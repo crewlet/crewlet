@@ -175,10 +175,22 @@ interoperability endpoint. The bucket keeps whatever copies its provider
 promises, and its size is the provider's problem rather than any node's disk.
 
 - **An upload of up to 8 MiB is one `PutObject`; a larger one is a multipart
-  upload** of equal 8 MiB parts, sent one after another through one buffer, so
-  an upload holds 8 MiB in memory whatever the file's size. An upload that
-  fails part of the way through is aborted; one a process was killed in the
-  middle of is aborted by the [collector](#unfinished-uploads) a day later.
+  upload** of equal 8 MiB parts, up to four of them in flight at once while the
+  next is read, so a bucket a round trip away costs a large upload a round trip
+  per four parts rather than one per part — measured, a 128 MiB file went up at
+  150–230 MB/s with the bucket 20–50 ms away, where one part at a time
+  managed 80–120. An upload holds at most four parts (32 MiB) in memory
+  whatever the file's size, and every upload past its first part draws on one
+  allowance the node's uploads share (96 MiB), so a fifth large upload at once
+  goes a part at a time rather than waiting for memory. An upload that fails
+  part of the way through stops at once — a part the bucket refuses ends the
+  read of the file and the other parts on their way — and is aborted, once
+  every part it sent has answered; one a process was killed in the middle of
+  is aborted by the [collector](#unfinished-uploads) a day later. With parts
+  in flight together sharing the node's link to the bucket, each part is
+  given the time its share of that link takes at the slowest rate the store
+  accepts, so a large upload is held to that rate as a whole, as it was when
+  its parts went one at a time.
 - **Credentials** are `${VAR}` references resolved at boot, or neither, which
   takes the SDK's default chain: the environment (`AWS_ACCESS_KEY_ID`…), a
   shared profile, a web identity token or the instance's role.

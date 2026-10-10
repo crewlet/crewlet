@@ -72,6 +72,11 @@ type Server struct {
 	// requests is every request the bucket has been sent ([Server.Requests]).
 	requests atomic.Int64
 
+	// partsNow is the part uploads in hand — sent and not yet answered —
+	// and mostParts the most there have been at once
+	// ([Server.MostPartsAtOnce]).
+	partsNow, mostParts atomic.Int64
+
 	mu      sync.Mutex
 	objects map[string]object
 	// sorted is every key objects holds, in order, for a listing to page
@@ -86,8 +91,18 @@ type Server struct {
 	uploads  map[string]*upload
 	nextID   int
 	failPart int32
+	// held is the part [Server.HoldPart] holds, or nil.
+	held *heldPart
 	// undated is the keys whose listings leave the date out.
 	undated map[string]bool
+}
+
+// heldPart is a part number whose every upload the bucket takes and never
+// answers, and the news that a client gave up on one.
+type heldPart struct {
+	number  int32
+	givenUp chan struct{}
+	once    sync.Once
 }
 
 type object struct {
@@ -148,6 +163,21 @@ func newServer(bucket string) *Server {
 // every verb, a refused one included — which is what a provider's round trip
 // multiplies and what it bills by.
 func (s *Server) Requests() int64 { return s.requests.Load() }
+
+// MostPartsAtOnce is the most part uploads the bucket has had in hand at once
+// — sent and not yet answered — since it started: how many parts of an upload
+// a client keeps in flight, which only the bucket's side of the wire can see.
+func (s *Server) MostPartsAtOnce() int64 { return s.mostParts.Load() }
+
+// partArrived counts a part upload in hand, answering the call that counts it
+// answered.
+func (s *Server) partArrived() func() {
+	now := s.partsNow.Add(1)
+	for most := s.mostParts.Load(); now > most && !s.mostParts.CompareAndSwap(most, now); {
+		most = s.mostParts.Load()
+	}
+	return func() { s.partsNow.Add(-1) }
+}
 
 // Keys is every key the bucket holds, sorted.
 func (s *Server) Keys() []string {
@@ -225,8 +255,31 @@ func (s *Server) FailPart(n int32) {
 	s.failPart = n
 }
 
+// HoldPart makes every upload of part number n wait, its body read and no
+// answer sent, until its client gives up on it — a bucket that took a part's
+// bytes and never answered — and answers a channel closed once a client
+// first has. Zero holds none.
+//
+// The giving up is THE CLIENT'S OWN, seen from the far side of the wire: a
+// test that holds a part learns from it the moment the upload the part
+// belongs to cancelled its requests, which nothing on the client's side
+// exposes.
+func (s *Server) HoldPart(n int32) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n == 0 {
+		s.held = nil
+		return nil
+	}
+	s.held = &heldPart{number: n, givenUp: make(chan struct{})}
+	return s.held.givenUp
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.requests.Add(1)
+	if r.Method == http.MethodPut && r.URL.Query().Has("uploadId") {
+		defer s.partArrived()()
+	}
 	if !s.wait(r) {
 		return
 	}
@@ -384,6 +437,18 @@ func (s *Server) putPart(w http.ResponseWriter, r *http.Request, q map[string][]
 	data, err := readBody(r)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
+		return
+	}
+	s.mu.Lock()
+	held := s.held
+	s.mu.Unlock()
+	if held != nil && held.number == int32(number) {
+		// THE BODY IS READ FIRST, so the server is already watching the
+		// connection for its client to close it: until a handler has read
+		// the request to its end, net/http does not notice a client going
+		// away, and this would wait for ever.
+		<-r.Context().Done()
+		held.once.Do(func() { close(held.givenUp) })
 		return
 	}
 	s.mu.Lock()

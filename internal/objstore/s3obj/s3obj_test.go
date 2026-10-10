@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/aws/smithy-go"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -318,6 +321,204 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 	}
 	if len(srv.Keys()) != 0 {
 		t.Fatalf("failed uploads left objects: %v", srv.Keys())
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("failed uploads kept %d of the node's spare part buffers", held)
+	}
+}
+
+// A PART IS GIVEN ITS SHARE OF THE LINK. An upload's parts in flight cross ONE
+// link to the bucket together, so each moves at a share of it, and the floor
+// every leg is held to ([objstore.MiBPace]) is the UPLOAD's: a part given only
+// its own bytes at the floor misses its deadline on a link the upload as a
+// whole crosses at the floor, where one part at a time had crossed it. So
+// every part — a short last one too — is given its request's [s3obj.CallBudget]
+// and the time its bytes take at the floor with every part an upload may keep
+// in flight sharing that link: [s3obj.PartsInFlight] of them, whenever the
+// others were sent, because an upload sends parts behind one already on its
+// way — its first part goes alone, and three more join it as fast as the body
+// arrives.
+//
+// THE ARITHMETIC RATHER THAN A THROTTLED BUCKET: the budget of a part of the
+// production size is sixteen and a half minutes, which no case can wait out.
+func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int64{1, objstore.MiB / 3, objstore.MiB, s3obj.PartBytes - 1, s3obj.PartBytes} {
+		atFloor := time.Duration(size*s3obj.PartsInFlight) * objstore.MiBPace / objstore.MiB
+		if got, want := s3obj.PartBudget(size), s3obj.CallBudget+atFloor; got < want {
+			t.Errorf("a part of %d bytes is given %v; sharing the link with %d parts in flight "+
+				"at the floor its bytes take %v, and its request %v more", size, got,
+				s3obj.PartsInFlight, atFloor, s3obj.CallBudget)
+		}
+	}
+}
+
+// A REFUSED PART ENDS ITS UPLOAD AT ONCE: once the bucket's refusal of a part
+// reaches the upload, the upload cancels the parts still in flight, begins no
+// further read of its body and sends no other part, and fails with the refusal
+// — never a cancelled sibling's error. With parts in flight together, an
+// upload that noticed a failure only when it next needed a buffer went on
+// reading the client's body and sending parts behind it — up to three parts,
+// minutes of a slow client's body, for an upload already lost.
+//
+// THE MOMENT IS SEEN FROM THE BUCKET'S SIDE: the bucket refuses part 1 and
+// holds part 2 unanswered, so the hold reports when the upload cancels its
+// requests — which an upload does only once it has the refusal. The body hands
+// over the first two parts freely and waits at the third for that report, so
+// a read the upload begins after the report is one it began knowing it had
+// failed. An upload that never acts on the refusal is never reported, and the
+// body gives up waiting after a minute — far past the SDK's retries of the
+// refused part — so it fails this case rather than hanging it.
+func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b := open(t, srv, "")
+	srv.FailPart(1)
+	body := &gatedBody{body: make([]byte, 8*part), at: 2 * part, gate: srv.HoldPart(2)}
+
+	err := b.Put(t.Context(), "refused", body, objstore.PutMeta{})
+	if apiErr, ok := errors.AsType[smithy.APIError](err); !ok || apiErr.ErrorCode() != "InternalError" {
+		t.Fatalf("an upload whose first part was refused = %v; want the refusal itself", err)
+	}
+	if !body.waited {
+		t.Fatal("the upload heard of the refusal before it asked for its third part, so " +
+			"nothing staged a refusal arriving while it reads: the SDK retries a refused part " +
+			"for seconds, and the first two parts are handed over at once")
+	}
+	if !body.opened {
+		t.Fatalf("the upload read on for a minute after its first part was refused, " +
+			"its other parts still in flight")
+	}
+	if body.after > 0 {
+		t.Fatalf("the upload began %d reads of its body after it had cancelled its parts "+
+			"for a refusal", body.after)
+	}
+	if open := srv.Uploads(); len(open) != 0 {
+		t.Fatalf("the refused upload was left open: %v", open)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("the refused upload kept %d of the node's spare part buffers", held)
+	}
+}
+
+// gatedBody hands over body, and at offset at waits for gate to close — for a
+// minute at most, opened saying which ended the wait — before it hands over
+// the rest, a kibibyte a read. after counts the reads begun once the wait was
+// over: the read that waited was asked for before, and answers with what it
+// was asked for.
+type gatedBody struct {
+	body           []byte
+	at             int
+	gate           <-chan struct{}
+	read           int
+	waited, opened bool
+	after          int
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	if g.waited {
+		g.after++
+	}
+	if g.read == len(g.body) {
+		return 0, io.EOF
+	}
+	if g.read < g.at {
+		p = p[:min(len(p), g.at-g.read)]
+	} else {
+		if !g.waited {
+			g.waited = true
+			select {
+			case <-g.gate:
+				g.opened = true
+			case <-time.After(time.Minute):
+			}
+		}
+		p = p[:min(len(p), 1<<10)]
+	}
+	n := copy(p, g.body[g.read:])
+	g.read += n
+	return n, nil
+}
+
+// A LARGE UPLOAD KEEPS ITS PARTS IN FLIGHT TOGETHER — exactly
+// [s3obj.PartsInFlight] of them, never more — so a bucket a round trip away
+// costs an upload a round trip per that many parts rather than one per part,
+// and the object it assembles is the body, in order, whatever order the parts
+// landed in.
+//
+// The bucket holds every request for its latency, so the parts an upload has
+// sent overlap at the bucket for as long as the upload keeps them in flight,
+// and the most at once is what the bucket counts.
+func TestALargeUploadKeepsItsPartsInFlightTogether(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Latency = 200 * time.Millisecond
+	b := open(t, srv, "")
+	const parts = 3 * s3obj.PartsInFlight
+	body := make([]byte, parts*part)
+	for i := range body {
+		body[i] = byte(i / part)
+	}
+	if err := b.Put(t.Context(), "wide", iotest.HalfReader(bytes.NewReader(body)), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.MostPartsAtOnce(); got != s3obj.PartsInFlight {
+		t.Fatalf("the upload had at most %d parts in flight at once, want %d", got, s3obj.PartsInFlight)
+	}
+	if got := srv.Parts("wide"); got != parts {
+		t.Fatalf("%d bytes went up in %d parts, want %d", len(body), got, parts)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "wide", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("the object read back %d bytes, %v, not the body in order", len(got), err)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("a finished upload kept %d of the node's spare part buffers", held)
+	}
+}
+
+// UPLOADS SHARE THE NODE'S SPARE PART BUFFERS, and none waits for one: past
+// its own first buffer an upload takes a spare only while the node has one
+// free, so however many large uploads run at once the parts in flight never
+// exceed one per upload plus [s3obj.SpareParts] — and every upload still
+// finishes on the buffers it got.
+func TestUploadsShareTheNodesSpareParts(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Latency = 200 * time.Millisecond
+	b := open(t, srv, "")
+	// MORE UPLOADS THAN THE SPARES CAN WIDEN, so the allowance runs out
+	// while every one of them still wants more.
+	const uploads = s3obj.SpareParts/(s3obj.PartsInFlight-1) + 2
+	body := bytes.Repeat([]byte("shared "), 2*s3obj.PartsInFlight*part/7+1)
+	errs := make([]error, uploads)
+	var wg sync.WaitGroup
+	for i := range uploads {
+		wg.Go(func() {
+			errs[i] = b.Put(t.Context(), fmt.Sprintf("shared-%d", i), bytes.NewReader(body), objstore.PutMeta{})
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	if most, limit := srv.MostPartsAtOnce(), int64(uploads+s3obj.SpareParts); most > limit || most <= uploads {
+		t.Fatalf("%d uploads had %d parts in flight at once; want more than one each and "+
+			"at most one each plus the node's %d spares, %d", uploads, most, s3obj.SpareParts, limit)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("finished uploads kept %d of the node's spare part buffers", held)
+	}
+	for i := range uploads {
+		if got := srv.Parts(fmt.Sprintf("shared-%d", i)); got == 0 {
+			t.Fatalf("upload %d was not assembled from parts", i)
+		}
 	}
 }
 
