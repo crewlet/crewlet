@@ -247,13 +247,13 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	// ASKED THROUGH THE LAUNCHER, not through runLLM directly: what is
 	// under test is which phase the agent-mode path chooses, and a test
 	// that named the phase itself would pass whatever the launcher did.
-	launcher := &agentLauncher{seat: seat}
-	executor, _, _ := launcher.executorLLM(c)
+	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
+	executor := launcher.executorRun(c, nil).llm
 	if executor == nil || executor.Model != "opus" {
 		t.Fatalf("an agent-mode run resolved to %+v, want the executor's own model", executor)
 	}
 	// And a run_sandbox call still goes to the model the seat chose for it.
-	delegated, _, _ := sandboxLLM(c, seat)
+	delegated := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil).llm
 	if delegated == nil || delegated.Model != "haiku" {
 		t.Fatalf("a delegated coding run resolved to %+v, want llm_sandbox's model", delegated)
 	}

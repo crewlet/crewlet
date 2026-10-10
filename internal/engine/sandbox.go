@@ -1094,20 +1094,25 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
-	// running somewhere else, and `llm` is what that work runs on.
-	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
-	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
+	// running somewhere else, and `llm` is what that work runs on — for the
+	// runner that will read them, resolved here as BuildSpec resolves it.
+	runner := string(gate.CodingAgent)
+	if runner == "" {
+		runner = manager.DefaultCodingAgent()
+	}
+	run := newCodingRun(company, seat, phase.Sandbox, runner, e.sandboxEnv(seat, gate, setup))
+	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		// The seat's cell, empty inheriting providers.sandbox's default.
 		// Resolved at LAUNCH rather than at config time, for the same
 		// reason coding_agent is: a catalogue change reaches every seat
 		// that named nothing without rewriting their blocks.
 		Placement:       sandbox.Placement(gate.RunIn),
-		CodingAgent:     string(gate.CodingAgent),
+		CodingAgent:     runner,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        gate.MaxTurns,
 		Env:             env,
-		CredentialFiles: credentials,
+		CredentialFiles: run.files,
 	})
 	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
 		return sandbox.LaunchResult{}, err
@@ -2260,30 +2265,32 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// sandboxLLM resolves the model a coding run works under, and the credential
-// that lets it reach one.
+// codingRun is what one coding box is handed to reach a model: the model, the
+// credential files a local backend seeds, and the whole run environment.
 //
 // THREE things travel, and they travel differently on purpose:
 //
 //   - The MODEL and its endpoint, so an agent that resolves
 //     "<family>/<model>" against a catalogue addresses the right vendor at
 //     the right host rather than the catalogue's default.
-//   - A TOKEN, in the run environment, which reaches any box including a
-//     remote one: it is one scoped, revocable variable.
+//   - A TOKEN OR A KEY, in the run environment, which reaches any box
+//     including a remote one: it is one scoped, revocable variable — a
+//     subscription's headless token or cli.env key, or an API entry's own
+//     key under the variable its runner reads.
 //   - The credential FILES, only as a host-path map the LOCAL backend seeds
 //     and writes back. They carry a refresh token whose rotation is shared
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
-//
-// A seat with no resolvable sandbox model is not an error here: a company with
-// no models takes no turn, so launches no run (see nomodels.go), and a run
-// whose agent reads its credential from the environment needs none of this.
-func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
-	return runLLM(c, seat, phase.Sandbox)
+type codingRun struct {
+	llm   *sandbox.AgentLLM
+	files map[string]string
+	env   map[string]string
 }
 
-// runLLM is [sandboxLLM] over an explicit phase.
+// newCodingRun resolves the [codingRun] of a box driven by runner on the
+// entry seat's phase resolves to, over seatEnv — the environment the seat's
+// own config assembled ([Engine.sandboxEnv]).
 //
 // TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
 // call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
@@ -2292,40 +2299,115 @@ func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]strin
 // executor's own entry: sending it to llm_sandbox would run a seat's whole turn
 // on the model it chose for a subordinate job, silently, on any seat that set
 // both.
-func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[string]string, map[string]string) {
+//
+// THE RUNNER IS AN INPUT, because what an entry can give a box depends on
+// which coding agent reads it ([apiEntryEnv]).
+//
+// A seat with no resolvable model is not an error here: a company with no
+// models takes no turn, so launches no run (see nomodels.go), and the run
+// carries the seat's own environment and nothing else.
+func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
+	seatEnv map[string]string) codingRun {
+	run := codingRun{env: seatEnv}
 	if c == nil || c.Models == nil {
-		return nil, nil, nil
+		return run
 	}
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
 			"phase", ph.String(), "error", err)
-		return nil, nil, nil
+		return run
 	}
 	spec, ok := c.Config.Providers.LLM[member.Key]
 	if !ok {
-		return nil, nil, nil
+		return run
 	}
+	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
+		run.llm = &sandbox.AgentLLM{Model: spec.Model}
+		// Every subscription entry shares one providers.llm type, so the
+		// type does not name the family. The profile's vendor does.
+		if vendor := agent.Vendor(); vendor != "" {
+			run.llm.ProviderType = vendor
+		}
+		// A cli-agent entry has no base URL of its own: the CLI talks to
+		// its vendor, and declaring a custom provider for it would point a
+		// coding agent at an endpoint nothing is serving.
+		//
+		// Its sign-in UNDERLAID BY NAME, so a variable the seat names in
+		// role.sandbox.env wins: each CLI ranks its own credentials, and a
+		// subscription token is the lowest of Claude Code's, so whatever the
+		// seat brought is what signs the run in.
+		run.files = agent.SandboxCredentials()
+		run.env = underlay(seatEnv, agent.SandboxEnv())
+		return run
+	}
+	ep := c.endpoints[member.Key]
+	run.llm = &sandbox.AgentLLM{Model: ep.model, ProviderType: string(spec.Type), BaseURL: ep.baseURL}
+	run.env = underlay(seatEnv, apiEntryEnv(spec, ep, runner, seatEnv))
+	return run
+}
 
-	out := &sandbox.AgentLLM{
-		Model:        spec.Model,
-		ProviderType: string(spec.Type),
-		BaseURL:      spec.BaseURL,
+// apiEntryEnv is the sign-in an API entry contributes to a box its runner
+// reads: the entry's key under the variable that runner's SDK reads for the
+// entry's wire ([config.LLMProvider.ConventionalKeyVar] — ANTHROPIC_API_KEY for
+// an `anthropic` entry, OPENAI_API_KEY for an `openai` or `openai-compatible`
+// one) and, for Claude Code alone, its base URL as ANTHROPIC_BASE_URL.
+//
+// RESOLVED, NEVER RAW. Tier B stores `${VAR}` verbatim, so the entry's own
+// fields would hand a box the literal "${LLM_BASE_URL}" as its endpoint; ep
+// is the epoch's resolution, the one its seats' own calls are made with.
+//
+// THE KEY TRAVELS, because nothing else in the box can sign the agent in:
+// Claude Code reads only its environment, and OpenCode's providers read the
+// same variable, its declared one through {env:…} rather than holding the
+// value. It is one scoped, revocable variable, exactly the trust step a
+// subscription's headless token already takes into every box. The FIRST key
+// of the entry's pool, because a box cannot rotate: the pool's cooldowns live
+// in this process, and a run holds whatever it was started with.
+//
+// THE BASE URL TRAVELS ONLY WHERE IT IS READ. Claude Code reads its endpoint
+// from ANTHROPIC_BASE_URL. OpenCode is handed its endpoint in opencode.json's
+// declared provider ([codingagent.OpenCode.WriteConfig]), translated to the
+// convention of the SDK it loads there, and that provider is the one place
+// its run takes the entry's endpoint from — a variable beside it would be read
+// by nothing the run is addressed to.
+//
+// ONE UNIT FOR CLAUDE CODE: when the seat's own environment already signs
+// Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
+// neither its key nor its endpoint. Claude Code ranks ANTHROPIC_API_KEY above
+// a plan's CLAUDE_CODE_OAUTH_TOKEN and a cloud toggle routes away from the
+// Anthropic API altogether, so a company key underlaid beside the seat's own
+// sign-in silently moved a plan-billed seat onto metered billing, and a
+// company endpoint underlaid beside the seat's own key sent that key to the
+// company's gateway. Each was underlaid by NAME, which cannot see either.
+func apiEntryEnv(spec config.LLMProvider, ep endpoint, runner string, seatEnv map[string]string) map[string]string {
+	if runner == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+		return nil
 	}
-	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI {
-		return out, nil, nil
+	env := map[string]string{}
+	if len(ep.keys) > 0 {
+		env[spec.ConventionalKeyVar()] = ep.keys[0]
 	}
-	// Every subscription entry shares one providers.llm type, so the type
-	// does not name the family. The profile's vendor does.
-	if vendor := agent.Vendor(); vendor != "" {
-		out.ProviderType = vendor
+	if runner == codingagent.ClaudeCodeName && ep.baseURL != "" {
+		env[anthropicBaseURLVar] = ep.baseURL
 	}
-	// A cli-agent entry has no base URL of its own: the CLI talks to its
-	// vendor, and declaring a custom provider for it would point a coding
-	// agent at an endpoint nothing is serving.
-	out.BaseURL = ""
-	return out, agent.SandboxCredentials(), agent.SandboxEnv()
+	return env
+}
+
+// anthropicBaseURLVar is the variable Claude Code reads its endpoint from:
+// the host root, Anthropic's own SDK convention and the engine's base_url's.
+const anthropicBaseURLVar = "ANTHROPIC_BASE_URL"
+
+// signsIn reports whether env carries a non-blank value under any of names.
+// Blank does not count: an unresolved `${VAR}` lands as blank and
+// authenticates nothing.
+func signsIn(env map[string]string, names []string) bool {
+	for _, name := range names {
+		if strings.TrimSpace(env[name]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // SandboxCredentialError reports a coding run whose box could never

@@ -191,7 +191,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	c, seat := company(map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-not-real", "HTTPS_PROXY": "http://proxy.example.com",
 	})
-	_, _, env := runLLM(c, seat, phase.Sandbox)
+	env := newCodingRun(c, seat, phase.Sandbox, "opencode", nil).env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
 		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
 	}

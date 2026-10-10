@@ -109,17 +109,17 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	agentLLM, credentials, credentialEnv := l.executorLLM(company)
-	env := underlay(e.sandboxEnv(l.seat, gate, setup), credentialEnv)
+	run := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
 		CodingAgent:     l.codingAgent,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        maxTurnsFor(gate),
 		Env:             env,
-		CredentialFiles: credentials,
+		CredentialFiles: run.files,
 	})
-	// THE EXECUTOR'S PHASE, matching executorLLM above: the guard has to
+	// THE EXECUTOR'S PHASE, matching executorRun above: the guard has to
 	// inspect the entry whose login the box will actually run under, and
 	// asking it about llm_sandbox would answer for a model this run never
 	// touches.
@@ -147,15 +147,15 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	return nil
 }
 
-// executorLLM is the model an agent-mode run works under.
+// executorRun is the [codingRun] an agent-mode run works under.
 //
 // THE EXECUTOR'S OWN ENTRY, not llm_sandbox — this run IS the executor. A
 // method rather than an inline call so the choice has a name a test can hold:
-// see [runLLM] for what the two phases mean, and why sending an agent-mode run
-// to llm_sandbox would silently run a seat's whole turn on the model it chose
-// for a subordinate job.
-func (l *agentLauncher) executorLLM(c *Company) (*sandbox.AgentLLM, map[string]string, map[string]string) {
-	return runLLM(c, l.seat, phase.Execute)
+// see [newCodingRun] for what the two phases mean, and why sending an
+// agent-mode run to llm_sandbox would silently run a seat's whole turn on the
+// model it chose for a subordinate job.
+func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) codingRun {
+	return newCodingRun(c, l.seat, phase.Execute, l.codingAgent, seatEnv)
 }
 
 // withBridge adds the engine-side surface to a box's MCP server list.
