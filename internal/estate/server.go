@@ -98,6 +98,7 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		return encodeReply(out)
 	}
 	b.ServerSeams = s.seams
+	b.pageBytes = usagePageBytes
 	var written *writtenItems
 	if req.Actor != nil && req.Actor.Records {
 		// THE ASKER'S TURN WANTS TO HEAR what this write committed to,
@@ -121,7 +122,7 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		out.Err = encodeError(err)
 		return encodeReply(out)
 	}
-	encoded, err := json.Marshal(result)
+	encoded, err := encodeResult(result)
 	if err != nil {
 		out.Err = encodeError(fmt.Errorf("estate: %s could not encode the answer to %s: %w",
 			s.self, req.Op, err))
@@ -129,6 +130,23 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 	}
 	out.Result = encoded
 	return encodeReply(out)
+}
+
+// jsonAppender is an answer that writes its own encoding — a usage page, which
+// holds the encoding [usage.Fill] measured each of its rows by
+// ([usage.Page.AppendJSON]) — exactly as [json.Marshal] would.
+type jsonAppender interface {
+	AppendJSON(dst []byte) ([]byte, error)
+}
+
+// encodeResult is an operation's answer as the reply carries it: its own
+// encoding where it holds one, so a usage page's rows — encoded once already,
+// to cut the page at its budget — are not encoded a second time to send it.
+func encodeResult(result any) ([]byte, error) {
+	if a, ok := result.(jsonAppender); ok {
+		return a.AppendJSON(nil)
+	}
+	return json.Marshal(result)
 }
 
 // ready is the two gates a data node's copy puts in front of an operation —

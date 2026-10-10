@@ -56,6 +56,9 @@ var carriedByServer = map[string]string{
 
 	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
 		"answers what it committed to in reply.Written, and the router adds it there",
+
+	"usage.measured.encoded": "a usage page's rows as Fill measured them: the serving node " +
+		"writes them AS the page's Rows (usage.Page.AppendJSON), and the asker decodes Rows",
 }
 
 // extraField is the one field name every record type keeps a newer build's
@@ -184,6 +187,15 @@ var floorless = map[string]string{
 		"log position describes",
 	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
 		"gate, not whether it has reached the asker's writes",
+
+	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
+		"on: every node publishes its own days, so there is no position to see",
+	"usage.seat_turns":    "reads the usage domain, as usage.spend does",
+	"usage.person_spend":  "reads the usage domain, as usage.spend does",
+	"usage.seat_days":     "reads the usage domain, as usage.spend does",
+	"usage.schedule_runs": "reads the usage domain, as usage.spend does",
+	"usage.page_reads":    "reads the usage domain, as usage.spend does",
+	"usage.reads_elided":  "reads the usage domain, as usage.spend does",
 }
 
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
@@ -243,7 +255,7 @@ var seatCopyOps = map[string]string{
 // a copy out of service, or held to one it does not read.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
-	domains := []string{trackerDomain, pagesDomain}
+	domains := []string{trackerDomain, pagesDomain, usageDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
@@ -388,4 +400,28 @@ func (a *recordingAsker) requests() []sentRequest {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return slices.Clone(a.sent)
+}
+
+// selfEncoded is an answer that holds its own encoding, as a usage page does.
+type selfEncoded struct{ held string }
+
+func (s selfEncoded) AppendJSON(dst []byte) ([]byte, error) {
+	return append(dst, `{"held":"`+s.held+`"}`...), nil
+}
+
+// AN ANSWER THAT HOLDS ITS OWN ENCODING IS SENT AS IT IS. A usage page's rows
+// were encoded once already, to cut the page at its budget, and a reply that
+// encoded the page again with json.Marshal encoded every row twice; so the
+// serving half writes an answer's own encoding where it holds one, and the
+// ordinary encoding of everything else.
+func TestAnAnswerThatHoldsItsOwnEncodingIsSentAsItIs(t *testing.T) {
+	t.Parallel()
+	got, err := encodeResult(selfEncoded{held: "rows"})
+	if err != nil || string(got) != `{"held":"rows"}` {
+		t.Fatalf("an answer holding its encoding was sent as (%s, %v), want its own bytes", got, err)
+	}
+	got, err = encodeResult(scheduleRunsPage{More: true})
+	if err != nil || string(got) != `{"Runs":null,"More":true}` {
+		t.Fatalf("an ordinary answer was sent as (%s, %v), want its json encoding", got, err)
+	}
 }

@@ -69,7 +69,7 @@ func (f *spendFixture) sources() queries.Sources {
 		// on the projection's own, and on the wall clock a record stamped
 		// beside spendNow left it long ago.
 		State:   livestate.New(livestate.WithClock(func() time.Time { return spendNow })),
-		Usage:   f.db.Replicated(),
+		Usage:   usage.Reader{Estate: f.db.Replicated()},
 		Company: func() *config.Company { return f.company },
 		Now:     func() time.Time { return spendNow },
 	}

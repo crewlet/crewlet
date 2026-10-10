@@ -19,7 +19,7 @@ import (
 )
 
 // openStore is a fresh node with both estates migrated.
-func openStore(t *testing.T) *store.DB {
+func openStore(t testing.TB) *store.DB {
 	t.Helper()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {

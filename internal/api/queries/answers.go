@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/usage"
 )
 
 var log = logging.Get("api.queries")
@@ -74,7 +73,7 @@ type Sources struct {
 	// this node's event log, which answered for this node alone and only
 	// thirty days back. Nil leaves `token_series` unregistered and a named
 	// `tokens` window empty.
-	Usage usage.Estate
+	Usage UsageReads
 
 	// Company reads the CURRENT epoch, for the questions answered from
 	// configuration rather than from a store. A function, not a value: an

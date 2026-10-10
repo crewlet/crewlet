@@ -2442,8 +2442,9 @@ over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 
 **A read no data node could answer is `unavailable`, never a list.** The
-tracker and the knowledge base are answered by a data node's copy of the estate
-— this node's own where it holds one, another data node's otherwise — and a
+tracker, the knowledge base and the usage history behind the spend, activity
+and readers screens are answered by a data node whose copy of that domain
+serves — this node's own where it holds one, another data node's otherwise — and a
 read nobody answered is refused `unavailable` (REST: `503` with a
 `Retry-After`) rather than answered as an empty list, which would say the
 company has nothing in it. `knowledge` is the one exception, because a search is

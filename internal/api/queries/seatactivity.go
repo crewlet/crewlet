@@ -185,7 +185,7 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	if previous {
 		from = prev.First.Label
 	}
-	rows, err := usage.SeatDays(ctx, s.Usage, usage.SpendQuery{
+	rows, err := s.Usage.SeatDays(ctx, usage.SpendQuery{
 		From: from, To: window.Last.Label, AgentID: agentID})
 	if err != nil {
 		return nil, usageErr(err)

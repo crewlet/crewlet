@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // seededApp is an app whose sources hold a known company's worth of history.
@@ -58,7 +59,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	opts := api.Options{
 		State: state,
 		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
-			Usage: db.Replicated()},
+			Usage: usage.Reader{Estate: db.Replicated()}},
 		Now: func() time.Time { return clock },
 	}
 	if mutate != nil {

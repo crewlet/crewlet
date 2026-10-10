@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
+- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongUsageCopyAnswersNoSpendRead`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
 - **Cost-when-tried:** one declaration (whether a domain's health was a readiness input) answered two questions: does a seat depend on this domain, and is its copy judged at all. The compacted domains answered no, and so escaped the judgement: a vectors or usage copy whose applier stopped, whose rows fell below the log or that held an undecodable record past the grace was served for ever, and nothing said so. The two that answered yes took the WHOLE copy out of service for one log's fault — a knowledge-base applier halted on one page sent every tracker call the node's seats made to a peer, and on a single node refused them all — and a knowledge base that merely lagged its log made every tracker read a last resort. The native code host's design had to choose between gating every seat claim on a busy git log's lag and never judging that log at all.
 - **Tag-status:** unreleased
 
@@ -62,7 +62,8 @@ did, by answering a question about seats.
 
 WHAT makes a copy wrong: `statelog.Health.Healthy` and the engine's judgement
 own that list, and a lag of any size is still not on it. How a seat's tools
-behave when no data node serves a domain: ADR-0025. Which readers outside the
-estate's router consult a domain's verdict: the API's spend and usage reads
-answer from this node's usage copy whatever its verdict, and the fleet-singleton
-duties decide from rows through their own read authority or not at all.
+behave when no data node serves a domain: ADR-0025. How the fleet-singleton
+duties read: they decide from rows through their own read authority or not at
+all, outside the estate's router — every reader a person or a seat is answered
+by, the API's spend and activity reads over the usage domain included, goes
+through it.

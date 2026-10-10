@@ -152,11 +152,11 @@ func (s Sources) derivedAgentID(handle string) string {
 // spendCells reads a window's company-day rows from the usage domain.
 func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, []tokens.SeatDay, error) {
 	q := usage.SpendQuery{From: w.Range.First.Label, To: w.Range.Last.Label, AgentID: w.AgentID}
-	rows, err := usage.Spend(ctx, s.Usage, q)
+	rows, err := s.Usage.Spend(ctx, q)
 	if err != nil {
 		return nil, nil, usageErr(err)
 	}
-	turns, err := usage.SeatTurns(ctx, s.Usage, q)
+	turns, err := s.Usage.SeatTurns(ctx, q)
 	if err != nil {
 		return nil, nil, usageErr(err)
 	}
@@ -193,7 +193,7 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 	// model spent for a human seat — a question on the operator surface —
 	// named by the seat's handle, so a window narrowed to that handle is
 	// the person's alone.
-	people, err := usage.PersonSpend(ctx, s.Usage, usage.PersonQuery{
+	people, err := s.Usage.PersonSpend(ctx, usage.PersonQuery{
 		From: q.From, To: q.To, Person: w.Seat,
 	})
 	if err != nil {
@@ -211,6 +211,23 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 		})
 	}
 	return cells, seats, nil
+}
+
+// UsageReads is the usage domain's reads (ADR-0020), as the spend, activity
+// and skill-reader answers ask them: [usage.Reader] over one estate, or the
+// estate router's facade, which answers from a data node whose usage copy is
+// in service — this node's own where it is (ADR-0031). The router is what a
+// running node hands this surface, so a node whose usage copy is out of
+// service draws its screens from a peer's rather than from the copy it
+// stopped serving.
+type UsageReads interface {
+	Spend(ctx context.Context, q usage.SpendQuery) ([]usage.SpendRow, error)
+	SeatTurns(ctx context.Context, q usage.SpendQuery) ([]usage.TurnsRow, error)
+	PersonSpend(ctx context.Context, q usage.PersonQuery) ([]usage.PersonRow, error)
+	SeatDays(ctx context.Context, q usage.SpendQuery) ([]usage.SeatDay, error)
+	ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error)
+	PageReads(ctx context.Context, q usage.PageReadsQuery) ([]usage.PageRead, error)
+	ReadsElided(ctx context.Context, from, to string) (int64, error)
 }
 
 // usageErr is a usage read's failure as this surface reports it: an estate

@@ -10,8 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The serving half: what a data node answers with.
@@ -152,6 +154,27 @@ type KnowledgeSearcher interface {
 	Building(ctx context.Context) bool
 }
 
+// UsageReader is the usage domain's read side (ADR-0020): what each node's
+// seats, schedules and people did each company day — the spend, activity and
+// skill-reader answers the operator's surfaces draw.
+//
+// EVERY READ THAT GROWS WITH A WINDOW IS ASKED A PAGE AT A TIME, resuming
+// after the group the page before it ended on and cut by [usage.Fill] at a
+// budget — [usagePageBytes] for an answer that crosses the wire, none for one
+// this node gives itself ([Backend.pageBytes]): a ninety-day window of a
+// company's spend is tens of megabytes of rows, and a reply crosses one
+// message. The schedule runs are already a page the caller sizes, and the
+// elided count is a number.
+type UsageReader interface {
+	SpendPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.SpendRow], error)
+	SeatTurnsPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.TurnsRow], error)
+	PersonSpendPage(ctx context.Context, q usage.PersonQuery, after usage.Group, budget int) (usage.Page[usage.PersonRow], error)
+	SeatDaysPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.SeatDay], error)
+	PageReadsPage(ctx context.Context, q usage.PageReadsQuery, after usage.Group, budget int) (usage.Page[usage.PageRead], error)
+	ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error)
+	ReadsElided(ctx context.Context, from, to string) (int64, error)
+}
+
 // Backend is one data node's answer to every operation, over its copy of the
 // estate, resolved PER REQUEST: a node that booted with no company brings its
 // native runtime up at its first apply, and a request that arrives before then
@@ -166,6 +189,7 @@ type Backend struct {
 	Pages      PageReader
 	PageWriter PageWriter
 	Knowledge  KnowledgeSearcher
+	Usage      UsageReader
 
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
@@ -197,6 +221,20 @@ type Backend struct {
 	// ServerSeams are the node's own: the dispatcher sets them on every
 	// backend it hands an operation.
 	ServerSeams
+
+	// pageBytes is the most one answer of a PAGED read carries before it is
+	// cut ([usage.Fill]): [usagePageBytes] where the serving half answers a
+	// request off the wire, and zero — one page, the whole read — where
+	// this node's own router runs the operation in-process. Only the server
+	// sets it.
+	//
+	// THE IN-PROCESS ANSWER IS NOT PAGED because nothing carries it: paged,
+	// this node's own spend screen was N read transactions instead of one, a
+	// JSON encoding of every row to measure a page no message would hold,
+	// and N snapshots of the estate where the whole read is one. A failover
+	// gains nothing from it either — an in-process read that fails before it
+	// lands is asked of a peer from its first page.
+	pageBytes int
 }
 
 // ServerSeams are what an operation reads of the SERVING node rather than of
@@ -239,10 +277,12 @@ const SeatCopy = ""
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
+	usageDomain   = usage.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain: tracker.Domain{}.Stream().Name,
 		pagesDomain:   pages.Domain{}.Stream().Name,
+		usageDomain:   usage.Domain{}.Stream().Name,
 	}
 )
 
@@ -1289,6 +1329,108 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 			return false, errNoHalf
 		}
 		return b.Knowledge.Building(ctx), nil
+	}).floorless()
+
+// ---- the usage domain's reads ------------------------------------------- //
+
+// THE USAGE DOMAIN'S READS cross like every other domain's, so a node whose
+// usage copy is out of service answers its operator's spend and activity
+// screens from a peer's copy rather than from the one it stopped serving
+// (ADR-0031). FLOORLESS: no write this node makes lands on the usage log —
+// every node publishes its own days from its own event log — so there is no
+// position an operator's read must see, and the rows are compacted, one per
+// object, each replaced whole.
+//
+// FIVE OF THEM ARE PAGED (see [UsageReader]) when a PEER answers them: each
+// reply is one page of the read, and the asker asks again after the group it
+// ended on ([allPages]). This node's own answer is the whole read, one page
+// ([Backend.pageBytes]).
+
+// usagePageBytes is the most a page of a routed usage read carries before it
+// is cut at the next record's edge: A QUARTER OF THE MESSAGE
+// ([queue.MaxPayloadBytes]). A page may run past it by one group — one
+// record's rows, never split (usage.Group) — and a record is itself one
+// message, measured under 1 MiB at its caps
+// (usage.TestAFullSeatDayRecordFitsOneMessage); re-encoded as read rows each
+// carrying its group's key it is at most a few times that, which the other
+// three quarters hold (TestAUsagePageFitsOneMessage). A reply past the message
+// is refused rather than dropped ([encodeReply]), so a pathological group
+// fails loudly.
+const usagePageBytes = queue.MaxPayloadBytes / 4
+
+// usagePageArgs is one page of a paged usage read: the read's query, and the
+// group the page before it ended on — empty for the first.
+type usagePageArgs[Q any] struct {
+	Query Q
+	After usage.Group
+}
+
+var opUsageSpend = define("usage.spend", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.SpendQuery]) (usage.Page[usage.SpendRow], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.SpendRow]{}, errNoHalf
+		}
+		return b.Usage.SpendPage(ctx, a.Query, a.After, b.pageBytes)
+	}).floorless()
+
+var opUsageSeatTurns = define("usage.seat_turns", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.SpendQuery]) (usage.Page[usage.TurnsRow], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.TurnsRow]{}, errNoHalf
+		}
+		return b.Usage.SeatTurnsPage(ctx, a.Query, a.After, b.pageBytes)
+	}).floorless()
+
+var opUsagePersonSpend = define("usage.person_spend", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.PersonQuery]) (usage.Page[usage.PersonRow], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.PersonRow]{}, errNoHalf
+		}
+		return b.Usage.PersonSpendPage(ctx, a.Query, a.After, b.pageBytes)
+	}).floorless()
+
+var opUsageSeatDays = define("usage.seat_days", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.SpendQuery]) (usage.Page[usage.SeatDay], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.SeatDay]{}, errNoHalf
+		}
+		return b.Usage.SeatDaysPage(ctx, a.Query, a.After, b.pageBytes)
+	}).floorless()
+
+// scheduleRunsPage is [UsageReader.ScheduleRuns]'s two answers, named.
+type scheduleRunsPage struct {
+	Runs []usage.ScheduleRun
+	More bool
+}
+
+var opUsageScheduleRuns = define("usage.schedule_runs", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q usage.ScheduleRunsQuery) (scheduleRunsPage, error) {
+		if b.Usage == nil {
+			return scheduleRunsPage{}, errNoHalf
+		}
+		runs, more, err := b.Usage.ScheduleRuns(ctx, q)
+		return scheduleRunsPage{Runs: runs, More: more}, err
+	}).floorless()
+
+var opUsagePageReads = define("usage.page_reads", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a usagePageArgs[usage.PageReadsQuery]) (usage.Page[usage.PageRead], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.PageRead]{}, errNoHalf
+		}
+		return b.Usage.PageReadsPage(ctx, a.Query, a.After, b.pageBytes)
+	}).floorless()
+
+// readsElidedArgs is a range of company days, both inclusive.
+type readsElidedArgs struct {
+	From, To string
+}
+
+var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a readsElidedArgs) (int64, error) {
+		if b.Usage == nil {
+			return 0, errNoHalf
+		}
+		return b.Usage.ReadsElided(ctx, a.From, a.To)
 	}).floorless()
 
 // served is what a node runs, as a seat's admission asks it.

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // openStore is a data node's two estates, opened from the binary's migrated
@@ -167,10 +168,10 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// company days, a source of its own rather than the fleet's turn
 		// detail; `seat_activity` is every seat's turns over those same
 		// days, summed across nodes.
-		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
+		{"the usage domain alone", queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}},
 			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
-			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
+			State: state, Events: fleetOf(db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
 			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
