@@ -238,18 +238,28 @@ func TestADisabledGuardIsNeverAPerson(t *testing.T) {
 // transport's own for a linked key and EMPTY for everybody else — an array
 // either way, because "may do nothing" is a value a screen tests, not an
 // absence it has to guess the meaning of.
+//
+// AND IT IS THE LIST AT THE CALLER'S OWN REACH, because the act transport's
+// dispatch refuses a member what is served to an admin alone: a member
+// offered that press would be refused `forbidden` on every one.
 func TestTheViewerNamesWhatItMayAct(t *testing.T) {
 	t.Parallel()
-	served := []string{"create_work_item", "mark_inbox"}
+	member := []string{"create_work_item", "mark_inbox"}
+	admin := append(slices.Clone(member), "write_work_catalogue")
 	sources := viewerSources(t, &stubWork{})
-	sources.OperatorActs = func() []string { return served }
+	sources.OperatorActs = func(reach auth.Reach) []string {
+		if reach == auth.ReachAdmin {
+			return admin
+		}
+		return member
+	}
 	for _, tc := range []struct {
 		name   string
 		caller auth.Principal
 		want   []string
 	}{
-		{"a linked member key", asMember("ops-1"), served},
-		{"a linked admin key", asAdmin("ops-1"), served},
+		{"a linked member key", asMember("ops-1"), member},
+		{"a linked admin key", asAdmin("ops-1"), admin},
 		{"an unlinked key", asAdmin("ops-nobody"), []string{}},
 		{"a caller with no key", nobody, []string{}},
 		{"a disabled guard's caller", asAdmin(org.ReservedOperatorID), []string{}},

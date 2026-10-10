@@ -164,18 +164,25 @@ type actRequest struct {
 	Args      map[string]any `json:"args"`
 }
 
-// Acts names every tool the act transport serves, in catalogue order — the
-// catalogue less its proven reads. What `viewer.acts` answers a bound
+// Acts names every tool the act transport serves a caller holding reach, in
+// catalogue order — the catalogue less its proven reads and less what is
+// served past that reach ([toolReach]). What `viewer.acts` answers a bound
 // person, so a screen enables exactly the controls a press of would be
-// served. Nil for a nil server.
-func (s *Server) Acts() []string {
+// served: a member is not offered a press the dispatch refuses `forbidden`.
+// Nil for a nil server.
+//
+// BY REACH AND NOTHING ELSE. Whether a caller may act on a particular object —
+// order THAT person's queue, change THIS project's settings — is the tool's
+// own rule over the chart, decided when it has read the object; a list
+// answered once per viewer could only guess at it.
+func (s *Server) Acts(reach auth.Reach) []string {
 	if s == nil {
 		return nil
 	}
 	var out []string
-	for _, name := range s.catalogue.names() {
-		if !readOnly(name) {
-			out = append(out, name)
+	for _, tool := range s.catalogue.within(reach) {
+		if !readOnly(tool.Name()) {
+			out = append(out, tool.Name())
 		}
 	}
 	return out
@@ -195,7 +202,9 @@ func readOnly(name string) bool {
 // What the caller names comes first (the tool, then the body), because those
 // refusals are the same for everybody and cost nothing to answer; who the
 // caller IS comes last, just before the call, so the one check the whole
-// transport rests on sits beside the one line it protects.
+// transport rests on sits beside the one line it protects. Whether their key
+// reaches the tool is not this handler's: the dispatch refuses it `forbidden`
+// for both transports ([catalogue.call]), and is audited doing so.
 //
 // # Who the write is attributed to does not change here
 //

@@ -69,6 +69,19 @@
 // (ADR-0031): the catalogue is the company's own work and pages, which is
 // what a member reads and writes, and a caller with no key reaches neither.
 //
+// # Every tool names the reach it is served at
+//
+// Past the route, each TOOL declares who may call it ([toolReach]), and the
+// one dispatch both transports share refuses a caller below it `forbidden`
+// before the tool runs — so the act transport, the MCP transport and the list
+// of what a person may press (`viewer.acts`, [Server.Acts]) cannot disagree
+// about it. A tool with no declared reach is refused by [New], as a question
+// with none panics at its registration: there is no default to fall through
+// to. What the reach does NOT decide is which object a caller may act on —
+// whose queue they may order, whose project's settings they may change —
+// which every tool decides for itself from the chart, because only the tool
+// has read the object.
+//
 // # The act transport admits a PERSON, and nobody else (ADR-0024)
 //
 // The two transports differ in exactly one rule. MCP admits a key linked to a
@@ -103,11 +116,14 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 var log = logging.Get("api.operator")
@@ -206,23 +222,110 @@ type Server struct {
 	audit AuditPublisher
 }
 
+// toolReach is the reach every tool [builtin.OperatorTools] can register is
+// served at (ADR-0031): who may CALL it.
+//
+// # Not the dashboard's `scope`, which answers a different question
+//
+// A row of the dashboard's `contract/actions.ts` also says `scope`: `person`
+// for a change to one piece of work, `company` for one that rewrites what
+// every seat's tracker means. That is the BLAST RADIUS, and it decides where a
+// screen offers the control. This is who may press it at all. The two are
+// held side by side against this table by
+// `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`, because a
+// `company` tool is not therefore an admin's: a project's own settings are
+// its lead's to change, which only the chart can say ([builtin.LeadsProject]).
+//
+// # Member, but one
+//
+// The catalogue is the company's own work and pages, which is what a member
+// reads and acts on as the person their key is linked to — so every tool is
+// served at [auth.ReachMember], and which OBJECT a member may act on is the
+// tool's own rule, decided from the chart: whose queue, whose project. The
+// exception is the company's catalogue of task types and custom fields: it is
+// the vocabulary every seat's tracker is judged by, and no seat in the chart
+// holds it — no project, unit or person it belongs to — so no rule over the
+// chart could say who may change it. It is how the company's tracker is RUN,
+// which is an admin's.
+//
+// TOTAL, and checked at [New]: a tool this table does not name is refused
+// rather than served at some default, and
+// `TestEveryDeclaredReachNamesAToolTheCatalogueServes` fails on a row naming a
+// tool that is gone.
+var toolReach = map[string]auth.Reach{
+	tracker.ListWorkItemsTool:      auth.ReachMember,
+	tracker.GetWorkItemTool:        auth.ReachMember,
+	tracker.CreateWorkItemTool:     auth.ReachMember,
+	tracker.UpdateWorkItemTool:     auth.ReachMember,
+	tracker.CommentOnWorkTool:      auth.ReachMember,
+	tracker.MergeWorkItemTool:      auth.ReachMember,
+	tracker.MoveWorkItemTool:       auth.ReachMember,
+	tracker.SearchWorkItemsTool:    auth.ReachMember,
+	tracker.ListWorkViewsTool:      auth.ReachMember,
+	tracker.SaveWorkViewTool:       auth.ReachMember,
+	tracker.GetWorkCatalogueTool:   auth.ReachMember,
+	tracker.WriteWorkCatalogueTool: auth.ReachAdmin,
+	tracker.ListProjectsTool:       auth.ReachMember,
+	tracker.DescribeProjectTool:    auth.ReachMember,
+	tracker.TaskActivityTool:       auth.ReachMember,
+	tracker.MyWorkTool:             auth.ReachMember,
+	tracker.GetPersonTool:          auth.ReachMember,
+	tracker.SetPrioritiesTool:      auth.ReachMember,
+	tracker.SetPinsTool:            auth.ReachMember,
+	tracker.MarkInboxTool:          auth.ReachMember,
+	tracker.WorkInboxTool:          auth.ReachMember,
+	tracker.WriteProjectTool:       auth.ReachMember,
+	tracker.ListProjectFilesTool:   auth.ReachMember,
+	tracker.ReadProjectFileTool:    auth.ReachMember,
+	tracker.WriteProjectFileTool:   auth.ReachMember,
+	tracker.RemoveProjectFileTool:  auth.ReachMember,
+	tracker.RemoveWorkItemTool:     auth.ReachMember,
+	tracker.RestoreWorkItemTool:    auth.ReachMember,
+	tracker.PlaceWorkItemTool:      auth.ReachMember,
+	builtin.ListPagesTool:          auth.ReachMember,
+	builtin.GetPageTool:            auth.ReachMember,
+	builtin.WritePageTool:          auth.ReachMember,
+	builtin.SavePageTool:           auth.ReachMember,
+	builtin.CommentOnPageTool:      auth.ReachMember,
+	builtin.SearchKnowledgeTool:    auth.ReachMember,
+	builtin.AnswerRunTool:          auth.ReachMember,
+	builtin.PauseSeatTool:          auth.ReachMember,
+	builtin.ResumeSeatTool:         auth.ReachMember,
+	builtin.SteerTurnTool:          auth.ReachMember,
+	builtin.AnswerKnowledgeTool:    auth.ReachMember,
+}
+
 // catalogue is the tool set every transport serves, in the order
-// [builtin.OperatorTools] returned it.
+// [builtin.OperatorTools] returned it, each with the reach it is served at.
 //
 // A VALUE BUILT ONCE rather than a constructor each transport calls, which is
 // the whole point of the type: see the package doc.
 type catalogue struct {
 	tools  []tools.Callable
 	byName map[string]tools.Callable
+	reach  map[string]auth.Reach
 }
 
-func newCatalogue(callables []tools.Callable) catalogue {
-	c := catalogue{byName: make(map[string]tools.Callable, len(callables))}
+// ErrNoReach refuses a catalogue tool [toolReach] does not name.
+var ErrNoReach = errors.New("operator: a catalogue tool declares no reach")
+
+func newCatalogue(callables []tools.Callable) (catalogue, error) {
+	c := catalogue{
+		byName: make(map[string]tools.Callable, len(callables)),
+		reach:  make(map[string]auth.Reach, len(callables)),
+	}
 	for _, tool := range callables {
+		reach, declared := toolReach[tool.Name()]
+		if !declared || !reach.Valid() {
+			return catalogue{}, fmt.Errorf("%w: %s — name the reach it is served "+
+				"at in operator.toolReach (member, or admin for what runs the "+
+				"company rather than what it published)", ErrNoReach, tool.Name())
+		}
 		c.tools = append(c.tools, tool)
 		c.byName[tool.Name()] = tool
+		c.reach[tool.Name()] = reach
 	}
-	return c
+	return c, nil
 }
 
 // lookup resolves one tool by name. A name the catalogue does not hold is
@@ -238,6 +341,18 @@ func (c catalogue) names() []string {
 	out := make([]string, 0, len(c.tools))
 	for _, tool := range c.tools {
 		out = append(out, tool.Name())
+	}
+	return out
+}
+
+// within is the catalogue's tools a caller holding reach may call, in
+// catalogue order.
+func (c catalogue) within(reach auth.Reach) []tools.Callable {
+	var out []tools.Callable
+	for _, tool := range c.tools {
+		if reach.Covers(c.reach[tool.Name()]) {
+			out = append(out, tool)
+		}
 	}
 	return out
 }
@@ -273,8 +388,11 @@ func New(opts Options) (*Server, error) {
 	if opts.Audit == nil {
 		return nil, ErrNoAudit
 	}
-	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org, env: opts.Env,
-		audit: opts.Audit}
+	c, err := newCatalogue(callables)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{catalogue: c, chart: opts.Org, env: opts.Env, audit: opts.Audit}
 	s.mcp = newMCPTransport(s, opts.Company)
 	return s, nil
 }
@@ -317,6 +435,13 @@ func (s *Server) Annotations(name string) tools.Annotations {
 // audits the call; this is the tool half of it.
 // served is false for a name the catalogue does not hold, which the transport
 // refuses in its own vocabulary.
+//
+// A CALLER BELOW THE TOOL'S REACH IS REFUSED HERE, before the tool runs, as
+// the classified refusal a tool would make — `forbidden`, naming who may —
+// rather than as a transport error: the act transport answers it 403 like any
+// other `forbidden`, an assistant reads it as a tool result, and the audit
+// records it as the refused call it is. Here rather than in a transport,
+// because a check two transports each made is a check one of them forgets.
 func (c catalogue) call(ctx context.Context, name string,
 	args map[string]any) (result tools.Result, served bool, err error) {
 
@@ -324,6 +449,23 @@ func (c catalogue) call(ctx context.Context, name string,
 	if !ok {
 		return tools.Result{}, false, nil
 	}
+	if need := c.reach[name]; !auth.PrincipalFrom(ctx).Reach.Covers(need) {
+		return beyondReach(name, need), true, nil
+	}
 	result, err = tool.Call(ctx, args)
 	return result, true, err
+}
+
+// beyondReach is the refusal of a call to a tool served at a reach the caller
+// does not hold. Only [auth.ReachAdmin] can be beyond a caller who reached the
+// catalogue at all, since both transports are mounted at member reach — and
+// the sentence names who may, because a person told only "no" asks the wrong
+// person next.
+func beyondReach(name string, need auth.Reach) tools.Result {
+	return tools.Result{
+		Failed: true, Refusal: tools.RefusalForbidden,
+		Output: fmt.Sprintf("Only an admin can call %s: it changes how the company "+
+			"is run rather than what it published, and it is served to an admin's "+
+			"key alone (%s reach). Ask an admin to make this change.", name, need),
+	}
 }

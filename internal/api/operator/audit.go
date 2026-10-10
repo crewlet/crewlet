@@ -79,10 +79,10 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 	// THE CALLER'S SEAT IS RESOLVED ONCE, here or at the transport's
 	// admission, and the tool's actor and the audit record both read that
 	// one answer — see [withSeat].
-	operatorID := auth.PrincipalFrom(ctx).ID
+	caller := auth.PrincipalFrom(ctx)
 	seat, pinned := pinnedSeat(ctx)
 	if !pinned {
-		seat = seatFor(s.chart, s.env, operatorID)
+		seat = seatFor(s.chart, s.env, caller.ID)
 		ctx = withSeat(ctx, seat)
 	}
 	result, served, err := s.catalogue.call(ctx, name, args)
@@ -90,11 +90,17 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 		return result, served, err
 	}
 	record := types.OperatorActed{
-		OperatorID: operatorID,
-		ActorSeat:  seat,
-		Transport:  transport,
-		Tool:       name,
-		RequestID:  requestID,
+		OperatorID: caller.ID,
+		// AND THE ROLE THE KEY HELD, because an audit is read later than
+		// the keys are: a key re-issued as an admin's would otherwise make
+		// every refusal it was once given read as a bug, and a member's
+		// call refused for reaching past its role is the record that says
+		// so.
+		KeyRole:   caller.Role,
+		ActorSeat: seat,
+		Transport: transport,
+		Tool:      name,
+		RequestID: requestID,
 	}
 	record.Outcome, record.Position, record.Refusal = auditOutcome(name, result, err)
 	Audit(ctx, s.audit, types.NewOperatorActed(record))

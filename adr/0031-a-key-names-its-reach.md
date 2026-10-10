@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/auth`
-- **Enforced-by:** `internal/api.TestEveryRouteDeclaresTheReachItServes`, `internal/api/queries.TestEveryQuestionIsRegisteredAtTheReachTheWithholdingRuleGivesIt`, `internal/api/queries.TestARegistrationWithoutAReachPanics`, `internal/api/auth.TestRequirePanicsOnAReachItDoesNotKnow`, `internal/config.TestAKeyWithoutARoleIsRefused`, `internal/api/stream.TestEveryPushKindHasAReach`, `internal/api/stream.TestAPushIsBuiltOncePerReachAndSentAsTheClientsOwn`, `internal/api/stream.TestAFrameKeyUpgradesTheQuestionAndNeverThePushes`, `internal/api/livestate.TestEveryAgentStatusFieldIsClassified`, `internal/api.TestEveryOrgFieldIsClassified`, `internal/api.TestTheOrgProjectionCarriesNothingGuarded`, `internal/e2e.TestTheDashboardClientCanReadWhatThisServerSends`, and the `auth.Router` signature — a route mounted without a reach does not compile
+- **Enforced-by:** `internal/api.TestEveryRouteDeclaresTheReachItServes`, `internal/api/queries.TestEveryQuestionIsRegisteredAtTheReachTheWithholdingRuleGivesIt`, `internal/api/queries.TestARegistrationWithoutAReachPanics`, `internal/api/operator.TestACatalogueToolWithNoReachIsRefused`, `internal/api/auth.TestRequirePanicsOnAReachItDoesNotKnow`, `internal/config.TestAKeyWithoutARoleIsRefused`, `internal/api/stream.TestEveryPushKindHasAReach`, `internal/api/stream.TestAPushIsBuiltOncePerReachAndSentAsTheClientsOwn`, `internal/api/stream.TestAFrameKeyUpgradesTheQuestionAndNeverThePushes`, `internal/api/livestate.TestEveryAgentStatusFieldIsClassified`, `internal/api.TestEveryOrgFieldIsClassified`, `internal/api.TestTheOrgProjectionCarriesNothingGuarded`, `internal/e2e.TestTheDashboardClientCanReadWhatThisServerSends`, and the `auth.Router` signature — a route mounted without a reach does not compile
 - **Cost-when-tried:** every accepted token was an operator. The scope the access screen called `person` was everything `operator` reached plus `/operator/act`, so a key handed to a teammate for their inbox revealed the secret store's values, rewrote the company document and read every agent's transcript; and a Tier A switch that opened every read, on by default, served transcripts, diaries and the whole event stream to anybody who could reach the port, its one guard a warning at startup on a bind that was not loopback. What a read needed was decided in two places — a prefix list beside the switch, and a per-question operator flag the route rule could not see — and each looked complete from inside.
 - **Tag-status:** unreleased
 
@@ -14,7 +14,8 @@ what a caller with no key reaches: `public` (the default — the company's name,
 mission and chart) or `none`. The guard resolves every request to one
 principal carrying a **reach**, ordered `open` < `public` < `member` < `admin`,
 and every surface names the reach it serves **where it is declared**: a route
-at its mount and a question at its registration. A question's REST route takes
+at its mount, a question at its registration and an operator tool in the
+catalogue's table, which the operator surface refuses to build without. A question's REST route takes
 its reach from the registry, so the two cannot disagree. A caller below a
 surface's reach is refused before the surface runs — 401 when no key was
 accepted, 403 `forbidden` when the key was accepted and reaches less, because

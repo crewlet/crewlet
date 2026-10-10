@@ -96,12 +96,13 @@ type Sources struct {
 	// was attributed to them.
 	Env org.EnvLookup
 
-	// OperatorActs names the tools the act transport serves
-	// (`internal/api/operator`'s Server.Acts), which `viewer` answers a
-	// person as `acts` so a screen enables exactly the controls a press of
-	// would be served. Nil serves none — a company with no native backend
-	// has nothing a person could act on.
-	OperatorActs func() []string
+	// OperatorActs names the tools the act transport serves a caller holding
+	// a reach (`internal/api/operator`'s Server.Acts), which `viewer`
+	// answers a person as `acts` so a screen enables exactly the controls a
+	// press of would be served — a member's list without what only an admin
+	// may call. Nil serves none — a company with no native backend has
+	// nothing a person could act on.
+	OperatorActs func(auth.Reach) []string
 
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.

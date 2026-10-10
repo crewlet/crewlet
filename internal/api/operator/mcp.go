@@ -37,20 +37,48 @@ const serverName = "crewlet-operator"
 // credential as its author (see [WorkActor]). An unlinked MEMBER key it
 // refuses, because a member acts only as the person the key is linked to
 // (ADR-0031) — see [Server.MCPHandler].
+//
+// ONE SERVER PER KEYED REACH, each listing exactly the tools its reach is
+// served ([catalogue.within]): an assistant shown a tool that fails on every
+// call learns to distrust the whole catalogue, which is [builtin.OperatorTools]'
+// own reason for omitting what a company cannot serve. The listing is the
+// courtesy and the dispatch is the rule — every call is still checked against
+// the caller's own reach there, so a session opened under one key and carried
+// on under another gains nothing.
 type mcpTransport struct {
-	srv *mcp.Server
+	byReach map[auth.Reach]*mcp.Server
 }
 
-// newMCPTransport registers every catalogue tool on an MCP server.
+// keyedReaches are the reaches a caller reaching this surface can hold: it is
+// mounted at member reach, so anonymous and public callers never get here.
+var keyedReaches = []auth.Reach{auth.ReachMember, auth.ReachAdmin}
+
+// newMCPTransport registers, on one MCP server per keyed reach, every
+// catalogue tool that reach is served.
 func newMCPTransport(s *Server, company string) mcpTransport {
 	title := "Crewlet"
 	if name := strings.TrimSpace(company); name != "" {
 		title = name + " (Crewlet)"
 	}
+	t := mcpTransport{byReach: make(map[auth.Reach]*mcp.Server, len(keyedReaches))}
+	for _, reach := range keyedReaches {
+		t.byReach[reach] = newMCPServer(s, title, reach)
+	}
+	return t
+}
+
+// serverFor is the server a caller holding reach is listed, or nil for a reach
+// this surface serves nobody at.
+func (t mcpTransport) serverFor(reach auth.Reach) *mcp.Server {
+	return t.byReach[reach]
+}
+
+// newMCPServer is one MCP server listing what reach is served.
+func newMCPServer(s *Server, title string, reach auth.Reach) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name: serverName, Title: title, Version: "1",
 	}, nil)
-	for _, tool := range s.catalogue.tools {
+	for _, tool := range s.catalogue.within(reach) {
 		srv.AddTool(&mcp.Tool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
@@ -68,7 +96,7 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 				builtin.AnnotationsFor(tool.Name())),
 		}, handlerFor(s, tool.Name()))
 	}
-	return mcpTransport{srv: srv}
+	return srv
 }
 
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
@@ -121,8 +149,12 @@ func handlerFor(s *Server, name string) mcp.ToolHandler {
 // which an MCP client reports as a transport that does not support streaming
 // rather than as a route registered wrong.
 func (s *Server) MCPHandler() http.Handler {
-	streamable := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return s.mcp.srv }, nil)
+	// THE CALLER'S OWN REACH PICKS THE LISTING, read off the principal the
+	// handler below has already admitted. Nil only for a reach that cannot
+	// get past that admission, which the SDK answers 400.
+	streamable := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		return s.mcp.serverFor(auth.PrincipalFrom(r.Context()).Reach)
+	}, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE REACH IS THE APP'S, not a second check here: this path is
 		// mounted at member reach, so a request that reaches this handler

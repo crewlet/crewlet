@@ -157,8 +157,8 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 func TestAnAnswerIsAnActNotARead(t *testing.T) {
 	t.Parallel()
 	s := answerSurface(t, &countedModel{}, &companyWindows{})
-	if !slices.Contains(s.Acts(), builtin.AnswerKnowledgeTool) {
-		t.Fatalf("the act transport serves %v and not answer_knowledge", s.Acts())
+	if !slices.Contains(s.Acts(auth.ReachMember), builtin.AnswerKnowledgeTool) {
+		t.Fatalf("the act transport serves %v and not answer_knowledge", s.Acts(auth.ReachMember))
 	}
 	if crewletmcp.ReadOnlyProven(s.Annotations(builtin.AnswerKnowledgeTool)) {
 		t.Error("answer_knowledge is advertised as a proven read")

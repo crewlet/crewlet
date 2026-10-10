@@ -184,6 +184,8 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 			"transport": types.TransportAct, "tool": tracker.CreateWorkItemTool,
 			"request_id": auditedRequest,
 			"position":   "CREWLET_TRACKER_LOG@1:7",
+			// THE ROLE THE KEY HELD, from the app's own guard.
+			"key_role": "admin",
 		}},
 	}, {
 		name: "an act the tool refuses",

@@ -3,6 +3,7 @@ package types
 import (
 	"strconv"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 )
 
@@ -107,6 +108,17 @@ type OperatorActed struct {
 	// for a credential nobody bound (which only the MCP transport admits).
 	OperatorID string `json:"operator_id"`
 	ActorSeat  string `json:"actor_seat,omitempty"`
+	// KeyRole is the ROLE the key held when it made the call — `member` or
+	// `admin` (`api.auth.tokens[].role`, ADR-0031), `admin` for a disabled
+	// guard's caller. Recorded rather than looked up later because Tier A
+	// is per node and changes on a restart: the key that made a call may
+	// hold another role, or none, by the time anybody reads the record.
+	//
+	// `key_role`, NEVER `role`: on the event wire `role` is a SEAT's role
+	// name, which the actor chain reads off every payload that carries it
+	// ([events.Roler]) — a key's role under that name would be read as the
+	// seat the call was made by.
+	KeyRole config.TokenRole `json:"key_role"`
 
 	Transport string `json:"transport"`
 	Tool      string `json:"tool"`

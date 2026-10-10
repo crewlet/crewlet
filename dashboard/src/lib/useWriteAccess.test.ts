@@ -89,6 +89,77 @@ test("a handle with an empty acts list acts for nobody", () => {
   expect(writeAccess("set_pins", { ...BOUND, acts: [] }, true).can).toBe(false);
 });
 
+// A CHANGE SERVED TO AN ADMIN'S KEY ALONE is missing from a member's `acts`
+// for their role, not because the engine does not make it — so a member is
+// told who to ask, and only a change the engine makes for nobody here reads
+// "does not make". The ENGINE'S list still decides: an admin, or a member the
+// engine somehow listed it for, is never held by the row's reach alone.
+describe("a change served to an admin alone", () => {
+  const admins = [{ handle: "jane", name: "Jane Founder" }];
+  const member: ViewerState = {
+    ...BOUND,
+    tokenID: "ada",
+    role: "member",
+    reach: "member",
+    admin: false,
+    handle: "ada",
+    name: "Ada",
+    acts: [],
+    admins,
+  };
+
+  test("a member is told which admin to ask", () => {
+    expect(writeAccess("set_pins", member, true, null, "admin")).toEqual({
+      can: false,
+      block: "not_admin",
+      reason: notAdminSentence(admins),
+    });
+    expect(notAdminSentence(admins)).toBe("Only an admin can change this — ask Jane Founder.");
+  });
+
+  test("a member's own change the engine does not make is still not served", () => {
+    expect(writeAccess("set_pins", member, true, null, "member")).toMatchObject({
+      block: "not_served",
+    });
+  });
+
+  test("an admin the engine leaves it out for is not served, never told to ask themselves", () => {
+    expect(writeAccess("set_pins", { ...BOUND, acts: [] }, true, null, "admin")).toMatchObject({
+      block: "not_served",
+    });
+  });
+
+  test("the engine's list decides, whatever the row's reach", () => {
+    expect(writeAccess("set_pins", { ...member, acts: ["set_pins"] }, true, null, "admin")).toEqual(
+      { can: true, as: "ada", acts: ["set_pins"] },
+    );
+  });
+
+  test("ranks after every reason a person clears on this screen", () => {
+    expect(writeAccess("set_pins", member, false, null, "admin")).toMatchObject({
+      block: "offline",
+    });
+    expect(
+      writeAccess(
+        "set_pins",
+        { ...member, handle: "", linked: false, unbound: true },
+        true,
+        null,
+        "admin",
+      ),
+    ).toMatchObject({ block: "unbound" });
+  });
+
+  // EVERY ROW THE DASHBOARD PRESSES TODAY IS A MEMBER'S, which is the
+  // engine's table (`TestEveryActionTheDashboardTakesIsOneTheActTransportServes`)
+  // — so the row's own reach, read when a test names none, holds nobody.
+  test("the row's own reach is what a press is judged at", () => {
+    expect(writeAccess("set_pins", { ...member, acts: [] }, true)).toMatchObject({
+      block: "not_served",
+    });
+  });
+});
+
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
 // own sentence — but LAST: a reader who is offline, anonymous or unbound is
 // told the thing they can clear first, and a hold is a fact about the screen.

@@ -90,7 +90,7 @@ func everySource() Sources {
 		Events:       struct{ FleetEvents }{},
 		Usage:        struct{ usage.Estate }{},
 		Company:      func() *config.Company { return nil },
-		OperatorActs: func() []string { return nil },
+		OperatorActs: func(auth.Reach) []string { return nil },
 		Coord:        struct{ coord.Backend }{},
 		Plane:        struct{ coord.Plane }{},
 		Objects:      struct{ engine.CollectionRecords }{},

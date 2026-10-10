@@ -494,10 +494,14 @@ the word the company uses.
 
 Read it at `GET /work/catalogue`, or with `get_work_catalogue`, which every
 seat holds: a model that cannot read the catalogue can only guess at a type.
-Writing it is an **operator** gesture — `write_work_catalogue` — because a seat
-adding a type to make its own create succeed is a seat editing the rules it is
-judged by, and the refusal it was working around is the signal a person needs
-to see.
+Writing it is an **admin's** gesture — `write_work_catalogue`, which the
+operator surface serves to an admin's key alone — because a seat adding a type
+to make its own create succeed is a seat editing the rules it is judged by, and
+the refusal it was working around is the signal a person needs to see; and
+because no seat in the chart holds the catalogue, so no lead's rule could say
+which person may change it. A member's key is refused `forbidden`, naming
+that an admin can, and an assistant connected with one is not listed the tool
+at all.
 
 **A write is the read, edited.** The `fields` list REPLACES the declared set,
 and every declaration in it is whole: a key left out is *cleared*, `config` and
@@ -1455,7 +1459,8 @@ given — `list_work_views`, `save_work_view`,
 `set_priorities`, `remove_work_item`, `restore_work_item` and
 `place_work_item`
 — the five page tools beside them and knowledge
-search — the seat's own implementations, with one
+search — every one served to a member's key but `write_work_catalogue`, an
+admin's — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
 author kind `operator`. There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
