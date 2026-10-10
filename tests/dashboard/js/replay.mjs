@@ -17,10 +17,15 @@
 // to the last.
 //
 // Usage: node replay.mjs <frames.json> <act.json> [--print]
+//        node replay.mjs <frames.json> --member [--print]
 //
 //   frames.json  a JSON array of raw frame strings, in arrival order
 //   act.json     one `/operator/act` exchange: {tool, args, request_id,
 //                status, body}, the body the engine's answer byte for byte
+//   --member     the frames are a MEMBER's socket (ADR-0031): each seat's
+//                state and no call, the budget's state and no figure, and
+//                none of what the machine processed — and the client must
+//                end up holding exactly that
 //   --print      dump the resulting store state as JSON on stdout
 //
 // Exits non-zero with a diagnosis on stderr when the frames do not drive the
@@ -56,9 +61,15 @@ globalThis.location = { origin: "http://replay.invalid" };
 
 const { Store, LiveSocket, act, SessionFloors, domainOf } = await import(PROTOCOL_URL.href);
 
-const [file, actFile, ...flags] = process.argv.slice(2);
-if (!file || !actFile || actFile.startsWith("--")) {
-  console.error("usage: node replay.mjs <frames.json> <act.json> [--print]");
+const args = process.argv.slice(2);
+const flags = args.filter((a) => a.startsWith("--"));
+const [file, actFile] = args.filter((a) => !a.startsWith("--"));
+const member = flags.includes("--member");
+if (!file || (!member && !actFile)) {
+  console.error(
+    "usage: node replay.mjs <frames.json> <act.json> [--print]\n" +
+      "       node replay.mjs <frames.json> --member [--print]",
+  );
   process.exit(2);
 }
 
@@ -90,6 +101,106 @@ if (store.unknownPushes.size) {
     `the client does not dispatch every kind the engine pushed (${seen}): each ` +
       "of those frames fell through the socket's switch and reached no screen",
   );
+}
+
+if (member) {
+  replayMember();
+}
+
+// A MEMBER'S SOCKET, read by the same client (ADR-0031). What a member is
+// served is each seat's STATE — its activity, the item it is on, its step and
+// since when — and the budget's state with no figure, the chart, the routines
+// and the health; and none of what the machine processed. So the client must
+// end up holding that and nothing an admin's tab holds: a row the store merged
+// a call onto, an event in the feed or a spend figure would each be a member
+// reading a prompt, a payload or a bill.
+function replayMember() {
+  const MEMBER_ROW = new Set([
+    "id", "role", "handle", "activity", "stopped_reason", "work_item", "step", "since", "paused_by",
+  ]);
+  const STEPS = ["context", "execute", "review"];
+  if (!state.agents.length) {
+    problems.push("no seats: a member's roster arrived empty");
+  }
+  let sawWorking = false;
+  let sawStep = false;
+  let sawItem = false;
+  const replay = new Store();
+  const probe = new LiveSocket(replay);
+  for (const raw of frames) {
+    probe.onMessage(raw);
+    for (const agent of replay.state.agents) {
+      if (agent.activity === "working") sawWorking = true;
+      if (agent.step) {
+        sawStep = true;
+        if (!STEPS.includes(agent.step)) {
+          problems.push(`a seat is at step ${JSON.stringify(agent.step)}, which no stepper draws`);
+        }
+      }
+      const item = agent.work_item;
+      if (item && item.key && item.id && item.project) sawItem = true;
+      const extra = Object.keys(agent).filter((k) => !MEMBER_ROW.has(k));
+      if (extra.length) {
+        problems.push(
+          `a member's seat row holds ${extra.join(", ")}, which a member is not served`,
+        );
+      }
+    }
+  }
+  if (!sawWorking) problems.push("no seat was ever `working` on a member's tab");
+  if (!sawStep) problems.push("no seat ever said which step of its turn it was at");
+  if (!sawItem) problems.push("no seat ever named the item its turn was on");
+
+  for (const [slice, empty] of [
+    ["events", state.events.length === 0],
+    ["phases", state.phases.length === 0],
+    ["sandboxes", state.sandboxes.length === 0],
+    ["tools", state.tools.length === 0],
+    ["tokens", state.tokens === null],
+    ["budget", state.budget === null],
+  ]) {
+    if (!empty) problems.push(`a member's tab holds ${slice}, which only an admin is pushed`);
+  }
+
+  const status = state.budgetStatus;
+  if (!status || !Array.isArray(status.seats) || !status.timezone) {
+    problems.push(`a member's tab holds no budget state: ${JSON.stringify(status)}`);
+  } else {
+    const refusing = status.seats
+      .flatMap((s) => s.windows)
+      .find((w) => w.state === "refusing" && w.resets_at);
+    if (!refusing) {
+      problems.push(
+        "no seat's window read as refusing with its reset: a member cannot tell " +
+          "when a seat out of budget can work again",
+      );
+    }
+    const figures = JSON.stringify(status).match(/"(used|limit|refused_at|starts_at)"/);
+    if (figures) problems.push(`a member's budget state carries ${figures[1]}, a figure`);
+  }
+
+  const org = state.org;
+  if (!org || !Array.isArray(org.roles) || !org.roles.length) {
+    problems.push("a member's tab holds no chart");
+  } else {
+    for (const seat of org.roles) {
+      for (const key of ["llm", "tool_sources", "token_budget"]) {
+        if (key in seat) problems.push(`the chart a member holds carries a seat's ${key}`);
+      }
+    }
+  }
+  if (!state.health) problems.push("a member's tab holds no health");
+
+  if (problems.length) {
+    console.error("the dashboard client could not read a member's frames:");
+    for (const p of problems) console.error(`  - ${p}`);
+    process.exit(1);
+  }
+  console.log(
+    `replay ok (member): ${frames.length} frames, ${state.agents.length} seats, ` +
+      `${status.seats.length} seat(s) pressing on a budget, nothing the machine processed`,
+  );
+  process.exit(0);
 }
 
 // The frames are one company running one turn. What the client must end up

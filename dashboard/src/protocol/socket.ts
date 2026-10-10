@@ -21,6 +21,7 @@ import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
 import type { Frame, QueryMap, QueryName } from "./types.ts";
 import type { QueryErrorCode } from "../contract/errors.ts";
+import type { Reach } from "../contract/access.ts";
 import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 
 const PATH = "/ws/stream";
@@ -144,6 +145,14 @@ export class LiveSocket {
    *  found the call behind again while the fetch was out — see `fetchCalls`. */
   private fetchingCalls = new Map<string, boolean>();
   private token = "";
+  /**
+   * How far the reader reaches, as the last `viewer` answer through this socket
+   * said — `open` until one has. READ AS THE ANSWER PASSES (`settle`) rather
+   * than handed in, so it holds for whatever asked the question, a frame or
+   * not. Read by `fetchCalls` and nothing else: what the socket is PUSHED is
+   * decided by the engine from the handshake's key, never here.
+   */
+  private viewerReach: Reach = "open";
   /** Whether the shell has already been asked to collect a token. */
   private askedForToken = false;
   private authRejectedHandler: (() => void) | null = null;
@@ -481,8 +490,16 @@ export class LiveSocket {
    * fails — the call is asked for again, once, rather than left behind until
    * the seat's next push, which a frozen failed call or a long round never
    * sends. An answer at or past them holds everything they named, and ends it.
+   *
+   * ONLY FROM AN ADMIN'S TAB. `live_call` is the prompt in flight and every
+   * tool result — what the machine processed (ADR-0031) — so a member's tab is
+   * refused it, and is never pushed a call to hold behind in the first place.
+   * Asked before the viewer has answered, it would put a refusal on the wire
+   * from every member's tab; the cost of waiting is a call an admin's tab
+   * holds behind for one push longer, which the seat's next push repairs.
    */
   private fetchCalls(handles: string[]): void {
+    if (this.viewerReach !== "admin") return;
     for (const handle of handles) {
       if (this.fetchingCalls.has(handle)) {
         this.fetchingCalls.set(handle, true);
@@ -514,8 +531,15 @@ export class LiveSocket {
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
-    else entry.resolve(data);
+    if (error) {
+      entry.reject(new QueryError(error, retryAfterSeconds, detail));
+      return;
+    }
+    if (entry.what === "viewer") {
+      const reach = (data as { reach?: unknown } | null)?.reach;
+      this.viewerReach = typeof reach === "string" ? (reach as Reach) : "open";
+    }
+    entry.resolve(data);
   }
 
   private failInflight(reason: string): void {

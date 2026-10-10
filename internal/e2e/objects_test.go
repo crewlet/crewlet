@@ -24,11 +24,14 @@ import (
 // object bucket, replicated across the members — so a file uploaded on one
 // node is served, whole and verified, by another.
 
-// e2eOperatorID and e2eOperatorToken are the credential a cluster member's
-// API accepts writes under.
+// e2eOperatorID and e2eOperatorToken are the ADMIN credential a node's API
+// accepts — the one a cluster member accepts writes under — and e2eMemberID
+// and e2eMemberToken a MEMBER's, which a node startNode stands up accepts too.
 const (
 	e2eOperatorID    = "e2e-ops"
 	e2eOperatorToken = "e2e-operator-token-0123456789"
+	e2eMemberID      = "e2e-member"
+	e2eMemberToken   = "e2e-member-token-0123456789"
 )
 
 // upload PUTs a file through a node's byte route.

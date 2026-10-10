@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/auth`
-- **Enforced-by:** `internal/api.TestEveryRouteDeclaresTheReachItServes`, `internal/api/queries.TestEveryQuestionIsRegisteredAtTheReachTheWithholdingRuleGivesIt`, `internal/api/queries.TestARegistrationWithoutAReachPanics`, `internal/api/auth.TestRequirePanicsOnAReachItDoesNotKnow`, `internal/config.TestAKeyWithoutARoleIsRefused`, and the `auth.Router` signature — a route mounted without a reach does not compile
+- **Enforced-by:** `internal/api.TestEveryRouteDeclaresTheReachItServes`, `internal/api/queries.TestEveryQuestionIsRegisteredAtTheReachTheWithholdingRuleGivesIt`, `internal/api/queries.TestARegistrationWithoutAReachPanics`, `internal/api/auth.TestRequirePanicsOnAReachItDoesNotKnow`, `internal/config.TestAKeyWithoutARoleIsRefused`, `internal/api/stream.TestEveryPushKindHasAReach`, `internal/api/stream.TestAPushIsBuiltOncePerReachAndSentAsTheClientsOwn`, `internal/api/stream.TestAFrameKeyUpgradesTheQuestionAndNeverThePushes`, `internal/api/livestate.TestEveryAgentStatusFieldIsClassified`, `internal/api.TestEveryOrgFieldIsClassified`, `internal/api.TestTheOrgProjectionCarriesNothingGuarded`, `internal/e2e.TestTheDashboardClientCanReadWhatThisServerSends`, and the `auth.Router` signature — a route mounted without a reach does not compile
 - **Cost-when-tried:** every accepted token was an operator. The scope the access screen called `person` was everything `operator` reached plus `/operator/act`, so a key handed to a teammate for their inbox revealed the secret store's values, rewrote the company document and read every agent's transcript; and a Tier A switch that opened every read, on by default, served transcripts, diaries and the whole event stream to anybody who could reach the port, its one guard a warning at startup on a bind that was not loopback. What a read needed was decided in two places — a prefix list beside the switch, and a per-question operator flag the route rule could not see — and each looked complete from inside.
 - **Tag-status:** unreleased
 
@@ -29,6 +29,24 @@ traces and spend — **and how it is run**: nodes, leases, keys, secrets,
 configuration, retention and backups. A record about a person is read by that
 person and by the leads whose line they are in, whatever the key's role: an
 admin key is reach over the engine, not over somebody else's inbox.
+
+**What a socket is pushed is held to the same rule.** The handshake's key fixes
+the socket's reach for its life, and every push kind names the lowest reach it
+is sent to in one table that covers every kind the socket sends; a key a query
+frame presents upgrades that one question and never the pushes. Where a kind's
+content differs by reach it is built once per reach a connected socket holds —
+never once per socket — and each socket is sent the variant its own reach is
+served: a member is pushed each seat's STATE (what it is doing, the item it is
+on, the step of its turn, since when, and which person paused it) and never the
+call in flight, and which budget windows are refusing or near with no figure.
+The handshake snapshot and the REST bundles beside it (`GET /agents`,
+`GET /stream/snapshot`) are assembled for the caller's reach the same way. A
+member-served shape is its own type naming what it carries — never a trimmed
+copy of the admin's, where the next field added would be on it by default —
+and so is the chart, `GET /org`: every field carries the reach it is served at
+(the chart's shape for anybody, the founder's prose for a member, the ceilings,
+model chains and tool sources for an admin), and a field with no reach is
+withheld from every caller rather than published.
 
 ## Why the obvious alternative is wrong
 

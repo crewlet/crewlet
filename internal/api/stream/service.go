@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -58,11 +59,12 @@ type Service struct {
 	// which leaves them blank.
 	handles HandleFunc
 
-	// roster, org and tools are the config-derived surfaces. See Options.
-	roster    func() []map[string]any
-	org       func() any
-	tools     func() []map[string]any
-	schedules func() any
+	// rosterRows, org, tools and schedules are the config-derived
+	// surfaces. See Options.
+	rosterRows func() []map[string]any
+	org        func(auth.Reach) any
+	tools      func() []map[string]any
+	schedules  func() any
 
 	// placement reads the seat leases for the seat-state vocabulary's
 	// `unplaced`. See Options.Placement.
@@ -129,11 +131,19 @@ type Options struct {
 	// showing a role a revision deleted.
 	//
 	// Org answers `any` because its shape is an explicit public type owned
-	// by package api (the anonymous org projection), and api imports this
+	// by package api (the classified org projection), and api imports this
 	// package, so naming the type here would be an import cycle. This
 	// service only carries the value to the wire and never reads into it.
+	// It is asked FOR A REACH and answers what that reach is served of the
+	// chart: the projection classifies every field it carries (ADR-0031),
+	// and this service sends each socket the variant its own reach is
+	// handed — never one built for a richer reach.
+	//
+	// Roster is the static rows, whatever the reach: what a reach is served
+	// of a seat's row is decided here, where the live state is merged onto
+	// it ([Service.Roster]).
 	Roster    func() []map[string]any
-	Org       func() any
+	Org       func(auth.Reach) any
 	Tools     func() []map[string]any
 	Schedules func() any
 
@@ -185,18 +195,18 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 			strings.Join(missing, ", "))
 	}
 	s := &Service{
-		hub:       NewHub(),
-		state:     state,
-		health:    opts.Health,
-		handles:   opts.Handles,
-		roster:    opts.Roster,
-		org:       opts.Org,
-		tools:     opts.Tools,
-		schedules: opts.Schedules,
-		placement: opts.Placement,
-		now:       opts.Now,
-		interval:  opts.HealthInterval,
-		pushed:    map[string]pushedCall{},
+		hub:        NewHub(),
+		state:      state,
+		health:     opts.Health,
+		handles:    opts.Handles,
+		rosterRows: opts.Roster,
+		org:        opts.Org,
+		tools:      opts.Tools,
+		schedules:  opts.Schedules,
+		placement:  opts.Placement,
+		now:        opts.Now,
+		interval:   opts.HealthInterval,
+		pushed:     map[string]pushedCall{},
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -233,11 +243,11 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	// before the event that caused it would briefly show a consequence
 	// with no cause in the feed beside it.
 	if change.Events {
-		s.hub.Broadcast(Push(KindEvent, env, now))
+		s.hub.Broadcast(KindEvent, Same(env), now)
 	}
 	s.pushAgents(change, now)
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.pushSandboxes(now)
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
@@ -248,8 +258,26 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		s.tokensDirty.Store(true)
 	}
 	if change.Budget {
-		s.hub.Broadcast(Push(KindBudget, s.state.Budget(), now))
+		s.hub.Broadcast(KindBudget, func(reach auth.Reach) (any, bool) {
+			return s.budget(reach), true
+		}, now)
 	}
+}
+
+// pushSandboxes sends the run set, built only if a client is sent it.
+func (s *Service) pushSandboxes(now time.Time) {
+	s.hub.Broadcast(KindSandboxes, Shared(func() any { return s.state.ActiveSandboxes() }), now)
+}
+
+// budget is the live meter as reach is served it: an admin's meters, figures
+// and all, or a member's [livestate.BudgetStatus] — which windows are refusing
+// or near and when each turns over, and no figure, because what a window spent
+// is what the machine processed (ADR-0031).
+func (s *Service) budget(reach auth.Reach) any {
+	if reach.Covers(auth.ReachAdmin) {
+		return s.state.Budget()
+	}
+	return s.state.BudgetStatus()
 }
 
 // ReconcileSandboxes lands a read of the durable run record on the projection
@@ -263,7 +291,7 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 	change := s.state.ReconcileSandboxes(records, asOf)
 	now := s.now()
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.pushSandboxes(now)
 	}
 	s.pushAgents(change, now)
 }
@@ -283,6 +311,15 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 // frame: what is left out is decided against what the previous push said,
 // so two pushes built side by side could each leave out a field the other
 // was the one to carry. Broadcast never blocks, so nothing waits long here.
+//
+// TWO VARIANTS, and the heavy-field bookkeeping is the admin one's alone. A
+// member is pushed each seat's [livestate.AgentStatus] — its state, the item it
+// is on and its step, and nothing of the call — so there is nothing to leave
+// out. The admin rows are built only while an admin's socket is connected, and
+// a gap in which none was leaves what the last admin push said behind: the
+// next one then sends more than it needed to, never less, because a version
+// only moves forward and an admin who connected in the gap holds every field
+// at the version its snapshot was taken at.
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -293,14 +330,17 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	handles := slices.Sorted(maps.Keys(change.Agents))
 	s.pushMu.Lock()
 	defer s.pushMu.Unlock()
-	rows := s.state.OverlayRows(handles)
-	if len(rows) == 0 {
-		return
-	}
-	for _, row := range rows {
-		s.leaveOutWhatIsHeld(row)
-	}
-	s.hub.Broadcast(Push(KindAgents, rows, now))
+	s.hub.Broadcast(KindAgents, func(reach auth.Reach) (any, bool) {
+		if !reach.Covers(auth.ReachAdmin) {
+			statuses := s.state.Statuses(handles)
+			return statuses, len(statuses) > 0
+		}
+		rows := s.state.OverlayRows(handles)
+		for _, row := range rows {
+			s.leaveOutWhatIsHeld(row)
+		}
+		return rows, len(rows) > 0
+	}, now)
 }
 
 // pushedCall is what an `agents` push said about one seat's live call.
@@ -349,7 +389,43 @@ func (s *Service) RefreshPlacement() {
 	s.pushAgents(s.state.SetPlacement(placed), s.now())
 }
 
-// Snapshot is the state a client receives the instant it connects.
+// section is one key of the handshake snapshot: the push kind that keeps it
+// current, whose reach decides who is handed it, and its content for a reach.
+type section struct {
+	key   string
+	kind  Kind
+	build func(reach auth.Reach) any
+}
+
+// sections is the snapshot, key by key. Each key is gated by the push that
+// keeps it current, so a tab is never handed on connect what it would not be
+// pushed a moment later — and the reach is stated once, in [kinds].
+func (s *Service) sections() []section {
+	return []section{
+		{"health", KindHealth, func(auth.Reach) any { return s.currentHealth() }},
+		// THE STATIC ROSTER FIRST, with the live state merged onto it.
+		// The merge walks what it is GIVEN, so passing nil here — which it
+		// did — produced an empty list whatever the projection held.
+		{"agents", KindSeats, s.roster},
+		{"org", KindOrg, s.currentOrg},
+		{"tools", KindTools, func(auth.Reach) any { return s.currentTools() }},
+		// THE CONFIGURED ROWS, not the dispatch ledger. The screen renders
+		// its table from this slice and fetches the ledger itself, so
+		// without it the table stayed on its skeleton for ever — the
+		// client reads null as "not here yet", which was permanently true.
+		{"schedules", KindSchedules, func(auth.Reach) any { return s.currentSchedules() }},
+		{"events", KindEvent, func(auth.Reach) any { return s.state.RecentEvents(livestate.EventFeedLimit) }},
+		{"sandboxes", KindSandboxes, func(auth.Reach) any { return s.state.ActiveSandboxes() }},
+		{"tokens", KindTokens, func(auth.Reach) any { return s.TokenRollup() }},
+		{"budget", KindBudget, s.budget},
+	}
+}
+
+// Snapshot is the state a client holding reach receives the instant it
+// connects: every section whose push reaches it, each in its reach's variant,
+// and no key at all for one that does not — absent, never null, because a
+// client reads null as "not here yet" and would wait for a push that is never
+// coming.
 //
 // Built entirely from the in-memory projection — no database round trip on
 // connect. That is the whole reason the projection exists: a dashboard that
@@ -358,45 +434,48 @@ func (s *Service) RefreshPlacement() {
 //
 // The one read it makes is the seat leases ([Service.RefreshPlacement]),
 // because no event says which seats a node holds and a connecting tab must not
-// be handed a placement up to a tick old.
-func (s *Service) Snapshot() map[string]any {
-	s.RefreshPlacement()
-	return map[string]any{
-		"health": s.currentHealth(),
-		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
-		// MergeAgents walks what it is GIVEN, so passing nil here — which
-		// it did — produced an empty list whatever the projection held.
-		"agents": s.state.MergeAgents(s.currentRoster()),
-		"org":    s.currentOrg(),
-		"tools":  s.currentTools(),
-		// THE CONFIGURED ROWS, not the dispatch ledger. The screen renders
-		// its table from this slice and fetches the ledger itself, so
-		// without it the table stayed on its skeleton for ever — the
-		// client reads null as "not here yet", which was permanently
-		// true.
-		"schedules": s.currentSchedules(),
-		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
-		"sandboxes": s.state.ActiveSandboxes(),
-		"tokens":    s.TokenRollup(),
-		"budget":    s.state.Budget(),
+// be handed a placement up to a tick old — and only for a reach that is served
+// the roster, so a socket anybody may open costs no lease read.
+func (s *Service) Snapshot(reach auth.Reach) map[string]any {
+	if need, _ := KindReach(KindSeats); reach.Covers(need) {
+		s.RefreshPlacement()
 	}
+	out := map[string]any{}
+	for _, sec := range s.sections() {
+		if need, _ := KindReach(sec.kind); reach.Covers(need) {
+			out[sec.key] = sec.build(reach)
+		}
+	}
+	return out
 }
 
-// Roster is the company's seat list as the `seats` push carries it.
+// Roster is the company's seat list as reach is served it — the rows the
+// `seats` push carries and GET /agents answers.
 //
-// Exported because a config apply has to re-send it: the client's own doc
-// says a merge cannot express a deletion, so a revision that removed a role
-// would leave its card on screen until someone reloaded the page.
-func (s *Service) Roster() []map[string]any {
+// AN ADMIN'S ROW is the static row with the live overlay merged on, the call
+// in flight included; A MEMBER'S is the seat's public identity and its
+// [livestate.AgentStatus]. Mounted at member and gated by the `seats` push's
+// reach, so nothing below member is handed either.
+func (s *Service) Roster(reach auth.Reach) any {
 	s.RefreshPlacement()
-	return s.state.MergeAgents(s.currentRoster())
+	return s.roster(reach)
 }
 
-// Org is the company's role and unit tree, for the same re-send.
-func (s *Service) Org() any { return s.currentOrg() }
+// roster is [Service.Roster] without the lease read, for a caller that has
+// just made one.
+func (s *Service) roster(reach auth.Reach) any {
+	static := s.currentRoster()
+	if reach.Covers(auth.ReachAdmin) {
+		return s.state.MergeAgents(static)
+	}
+	return s.state.MergeStatuses(static)
+}
 
-// Tools is this node's catalogue, for the same re-send. It changes on an
-// apply too — a revision that adds an MCP server adds its tools.
+// Org is the company's role and unit tree as reach is served it.
+func (s *Service) Org(reach auth.Reach) any { return s.currentOrg(reach) }
+
+// Tools is this node's catalogue, which only an admin is served: it is how
+// the engine is wired, every tool every server serves with its schema.
 func (s *Service) Tools() []map[string]any { return s.currentTools() }
 
 // Schedules is the configured rows as the `schedules` push carries them.
@@ -411,18 +490,30 @@ func (s *Service) Schedules() map[string]any {
 	return map[string]any{"schedules": s.currentSchedules()}
 }
 
-func (s *Service) currentRoster() []map[string]any { return s.roster() }
+func (s *Service) currentRoster() []map[string]any { return s.rosterRows() }
 
-func (s *Service) currentOrg() any { return s.org() }
+func (s *Service) currentOrg(reach auth.Reach) any { return s.org(reach) }
 
 func (s *Service) currentSchedules() any { return s.schedules() }
 
 func (s *Service) currentTools() []map[string]any { return s.tools() }
 
-// Broadcast pushes an envelope to every client, for the surfaces that own their
-// own data — the roster, the org tree, the tool catalogue, the schedules.
-func (s *Service) Broadcast(kind Kind, data any) {
-	s.hub.Broadcast(Push(kind, data, s.now()))
+// ResendConfigured pushes every surface the company document decides — the
+// roster, the org tree, the tool catalogue and the schedules — each to every
+// socket in its own reach's variant.
+//
+// A config apply calls it: no event will ever correct any of them, since a
+// revision that adds, renames or removes a seat produces nothing a projection
+// could learn from, and the client's merge cannot express a deletion — so
+// without it an open dashboard renders the company it connected to until
+// somebody reloads.
+func (s *Service) ResendConfigured() {
+	s.RefreshPlacement()
+	now := s.now()
+	s.hub.Broadcast(KindSeats, func(reach auth.Reach) (any, bool) { return s.roster(reach), true }, now)
+	s.hub.Broadcast(KindOrg, func(reach auth.Reach) (any, bool) { return s.currentOrg(reach), true }, now)
+	s.hub.Broadcast(KindTools, Shared(func() any { return s.currentTools() }), now)
+	s.hub.Broadcast(KindSchedules, Shared(func() any { return s.Schedules() }), now)
 }
 
 func (s *Service) currentHealth() any { return s.health() }
@@ -455,7 +546,7 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.hub.Broadcast(Push(KindHealth, s.currentHealth(), s.now()))
+				s.hub.Broadcast(KindHealth, Shared(s.currentHealth), s.now())
 				s.flushTokens()
 				// PLACEMENT ON THE SAME TICK: a seat moves between
 				// nodes on a lease, which publishes nothing, so an open
@@ -480,6 +571,11 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 // The flag is cleared only AFTER the fold, so an aggregation that panicked
 // would not consume the burst it failed on and leave the rollup stale until
 // the next phase completed.
+//
+// FOLDED ONLY WHILE AN ADMIN IS CONNECTED to be pushed it: the rollup is spend,
+// which no other reach is sent, and a fold nobody is sent is a fold wasted. The
+// flag stays set until one is, so the first tick after an admin connects pushes
+// the window as it then stands.
 func (s *Service) flushTokens() {
 	if s.state.ExpireSpend() {
 		s.tokensDirty.Store(true)
@@ -487,9 +583,11 @@ func (s *Service) flushTokens() {
 	if !s.tokensDirty.Load() {
 		return
 	}
-	rollup := s.TokenRollup()
-	s.tokensDirty.Store(false)
-	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
+	s.hub.Broadcast(KindTokens, Shared(func() any {
+		rollup := s.TokenRollup()
+		s.tokensDirty.Store(false)
+		return rollup
+	}), s.now())
 }
 
 // TokenRollup folds the live window into the breakdown the `tokens` push and

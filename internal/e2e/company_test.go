@@ -284,6 +284,14 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	// AN ADMIN KEY AND A MEMBER KEY, because what a socket is pushed is its
+	// key's reach (ADR-0031): a case watching the machine work dials as the
+	// admin, and one holding the member variants to what a member may read
+	// dials as the member. A case amends the list rather than replacing it.
+	boot.API.Auth.Tokens = []config.APIToken{
+		{ID: e2eOperatorID, Role: config.RoleAdmin, Token: e2eOperatorToken},
+		{ID: e2eMemberID, Role: config.RoleMember, Token: e2eMemberToken},
+	}
 	if spec.boot != nil {
 		spec.boot(&boot)
 	}

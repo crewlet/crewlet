@@ -39,9 +39,33 @@ func derivedCompany() *config.Company {
 	}
 }
 
-func orgOf(t *testing.T, a *api.App) api.OrgProjection {
+// chartPosture is a node's Tier A for the chart's cases: the public anonymous
+// posture, one admin key ("secret") and one member key ("member-secret").
+func chartPosture() *config.Bootstrap {
+	b := closedPosture()
+	b.API.Auth.Anonymous = config.AnonymousPublic
+	b.API.Auth.Tokens = append(b.API.Auth.Tokens,
+		config.APIToken{ID: "ada", Role: config.RoleMember, Token: "member-secret"})
+	return &b
+}
+
+// chartApp is a node over company on [chartPosture].
+func chartApp(t *testing.T, company *config.Company) *api.App {
 	t.Helper()
-	res := fetch(t, a, "/org", nil)
+	return newApp(t, api.Options{
+		Bootstrap: chartPosture(),
+		Sources:   queries.Sources{Company: func() *config.Company { return company }},
+	})
+}
+
+// orgOf is GET /org as the caller presenting key ("" presents none) reads it.
+func orgOf(t *testing.T, a *api.App, key string) api.OrgProjection {
+	t.Helper()
+	headers := map[string]string{}
+	if key != "" {
+		headers["Authorization"] = "Bearer " + key
+	}
+	res := fetch(t, a, "/org", headers)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("GET /org = %d", res.StatusCode)
 	}
@@ -56,7 +80,7 @@ func orgOf(t *testing.T, a *api.App) api.OrgProjection {
 	return out
 }
 
-func seatIn(t *testing.T, derived *config.Derived, handle string) config.DerivedSeat {
+func seatIn(t *testing.T, derived *api.OrgDerived, handle string) api.OrgDerivedSeat {
 	t.Helper()
 	for _, seat := range derived.Seats {
 		if seat.Handle == handle {
@@ -64,10 +88,10 @@ func seatIn(t *testing.T, derived *config.Derived, handle string) config.Derived
 		}
 	}
 	t.Fatalf("no seat %q in the derived hierarchy: %+v", handle, derived.Seats)
-	return config.DerivedSeat{}
+	return api.OrgDerivedSeat{}
 }
 
-func unitIn(t *testing.T, derived *config.Derived, name string) config.DerivedUnit {
+func unitIn(t *testing.T, derived *api.OrgDerived, name string) api.OrgDerivedUnit {
 	t.Helper()
 	for _, unit := range derived.Units {
 		if unit.Name == name {
@@ -75,18 +99,23 @@ func unitIn(t *testing.T, derived *config.Derived, name string) config.DerivedUn
 		}
 	}
 	t.Fatalf("no unit %q in the derived hierarchy: %+v", name, derived.Units)
-	return config.DerivedUnit{}
+	return api.OrgDerivedUnit{}
 }
 
-// THE PROJECTION ANSWERS THE DERIVED HIERARCHY, resolved as the engine runs it.
+// THE PROJECTION ANSWERS THE DERIVED HIERARCHY, resolved as the engine runs it
+// — to a member, who reads a unit's channel; the chart's anonymous reader is
+// served the same hierarchy without it.
 func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	company := derivedCompany()
-	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
-	})
+	a := chartApp(t, company)
 
-	derived := orgOf(t, a).Derived
+	if public := orgOf(t, a, "").Derived; public == nil ||
+		unitIn(t, public, "Platform").Channel != "" || unitIn(t, public, "Platform").Lead != "cto" {
+		t.Errorf("the anonymous hierarchy = %+v, want Platform's inherited lead and no channel", public)
+	}
+
+	derived := orgOf(t, a, "member-secret").Derived
 	if derived == nil {
 		t.Fatal("GET /org carries no derived hierarchy, so a client has to derive one")
 	}
@@ -126,7 +155,7 @@ func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 		t.Errorf("the SRE's managers = %v, want the CEO, which manages its unit", got)
 	}
 
-	// WITHOUT PATHS: an anonymous reader is given no document to point
+	// WITHOUT PATHS: a reader of the chart is given no document to point
 	// into, and membership is in each unit's seats.
 	raw, err := json.Marshal(derived)
 	if err != nil {

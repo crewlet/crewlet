@@ -262,7 +262,11 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	client := NewClient()
+	// PUSHED AT THE HANDSHAKE'S REACH for the life of the socket. A key a
+	// frame presents later upgrades that one question (runQuery) and never
+	// this: what a tab is sent unasked is decided once, by the key it was
+	// opened with.
+	client := NewClient(caller.Reach)
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
 	// deduped by the client, and the gap the other order leaves is not.
 	svc.Hub().Register(client)
@@ -274,7 +278,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 		writeLoop(ctx, conn, client)
 	})
 
-	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
+	client.send(Push(KindSnapshot, svc.Snapshot(caller.Reach), time.Now().UTC()))
 	readLoop(ctx, conn, guard, client, query, caller)
 
 	// Unregister closes the client's queue, which is what ends the writer.
@@ -386,7 +390,8 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Query,
 	req request, caller auth.Principal,
 ) {
-	// A frame-carried key upgrades THIS query only. It is how a socket
+	// A frame-carried key upgrades THIS query only — never the pushes, which
+	// stay at the reach the socket was opened with. It is how a socket
 	// opened before anybody signed in asks one keyed question without
 	// reconnecting. A key the guard does not accept changes nothing: the
 	// question is asked as the socket, and refused at its reach as the

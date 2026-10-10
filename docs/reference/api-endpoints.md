@@ -118,11 +118,11 @@ node means nothing was done.
 |--------|------|-------------|
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
-| `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
+| `GET` | `/agents` | List agent seats, each with its live state from the in-memory projection, **as the caller's reach is served it**: an admin's rows merge the whole overlay (the in-flight `live_call` included), a member's are each seat's identity and [state alone](#what-a-member-is-pushed). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — its `handle`, its `role` (the seat's name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50, matched on the agent id the handle derives. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is not an identity — two seats can share one — so it is not accepted |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole** — its ask and its account complete, which the memory listing carries the openings of (see [below](#get-agentsidmemoryepisodesepisode)) |
-| `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
+| `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit classified shape that carries no contact identity, email, credential or deployment setting, each field served at its own reach (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload — inside the 30-day history (`event_history_seconds`) like every other read of the log, so a link to an older event answers `not_found`: every node floors its lookup at the serving node's horizon, whatever the retention sweep of the node holding a copy has or has not reached (see [coverage](#reading-the-fleets-history-coverage)) |
@@ -175,7 +175,7 @@ node means nothing was done.
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
 | `GET` | `/viewer` | **Who is asking**, served to anyone (`open`). The presented key's id, its role and the reach it carries, and the seat that links it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no key at all, a key no seat links, and a linked one. An unlinked key is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a linked key, and an empty list for anybody else. `config_writer` is whether this key may change the company document, and `config_managed_by` who may when [another system manages it](../concepts/configuration.md#managed-configuration) — named to an admin only. `admins` is who to ask for what this key does not reach — the people whose seats link an admin key — and is empty for a caller with no key. The full shape is the [`viewer` question](#the-viewer-answer) |
-| `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
+| `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection and assembled for the caller's reach exactly as the socket's handshake is (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
@@ -224,8 +224,16 @@ and `forbidden` (see [Queries](#queries)).
 |---|---|
 | `open` | `/health`, `/ready`; the dashboard shell — `/` (a redirect), `/dashboard`, `/favicon.ico`, `/static/*`; `GET /viewer`; opening `WS /ws/stream`; `GET /query/{what}`, which judges each question by its own reach; and the routes outside parties call — `/webhooks/*`, `/otlp/*` and `/mcp/*` — which authenticate by a provider signature or a signed per-run token instead of a key |
 | `public` | `GET /org`, the company's classified public projection |
-| `member` | The REST route of every member question below — `/work` and everything under it but `/work/turns`, the retention gestures and the purge, `/pages` and its sub-routes, `/containers`, `/feed`, `/agents/activity`, `/schedules`; reading, writing and removing a project's files under `/work/files`; `POST /operator/act/{tool}` and `/operator/mcp`, which act **as the person the key is linked to** and refuse an unlinked member key `unbound` |
-| `admin` | `/config` and everything under it, reads included; `/secrets`; `/setup`; `POST /backup`; `/work/retention` and every retention, capacity and reanchor gesture under it; `POST /work/{id}/purge`; `/fleet` and `/fleet/broker`, with the broker removals; `GET /agents`, `GET /tools` and `GET /stream/snapshot`; and the REST route of every admin question below — `/agents/{id}` and its memory, episodes and conversations, `/events` and everything under it, `/turns`, `/tokens/*`, `/budgets`, `/sandbox-runs`, `/schedules/…/runs`, `/integrations`, `/access`, `/mcp-servers`, `/credential-pool`, `/backups` |
+| `member` | The REST route of every member question below — `/work` and everything under it but `/work/turns`, the retention gestures and the purge, `/pages` and its sub-routes, `/containers`, `/feed`, `/agents/activity`, `/schedules`; `GET /agents` and `GET /stream/snapshot`, each answering the caller's own reach's variant; reading, writing and removing a project's files under `/work/files`; `POST /operator/act/{tool}` and `/operator/mcp`, which act **as the person the key is linked to** and refuse an unlinked member key `unbound` |
+| `admin` | `/config` and everything under it, reads included; `/secrets`; `/setup`; `POST /backup`; `/work/retention` and every retention, capacity and reanchor gesture under it; `POST /work/{id}/purge`; `/fleet` and `/fleet/broker`, with the broker removals; `GET /tools`; and the REST route of every admin question below — `/agents/{id}` and its memory, episodes and conversations, `/events` and everything under it, `/turns`, `/tokens/*`, `/budgets`, `/sandbox-runs`, `/schedules/…/runs`, `/integrations`, `/access`, `/mcp-servers`, `/credential-pool`, `/backups` |
+
+**Three routes answer each caller per reach**, the same variants the socket
+pushes: `GET /org` serves each field of the chart at its own reach, and
+`GET /agents` and `GET /stream/snapshot` serve a member each seat's state and
+the sections a member's socket is handed, and an admin the overlay and every
+section. They are mounted at the lowest reach they serve anything to; what
+reaches the caller is decided by the reach the guard resolved, never by the
+handler (see [What a member is pushed](#what-a-member-is-pushed)).
 
 **The questions, by reach** — the same names on REST, `GET /query/{what}` and
 the socket:
@@ -1493,16 +1501,23 @@ answer still carries the seat and its live state.
 ### What the handshake snapshot carries
 
 One frame, `kind: "snapshot"`, with every section a screen needs on first
-paint. Three of them are derived from **configuration** rather than from
+paint, **assembled for the socket's reach**: each section is handed to a
+socket the push that keeps it current reaches (see [Pushes](#pushes)), in that
+reach's variant, and a section the reach is not pushed is **absent** rather
+than empty — a client reads an absent key as "not served", never as "nothing
+there". Three sections are derived from **configuration** rather than from
 anything that has happened, and they are present from the moment the socket
 opens — before a single turn has run:
 
-| Section | What it is |
-|---|---|
-| `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The same public projection [`GET /org`](#get-org) answers: the charter, the company's resolved `timezone` and its `token_budget`, root-level `roles` and `units` nesting to any depth, with only the public fields of each — a seat's resolved `llm` chain and `tool_sources` among them |
-| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
-| `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
+| Section | Reach | What it is |
+|---|---|---|
+| `agents` | `member` | The company's agent seats with their live state. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. An admin's rows merge the whole live overlay; a member's are each seat's `id`, `role` and [state](#what-a-member-is-pushed). Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
+| `org` | `public` | The same classified projection [`GET /org`](#get-org) answers at the socket's reach: the chart for anybody, the founder's prose for a member, and the ceilings, each seat's resolved `llm` chain and its `tool_sources` for an admin |
+| `tools` | `admin` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
+| `schedules` | `member` | The configured schedules |
+| `budget` | `member` | The live token meter: an admin's figures, a member's [state](#what-a-member-is-pushed) |
+| `events`, `sandboxes`, `tokens` | `admin` | The live projection: what has happened |
+| `health` | `open` | The [health envelope](#the-health-envelope) |
 
 Every seat carries **one seat-state vocabulary**, computed by the engine and
 never by a client: `activity` is `working`, `needs`, `stopped` or `idle`, and
@@ -1518,10 +1533,11 @@ on every seat another node held — and a seat no node holds reads
 not anything runs it, and moves a seat's state only when one of its windows is
 refusing.
 
-The three config-derived sections are **re-sent on every config apply**, as
-`seats`, `org` and `tools` pushes. Nothing else would correct them: a
-revision that adds, renames or removes a role produces no event a projection
-could learn from, and an overlay merge cannot express a row going away.
+The config-derived sections are **re-sent on every config apply**, as
+`seats`, `org`, `tools` and `schedules` pushes, each to every socket in its
+own reach's variant. Nothing else would correct them: a revision that adds,
+renames or removes a role produces no event a projection could learn from, and
+an overlay merge cannot express a row going away.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
@@ -1673,12 +1689,15 @@ for which of the two wins when they disagree. A reconcile that changed the set p
 ### `GET /stream/snapshot`
 
 Single-shot bundle equivalent to the WebSocket handshake's first
-envelope: every section a dashboard screen needs on first paint.
+envelope: every section a dashboard screen needs on first paint,
+**assembled for the caller's reach** exactly as the handshake is — a
+member is answered the member sections and variants, an admin all of them
+(the reach of each is in [the handshake snapshot](#what-the-handshake-snapshot-carries)).
 Assembled entirely from the in-memory projection — no database
 round-trip on the hot path.  Used as a fallback when the browser cannot
-upgrade to a WebSocket (corporate proxies, etc.).
+upgrade to a WebSocket (corporate proxies, etc.). Mounted at `member`.
 
-**Response**
+**Response** (an admin's)
 
 ```json
 {
@@ -2367,22 +2386,60 @@ socket.
 
 #### Pushes
 
+**Every socket is pushed what its reach is served** (ADR-0031). The handshake's
+key fixes the socket's reach for its life — a key a query frame presents
+upgrades [that one question](#client-frames) and never the pushes — and every
+kind names the lowest reach it is pushed to, in one table in
+`internal/api/stream` that covers every kind the socket sends. A kind whose
+content differs by reach (`agents`, `seats`, `budget`, `org`) is built once
+per reach a connected socket holds — never once per socket — and each socket
+is sent the variant its own reach is served.
+
 Server → client kinds:
 
-| `kind` | When | `data` |
-|--------|------|--------|
-| `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call` and its `live_call_seq`, so a reconnect re-renders the live row and starts the ordering of the call slot afresh. |
-| `event`    | Every event the activity feed carries, as it arrives: each persisted type, inbound deliveries included, except `auxiliary_spend`. A live-only type (`agent_turn_progress`, `agent_spawned`, `agent_terminated`, `budget_meters`) never is one — it moves the projection, which goes out as `agents` or `budget`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, failed, agent_id?, channel_id?, payload }` — `agent_id` the seat the event concerns and `channel_id` the agent-to-agent channel it belongs to, each read by the rule that fills the store's own column, so the event log narrows its live rows to a seat or a channel exactly as the store narrows its pages — the same shape as a `/events` row, plus the full event `payload`. `failed` is stamped on the server by the rule that stamps the snapshot's own feed rows, so a failure watched live and the same row after a reload read alike.  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; the call in flight before its phase record exists reaches a client as the seat's `live_call` on the `agents` push, which `agent_turn_progress` (per tool-call round) moves. |
-| `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `handle`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. **Keyed by `handle`**, the seat's identity, and merged onto the roster row of the same handle: never by `role`, the seat's name, which two seats can share (a revision a newer node admitted, or one stored before the duplicate-name rule). A row for a handle the client's roster does not list is dropped — the roster (the snapshot, the `seats` push) is what says which seats exist, and it carries each seat's live state merged. A `live_call` carries its heavy fields only when their `versions` moved since the last push for the same call, and a client keeps the copy it holds of one left out; every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
-| `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
-| `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
-| `tokens`   | On the shared 5-second tick, when a spend record arrived or one aged out of the live window since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After a node's token meter report is applied (every node reports at start, every 15 seconds and at once when a budget window first refuses a charge, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
-| `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
-| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
-| `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `forbidden`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unauthorized` and `forbidden` are the 401 and the 403 of [Who reaches what](#who-reaches-what)**: a question that needs a key, asked with none the guard accepted, and one beyond what an accepted key reaches — a member asking an admin's question, or anybody asking for a personal record outside their own line. Their remedies are opposite, which is why they are two codes: the first is a key to set, and the second a key of the other role or a person to ask. **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault) — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
-| `pong`     | Reply to a client `ping`. | `null` |
+| `kind` | Reach | When | `data` |
+|--------|-------|------|--------|
+| `snapshot` | every socket | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot`, assembled for the socket's reach — an admin's agents carry their in-flight `live_call` and its `live_call_seq`, so a reconnect re-renders the live row and starts the ordering of the call slot afresh. |
+| `event`    | `admin` | Every event the activity feed carries, as it arrives: each persisted type, inbound deliveries included, except `auxiliary_spend`. A live-only type (`agent_turn_progress`, `agent_spawned`, `agent_terminated`, `budget_meters`) never is one — it moves the projection, which goes out as `agents` or `budget`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, failed, agent_id?, channel_id?, payload }` — `agent_id` the seat the event concerns and `channel_id` the agent-to-agent channel it belongs to, each read by the rule that fills the store's own column, so the event log narrows its live rows to a seat or a channel exactly as the store narrows its pages — the same shape as a `/events` row, plus the full event `payload`. `failed` is stamped on the server by the rule that stamps the snapshot's own feed rows, so a failure watched live and the same row after a reload read alike.  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; the call in flight before its phase record exists reaches a client as the seat's `live_call` on the `agents` push, which `agent_turn_progress` (per tool-call round) moves. |
+| `agents`   | `member` | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `handle`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. **Keyed by `handle`**, the seat's identity, and merged onto the roster row of the same handle: never by `role`, the seat's name, which two seats can share (a revision a newer node admitted, or one stored before the duplicate-name rule). A row for a handle the client's roster does not list is dropped — the roster (the snapshot, the `seats` push) is what says which seats exist, and it carries each seat's live state merged. A `live_call` carries its heavy fields only when their `versions` moved since the last push for the same call, and a client keeps the copy it holds of one left out; every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). That is an admin's row; **a member is pushed each changed seat's [state](#what-a-member-is-pushed)** instead, merged by `handle` the same way. |
+| `seats`    | `member` | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds, in the reach's variant (an admin's merged rows, a member's identity and state). Distinct from `agents` on purpose: that one is a per-seat merge, and a merge cannot express the deletion of a seat a revision removed. |
+| `sandboxes`| `admin` | After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
+| `tokens`   | `admin` | On the shared 5-second tick, when a spend record arrived or one aged out of the live window since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase — and only while an admin's socket is connected to be pushed it. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `budget`   | `member` | After a node's token meter report is applied (every node reports at start, every 15 seconds and at once when a budget window first refuses a charge, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). That is an admin's; **a member is pushed the meter's [state](#what-a-member-is-pushed)**, with no figure. |
+| `org` | `public` | After a config revision is activated. | The new [org tree](#get-org), classified for the socket's reach, so open tabs stop showing seats that no longer exist. |
+| `schedules` | `member` | After a config revision is activated. | The new schedule list. |
+| `tools` | `admin` | After a config revision is activated. | The new tool surface. |
+| `health`   | `open` | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
+| `result`   | the asking socket | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
+| `error`    | the asking socket | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `forbidden`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unauthorized` and `forbidden` are the 401 and the 403 of [Who reaches what](#who-reaches-what)**: a question that needs a key, asked with none the guard accepted, and one beyond what an accepted key reaches — a member asking an admin's question, or anybody asking for a personal record outside their own line. Their remedies are opposite, which is why they are two codes: the first is a key to set, and the second a key of the other role or a person to ask. **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault) — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
+| `pong`     | the asking socket | Reply to a client `ping`. | `null` |
+
+#### What a member is pushed
+
+What the company published, and nothing the machine processed to reach it
+(ADR-0031). A member's `agents` row — and the live half of a member's `seats`
+row, beside the seat's `id` and `role` — is the seat's **state**:
+
+| Field | What it is |
+|---|---|
+| `handle` | The seat's identity, which the row is merged by |
+| `activity`, `stopped_reason` | The [seat-state vocabulary](../concepts/agent-runtime.md#agent-states), exactly as an admin's row states it |
+| `work_item` | The item the seat's turn is charged to — `{backend, id, key, project}`, never its title — or `null` |
+| `step` | Where in its turn the seat is: `context`, `execute` or `review`, by the rule the dashboard's stepper applies to an admin's row, or `null` on no turn |
+| `since` | When the state began, RFC 3339 — the turn's start while it works, the pause's while it is paused, its last turn's end while it is idle — or `null` where the engine holds no instant |
+| `paused_by` | The seat of the person who paused it, or `null` — never a key's label, which says how the engine is run |
+
+Every field is on every row, `null` where it has no value, so a client merging
+a row sheds an item or a step the seat has left. There is no `live_call`, no
+prompt, response, tool call or round, no node, no model and no figure — and so
+a member's tab never asks the `live_call` question, which it would be refused.
+
+A member's `budget` is the meter's **state**: `{timezone, org: [...], seats:
+[{handle, windows: [...]}]}`, listing only the windows that are `refusing` or
+`near` — each `{period, window, state, resets_at}` — and dropping one whose
+window has already turned over. What a window spent and what it is capped at
+are spend and configuration, an admin's; when a seat can work again is what a
+person plans around.
 
 #### Client frames
 
@@ -2714,10 +2771,11 @@ a change has to keep — is documented in
 
 ### `GET /org`
 
-The company's charter and its organization tree, as an anonymous reader may see
-it. The same object is the `org` section of the [handshake
-snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
-push, so all three surfaces carry exactly one shape.
+The company's charter and its organization tree, **classified field by field
+by the reach that reads it** (ADR-0031). The same object is the `org` section
+of the [handshake snapshot](#what-the-handshake-snapshot-carries) and the body
+of every `org` push, so all three surfaces carry exactly one shape — each
+answered at the caller's own reach. The example is an admin's:
 
 ```json
 {
@@ -2801,19 +2859,27 @@ the same document in the same call as the tree beside it, and absent only from
 The fields above it stay as WRITTEN, so a reader can still tell a declared lead
 from an inherited one. Every list here may arrive as `null` (Go marshals a nil
 slice that way); a reader treats `null` as empty. The authored `path` and
-`unit_path` of each entry are omitted, because an anonymous reader is given no
-document to point into, and membership is each unit's `seats`; the same block
-with paths comes back from [a configuration write or dry run](#what-a-write-answers).
+`unit_path` of each entry are omitted, because a reader of the chart is given
+no document to point into, and membership is each unit's `seats`; the same
+block with paths comes back from [a configuration write or dry run](#what-a-write-answers).
+A unit's effective `channel` and `channel_inherited` are served at a member's
+reach, as its authored channel is.
 
-**What it carries, and nothing else.** The company's `name`, `mission`,
-`vision`, `policies`, `timezone`, `token_budget` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
-`backstory`, `responsibilities`, `behavioral_guidelines`, `manages`,
-`availability`, `token_budget`, `llm` and `tool_sources`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
-`channel`, `knowledge`, `roles` and `children`. Every value is the one the
-company document holds, as written: a seat with no declared `handle` has none
-here (the engine derives it from the name), and a unit that inherits its lead
-has no `lead` of its own. An empty field is omitted, and a node with no active
-company answers `{}`.
+**What it carries, and to whom — and nothing else.** Each field is served to
+the lowest reach below and every reach above it, and omitted for a caller
+below it:
+
+| Reach | The company | Each seat | Each unit |
+|---|---|---|---|
+| `public` — the chart | `name`, `mission`, `vision`, `timezone`, `derived` | `name`, `kind`, `handle`, `manages` | `name`, `type`, `lead`, `roles`, `children` |
+| `member` — the founder's prose | `policies` | `goal`, `backstory`, `responsibilities`, `behavioral_guidelines`, `availability` | `purpose`, `goals`, `channel`, `knowledge` |
+| `admin` — how it is run | `token_budget` | `token_budget`, `llm`, `tool_sources` | — |
+
+Every value is the one the company document holds, as written: a seat with no
+declared `handle` has none here (the engine derives it from the name), and a
+unit that inherits its lead has no `lead` of its own. An empty field is
+omitted, a field withheld from the caller's reach is omitted the same way, and
+a node with no active company answers `{}`.
 
 **`timezone` is the one value the engine resolves**, and it is not a mixture:
 it is the company's [one clock](../getting-started/configuration.md#the-companys-clock),
@@ -2823,16 +2889,17 @@ string a client would default to its own browser's zone. Every day the engine
 cuts is cut on it ("today", a due band, an overdue mark, a person's own day), so
 a screen deciding which day something falls on cuts on this.
 
-**`token_budget` is the ceilings as written**, on the company and on each seat
-that names its own: one number per calendar window it caps (`day`, `week`,
+**`token_budget` is the ceilings as written**, served to an admin, on the
+company and on each seat that names its own: one number per calendar window it caps (`day`, `week`,
 `month`, on the company clock), and nothing for a window it leaves open — so
 an absent key is "no ceiling", never zero. How much of each window is spent,
 and when it resets, is [`GET /budgets`](#get-budgets); this is the rule those
 meters count against.
 
 **A seat's `llm` and `tool_sources` are RESOLVED**, for the reason `derived`
-is: the rule is one a client would get wrong. Both are absent on a human seat,
-which runs neither.
+is: the rule is one a client would get wrong. Both are served to an admin —
+which entries and servers a seat is wired to is how the company is run — and
+both are absent on a human seat, which runs neither.
 
 - **`llm`** is every phase's provider chain exactly as a turn resolves it —
   keyed by phase (`execute`, `review`, `subagent`, `auxiliary`, `judge`,
@@ -2872,8 +2939,11 @@ key reaches — its reach is `public`, open while `api.auth.anonymous` is
 `public`, the default. Serialising the config's own
 seat and unit types would make every field added to a seat public the day it
 landed, whatever it held. The shape is declared field by field in
-`internal/api` instead, and a test fails when the config gains a company, seat
-or unit field nobody has classified as public, resolved or guarded.
+`internal/api` instead, every field tagged with the reach it is served at, and
+a test fails when the config gains a company, seat or unit field nobody has
+classified — carried at a reach, resolved or guarded — or when a projected
+field's reach is not the one its classification names. A field with no reach
+at all is withheld from every caller, an admin included, rather than published.
 
 Founder prose is served as written. Nothing in the public fields is resolved as
 a `${VAR}`, so a reference typed into a goal is shown as the text it is; keep

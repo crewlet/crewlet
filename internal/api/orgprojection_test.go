@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -13,20 +14,22 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The org projection is ANONYMOUSLY READABLE, so what it carries is a security
-// decision made one field at a time. These tests are what keep it one.
+// The org projection is READABLE WITHOUT A KEY, and served to three reaches, so
+// what it carries — and to whom — is a security decision made one field at a
+// time. These tests are what keep it one.
 
 // exposure is the decision recorded for one authored field.
 type exposure int
 
 const (
-	// exposurePublic: founder prose and structure, carried by /org.
-	exposurePublic exposure = iota + 1
+	// exposureCarried: carried by the projection, to the reach named.
+	exposureCarried exposure = iota + 1
 	// exposureGuarded: read only through the guarded `config` query.
 	exposureGuarded
 	// exposureResolved: read, with others, into the RESOLVED seat field
@@ -40,42 +43,47 @@ const (
 // without knowing what it was protecting.
 type classified struct {
 	exposure exposure
-	why      string
+	// reach is the lowest reach a carried or resolved field is served to
+	// (ADR-0031): public for the chart, member for what the company
+	// published for its people, admin for how it is run.
+	reach auth.Reach
+	why   string
 	// into is the api.OrgSeat wire field a resolved value reaches.
 	into string
 }
 
 // companyFields classifies every field of config.Company.
 var companyFields = map[string]classified{
-	"Name":           {exposure: exposurePublic, why: "the company's identity"},
-	"Mission":        {exposure: exposurePublic, why: "founder prose"},
-	"Vision":         {exposure: exposurePublic, why: "founder prose"},
-	"Policies":       {exposure: exposurePublic, why: "founder prose"},
-	"Timezone":       {exposure: exposurePublic, why: "every date a reader is shown is cut on it (ADR-0018)"},
-	"TokenBudget":    {exposure: exposurePublic, why: "a statement of what the company may spend, beside the /budgets meter spending against it"},
+	"Name":           {exposure: exposureCarried, reach: auth.ReachPublic, why: "the company's identity"},
+	"Mission":        {exposure: exposureCarried, reach: auth.ReachPublic, why: "founder prose the company shows the world"},
+	"Vision":         {exposure: exposureCarried, reach: auth.ReachPublic, why: "founder prose the company shows the world"},
+	"Policies":       {exposure: exposureCarried, reach: auth.ReachMember, why: "the rules the company's seats work by, written for the people in it"},
+	"Timezone":       {exposure: exposureCarried, reach: auth.ReachPublic, why: "every date a reader is shown is cut on it (ADR-0018)"},
+	"TokenBudget":    {exposure: exposureCarried, reach: auth.ReachAdmin, why: "what the company may spend is how it is run, beside the /budgets meter spending against it"},
 	"Integrations":   {exposure: exposureGuarded, why: "vendor identities, bot tokens and signing secrets"},
 	"Tracker":        {exposure: exposureGuarded, why: "which tracker backend and project keys: a map of what is wired to what"},
 	"Knowledge":      {exposure: exposureGuarded, why: "which knowledge backend and container keys"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
-	"Providers": {exposure: exposureResolved, into: "llm",
+	"Providers": {exposure: exposureResolved, reach: auth.ReachAdmin, into: "llm",
 		why: "only the KEYS reach a reader, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
 	"TurnEngine": {exposure: exposureGuarded, why: "an operational setting"},
 	"Learning":   {exposure: exposureGuarded, why: "an operational setting"},
 	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
-	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
+	"MCPServers": {exposure: exposureResolved, reach: auth.ReachAdmin, into: "tool_sources",
 		why: "only a granted server's NAME reaches a reader, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
 	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
-	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
-	"Units":                             {exposure: exposurePublic, why: "the tree itself"},
+	"Roles":                             {exposure: exposureCarried, reach: auth.ReachPublic, why: "the tree itself"},
+	"Units":                             {exposure: exposureCarried, reach: auth.ReachPublic, why: "the tree itself"},
 }
 
 // projectionOnly is every OrgProjection field no authored company field
 // accounts for, and why it may exist anyway.
-var projectionOnly = map[string]string{
-	"derived": "the hierarchy the fields above resolve to, with no document paths",
+var projectionOnly = map[string]classified{
+	"derived": {exposure: exposureCarried, reach: auth.ReachPublic,
+		why: "the hierarchy the fields above resolve to, with no document paths; each of its own fields is classified below"},
 }
 
 // A tracker project and a knowledge space are the decision here that is not
@@ -88,66 +96,133 @@ var projectionOnly = map[string]string{
 // to attack. They are read with the rest of the integration picture instead,
 // through the admin `config` and `integrations` answers.
 
+func servedAt(reach auth.Reach, why string) classified {
+	return classified{exposure: exposureCarried, reach: reach, why: why}
+}
+
+func withheld(why string) classified { return classified{exposure: exposureGuarded, why: why} }
+
+func resolvedInto(into, why string) classified {
+	return classified{exposure: exposureResolved, reach: auth.ReachAdmin, why: why, into: into}
+}
+
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
-	"Name":                 {exposurePublic, "the seat's identity in the chart", ""},
-	"Kind":                 {exposurePublic, "agent or human, which the chart draws differently", ""},
-	"Contact":              {exposureGuarded, "a person's account ids on external services", ""},
-	"Availability":         {exposurePublic, "free text written to be read by colleagues", ""},
-	"Handle":               {exposurePublic, "the declared slug every other surface addresses the seat by", ""},
-	"Email":                {exposureGuarded, "a personal identifier, and it may hold a ${VAR} name", ""},
-	"Unit":                 {exposureGuarded, "a placement reference; where a seat sits is derived, not authored prose", ""},
-	"Goal":                 {exposurePublic, "founder prose", ""},
-	"Backstory":            {exposurePublic, "founder prose", ""},
-	"Responsibilities":     {exposurePublic, "founder prose", ""},
-	"Manages":              {exposurePublic, "the reporting structure the chart draws", ""},
-	"BehavioralGuidelines": {exposurePublic, "founder prose", ""},
-	"Workers":              {exposureGuarded, "operational configuration of the delegate surface", ""},
-	"TokenBudget":          {exposurePublic, "the seat's own ceilings, beside the /budgets meter spending against them", ""},
-	"LLM":                  {exposureResolved, "provider keys, labels for the company's model entries, resolved per phase as a turn resolves them", "llm"},
-	"LLMReview":            {exposureResolved, "provider keys, resolved into the reviewer's chain", "llm"},
-	"LLMSubagent":          {exposureResolved, "provider keys, resolved into the worker chain", "llm"},
-	"LLMAuxiliary":         {exposureResolved, "provider keys, resolved into the auxiliary chain", "llm"},
-	"LLMJudge":             {exposureResolved, "provider keys, resolved into the judge's chain", "llm"},
-	"LLMSandbox":           {exposureResolved, "provider keys, resolved into the coding agent's chain", "llm"},
-	"LearningEnabled":      {exposureGuarded, "an operational setting", ""},
-	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
-	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential", ""},
-	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
-	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets", ""},
-	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in", ""},
-	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages", ""},
-	"Schedules":            {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it", ""},
+	"Name":                 servedAt(auth.ReachPublic, "the seat's identity in the chart"),
+	"Kind":                 servedAt(auth.ReachPublic, "agent or human, which the chart draws differently"),
+	"Contact":              withheld("a person's account ids on external services"),
+	"Availability":         servedAt(auth.ReachMember, "free text written to be read by colleagues"),
+	"Handle":               servedAt(auth.ReachPublic, "the declared slug every other surface addresses the seat by"),
+	"Email":                withheld("a personal identifier, and it may hold a ${VAR} name"),
+	"Unit":                 withheld("a placement reference; where a seat sits is derived, not authored prose"),
+	"Goal":                 servedAt(auth.ReachMember, "founder prose, written for the seat's colleagues"),
+	"Backstory":            servedAt(auth.ReachMember, "founder prose, written for the seat's colleagues"),
+	"Responsibilities":     servedAt(auth.ReachMember, "founder prose, written for the seat's colleagues"),
+	"Manages":              servedAt(auth.ReachPublic, "the reporting structure the chart draws"),
+	"BehavioralGuidelines": servedAt(auth.ReachMember, "founder prose, written for the seat's colleagues"),
+	"Workers":              withheld("operational configuration of the delegate surface"),
+	"TokenBudget":          servedAt(auth.ReachAdmin, "the seat's own ceilings: how it is run, beside the /budgets meter spending against them"),
+	"LLM":                  resolvedInto("llm", "provider keys, labels for the company's model entries, resolved per phase as a turn resolves them"),
+	"LLMReview":            resolvedInto("llm", "provider keys, resolved into the reviewer's chain"),
+	"LLMSubagent":          resolvedInto("llm", "provider keys, resolved into the worker chain"),
+	"LLMAuxiliary":         resolvedInto("llm", "provider keys, resolved into the auxiliary chain"),
+	"LLMJudge":             resolvedInto("llm", "provider keys, resolved into the judge's chain"),
+	"LLMSandbox":           resolvedInto("llm", "provider keys, resolved into the coding agent's chain"),
+	"LearningEnabled":      withheld("an operational setting"),
+	"MCPEnv":               withheld("tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers"),
+	"Sandbox":              withheld("setup commands and env, the usual home of a registry credential"),
+	"Placement":            withheld("node ids and labels describing the deployment"),
+	"Integrations":         withheld("vendor identities, bot tokens and signing secrets"),
+	"Project":              withheld("a tracker project key: the container this seat files work in"),
+	"Space":                withheld("a knowledge container key: where this seat writes pages"),
+	"Schedules":            withheld("configured work, not structure; /schedules is the surface that describes it"),
 }
 
 // unitFields classifies every field of config.Unit.
 var unitFields = map[string]classified{
-	"Name":      {exposurePublic, "the unit's identity in the chart", ""},
-	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name", ""},
-	"Type":      {exposurePublic, "an informational label", ""},
-	"Purpose":   {exposurePublic, "founder prose", ""},
-	"Lead":      {exposurePublic, "the structure the chart draws", ""},
-	"Goals":     {exposurePublic, "founder prose", ""},
-	"Channel":   {exposurePublic, "where the unit talks, which a colleague needs to know", ""},
-	"Knowledge": {exposurePublic, "free-text references, not a read scope", ""},
-	"MCPEnv":    {exposureGuarded, "tool credentials inherited by members", ""},
-	"Project":   {exposureGuarded, "a tracker project key: the container this unit's work is filed in", ""},
-	"Space":     {exposureGuarded, "a knowledge container key: where this unit's pages are written", ""},
-	"Roles":     {exposurePublic, "the tree itself", ""},
-	"Children":  {exposurePublic, "the tree itself", ""},
-	"Schedules": {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it", ""},
+	"Name":      servedAt(auth.ReachPublic, "the unit's identity in the chart"),
+	"ID":        withheld("a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name"),
+	"Type":      servedAt(auth.ReachPublic, "an informational label the chart draws"),
+	"Purpose":   servedAt(auth.ReachMember, "founder prose, written for the unit's people"),
+	"Lead":      servedAt(auth.ReachPublic, "the structure the chart draws"),
+	"Goals":     servedAt(auth.ReachMember, "founder prose, written for the unit's people"),
+	"Channel":   servedAt(auth.ReachMember, "where the unit talks, which a colleague needs and a stranger does not"),
+	"Knowledge": servedAt(auth.ReachMember, "free-text references for the unit's people, not a read scope"),
+	"MCPEnv":    withheld("tool credentials inherited by members"),
+	"Project":   withheld("a tracker project key: the container this unit's work is filed in"),
+	"Space":     withheld("a knowledge container key: where this unit's pages are written"),
+	"Roles":     servedAt(auth.ReachPublic, "the tree itself"),
+	"Children":  servedAt(auth.ReachPublic, "the tree itself"),
+	"Schedules": withheld("configured work, not structure; /schedules is the surface that describes it"),
 }
 
-// EVERY AUTHORED FIELD HAS A DECISION, and the public ones are exactly what
-// the projection carries.
+// tokenBudgetFields classifies every field of config.TokenBudget, which a
+// carried budget is copied into api.OrgTokenBudget from.
+var tokenBudgetFields = map[string]classified{
+	"Day":   servedAt(auth.ReachAdmin, "a ceiling, carried where the budget is"),
+	"Week":  servedAt(auth.ReachAdmin, "a ceiling, carried where the budget is"),
+	"Month": servedAt(auth.ReachAdmin, "a ceiling, carried where the budget is"),
+}
+
+// derivedFields, derivedSeatFields and derivedUnitFields classify the engine's
+// derived hierarchy, which the chart carries resolved: each field at the reach
+// of what it is resolved from, and never the document paths.
+var derivedFields = map[string]classified{
+	"Seats": servedAt(auth.ReachPublic, "every seat, resolved"),
+	"Units": servedAt(auth.ReachPublic, "every unit, resolved"),
+}
+
+var derivedSeatFields = map[string]classified{
+	"Path":            withheld("a path into a document the chart's reader is not given"),
+	"UnitPath":        withheld("a path into a document the chart's reader is not given"),
+	"Handle":          servedAt(auth.ReachPublic, "the seat's identity"),
+	"Name":            servedAt(auth.ReachPublic, "the seat's name"),
+	"Kind":            servedAt(auth.ReachPublic, "agent or human"),
+	"PlacedByRef":     servedAt(auth.ReachPublic, "where the chart draws the seat"),
+	"Manager":         servedAt(auth.ReachPublic, "the reporting structure, resolved"),
+	"Managers":        servedAt(auth.ReachPublic, "the reporting structure, resolved"),
+	"Reports":         servedAt(auth.ReachPublic, "the reporting structure, resolved"),
+	"AutoReports":     servedAt(auth.ReachPublic, "the reporting structure, resolved"),
+	"OnboardingChain": servedAt(auth.ReachPublic, "the names of the units above the seat, which the chart already shows"),
+}
+
+var derivedUnitFields = map[string]classified{
+	"Path":             withheld("a path into a document the chart's reader is not given"),
+	"Name":             servedAt(auth.ReachPublic, "the unit's name"),
+	"Type":             servedAt(auth.ReachPublic, "the effective type the chart draws"),
+	"Lead":             servedAt(auth.ReachPublic, "the effective lead, the structure the chart draws"),
+	"LeadInherited":    servedAt(auth.ReachPublic, "whether the lead was inherited"),
+	"Channel":          servedAt(auth.ReachMember, "the effective channel, a member's as the authored one is"),
+	"ChannelInherited": servedAt(auth.ReachMember, "whether the channel was inherited, a member's with it"),
+	"Seats":            servedAt(auth.ReachPublic, "the unit's members"),
+}
+
+// projectionPairs is every authored type the projection copies from, its
+// classification, the projection type it is copied into, and the projected
+// fields nothing authored accounts for.
+type projectionPair struct {
+	authored   reflect.Type
+	table      map[string]classified
+	projection reflect.Type
+	extra      map[string]classified
+}
+
+// EVERY AUTHORED FIELD HAS A DECISION, the carried ones are exactly what the
+// projection carries, and every projected field is served at the reach its
+// decision names.
 //
-// A field added to config.Company, config.Role or config.Unit fails the first
-// half until somebody decides whether an anonymous reader may see it. Marking
-// it public without adding it to the projection (or the reverse) fails the
-// second half, so the table and the type cannot drift apart. A RESOLVED field
+// A field added to config.Company, config.Role, config.Unit, a budget or the
+// derived hierarchy fails the first half until somebody decides whether — and
+// to which reach — it may be shown. Marking it carried without adding it to
+// the projection (or the reverse) fails the second half, so the table and the
+// type cannot drift apart. A projected field whose `reach` tag is not the
+// decision's fails the third, and one with no valid tag at all is withheld
+// from everybody (orgprojection.go) and fails here first. A RESOLVED field
 // must name the api.OrgSeat field it reaches, and every resolved seat field
 // must be reached by something classified, so a resolved field is never a way
 // to publish a value nobody decided on.
+//
+// Mutation: tag OrgSeat.Goal `reach:"public"`, and the third half fails.
 func TestEveryOrgFieldIsClassified(t *testing.T) {
 	t.Parallel()
 	seatWire := map[string]bool{}
@@ -157,7 +232,7 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 	// resolvedInto is every seat field a resolved value reaches, from any
 	// table: a seat's chain is resolved from its own llm fields AND the
 	// company's provider keys.
-	resolvedInto := map[string]string{}
+	resolvedInto := map[string]classified{}
 	for _, table := range []map[string]classified{companyFields, roleFields, unitFields} {
 		for name, decision := range table {
 			switch {
@@ -166,42 +241,45 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 			case decision.exposure != exposureResolved && decision.into != "":
 				t.Errorf("%s names a field it is resolved into but is not classified resolved", name)
 			case decision.exposure == exposureResolved:
-				resolvedInto[decision.into] = "resolved from " + name
+				if prior, ok := resolvedInto[decision.into]; ok && prior.reach != decision.reach {
+					t.Errorf("%q is resolved from fields served at %s and %s; one field has one reach",
+						decision.into, prior.reach, decision.reach)
+				}
+				resolvedInto[decision.into] = classified{
+					exposure: exposureCarried, reach: decision.reach, why: "resolved from " + name,
+				}
 			}
 		}
 	}
-	for _, tc := range []struct {
-		authored   reflect.Type
-		table      map[string]classified
-		projection reflect.Type
-		// extra is the projected fields no public authored field accounts
-		// for, each with the reason it may exist.
-		extra map[string]string
-	}{
+	for _, tc := range []projectionPair{
 		{reflect.TypeFor[config.Company](), companyFields, reflect.TypeFor[api.OrgProjection](), projectionOnly},
 		{reflect.TypeFor[config.Role](), roleFields, reflect.TypeFor[api.OrgSeat](), resolvedInto},
 		{reflect.TypeFor[config.Unit](), unitFields, reflect.TypeFor[api.OrgUnit](), nil},
+		{reflect.TypeFor[config.TokenBudget](), tokenBudgetFields, reflect.TypeFor[api.OrgTokenBudget](), nil},
+		{reflect.TypeFor[config.Derived](), derivedFields, reflect.TypeFor[api.OrgDerived](), nil},
+		{reflect.TypeFor[config.DerivedSeat](), derivedSeatFields, reflect.TypeFor[api.OrgDerivedSeat](), nil},
+		{reflect.TypeFor[config.DerivedUnit](), derivedUnitFields, reflect.TypeFor[api.OrgDerivedUnit](), nil},
 	} {
 		t.Run(tc.authored.Name(), func(t *testing.T) {
 			t.Parallel()
-			var publicNames []string
+			want := map[string]auth.Reach{}
 			seen := map[string]bool{}
 			for field := range fieldsOf(tc.authored) {
 				seen[field.Name] = true
 				decision, ok := tc.table[field.Name]
 				if !ok {
-					t.Errorf("config.%s.%s is not classified. Decide whether an anonymous "+
-						"reader of /org may see it: add it to this test's table as public "+
-						"(and to api.%s), resolved (naming the api.OrgSeat field it "+
-						"reaches) or guarded (and read it through the config query)",
+					t.Errorf("config.%s.%s is not classified. Decide whether a reader of /org "+
+						"may see it, and at which reach: add it to this test's table as carried "+
+						"(and to api.%s, tagged with that reach), resolved (naming the api.OrgSeat "+
+						"field it reaches) or guarded (and read it through the config query)",
 						tc.authored.Name(), field.Name, tc.projection.Name())
 					continue
 				}
 				if decision.why == "" {
 					t.Errorf("config.%s.%s is classified with no reason", tc.authored.Name(), field.Name)
 				}
-				if decision.exposure == exposurePublic {
-					publicNames = append(publicNames, jsonName(field))
+				if decision.exposure == exposureCarried {
+					want[jsonName(field)] = decision.reach
 				}
 			}
 			for name := range tc.table {
@@ -210,87 +288,122 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 						"remove the entry", tc.authored.Name(), name)
 				}
 			}
-			for name := range tc.extra {
-				publicNames = append(publicNames, name)
+			for name, decision := range tc.extra {
+				want[name] = decision.reach
 			}
-			var projected []string
+			got := map[string]auth.Reach{}
 			for field := range fieldsOf(tc.projection) {
-				projected = append(projected, jsonName(field))
+				reach := auth.Reach(field.Tag.Get("reach"))
+				if !reach.Valid() || reach == auth.ReachOpen {
+					t.Errorf("api.%s.%s is tagged reach %q; every field of the chart names public, "+
+						"member or admin", tc.projection.Name(), field.Name, reach)
+				}
+				got[jsonName(field)] = reach
 			}
-			slices.Sort(publicNames)
-			slices.Sort(projected)
-			if !slices.Equal(publicNames, projected) {
-				t.Errorf("the public and resolved fields of config.%s are %v but api.%s carries %v; "+
-					"the two must name the same wire fields",
-					tc.authored.Name(), publicNames, tc.projection.Name(), projected)
+			if !maps.Equal(got, want) {
+				t.Errorf("the carried and resolved fields of config.%s, with their reaches, are %v "+
+					"but api.%s carries %v; the two must name the same wire fields at the same reaches",
+					tc.authored.Name(), want, tc.projection.Name(), got)
 			}
 		})
 	}
 }
 
-// NOTHING GUARDED REACHES AN ANONYMOUS READER, whatever it holds.
+// chartReaders is each reach the chart is served to, with the key that
+// presents it on [chartPosture].
+var chartReaders = []struct {
+	name  string
+	key   string
+	reach auth.Reach
+}{
+	{"anonymous", "", auth.ReachPublic},
+	{"member", "member-secret", auth.ReachMember},
+	{"admin", "secret", auth.ReachAdmin},
+}
+
+// NOTHING GUARDED REACHES ANY READER, AND NOTHING REACHES A READER ITS REACH
+// DOES NOT COVER.
 //
 // Every guarded field of every seat and unit (and every field of the company
 // outside its charter) is filled, all the way down through pointers, slices
 // and maps, keys included: once with a distinct literal, once with a distinct
-// whole ${VAR} reference. The projection is read the three ways a browser
-// reaches it, and none may contain a fill value, a `${`, or any key outside
-// the public shape. The public fields are filled with distinct prose that
-// MUST appear, which is what stops this passing on an empty answer.
+// whole ${VAR} reference. Every carried field is filled with distinct text
+// recorded under the reach it is served at. The projection is read the three
+// ways a browser reaches it, by each of the three readers, and none may contain
+// a guarded value, a `${`, a value carried above the reader's reach, or a key
+// outside the shape that reach is served — while every value AT or below the
+// reader's reach MUST appear, which is what stops this passing on an empty
+// answer.
+//
+// Mutation: skip the withholding in orgProjection, and the anonymous and member
+// readers fail; skip descending into slices, and a nested seat's goal reaches
+// the anonymous one.
 func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []fillMode{fillLiteral, fillReference} {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
-			f := &filler{mode: mode}
+			f := &filler{mode: mode, carried: map[auth.Reach][]string{}}
 			company := f.company()
-			a := newApp(t, api.Options{
-				Sources: queries.Sources{Company: func() *config.Company { return company }},
-			})
+			a := chartApp(t, company)
 
-			res := fetch(t, a, "/org", nil)
-			if res.StatusCode != http.StatusOK {
-				t.Fatalf("GET /org = %d, want an anonymous 200", res.StatusCode)
-			}
-			rest, err := io.ReadAll(res.Body)
-			if err != nil {
-				t.Fatalf("read /org: %v", err)
-			}
-			snapshot, err := json.Marshal(a.Stream().Snapshot()["org"])
-			if err != nil {
-				t.Fatalf("marshal the snapshot's org: %v", err)
-			}
-			push, err := json.Marshal(a.Stream().Org())
-			if err != nil {
-				t.Fatalf("marshal the org push: %v", err)
-			}
+			for _, reader := range chartReaders {
+				headers := map[string]string{}
+				if reader.key != "" {
+					headers["Authorization"] = "Bearer " + reader.key
+				}
+				res := fetch(t, a, "/org", headers)
+				if res.StatusCode != http.StatusOK {
+					t.Fatalf("GET /org as %s = %d, want 200", reader.name, res.StatusCode)
+				}
+				rest, err := io.ReadAll(res.Body)
+				if err != nil {
+					t.Fatalf("read /org: %v", err)
+				}
+				snapshot, err := json.Marshal(a.Stream().Snapshot(reader.reach)["org"])
+				if err != nil {
+					t.Fatalf("marshal the snapshot's org: %v", err)
+				}
+				push, err := json.Marshal(a.Stream().Org(reader.reach))
+				if err != nil {
+					t.Fatalf("marshal the org push: %v", err)
+				}
+				allowed := keysAt(reader.reach)
 
-			for surface, body := range map[string][]byte{
-				"GET /org": rest, "snapshot": snapshot, "org push": push,
-			} {
-				text := string(body)
-				if strings.Contains(text, "${") {
-					t.Errorf("%s carries a ${VAR} reference:\n%s", surface, text)
-				}
-				for _, secret := range f.guardedValues {
-					if strings.Contains(text, secret) {
-						t.Errorf("%s carries the guarded value %q:\n%s", surface, secret, text)
+				for surface, body := range map[string][]byte{
+					"GET /org": rest, "snapshot": snapshot, "org push": push,
+				} {
+					surface = reader.name + "'s " + surface
+					text := string(body)
+					if strings.Contains(text, "${") {
+						t.Errorf("%s carries a ${VAR} reference:\n%s", surface, text)
 					}
-				}
-				for _, prose := range f.publicValues {
-					if !strings.Contains(text, prose) {
-						t.Errorf("%s is missing the public value %q, so a public field "+
-							"was dropped:\n%s", surface, prose, text)
+					for _, secret := range f.guardedValues {
+						if strings.Contains(text, secret) {
+							t.Errorf("%s carries the guarded value %q:\n%s", surface, secret, text)
+						}
 					}
-				}
-				var decoded any
-				if err := json.Unmarshal(body, &decoded); err != nil {
-					t.Fatalf("%s is not JSON: %v", surface, err)
-				}
-				for key := range objectKeys(decoded) {
-					if !publicKeys[key] {
-						t.Errorf("%s carries the key %q, which is not in the public shape",
-							surface, key)
+					for reach, values := range f.carried {
+						for _, value := range values {
+							switch has := strings.Contains(text, value); {
+							case reader.reach.Covers(reach) && !has:
+								t.Errorf("%s is missing the %s value %q, so a field it is served "+
+									"was dropped:\n%s", surface, reach, value, text)
+							case !reader.reach.Covers(reach) && has:
+								t.Errorf("%s carries the %s value %q, which its reach does not "+
+									"cover:\n%s", surface, reach, value, text)
+							}
+						}
+					}
+					var decoded any
+					if err := json.Unmarshal(body, &decoded); err != nil {
+						t.Fatalf("%s is not JSON: %v", surface, err)
+					}
+					for key := range objectKeys(decoded) {
+						if !allowed[key] {
+							t.Errorf("%s carries the key %q, which is not in the shape its reach "+
+								"is served", surface, key)
+						}
 					}
 				}
 			}
@@ -298,31 +411,33 @@ func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 	}
 }
 
-// publicKeys is every JSON key the public shape may contain.
-var publicKeys = func() map[string]bool {
+// keysAt is every JSON key the chart may contain for a reader holding reach.
+func keysAt(reach auth.Reach) map[string]bool {
 	out := map[string]bool{}
 	for _, typ := range []reflect.Type{
 		reflect.TypeFor[api.OrgProjection](),
 		reflect.TypeFor[api.OrgSeat](),
 		reflect.TypeFor[api.OrgUnit](),
 		reflect.TypeFor[api.OrgTokenBudget](),
-		// The derived hierarchy is the values above, resolved: handles,
-		// names, unit names and the effective lead and channel. Its own
-		// keys belong to the public shape for that reason.
-		reflect.TypeFor[config.Derived](),
-		reflect.TypeFor[config.DerivedSeat](),
-		reflect.TypeFor[config.DerivedUnit](),
+		reflect.TypeFor[api.OrgDerived](),
+		reflect.TypeFor[api.OrgDerivedSeat](),
+		reflect.TypeFor[api.OrgDerivedUnit](),
 	} {
 		for field := range fieldsOf(typ) {
-			out[jsonName(field)] = true
+			if reach.Covers(auth.Reach(field.Tag.Get("reach"))) {
+				out[jsonName(field)] = true
+			}
 		}
 	}
-	// A seat's resolved chain is keyed by phase.
-	for _, ph := range phase.All {
-		out[ph.String()] = true
+	// A seat's resolved chain is keyed by phase, and served where the chain
+	// is.
+	if reach.Covers(auth.ReachAdmin) {
+		for _, ph := range phase.All {
+			out[ph.String()] = true
+		}
 	}
 	return out
-}()
+}
 
 // fieldsOf yields a struct type's exported fields.
 func fieldsOf(typ reflect.Type) func(func(reflect.StructField) bool) {
@@ -381,7 +496,9 @@ type filler struct {
 	n    int
 
 	guardedValues []string
-	publicValues  []string
+	// carried is every value filled into a carried field, by the reach the
+	// field is served at.
+	carried map[auth.Reach][]string
 	// providerKeys is every provider key a seat was given.
 	providerKeys []string
 }
@@ -404,9 +521,10 @@ func (f *filler) secret() string {
 	return value
 }
 
-func (f *filler) prose() string {
-	value := fmt.Sprintf("publicprose%04d", f.next())
-	f.publicValues = append(f.publicValues, value)
+// prose is distinct text for a field served at reach.
+func (f *filler) prose(reach auth.Reach) string {
+	value := fmt.Sprintf("%sprose%04d", reach, f.next())
+	f.carried[reach] = append(f.carried[reach], value)
 	return value
 }
 
@@ -423,11 +541,11 @@ func (f *filler) company() *config.Company {
 			// so a value that does not load would surface as UTC and this
 			// could not tell a dropped field from a defaulted one.
 			target.SetString("Pacific/Chatham")
-			f.publicValues = append(f.publicValues, "Pacific/Chatham")
+			f.carried[auth.ReachPublic] = append(f.carried[auth.ReachPublic], "Pacific/Chatham")
 		case field.Name == "Roles" || field.Name == "Units":
 			// Filled below, through the classification tables.
-		case companyFields[field.Name].exposure == exposurePublic:
-			f.public(target)
+		case companyFields[field.Name].exposure == exposureCarried:
+			f.public(target, companyFields[field.Name].reach)
 		default:
 			// A resolved field is filled like a guarded one, whole, and
 			// then given the labels it resolves from below: whatever the
@@ -438,7 +556,7 @@ func (f *filler) company() *config.Company {
 	// One SHARED server, so every agent seat is granted it and its name
 	// must reach every seat's tool_sources while its command, URL, env and
 	// headers — filled with secrets above — reach nothing.
-	c.MCPServers[0].Name = f.prose()
+	c.MCPServers[0].Name = f.prose(companyFields["MCPServers"].reach)
 	c.Roles = []config.Role{f.role()}
 	c.Units = []config.Unit{f.unit(2)}
 	// Every provider key a seat names is configured, each entry filled with
@@ -458,9 +576,9 @@ func (f *filler) role() config.Role {
 	v := reflect.ValueOf(&r).Elem()
 	for field := range fieldsOf(v.Type()) {
 		target := v.FieldByIndex(field.Index)
-		switch roleFields[field.Name].exposure {
-		case exposurePublic:
-			f.public(target)
+		switch decision := roleFields[field.Name]; decision.exposure {
+		case exposureCarried:
+			f.public(target, decision.reach)
 		case exposureResolved:
 			f.resolvedLLM(target)
 		default:
@@ -477,7 +595,7 @@ func (f *filler) role() config.Role {
 // the same phase inside the mapping, so a key written there would be one no
 // chain resolves to and nothing could require it to appear.
 func (f *filler) resolvedLLM(v reflect.Value) {
-	key := f.prose()
+	key := f.prose(roleFields["LLM"].reach)
 	f.providerKeys = append(f.providerKeys, key)
 	switch field := v.Addr().Interface().(type) {
 	case *config.ProviderKeys:
@@ -498,8 +616,8 @@ func (f *filler) unit(depth int) config.Unit {
 		switch {
 		case field.Name == "Roles" || field.Name == "Children":
 			// Structure, filled below.
-		case unitFields[field.Name].exposure == exposurePublic:
-			f.public(target)
+		case unitFields[field.Name].exposure == exposureCarried:
+			f.public(target, unitFields[field.Name].reach)
 		default:
 			f.guarded(target, 0)
 		}
@@ -511,13 +629,15 @@ func (f *filler) unit(depth int) config.Unit {
 	return u
 }
 
-// public fills a public field: a string, a list of strings, or a budget.
-func (f *filler) public(v reflect.Value) {
+// public fills a carried field served at reach: a string, a list of strings,
+// or a budget.
+func (f *filler) public(v reflect.Value, reach auth.Reach) {
 	if budget, ok := v.Addr().Interface().(*config.TokenBudget); ok {
-		// Distinct ceilings in every window, each of which must appear.
+		// Distinct ceilings in every window, each of which must appear
+		// where the budget is served.
 		ceiling := func() *int {
 			n := 900000 + f.next()
-			f.publicValues = append(f.publicValues, strconv.Itoa(n))
+			f.carried[reach] = append(f.carried[reach], strconv.Itoa(n))
 			return &n
 		}
 		*budget = config.TokenBudget{Day: ceiling(), Week: ceiling(), Month: ceiling()}
@@ -525,13 +645,13 @@ func (f *filler) public(v reflect.Value) {
 	}
 	switch v.Kind() {
 	case reflect.String:
-		v.SetString(f.prose())
+		v.SetString(f.prose(reach))
 	case reflect.Slice:
 		s := reflect.MakeSlice(v.Type(), 1, 1)
-		s.Index(0).SetString(f.prose())
+		s.Index(0).SetString(f.prose(reach))
 		v.Set(s)
 	default:
-		panic(fmt.Sprintf("a public field of kind %s; teach the filler before classifying it", v.Kind()))
+		panic(fmt.Sprintf("a carried field of kind %s; teach the filler before classifying it", v.Kind()))
 	}
 }
 
@@ -612,9 +732,9 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 		Sources: queries.Sources{Company: func() *config.Company { return company }},
 	})
 
-	projection, ok := a.Stream().Org().(api.OrgProjection)
+	projection, ok := a.Stream().Org(auth.ReachAdmin).(api.OrgProjection)
 	if !ok {
-		t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
+		t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org(auth.ReachAdmin))
 	}
 	scribble := func(lists ...[]string) {
 		for _, list := range lists {
@@ -668,9 +788,9 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 			a := newApp(t, api.Options{
 				Sources: queries.Sources{Company: func() *config.Company { return tc.company }},
 			})
-			projection, ok := a.Stream().Org().(api.OrgProjection)
+			projection, ok := a.Stream().Org(auth.ReachPublic).(api.OrgProjection)
 			if !ok {
-				t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
+				t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org(auth.ReachPublic))
 			}
 			if projection.Timezone != tc.want {
 				t.Errorf("the projection's clock is %q, want %q", projection.Timezone, tc.want)
@@ -681,7 +801,7 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	a := newApp(t, api.Options{
 		Sources: queries.Sources{Company: func() *config.Company { return nil }},
 	})
-	body, err := json.Marshal(a.Stream().Org())
+	body, err := json.Marshal(a.Stream().Org(auth.ReachAdmin))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,10 +854,8 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 			Roles:  []config.Role{{Name: "SRE"}},
 		}},
 	}
-	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
-	})
-	got := orgOf(t, a)
+	a := chartApp(t, company)
+	got := orgOf(t, a, "secret")
 
 	if got.TokenBudget == nil || got.TokenBudget.Month == nil || *got.TokenBudget.Month != 40_000_000 ||
 		got.TokenBudget.Day != nil || got.TokenBudget.Week != nil {
@@ -808,10 +926,8 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	// A company with no provider has no chain to show, and says nothing
 	// rather than an empty one.
 	bare := &config.Company{Name: "Acme", Roles: []config.Role{{Name: "CTO"}}}
-	b := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return bare }},
-	})
-	if seat := orgOf(t, b).Roles[0]; seat.LLM != nil || !slices.Equal(seat.ToolSources, []string{"builtin"}) {
+	b := chartApp(t, bare)
+	if seat := orgOf(t, b, "secret").Roles[0]; seat.LLM != nil || !slices.Equal(seat.ToolSources, []string{"builtin"}) {
 		t.Errorf("with no provider and no server, the seat carries %v and %v; want no chain and only the builtins",
 			seat.LLM, seat.ToolSources)
 	}

@@ -55,10 +55,17 @@ import (
 // component's own tests passed.
 
 // dial opens a socket the way the dashboard's LiveSocket does.
-func (n *node) dial(t *testing.T) *websocket.Conn {
+// dial opens the node's socket presenting token — which decides, for the life
+// of the socket, what it is pushed (ADR-0031): an admin's socket the event
+// stream and every seat's call in flight, a member's each seat's state alone.
+// Presented as a header, as a non-browser client should: a query string
+// appears in proxy logs.
+func (n *node) dial(t *testing.T, token string) *websocket.Conn {
 	t.Helper()
 	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
-	conn, _, err := websocket.Dial(t.Context(), target, nil)
+	conn, _, err := websocket.Dial(t.Context(), target, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + token}},
+	})
 	if err != nil {
 		t.Fatalf("dial %s: %v", target, err)
 	}
@@ -127,7 +134,7 @@ func decodeFrame(raw []byte) frame {
 		}
 	case "agents":
 		f.decoded = json.Unmarshal(env.Data, &f.rows) == nil
-	case "tokens", "health", "snapshot":
+	case "tokens", "health", "snapshot", "budget":
 		f.decoded = json.Unmarshal(env.Data, &f.body) == nil
 	}
 	return f
@@ -234,6 +241,61 @@ func (c *capture) sawRefusal(t *testing.T, handle string) bool {
 		}
 	}
 	return false
+}
+
+// sawPressing reports whether a MEMBER's `budget` push named a seat's window as
+// refusing, with when it turns over: the state a member is served of a meter,
+// which carries no figure.
+func (c *capture) sawPressing(t *testing.T, handle string) bool {
+	t.Helper()
+	for _, f := range c.snapshot() {
+		if f.kind != "budget" || !f.decoded {
+			continue
+		}
+		seats, _ := f.body["seats"].([]any)
+		for _, s := range seats {
+			seat, _ := s.(map[string]any)
+			if seat["handle"] != handle {
+				continue
+			}
+			windows, _ := seat["windows"].([]any)
+			for _, w := range windows {
+				window, _ := w.(map[string]any)
+				if reset, _ := window["resets_at"].(string); window["state"] == "refusing" && reset != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// keys reports every object key anywhere in every captured frame.
+func (c *capture) keys(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, child := range v {
+				out[key] = true
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	for _, f := range c.snapshot() {
+		var decoded any
+		if err := json.Unmarshal(f.raw, &decoded); err != nil {
+			t.Fatalf("a captured frame is not JSON: %v", err)
+		}
+		walk(decoded)
+	}
+	return out
 }
 
 // seatStates reports every activity an `agents` push put a seat in, by handle.
@@ -407,7 +469,10 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
 
-	conn := n.dial(t)
+	// AN ADMIN'S SOCKET: what this case asserts — the event stream, the call
+	// in flight, the spend — is what the machine processed, and only an
+	// admin is pushed it.
+	conn := n.dial(t, e2eOperatorToken)
 	frames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -996,7 +1061,8 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		// is stamped in the day it is read back in ([middayZone]).
 		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
 	}, boot: func(boot *config.Bootstrap) {
-		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Role: config.RoleAdmin, Token: replayToken}}
+		boot.API.Auth.Tokens = append(boot.API.Auth.Tokens,
+			config.APIToken{ID: replayOperator, Role: config.RoleAdmin, Token: replayToken})
 	}, env: map[string]string{replayOperatorVar: replayOperator}})
 	zone := companyMidday(t, n.engine)
 
@@ -1005,13 +1071,22 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
-	conn := n.dial(t)
+	// TWO SOCKETS ON ONE COMPANY: the founder's, an admin's, and a
+	// colleague's on a member key. Each is pushed what its reach is served
+	// (ADR-0031), and each capture is replayed through the client below —
+	// so the member variants are held to a client that reads them, and the
+	// member capture to carrying nothing the machine processed.
+	conn := n.dial(t, replayToken)
 	frames := &capture{}
+	memberConn := n.dial(t, e2eMemberToken)
+	memberFrames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go read(ctx, conn, frames)
-	waitFor(t, "the snapshot", func() bool {
-		return slices.Contains(frames.kinds(t), "snapshot")
+	go read(ctx, memberConn, memberFrames)
+	waitFor(t, "the snapshots", func() bool {
+		return slices.Contains(frames.kinds(t), "snapshot") &&
+			slices.Contains(memberFrames.kinds(t), "snapshot")
 	})
 
 	// THE REFUSAL FIRST, and settled on the counter's own stamp, so the
@@ -1065,7 +1140,21 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	waitFor(t, "a budget push carrying the refusal", func() bool {
 		return frames.sawRefusal(t, "cfo")
 	})
+	// AND THE MEMBER'S, whose meter names the refusing window and when it
+	// turns over and no figure: pushed in the same fan-out, read on its own
+	// goroutine.
+	waitFor(t, "a member's budget push naming the refused seat", func() bool {
+		return memberFrames.sawPressing(t, "cfo")
+	})
 	cancel()
+
+	// --- what a member's socket was pushed ------------------------------ //
+	// NOTHING THE MACHINE PROCESSED, ANYWHERE IN ANY FRAME: no call, no
+	// prompt, no response, no tool call, no round, no figure, no event
+	// payload — and not the words of the wake that started the CFO's turn,
+	// which only a prompt carries. Non-vacuous: the same socket saw the
+	// company's seat working on the task it was woken for.
+	assertMemberCapture(t, memberFrames, "What did we spend this week?")
 
 	// --- what the frames say, before the client reads them ------------- //
 	// The server's half of each field the replay then holds the client to,
@@ -1122,22 +1211,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// --- a write, and the floor it raises ------------------------------- //
 	answer := captureAct(t, n)
 
-	// The RAW bytes, as strings, in arrival order. Not re-encoded: the
-	// client must be fed what the server wrote, or the replay certifies
-	// this test's serialization instead of the server's.
-	raw := frames.all()
-	texts := make([]string, 0, len(raw))
-	for _, f := range raw {
-		texts = append(texts, string(f))
-	}
-	payload, err := json.Marshal(texts)
-	if err != nil {
-		t.Fatalf("encoding the capture: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "frames.json")
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
-		t.Fatalf("writing the capture: %v", err)
-	}
+	path := writeFrames(t, frames, "frames.json")
 
 	root := sourcetree.Root(t)
 	tree := filepath.Join(root, "static", "dashboard")
@@ -1149,17 +1223,110 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	if err := os.WriteFile(actPath, answer, 0o600); err != nil {
 		t.Fatalf("writing the act answer: %v", err)
 	}
-	cmd := exec.CommandContext(runCtx, node, script, path, actPath)
-	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
-	out, err := cmd.CombinedOutput()
-	if runCtx.Err() != nil {
-		t.Fatalf("the replay did not finish within %s:\n%s", replayTimeout, out)
+	replay := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(runCtx, node, append([]string{script}, args...)...)
+		cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
+		out, err := cmd.CombinedOutput()
+		if runCtx.Err() != nil {
+			t.Fatalf("the %s replay did not finish within %s:\n%s", name, replayTimeout, out)
+		}
+		if err != nil {
+			t.Fatalf("the dashboard client could not read the frames this server pushed "+
+				"to %s socket:\n%s", name, out)
+		}
+		t.Logf("%s: %s", name, strings.TrimSpace(string(out)))
 	}
+	replay("an admin's", path, actPath)
+	replay("a member's", writeFrames(t, memberFrames, "member-frames.json"), "--member")
+}
+
+// writeFrames writes a capture's RAW bytes, as strings, in arrival order, to a
+// file the replay reads. Not re-encoded: the client must be fed what the
+// server wrote, or the replay certifies this test's serialization instead of
+// the server's.
+func writeFrames(t *testing.T, c *capture, name string) string {
+	t.Helper()
+	raw := c.all()
+	texts := make([]string, 0, len(raw))
+	for _, f := range raw {
+		texts = append(texts, string(f))
+	}
+	payload, err := json.Marshal(texts)
 	if err != nil {
-		t.Fatalf("the dashboard client could not read this server's frames "+
-			"(%d captured):\n%s", len(texts), out)
+		t.Fatalf("encoding the capture: %v", err)
 	}
-	t.Logf("%s", strings.TrimSpace(string(out)))
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatalf("writing the capture: %v", err)
+	}
+	return path
+}
+
+// machineKeys is every wire key that carries what the machine processed — a
+// call in flight, its prompt and answer, its tool calls and rounds, a figure,
+// an event's payload — which a member's socket is never pushed (ADR-0031),
+// anywhere in any frame.
+//
+// NOT `node`: the health envelope names the node that answered, and it is the
+// body of the open `/health` probe. Which node runs a seat's turn is held off a
+// member's rows by memberRowKeys instead.
+var machineKeys = []string{
+	"live_call", "live_call_seq", "prompt", "prompt_messages", "response",
+	"round_narration", "tool_executions", "running_call", "rounds", "versions",
+	"system_prompt", "user_prompt", "payload", "model", "used", "limit",
+	"total_tokens", "input_tokens", "output_tokens", "meter_id",
+}
+
+// memberRowKeys is every key a member's `agents` row may carry: the seat's
+// state, field for field (livestate.AgentStatus).
+var memberRowKeys = []string{
+	"handle", "activity", "stopped_reason", "work_item", "step", "since", "paused_by",
+}
+
+// assertMemberCapture holds a member socket's whole capture to ADR-0031: no
+// kind beyond a member's, no machine key in any frame, not the given text a
+// prompt carried — and enough seen that the absence means something.
+func assertMemberCapture(t *testing.T, frames *capture, promptText string) {
+	t.Helper()
+	for _, kind := range frames.kinds(t) {
+		if !slices.Contains([]string{"snapshot", "agents", "budget", "health", "schedules", "org"}, kind) {
+			t.Errorf("a member's socket was pushed a %q frame", kind)
+		}
+	}
+	keys := frames.keys(t)
+	for _, key := range machineKeys {
+		if keys[key] {
+			t.Errorf("a member's socket was pushed the key %q, which carries what the machine processed", key)
+		}
+	}
+	for _, row := range frames.agentRows(t) {
+		for key := range row {
+			if !slices.Contains(memberRowKeys, key) {
+				t.Errorf("a member's agents row carries %q, which a member's seat state does not", key)
+			}
+		}
+	}
+	for _, f := range frames.snapshot() {
+		if bytes.Contains(f.raw, []byte(promptText)) {
+			t.Errorf("a member's socket was pushed the words of a prompt (%q) in a %s frame", promptText, f.kind)
+		}
+	}
+	if states := frames.seatStates(t); !slices.Contains(states["ceo"], "working") {
+		t.Errorf("a member's socket never saw the seat working (%v), so its silence proves nothing", states["ceo"])
+	}
+	var onItem, stepped bool
+	for _, row := range frames.agentRows(t) {
+		if item, _ := row["work_item"].(map[string]any); item != nil && item["key"] != nil {
+			onItem = true
+		}
+		if step, _ := row["step"].(string); step != "" {
+			stepped = true
+		}
+	}
+	if !onItem || !stepped {
+		t.Errorf("no member row named the item its seat was on (%v) or the step it was at (%v)", onItem, stepped)
+	}
 }
 
 // nodeBinary finds node, or explains its absence the right way for the run.

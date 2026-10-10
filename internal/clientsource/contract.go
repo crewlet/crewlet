@@ -212,6 +212,7 @@ var contract = []Entry{
 	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
+	{"TurnStep", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"DELEGATE_TOOL", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
 	{"DELEGATE_TASKS", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
 

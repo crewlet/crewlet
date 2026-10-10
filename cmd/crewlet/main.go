@@ -33,7 +33,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
-	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -1418,7 +1417,7 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState
 		}
 		seeds = append(seeds, livestate.SeedPause{Handle: p.Handle, Paused: livestate.Paused{
 			By: firstNonEmpty(p.Seat, p.By), At: p.At.UTC().Format(time.RFC3339),
-			Reason: p.Reason, StopRunning: p.StopRunning,
+			Reason: p.Reason, StopRunning: p.StopRunning, BySeat: p.Seat != "",
 		}})
 	}
 	live.SeedPauses(seeds)
@@ -1997,23 +1996,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// same-origin only, which is what the dashboard this process
 		// serves needs and what every other site gets.
 		"cross_origin_sites", app.CORS().Origins())
-	// THE CONFIG-DERIVED SURFACES, re-sent whenever an apply changes them.
-	//
-	// The roster, the org tree and the tool catalogue all come from the
-	// company document, so no event will ever correct them: a revision
-	// that adds, renames or removes a role produces nothing a projection
-	// could learn from, and an overlay merge cannot express a deletion at
-	// all. Without this an open dashboard renders the company it connected
-	// to until someone reloads.
+	// THE CONFIG-DERIVED SURFACES, re-sent whenever an apply changes them,
+	// each to every socket in its own reach's variant — see
+	// stream.Service.ResendConfigured for why no event would correct them.
 	//
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnApplied.
-	e.SetOnApplied(func(context.Context) {
-		app.Stream().Broadcast(stream.KindSeats, app.Stream().Roster())
-		app.Stream().Broadcast(stream.KindOrg, app.Stream().Org())
-		app.Stream().Broadcast(stream.KindTools, app.Stream().Tools())
-		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
-	})
+	e.SetOnApplied(func(context.Context) { app.Stream().ResendConfigured() })
 
 	return surface, nil
 }

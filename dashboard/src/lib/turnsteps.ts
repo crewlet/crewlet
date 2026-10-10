@@ -16,10 +16,15 @@
 import type { StepperStep } from "@crewlethq/ui";
 import { delegatedWorkers, roundOf } from "./seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
+import type { TurnStep } from "~/contract/wire.ts";
 
-/** The steps a turn walks, in order. */
-export const TURN_STEPS = ["context", "execute", "review"] as const;
-export type TurnStep = (typeof TURN_STEPS)[number];
+/**
+ * The steps a turn walks, in order: every word of the engine's `TurnStep`,
+ * which is also the `step` a member's seat row carries — computed by the rule
+ * `turnSteps` applies below (`livestate.agentLive.step`), so change both
+ * together.
+ */
+export const TURN_STEPS = ["context", "execute", "review"] as const satisfies readonly TurnStep[];
 
 /**
  * The turn's steps and which one it is on.

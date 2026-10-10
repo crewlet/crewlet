@@ -282,10 +282,10 @@ func TestTheStoppedReasonIsAlwaysOnTheRow(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EXACTLY THE SEAT STATES THE ENGINE SENDS. Its
-// `SeatActivity` and `StoppedReason` unions are the engine's closed sets
-// written twice, because the dashboard cannot import a Go identifier: a word
-// the engine sends that the union lacks is a state no screen can draw, and one
-// the union names that the engine never sends is a branch nothing reaches.
+// `SeatActivity`, `StoppedReason` and `TurnStep` unions are the engine's closed
+// sets written twice, because the dashboard cannot import a Go identifier: a
+// word the engine sends that the union lacks is a state no screen can draw, and
+// one the union names that the engine never sends is a branch nothing reaches.
 func TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends(t *testing.T) {
 	t.Parallel()
 	for _, set := range []struct {
@@ -294,6 +294,7 @@ func TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends(t *testing.T) {
 	}{
 		{"SeatActivity", strs(livestate.Activities)},
 		{"StoppedReason", strs(livestate.StoppedReasons)},
+		{"TurnStep", strs(livestate.Steps)},
 	} {
 		client, err := clientsource.Union(clientsource.Tree(t), set.name)
 		if err != nil {

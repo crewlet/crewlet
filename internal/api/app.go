@@ -404,7 +404,7 @@ func New(opts Options) (*App, error) {
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
-		Org:    func() any { return orgProjection(opts.Sources.Company) },
+		Org:    func(reach auth.Reach) any { return orgProjection(opts.Sources.Company, reach) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half

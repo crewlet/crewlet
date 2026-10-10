@@ -123,6 +123,15 @@ export type SeatActivity = "working" | "needs" | "stopped" | "idle";
 export type StoppedReason = "paused" | "unplaced" | "budget" | "provider";
 
 /**
+ * Where in its turn a seat is, in the three words a person reads: the steps the
+ * stepper draws (`lib/turnsteps.ts`), and the `step` a member's seat row
+ * carries (`AgentStatus`), which the engine computes by the stepper's own rule
+ * so a member and an admin read one step for one seat. EXACTLY THE ENGINE'S
+ * `livestate.Steps`, held by the seat-state gate.
+ */
+export type TurnStep = "context" | "execute" | "review";
+
+/**
  * The tool an executor hands work to its workers through, and the argument
  * that lists the tasks it hands them.
  *

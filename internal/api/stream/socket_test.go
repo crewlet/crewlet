@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +60,15 @@ func (f *socketFixture) dial(t *testing.T, token string) (*websocket.Conn, *http
 	return conn, res, err
 }
 
+// twoKeys is a guard holding one admin key and one member key, for the cases
+// about what a socket's reach is pushed.
+func twoKeys(a *config.APIAuth) {
+	a.Tokens = []config.APIToken{
+		{ID: "founder", Role: config.RoleAdmin, Token: "secret"},
+		{ID: "ada", Role: config.RoleMember, Token: "m-key"},
+	}
+}
+
 // next reads one frame as a decoded map.
 func next(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
@@ -96,24 +107,107 @@ func write(t *testing.T, conn *websocket.Conn, frame map[string]any) {
 
 // --- the handshake ------------------------------------------------------- //
 
-func TestASocketOpensAndGetsItsSnapshotImmediately(t *testing.T) {
+// A SOCKET IS HANDED ITS SNAPSHOT THE MOMENT IT OPENS, ASSEMBLED FOR ITS REACH:
+// every section whose push reaches the socket, and no key at all for one that
+// does not — so a member's tab is never handed on connect the event feed, the
+// coding runs, the spend rollup or the tool catalogue it would not be pushed a
+// moment later, and an anonymous one is handed the chart and the health and
+// nothing else.
+//
+// Built entirely from the in-memory projection: no database round trip on
+// connect, which is the whole reason the projection exists.
+//
+// Mutation: gate a section on anything but its push's reach, and a reach's key
+// set changes.
+func TestASocketsSnapshotIsAssembledForItsReach(t *testing.T) {
 	t.Parallel()
-	// Built entirely from the in-memory projection: no database round trip
-	// on connect, which is the whole reason the projection exists.
-	f := newSocket(t, nil, nil)
-	conn, _, err := f.dial(t, "")
+	for _, tc := range []struct {
+		name string
+		key  string
+		want []string
+	}{
+		{"anonymous", "", []string{"health", "org"}},
+		{"member", "m-key", []string{"agents", "budget", "health", "org", "schedules"}},
+		{"admin", "secret", []string{
+			"agents", "budget", "events", "health", "org", "sandboxes", "schedules", "tokens", "tools",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSocket(t, twoKeys, nil)
+			conn, _, err := f.dial(t, tc.key)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			got := next(t, conn)
+			if kindOf(got) != stream.KindSnapshot {
+				t.Fatalf("first frame = %v, want a snapshot", got["kind"])
+			}
+			data, _ := got["data"].(map[string]any)
+			keys := slices.Sorted(maps.Keys(data))
+			if !slices.Equal(keys, tc.want) {
+				t.Errorf("a %s socket's snapshot carries %v, want %v", tc.name, keys, tc.want)
+			}
+		})
+	}
+}
+
+// A KEY A FRAME PRESENTS UPGRADES ITS OWN QUESTION AND NEVER THE PUSHES.
+//
+// A member's tab asking one admin question with an admin's key in the frame is
+// answered as the admin — and is pushed, before and after, exactly what a
+// member socket is: the member rows of the `agents` push, and no `event` push
+// at all. Were the frame's key to reach the client, one question asked with a
+// borrowed key would leave the tab receiving every prompt in flight for the
+// rest of its life.
+//
+// Mutation: set the client's reach from the frame's principal, and the event
+// push arrives.
+func TestAFrameKeyUpgradesTheQuestionAndNeverThePushes(t *testing.T) {
+	t.Parallel()
+	seen := make(chan auth.Principal, 1)
+	f := newSocket(t, twoKeys, func(_ context.Context, _ string, _ map[string]any, caller auth.Principal) (any, error) {
+		seen <- caller
+		return map[string]any{}, nil
+	})
+	conn, _, err := f.dial(t, "m-key")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	got := next(t, conn)
-	if kindOf(got) != stream.KindSnapshot {
-		t.Fatalf("first frame = %v, want a snapshot", got["kind"])
-	}
-	data, _ := got["data"].(map[string]any)
-	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
-		if _, present := data[key]; !present {
-			t.Errorf("snapshot is missing %q", key)
+	next(t, conn)
+
+	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config", "token": "secret"})
+	select {
+	case got := <-seen:
+		if got.Reach != auth.ReachAdmin {
+			t.Fatalf("the frame's key asked as %+v, want the admin", got)
 		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the query never ran")
+	}
+	if got := next(t, conn); kindOf(got) != stream.KindResult {
+		t.Fatalf("frame = %v, want the answer", got["kind"])
+	}
+
+	f.svc.Ingest(livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
+		Category: "agent", Payload: map[string]any{
+			"role": "Lead", "agent_handle": "lead", "turn_id": "tn-1", "phase": "execute",
+		},
+	})
+	got := next(t, conn)
+	if kindOf(got) != stream.KindAgents {
+		t.Fatalf("frame = %v, want the agents push and nothing before it", got["kind"])
+	}
+	rows, _ := got["data"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("agents push = %v, want the one seat", got["data"])
+	}
+	row, _ := rows[0].(map[string]any)
+	keys := slices.Sorted(maps.Keys(row))
+	want := []string{"activity", "handle", "paused_by", "since", "step", "stopped_reason", "work_item"}
+	if !slices.Equal(keys, want) {
+		t.Errorf("the member socket was pushed a row carrying %v, want the member status %v", keys, want)
 	}
 }
 
@@ -269,8 +363,10 @@ func TestTheHandshakesKeyIsTheSocketsPrincipal(t *testing.T) {
 
 func TestAnIngestedEventReachesTheSocket(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, nil, nil)
-	conn, _, err := f.dial(t, "")
+	// An ADMIN's socket: the event push is what the machine processed, and
+	// no other reach is pushed it.
+	f := newSocket(t, twoKeys, nil)
+	conn, _, err := f.dial(t, "secret")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -627,14 +723,14 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 	t.Parallel()
 	// The reason queries run off the read loop at all.
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ auth.Principal) (any, error) {
+	f := newSocket(t, twoKeys, func(ctx context.Context, _ string, _ map[string]any, _ auth.Principal) (any, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
 		return nil, nil
 	})
-	conn, _, err := f.dial(t, "")
+	conn, _, err := f.dial(t, "secret")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

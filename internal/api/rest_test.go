@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -207,7 +208,7 @@ func TestASeatIsAddressableByTheIdentifierTheClientHolds(t *testing.T) {
 		t.Errorf("asking by role = %d %v, want a refusal naming the handle", code, body)
 	}
 	// And the roster hands out exactly that identifier.
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(auth.ReachAdmin)["agents"]) {
 		if row["id"] != row["handle"] {
 			t.Errorf("roster row %v: id must be the identifier every screen "+
 				"sends back, which is the handle", row)
