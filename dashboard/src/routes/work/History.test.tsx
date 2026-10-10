@@ -21,7 +21,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { History, HistoryView } from "./History.tsx";
 import { pick } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage } from "~/app/page.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkActivityRecord } from "~/protocol/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -37,7 +37,7 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 // because the point of these two cases is which component CALLS this hook and
 // pulling the real Shell in would drag the whole route table behind a question
 // about one function.
-vi.mock("~/app/Shell.tsx", () => ({ usePageCoverage: vi.fn() }));
+vi.mock("~/app/page.tsx", () => ({ usePageCoverage: vi.fn() }));
 
 afterEach(() => {
   cleanup();

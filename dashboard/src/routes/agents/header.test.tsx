@@ -9,7 +9,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 import { Schedules } from "./Schedules.tsx";
 import { Router } from "~/app/router.tsx";
-import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
+import { usePageMenu, useSectionCounts } from "~/app/page.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -18,7 +18,7 @@ import { LiveSocket, Store, type ScheduleRow } from "~/protocol/index.ts";
 
 // THE FRAME'S SLOTS, stood in for so a case can hold what the screen CLAIMS:
 // the tabs and the menu that draw them are the page header's.
-vi.mock("~/app/Shell.tsx", () => ({
+vi.mock("~/app/page.tsx", () => ({
   usePageMenu: vi.fn(),
   useSectionCounts: vi.fn(),
   usePageLabels: vi.fn(),

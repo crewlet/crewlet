@@ -47,7 +47,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
-import { usePageMenu } from "~/app/Shell.tsx";
+import { usePageMenu } from "~/app/page.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtTime, inTimeExact, plural } from "~/lib/format.ts";
 import {

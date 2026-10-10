@@ -34,7 +34,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";

@@ -59,7 +59,7 @@ import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
-import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { usePageLabels, usePageMenu } from "~/app/page.tsx";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import {
   AnswerRunButton,

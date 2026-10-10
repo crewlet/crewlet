@@ -51,7 +51,7 @@ import { QueryState } from "~/components/common.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
