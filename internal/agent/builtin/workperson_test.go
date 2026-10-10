@@ -297,8 +297,19 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 	party func(string) tracker.Party) *tools.Registry {
 
 	t.Helper()
+	return ledPersonSurface(t, trk, person, actor, party, nil)
+}
+
+// ledPersonSurface is [personSurface] with the chart's lead relation behind
+// it, which is what decides whose personal record a caller may read.
+func ledPersonSurface(t *testing.T, trk *fakeTracker, person *personSpy,
+	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error),
+	party func(string) tracker.Party, leads builtin.Leads) *tools.Registry {
+
+	t.Helper()
 	reg := tools.NewRegistry()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Leads: leads,
 		Work: builtin.WorkDeps{
 			Reader: trk,
 			Writer: trk.as,
@@ -518,18 +529,52 @@ func TestMyWorkThroughAnOperatorAnswersForTheirSeat(t *testing.T) {
 // AND A PERSONAL READ ABOUT SOMEBODY ELSE CARRIES *THEIR* TWO NAMES.
 //
 // Whose two names these are is a fact about the SEAT, resolved from the chart,
-// never the credential in the caller's own hand: an operator reading a
-// report's inbox is answered about that report. Both verbs take the handle as
-// an argument, so neither could get it from the actor.
+// never the credential in the caller's own hand: a lead reading a report's
+// inbox is answered about that report. Both verbs take the handle as an
+// argument, so neither could get it from the actor.
 func TestTheHandleArgumentIsResolvedToThatPersonsParty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := personSurface(t, trk, &personSpy{}, unboundOperator, boundParties)
+	// THE FOUNDER LEADS RUI, whose seat a key of their own is linked to.
+	parties := func(handle string) tracker.Party {
+		if handle == "rui-santos" {
+			return tracker.Party{Handle: handle, OperatorID: "rui"}
+		}
+		return boundParties(handle)
+	}
+	leads := func(_ context.Context, actor, handle string) bool {
+		return actor == "jane-founder" && handle == "rui-santos"
+	}
+	reg := ledPersonSurface(t, trk, &personSpy{}, boundOperator, parties, leads)
 
+	if got := callPlain(t, reg, tracker.GetPersonTool, map[string]any{
+		"handle": "rui-santos",
+	}); got.Failed {
+		t.Fatalf("get_person failed: %q", got.Output)
+	}
+	if got := trk.personQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"rui-santos", "rui"}) {
+
+		t.Errorf("get_person asked about %v, want the report's seat and the "+
+			"credential bound to it — never the reader's own", got)
+	}
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "rui-santos",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if got := trk.inboxQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"rui-santos", "rui"}) {
+
+		t.Errorf("work_inbox asked about %v — the applier writes one row per "+
+			"recipient the record named, so a change that reached this person "+
+			"under their credential is a row the seat alone never sees", got)
+	}
+	// AND THE READER'S OWN IS THEIR TWO NAMES TOO.
 	if got := callPlain(t, reg, tracker.GetPersonTool, map[string]any{
 		"handle": "jane-founder",
 	}); got.Failed {
-		t.Fatalf("get_person failed: %q", got.Output)
+		t.Fatalf("get_person of the reader's own failed: %q", got.Output)
 	}
 	if got := trk.personQuery.Who.Handles(); !slices.Equal(got,
 		[]string{"jane-founder", "founder"}) {
@@ -537,23 +582,11 @@ func TestTheHandleArgumentIsResolvedToThatPersonsParty(t *testing.T) {
 		t.Errorf("get_person asked about %v, want the seat and the credential "+
 			"bound to it — the record may be filed under either", got)
 	}
-	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
-		"handle": "jane-founder",
-	}); got.Failed {
-		t.Fatalf("work_inbox failed: %q", got.Output)
-	}
-	if got := trk.inboxQuery.Who.Handles(); !slices.Equal(got,
-		[]string{"jane-founder", "founder"}) {
-
-		t.Errorf("work_inbox asked about %v — the applier writes one row per "+
-			"recipient the record named, so a change that reached this person "+
-			"under their credential is a row the seat alone never sees", got)
-	}
 	// AND A SURFACE WITH NO CHART ANSWERS THE HANDLE ALONE, which is the
 	// honest state for a build that has not loaded one and the whole truth
 	// for every agent seat.
 	bare := newFakeTracker()
-	none := personSurface(t, bare, &personSpy{}, unboundOperator, nil)
+	none := personSurface(t, bare, &personSpy{}, boundOperator, nil)
 	if got := callPlain(t, none, tracker.GetPersonTool, map[string]any{
 		"handle": "jane-founder",
 	}); got.Failed {
@@ -786,7 +819,7 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	reg := personSurface(t, trk, &personSpy{}, unboundOperator, nil)
 
 	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
-		"handle": "alice",
+		"handle": "ci",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
@@ -795,7 +828,7 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 			trk.inboxQuery.Snoozed, tracker.SnoozeExclude)
 	}
 	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
-		"handle": "alice", "snoozed": "only",
+		"handle": "ci", "snoozed": "only",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
@@ -803,7 +836,7 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
 	}
 	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
-		"handle": "alice", "snoozed": "bogus",
+		"handle": "ci", "snoozed": "bogus",
 	})
 	if !bad.Failed || !strings.Contains(bad.Output, "include") {
 		t.Fatalf("snoozed=bogus answered %q, want a refusal naming the scopes",

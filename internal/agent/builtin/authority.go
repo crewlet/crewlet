@@ -1,10 +1,13 @@
 package builtin
 
 import (
+	"context"
+	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -110,6 +113,41 @@ func onlyWho(parties ...string) string {
 		return named[0] + " or an admin"
 	}
 	return strings.Join(named, ", ") + ", or an admin"
+}
+
+// readsRecordOf reports whether the person behind actor may READ handle's
+// personal record — their inbox, their marks, queue and pins, the views they
+// keep for themselves.
+//
+// THEIR OWN, OR A REPORT'S: the rule every personal question on the API
+// already follows (`viewerParty` in internal/api/queries), held here for the
+// operator tools that take a handle, because a member's key reaches this
+// catalogue too (ADR-0031) and a rule three surfaces follow and a fourth does
+// not is not a rule. Asked through these tools with no check, any teammate
+// could page through the founder's inbox by handle.
+//
+// OWN IS EITHER NAME the person's rows carry ([Actor.Party]): the seat, and
+// the key's own id older rows were filed under. A REPORT is anybody in their
+// line, asked of the chart about [Actor.Record] through `leads` — nil leads
+// nobody, which degrades to "your own only".
+//
+// AND AN ADMIN'S KEY ADDS NOTHING. The role says how much of the MACHINE a key
+// reaches; a person's inbox and queue are not the machine's, so an admin who
+// leads nobody reads their own and no one else's, exactly as a member does.
+func readsRecordOf(ctx context.Context, actor Actor, handle string, leads Leads) bool {
+	if slices.Contains(actor.Party().Handles(), handle) {
+		return true
+	}
+	return leads != nil && leads(ctx, actor.Record(), handle)
+}
+
+// notTheirs refuses a read of somebody else's personal record, naming who may
+// make it.
+func notTheirs(handle, what string) tools.Result {
+	return refused(tools.RefusalForbidden, fmt.Sprintf("Only %s or one of "+
+		"their leads can read %s's %s: a person's own record is read by them "+
+		"and by the people whose line they are in, and an admin's key reaches "+
+		"it no further than a member's. Nothing was read.", handle, handle, what))
 }
 
 // followsTask reports whether any of a person's identities ([Actor.Party])

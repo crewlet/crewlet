@@ -31,6 +31,11 @@ import (
 // the tracker deliberately does not do — this package has a chart and that one
 // does not.
 //
+// THE READS ARE THE EXCEPTION, because the tracker's reads take a party and
+// judge nobody: who may read somebody's state or inbox is decided here, before
+// the read, by the rule every personal question on the API follows — their
+// own, or a report's ([readsRecordOf]).
+//
 // # WHOSE record, which is not who wrote it
 //
 // These tools ACT AS A PERSON, and the person is not the credential in their
@@ -78,7 +83,10 @@ type PersonReader interface {
 // hole.
 type Leads func(ctx context.Context, actor, handle string) bool
 
-type getPerson struct{ deps WorkDeps }
+type getPerson struct {
+	deps  WorkDeps
+	leads Leads
+}
 
 var _ tools.Callable = (*getPerson)(nil)
 
@@ -87,7 +95,8 @@ func (t *getPerson) Name() string { return tracker.GetPersonTool }
 func (t *getPerson) Description() string {
 	return "One person's own state: what is in their inbox, what they have " +
 		"read, what is snoozed and which of those snoozes are now due, the " +
-		"order they mean to work in, and their pinned views."
+		"order they mean to work in, and their pinned views. Yours, or that " +
+		"of somebody in your line."
 }
 
 func (t *getPerson) Parameters() map[string]any {
@@ -107,6 +116,15 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 	handle := strings.TrimSpace(argString(args, "handle"))
 	if handle == "" {
 		return failed("Name whose state to read with `handle`."), nil
+	}
+	actor, err := t.deps.actor(ctx, nil)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return notInATurn(tracker.GetPersonTool), nil
+	}
+	// WHOSE RECORD THE CALLER MAY READ — see [readsRecordOf].
+	if !readsRecordOf(ctx, actor, handle, t.leads) {
+		return notTheirs(handle, "state"), nil
 	}
 	// BOTH OF THAT PERSON'S NAMES, resolved from the chart — never the
 	// credential the caller is holding. An operator reading a report's own
@@ -683,7 +701,10 @@ type InboxReader interface {
 		tracker.InboxAnswer, error)
 }
 
-type workInbox struct{ deps WorkDeps }
+type workInbox struct {
+	deps  WorkDeps
+	leads Leads
+}
 
 var _ tools.Callable = (*workInbox)(nil)
 
@@ -695,7 +716,8 @@ func (t *workInbox) Description() string {
 		"whether they have read it. The PRIMARY half is what they have said " +
 		"is theirs to act on — mentions, questions, their own work — and the " +
 		"rest is context. This is the durable record the engine wrote when " +
-		"the change landed, so it is there whether or not anybody was online."
+		"the change landed, so it is there whether or not anybody was " +
+		"online. Yours, or that of somebody in your line."
 }
 
 func (t *workInbox) Parameters() map[string]any {
@@ -761,6 +783,16 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	if handle == "" {
 		return failed("Name whose inbox to read with `handle`."), nil
 	}
+	actor, err := t.deps.actor(ctx, nil)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return notInATurn(tracker.WorkInboxTool), nil
+	}
+	// WHOSE INBOX THE CALLER MAY READ — see [readsRecordOf]. Somebody
+	// else's inbox is the one record an inbox's whole design keeps theirs.
+	if !readsRecordOf(ctx, actor, handle, t.leads) {
+		return notTheirs(handle, "inbox"), nil
+	}
 	q := tracker.InboxQuery{
 		// BOTH OF THAT PERSON'S NAMES — see [getPerson.Call]. The
 		// applier writes one notification row per RECIPIENT the record
@@ -791,9 +823,9 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		q.Reasons = append(q.Reasons, reason)
 	}
 	if since := strings.TrimSpace(argString(args, "since")); since != "" {
-		at, err := statelog.ParsePosition(since)
-		if err != nil {
-			return failed(err.Error()), nil
+		at, parseErr := statelog.ParsePosition(since)
+		if parseErr != nil {
+			return failed(parseErr.Error()), nil
 		}
 		q.Since = at
 	}

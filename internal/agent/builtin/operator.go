@@ -46,9 +46,10 @@ type OperatorDeps struct {
 	Org func() *org.Organization
 
 	// Leads answers whether one handle leads another, which is the one
-	// authority over a person's record that reaches across people. Nil
-	// resolves nothing, which degrades to "your own only" rather than to
-	// a hole — see [Leads].
+	// authority over a person's record that reaches across people: who
+	// may order a report's queue, and read their state, their inbox and
+	// the views they keep for themselves. Nil resolves nothing, which
+	// degrades to "your own only" rather than to a hole — see [Leads].
 	Leads Leads
 
 	// LeadsProject answers whether a handle leads the unit that owns a
@@ -113,7 +114,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// THE VIEW TOOLS ARE HERE AND IN NO SEAT'S REGISTRY. A saved
 		// view is furniture a person arranges; see the file head of
 		// workviews.go for why a seat is not given them.
-		{&listWorkViews{deps: work}, work.Reader != nil},
+		{&listWorkViews{deps: work, leads: deps.Leads}, work.Reader != nil},
 		{&saveWorkView{deps: work}, work.ViewWriter != nil},
 		{&getWorkCatalogue{deps: work}, work.Reader != nil},
 		{&writeWorkCatalogue{deps: work}, work.CatalogueWriter != nil},
@@ -121,11 +122,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&describeProject{deps: work}, projectReads(work)},
 		{&taskActivity{deps: work}, feedReads(work)},
 		{&myWork{deps: work}, feedReads(work)},
-		{&getPerson{deps: work}, work.Reader != nil},
+		{&getPerson{deps: work, leads: deps.Leads}, work.Reader != nil},
 		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
-		{&workInbox{deps: work}, work.Inbox != nil},
+		{&workInbox{deps: work, leads: deps.Leads}, work.Inbox != nil},
 		{&writeProject{deps: work, leads: deps.LeadsProject},
 			work.ProjectWriter != nil},
 		{&listProjectFiles{deps: work}, work.Files != nil},

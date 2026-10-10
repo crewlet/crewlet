@@ -2107,7 +2107,9 @@ a history row, and the history answers for ever: "what was I told about in
 
 Read at `GET /work/people/{handle}`, and through the operator MCP with
 `work_inbox`, `get_person`, `mark_inbox`, `set_pins` and `set_priorities` —
-never by a seat. A seat is not a human: it has a **mailbox**, which is the
+never by a seat. Whichever way it is read, a person's record is read by them
+and by the leads whose line they are in, and by nobody else, whatever their
+key. A seat is not a human: it has a **mailbox**, which is the
 durable subscription the engine attaches when it acquires the seat, and nothing
 on a person's record describes one.
 

@@ -2656,6 +2656,14 @@ it, and the claim lives on the seat rather than in Tier A deliberately — Tier 
 is the root of trust and holds the keys to the secret store, so it resolves
 with `EnvOnly` and may never read a value out of Tier B.
 
+The [operator tools](#operatormcp--your-own-assistant) that read a person's
+record — `get_person`, `work_inbox`, and `list_work_views` given a `viewer` —
+hold the same rule, rules 2 to 4: each names its person, and a handle that is
+neither yours (your seat, or your key's own id) nor in your line is refused
+`forbidden`, naming the person and their leads, before anything is read.
+`list_work_views` with no `viewer` is the shared strip, which is nobody's
+record.
+
 A caller with no seat behind their key is refused `bad_params`, not
 `forbidden`, when they name no handle. Nobody was denied anything: there is no
 person to answer about, and the remedy is a line of company configuration
