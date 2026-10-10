@@ -97,7 +97,6 @@ import {
   AGENT_TABS,
   HUMAN_TABS,
   TAB_LABELS,
-  findSeat,
   liveRow,
   pillWord,
   seatRun,
@@ -118,12 +117,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   const agents = useAgents();
   const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = findSeat(index, handle);
+  // BY THE HANDLE ALONE (`OrgIndex.byHandle`): a name, a runtime id or the
+  // handle in another case is no address, and lands on "No seat called".
+  const seat = index.byHandle.get(handle);
   const human = seat?.kind === "human";
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by — keyed on
-  // the RAW SEGMENT, which is what `crumbsFor` looks up (a link built from a
-  // document entry declaring no handle addresses the seat by name). And where it sits: its
-  // unit, as a way back to the team, and its kind, which the crumb's badge
+  // the RAW SEGMENT, which is what `crumbsFor` looks up. And where it sits:
+  // its unit, as a way back to the team, and its kind, which the crumb's badge
   // draws as the outline every other seat badge wears. Nothing for a seat
   // with no name, which would title the tab " · Crewlet".
   usePageLabels(
@@ -139,7 +139,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   );
   const [tab, setTab] = useTab<SeatTab>("tab", human ? HUMAN_TABS : AGENT_TABS);
   const panelId = useId();
-  const agent = liveRow(agents, handle, seat);
+  const agent = liveRow(agents, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
   // Overview's card and the Work tab's list — three readings of one answer,
   // so they can never name three numbers.

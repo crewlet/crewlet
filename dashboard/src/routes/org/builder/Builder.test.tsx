@@ -602,7 +602,7 @@ describe("the selection in the URL", () => {
     // the address itself. The path only — this harness keeps the Builder
     // mounted under any route, where the app replaces the whole screen.
     await waitFor(() =>
-      expect(location.hash.split("?")[0]).toBe(href(seatPath({ handle: "ceo", name: "CEO" }))),
+      expect(location.hash.split("?")[0]).toBe(href(seatPath({ handle: "ceo" }))),
     );
   });
 

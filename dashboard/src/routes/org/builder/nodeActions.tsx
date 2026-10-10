@@ -111,9 +111,16 @@ export function addSections(api: BuilderApi, view: NodeView): AddPillSection[] {
   }));
 }
 
-/** A seat's saved screen, when the saved company has the seat. */
+/**
+ * A seat's saved screen, when the saved company has the seat and the handle
+ * it runs under is known. A screen is addressed by the handle alone, and a
+ * saved seat declaring none has one only once the engine has said what it
+ * derives — the first check, which keys the base by handle before anything
+ * can be recorded (`SeatView.saved`). Until then there is no screen to offer,
+ * rather than a link spelled with the name that opens "No seat called".
+ */
 function seatScreen(view: SeatView): string[] | null {
-  return view.saved ? seatPath({ handle: view.saved.handle ?? "", name: view.saved.name }) : null;
+  return view.saved?.handle ? seatPath({ handle: view.saved.handle }) : null;
 }
 
 /** Every action of a node, in the order every surface offers them. */

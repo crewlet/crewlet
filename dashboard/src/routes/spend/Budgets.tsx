@@ -250,8 +250,11 @@ export function Budgets() {
         ),
     [answer],
   );
+  // EVERY ROW IS A SEAT OF THE CHART, so it carries the handle the peek is
+  // addressed by: the engine builds this list from the active org's own seats
+  // (`role.Handle()`), never from a spend that outlived one.
   usePeekNeighbours(
-    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle || s.role })), [seats]),
+    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle })), [seats]),
   );
 
   const nearPct = answer ? Math.round(answer.near_fraction * 100) : 90;
@@ -329,9 +332,9 @@ export function Budgets() {
               defaultSort="-month"
               // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
               // was it doing" without losing the row that raised it.
-              rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
+              rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
               onRowActivate={(s, e) => {
-                const go = () => openPeek({ kind: "seat", id: s.handle || s.role });
+                const go = () => openPeek({ kind: "seat", id: s.handle });
                 if (!("button" in e)) {
                   go();
                   return;

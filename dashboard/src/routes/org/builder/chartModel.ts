@@ -170,7 +170,10 @@ export interface SeatView {
   /**
    * The seat as the saved company holds it: the handle and name its own
    * screen and its live state are found by, which a rename or a handle chosen
-   * in this draft has not changed yet. `null` for a seat this draft created.
+   * in this draft has not changed yet. `null` for a seat this draft created;
+   * `handle` is `undefined` for one declaring none until a check has said
+   * what the engine derives, and its screen — addressed by the handle alone —
+   * is not offered until then.
    */
   readonly saved: { readonly handle: string | undefined; readonly name: string } | null;
   /** A saved agent seat that is still an agent seat in the draft: it has a live state to show. */

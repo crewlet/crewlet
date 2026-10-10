@@ -84,10 +84,15 @@ export function ByAgent({
   // WHETHER ANY SEAT'S DAY IS CAPPED — the column exists only if so.
   const capped = lines.some((l) => l.day?.limit !== undefined);
   // `[` AND `]` WALK THE SEATS IN THE ORDER THE TABLE OPENS IN — most tokens
-  // first, the order `agentLines` returns.
+  // first, the order `agentLines` returns — over the rows that HAVE a seat to
+  // open. The engine leaves a row's handle blank for a role the chart no
+  // longer holds rather than guess one (`tokens.Options.Handles`), and a peek
+  // addressed by the role name instead opened whichever seat's handle that
+  // happened to spell, or none. Such a row is drawn, and opens nothing.
   usePeekNeighbours(
     useMemo(
-      () => rows.map((l) => ({ kind: "seat" as const, id: l.row.handle || l.row.role })),
+      () =>
+        rows.flatMap((l) => (l.row.handle ? [{ kind: "seat" as const, id: l.row.handle }] : [])),
       [rows],
     ),
   );
@@ -112,10 +117,8 @@ export function ByAgent({
         defaultSort="-tokens"
         phoneRows="compact"
         flush
-        rowHref={(l) => peekHref({ kind: "seat", id: l.row.handle || l.row.role })}
-        onRowActivate={peekRow<AgentLine>((l) =>
-          open({ kind: "seat", id: l.row.handle || l.row.role }),
-        )}
+        rowHref={(l) => (l.row.handle ? peekHref({ kind: "seat", id: l.row.handle }) : undefined)}
+        onRowActivate={peekRow<AgentLine>((l) => open({ kind: "seat", id: l.row.handle }))}
         empty={
           error
             ? { title: "This window did not answer", hint: "The refusal above says why." }

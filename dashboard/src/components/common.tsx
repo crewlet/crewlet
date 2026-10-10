@@ -53,6 +53,12 @@ export function SeatChip({
   size = "sm",
 }: {
   name: string;
+  /**
+   * The handle the seat's page is addressed by (`seatPath`). Without one the
+   * chip is the name alone and links nowhere: a page resolves a handle and
+   * nothing else, so a link spelled with the name opened "No seat called" —
+   * or, where the name happened to spell another seat's handle, that seat.
+   */
   handle?: string;
   /**
    * The seat's kind, which decides the badge's one variant.
@@ -66,17 +72,8 @@ export function SeatChip({
   kind?: SeatKind;
   size?: "sm" | "md";
 }) {
-  const target = handle || name;
-  return (
-    <a
-      // `seat-chip`, not a bare link: a seat's name is IDENTITY, and the
-      // accent is reserved for saying where the reader is. A name rendered in
-      // the accent everywhere it appears is identity-colouring by accident.
-      // The affordance is the hover state and the cursor.
-      className="row seat-chip"
-      style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["agents", "seats", target])}
-    >
+  const body = (
+    <>
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
           agent as a squircle, and that is the one cue telling them apart. A
           kind the chart does not hold takes the kit's default, the agent's
@@ -85,6 +82,27 @@ export function SeatChip({
           without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
       <SeatAvatar name={name} size={size} kind={kind === "human" ? "human" : "agent"} decorative />
       <span className="truncate">{name}</span>
+    </>
+  );
+  const style = { gap: "var(--spacing-2)", minWidth: 0 };
+  if (!handle) {
+    return (
+      <span className="row seat-chip" style={style}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <a
+      // `seat-chip`, not a bare link: a seat's name is IDENTITY, and the
+      // accent is reserved for saying where the reader is. A name rendered in
+      // the accent everywhere it appears is identity-colouring by accident.
+      // The affordance is the hover state and the cursor.
+      className="row seat-chip"
+      style={style}
+      href={href(seatPath({ handle }))}
+    >
+      {body}
     </a>
   );
 }

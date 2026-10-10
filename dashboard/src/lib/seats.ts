@@ -178,23 +178,35 @@ export interface OrgIndex {
   units: Unit[];
   /** The outermost units, in document order. */
   topUnits: Unit[];
+  /**
+   * Every seat by the handle it runs under — and the ONE way a seat's ADDRESS
+   * resolves: its page, its peek and its guarded setup are each looked up here
+   * and nowhere else. A name, a runtime id or a handle typed in another case
+   * is no address. A name is only the FIRST seat called that (below), so a
+   * link that resolved one opened whichever seat a revision listed first; and
+   * the runtime id is derived FROM the handle, so it names nothing the handle
+   * does not.
+   */
   byHandle: Map<string, Seat>;
-  /** The FIRST seat with each name. */
+  /**
+   * The FIRST seat with each name, for a row that carries a NAME rather than
+   * a handle — a lead, a `manages` entry, a spend or turn row's role. Never
+   * an address: see `byHandle`.
+   */
   byName: Map<string, Seat>;
 }
 
 /**
- * The route segments that open a seat's page: its handle, or its name where no
- * handle is known.
+ * The route segments that open a seat's page: `#/agents/seats/{handle}`.
  *
- * ONE HELPER, because the rule for a seat addressed from its document entry —
- * which declares a handle only where it overrides the derived one, so the
- * builder can hold a saved seat with none — has to live in one place: the
- * seat screen resolves a name as well as a handle, so such a seat still has a
- * page a link can reach.
+ * ONE HELPER, so a seat's address is one rule kept in one place — and the
+ * handle alone, because the page resolves nothing else (`byHandle`). A caller
+ * holding a seat whose handle it does not know yet, such as a document entry
+ * declaring none before the engine has said what it derives, has no link to
+ * offer, and offers none rather than one spelled another way.
  */
-export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
-  return ["agents", "seats", seat.handle || seat.name];
+export function seatPath(seat: Pick<Seat, "handle">): string[] {
+  return ["agents", "seats", seat.handle];
 }
 
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -667,16 +679,15 @@ export interface SeatSetup {
  * screen that read it on its own either forgot the refusal-first order
  * [seatReading] exists for — and printed a revoked reader's model beside a
  * banner saying the answer needs a token — or collapsed "absent", "refused"
- * and "not read yet" into one sentence. The seat is resolved by handle, or by
- * name for a link built from a document entry that declares no handle, which
- * is how [seatPath] addresses one.
+ * and "not read yet" into one sentence. The seat is resolved by its handle
+ * alone, the address [seatPath] builds (`OrgIndex.byHandle`).
  *
  * A reader with no credential is never asked for: see the query below.
  */
 export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
+  const seat = handle ? index.byHandle.get(handle) : undefined;
   // NOT ASKED WITHOUT A CREDENTIAL. The document is guarded, so a browser
   // presenting no token is refused on every ask — the answer is known before
   // the question, and asking only puts a refusal on the wire and a

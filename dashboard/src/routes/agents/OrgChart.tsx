@@ -130,8 +130,7 @@ export function OrgChart() {
   const view = useRef<TreeCanvasHandle>(null);
   const peek = usePeek();
   const { open, move } = usePeekControls();
-  const peeked =
-    peek?.kind === "seat" ? (index.byHandle.get(peek.id) ?? index.byName.get(peek.id)) : undefined;
+  const peeked = peek?.kind === "seat" ? index.byHandle.get(peek.id) : undefined;
 
   // `[` AND `]` WALK THE SEATS in the order the tree reads them.
   const order = useMemo(() => {

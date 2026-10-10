@@ -51,7 +51,7 @@ describe("the tabs", () => {
 });
 
 describe("which live row is the seat's", () => {
-  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof liveRow>[2];
+  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof liveRow>[1];
   const row = (id: string, role: string, handle: string) => ({ id, role, handle }) as AgentRow;
 
   // A ROLE NAME IS SHARED by two unit seats stamped from one template, so the
@@ -59,20 +59,26 @@ describe("which live row is the seat's", () => {
   // which one is.
   test("the seat's own handle wins over an earlier sibling sharing its role name", () => {
     const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
-    expect(liveRow(agents, "swe-platform", seat)?.id).toBe("b");
-  });
-
-  // A LINK MINTED FROM A CONFIG FIELD addresses the seat by its NAME, and the
-  // resolved seat's handle still finds its own row.
-  test("a seat addressed by name is found by the handle it resolved to", () => {
-    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
-    expect(liveRow(agents, "SWE", seat)?.id).toBe("b");
+    expect(liveRow(agents, seat)?.id).toBe("b");
   });
 
   test("a row the engine named no handle on is matched by role, and only then", () => {
-    expect(liveRow([row("a", "SWE", "")], "swe-platform", seat)?.id).toBe("a");
-    expect(liveRow([row("a", "CTO", "")], "swe-platform", seat)).toBeUndefined();
-    expect(liveRow([row("a", "SWE", "")], "swe-platform", null)).toBeUndefined();
+    expect(liveRow([row("a", "SWE", "")], seat)?.id).toBe("a");
+    expect(liveRow([row("a", "CTO", "")], seat)).toBeUndefined();
+    expect(liveRow([row("a", "SWE", "")], null)).toBeUndefined();
+  });
+
+  // AND NEVER A SIBLING'S BY ITS ROLE: while the seat's own row is not listed
+  // yet, a row carrying another handle is another seat's whatever its role
+  // name says — and its state drawn here would be somebody else's.
+  test("a row carrying another handle is never the seat's, whatever its role", () => {
+    expect(liveRow([row("a", "SWE", "swe-core")], seat)).toBeUndefined();
+  });
+
+  // THE ROW'S `id` IS NO SECOND ADDRESS: a row the overlay appended carries
+  // its role name there, so matching on it was the role name by another door.
+  test("a row is the seat's by its handle, never by an id that spells the handle", () => {
+    expect(liveRow([row("swe-platform", "CTO", "")], seat)).toBeUndefined();
   });
 });
 

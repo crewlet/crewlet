@@ -507,8 +507,15 @@ export function DataGrid<T>({
   rowKey: (row: T) => string;
   /** A plain click. The row is still an anchor when `rowHref` is given. */
   onRowActivate?: (row: T, e: React.MouseEvent | React.KeyboardEvent) => void;
-  /** The row's object's page. A row whose link is the open peek's page is marked. */
-  rowHref?: (row: T) => string;
+  /**
+   * The row's object's page. A row whose link is the open peek's page is marked.
+   *
+   * `undefined` for a row whose object HAS no page — a spend row for a seat
+   * the chart no longer holds names no handle to address one by. That row is
+   * drawn, and is neither a link nor a button, and Enter on it does nothing:
+   * activating it would open the page it has not got.
+   */
+  rowHref?: (row: T) => string | undefined;
   /** A mark that is not the peek — the object a path addresses, a lens's subject. */
   isSelected?: (row: T) => boolean;
   isFailed?: (row: T) => boolean;
@@ -730,11 +737,16 @@ export function DataGrid<T>({
     announce();
   }, [gridId]);
 
+  // WHETHER A ROW OPENS ANYTHING: any row of a grid with a click and no
+  // pages, and a row of a grid with pages only where it has one (`rowHref`).
+  const opens = (row: T): boolean =>
+    Boolean(onRowActivate) && (rowHref === undefined || rowHref(row) !== undefined);
+
   useKeymap({
     "list.next": { run: () => step(1), when: driving },
     "list.previous": { run: () => step(-1), when: driving },
     "list.open": {
-      when: driving && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      when: driving && cursor >= 0 && cursor < flat.length && opens(flat[cursor]!),
       run: (e) => {
         const row = flat[cursor];
         if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
@@ -888,16 +900,19 @@ export function DataGrid<T>({
     // announced before: the name computation walks the element `aria-labelledby`
     // points at, so a screen reader still reads the cells rather than "link".
     const rowId = `${gridId}-row-${at}`;
+    // A BUTTON ONLY IN A GRID WITH NO PAGES: a row of a grid with pages that
+    // has none of its own (`rowHref`) opens nothing, so it is not a control.
+    const button = link === undefined && opens(row);
     return (
       <div
         key={key}
         id={link !== undefined ? rowId : undefined}
         className={className}
         data-row-index={at}
-        role={link === undefined && onRowActivate ? "button" : undefined}
-        tabIndex={link === undefined && onRowActivate ? 0 : undefined}
+        role={button ? "button" : undefined}
+        tabIndex={button ? 0 : undefined}
         aria-current={link === undefined && marked ? "true" : undefined}
-        onClick={link === undefined && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
+        onClick={button ? (e) => onRowActivate?.(row, e) : undefined}
       >
         {link !== undefined && (
           <a

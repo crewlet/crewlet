@@ -157,7 +157,8 @@ export function SeatPeek({ handle }: { handle: string }) {
   const org = useOrg();
   const agents = useAgents();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = index.byHandle.get(handle) ?? index.byName.get(handle);
+  // BY THE HANDLE ALONE, as the seat's page is (`OrgIndex.byHandle`).
+  const seat = index.byHandle.get(handle);
   if (!seat) {
     // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or
     // hand-edited URL as often as from a card, so the honest answer names the
@@ -171,9 +172,7 @@ export function SeatPeek({ handle }: { handle: string }) {
       />
     );
   }
-  return (
-    <SeatPeekBody seat={seat} agent={liveRow(agents, handle, seat)} nameOf={nameOfIn(index)} />
-  );
+  return <SeatPeekBody seat={seat} agent={liveRow(agents, seat)} nameOf={nameOfIn(index)} />;
 }
 
 function SeatPeekBody({

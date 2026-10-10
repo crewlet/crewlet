@@ -685,19 +685,6 @@ describe("partial pushes", () => {
   });
 });
 
-describe("seat lookup", () => {
-  test("a seat resolves by handle, id, role, and case-insensitively", () => {
-    // Links minted before seats were addressed by handle used ids and role
-    // names, and they are in people's history.
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "uuid-1", role: "Product Manager", handle: "pm" }] });
-    for (const key of ["pm", "PM", "uuid-1", "Product Manager", "product manager"]) {
-      expect(store.agentByKey(key)?.handle, key).toBe("pm");
-    }
-    expect(store.agentByKey("nobody")).toBeNull();
-  });
-});
-
 describe("a peer this build was not built against", () => {
   // A FLEET MID-UPGRADE has a node pushing what this bundle was built before.
   // Its unknown kind must neither throw nor land in a slice by a guess — and it

@@ -201,6 +201,21 @@ test("the state card names the turn on the task and the round", async () => {
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
 });
 
+// A PEEK IS ADDRESSED AS THE SEAT'S PAGE IS, BY THE HANDLE ALONE. The role
+// name is only the first seat called that, and the handle in another case is
+// another string: the peek names what it was given rather than drawing the
+// seat it resembles.
+test("the peek resolves a handle and nothing else", async () => {
+  for (const handle of ["SWE", "Swe"]) {
+    await mount(ANONYMOUS, { handle });
+    expect(screen.getByText(`No seat called “${handle}”`), handle).toBeTruthy();
+    cleanup();
+  }
+  await mount(ANONYMOUS);
+  expect(screen.queryByText(/No seat called/)).toBeNull();
+  expect(screen.getByText("Keep the scheduler reliable.")).toBeTruthy();
+});
+
 // THE CHART TO THE TURN IN TWO PRESSES: the card opens this peek, and its state
 // card watches the running turn — its Transcript, the phase it is on open. A
 // seat that is not working has no such link, and neither has one whose turn

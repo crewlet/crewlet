@@ -309,6 +309,23 @@ describe("what it surfaces", () => {
     expect(items[0]?.detail).toContain("Raise the seat's daily ceiling");
   });
 
+  // A SEAT'S ROW OPENS ITS PAGE BY HANDLE, the one address that page
+  // resolves. A row the overlay appended for a seat the roster does not list
+  // yet carries no handle — its `id` is the role name — so it links nowhere
+  // rather than to "No seat called".
+  test("a seat's row links its page by handle, and a row with none links nowhere", () => {
+    const refusing = { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] };
+    const [linked] = attentionQueue(
+      input({ agents: [{ id: "dev-a", role: "Dev A", handle: "dev-a", budget: refusing }] }),
+    );
+    expect(linked?.path).toEqual(["agents", "seats", "dev-a"]);
+    const [unlisted] = attentionQueue(
+      input({ agents: [{ id: "Dev A", role: "Dev A", budget: refusing }] }),
+    );
+    expect(unlisted?.id).toBe("seat-budget-Dev A");
+    expect(unlisted?.path).toBeUndefined();
+  });
+
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
   // there is no reset: room comes from raising the ceiling or from the window
   // turning over, so an item that sent somebody looking for a reset would
