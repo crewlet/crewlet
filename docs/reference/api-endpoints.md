@@ -194,8 +194,11 @@ node means nothing was done.
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Absent where `/operator/mcp` is |
 
-> **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
+> **Auth.** Writes and every `/config`, `/secrets`, `/setup` and `/operator`
+> route require `Authorization: Bearer <token>`, and so do the reads that
+> describe the deployment or somebody else's personal record (see
+> [Configuration § Auth](../concepts/configuration.md#auth) for the list).
+> Other reads (`GET` / `HEAD` outside those four)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
@@ -222,7 +225,7 @@ node means nothing was done.
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, and a route that needs
 > one is therefore refused rather than served: reads work, every write and the
-> whole of `/config`, `/secrets` and `/setup` answers `401`. There is no way to start a
+> whole of `/config`, `/secrets`, `/setup` and `/operator` answers `401`. There is no way to start a
 > process that serves those writes without a guard in front of them.
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer

@@ -609,7 +609,7 @@ that fires identically for both is one nobody reads by the third deployment.
 rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
 existence of a check. An API built with no Tier A at all therefore has no token
 that can match, which means reads serve and every write plus the whole `/config`,
-`/secrets` and `/setup` surfaces answer `401`. That is the only safe reading of "an app was built
+`/secrets`, `/setup` and `/operator` surfaces answer `401`. That is the only safe reading of "an app was built
 without being told who may write to it", and it removes the possibility of a
 process that serves `/config` writes with nothing in front of them.
 
@@ -632,8 +632,8 @@ in proxy access logs.
 
 | Setting | Effect |
 |---------|--------|
-| `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/integrations`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
+| `api.auth.tokens` | The accepted bearer tokens. Needed for writes, for `/config`, `/secrets`, `/setup` and `/operator`, and for the guarded reads below, whatever the read posture is |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets`, `/setup` and `/operator` serve without a token; writes and those four surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/fleet/broker`, `/mcp-servers`, `/credential-pool`, `/integrations`, `/access`, `/backups` and `/work/retention`, and the same questions asked on `/ws/stream`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/agents/{id}/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
 | `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
 | `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
 | `api.auth.company_writers` | The token ids that alone may **change** the company document; empty *(default)* is every token. See [Managed configuration](#managed-configuration) |
