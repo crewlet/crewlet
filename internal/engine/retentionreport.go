@@ -73,6 +73,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// apart could disagree about the floor a row prints and the floor its
 	// refusal was judged by.
 	read := readFloorsOf(ctx, r.fleet)
+	r.state.noteFloors(read)
 	floors := map[string]coord.TrimFloor{}
 	floorsErr := read.err
 	for _, row := range read.floors {
@@ -411,13 +412,23 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		// NODE: a two-domain node whose second applier is wedged is a
 		// node that is behind, and averaging would hide it.
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
-		if health.Deferred > 0 {
-			out.DeferredAge = max(out.DeferredAge, statelog.DeferralGrace)
-		}
-		if health.TrimFloor == nil {
-			out.FloorUnknownFor = max(out.FloorUnknownFor, statelog.FloorCacheStale)
+		// THE AGE THE SERIES MEASURED, never the grace itself: set to the
+		// grace, the reading sat exactly AT the threshold the rule fires
+		// strictly above, so `deferred_old` never fired, and its detail
+		// named thirty minutes for a record held thirty seconds or a day.
+		if held := running.progress.deferredSinceValue(); health.Deferred > 0 &&
+			held.Held && !held.Since.IsZero() {
+			out.DeferredAge = max(out.DeferredAge, now.Sub(held.Since))
 		}
 	}
+	// HOW LONG THIS NODE'S READS OF THE FLOOR REGISTER HAVE FAILED, from
+	// the reads themselves. It was read off a domain's health whose floor
+	// was missing — and a health whose floor could not be read is one that
+	// failed, which the loop above skips, so the field was never set; and
+	// where it was, it was set to exactly the threshold the rule fires
+	// strictly above. `floor_unknown` could not fire on a node every one of
+	// whose reads refused `floor_unknown`.
+	out.FloorUnknownFor = r.state.floorsUnreadFor(now)
 	out.SemanticCoverage = r.semanticCoverage(ctx, now)
 	if r.index != nil {
 		r.index(ctx, &out)
