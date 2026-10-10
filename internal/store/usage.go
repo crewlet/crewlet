@@ -78,10 +78,11 @@ type UsagePerson struct {
 type UsageSeat struct {
 	AgentID string
 
-	// Handle and Role name the seat as that day's own records did. Either
-	// may be empty — a day with only phase records carries a role and no
-	// handle — and the publisher fills the handle from the organisation
-	// where it can.
+	// Handle and Role name the seat as that day's own records did, off the
+	// columns every record fills (the handle since node/0047): a day of
+	// spend alone names its seat's handle, which a seat that has since left
+	// the chart has no other source for. The publisher prefers the
+	// organisation's handle where the seat is still in it.
 	Handle string
 	Role   string
 
@@ -271,8 +272,9 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 // usageTokens folds the window's spend records — the phase completions and the
 // auxiliary records — into (phase, worker, model, provider key) cells per seat,
 // off the columns node/0015, node/0032 and node/0040 promoted, never the
-// payload. An auxiliary record's cell is phase `auxiliary` with its purpose as
-// the worker, so it takes no cell shape of its own.
+// payload, and names the seat by node/0047's. An auxiliary record's cell is
+// phase `auxiliary` with its purpose as the worker, so it takes no cell shape
+// of its own.
 //
 // CALLS ARE PROVIDER CALLS — the `calls` column's sum, not a count of rows —
 // since one coalesced auxiliary row stands for many (node/0040).
@@ -284,7 +286,8 @@ func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 
 	holders, kinds := spendTypes()
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT agent_id, MAX(agent_role), phase, worker, model, provider_key,
+		SELECT agent_id, MAX(agent_handle), MAX(agent_role),
+		       phase, worker, model, provider_key,
 		       SUM(input_tokens), SUM(output_tokens),
 		       SUM(cache_read_tokens), SUM(cache_write_tokens),
 		       SUM(total_tokens), SUM(calls)
@@ -300,15 +303,15 @@ func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			id, role string
-			t        UsageTokens
+			id, handle, role string
+			t                UsageTokens
 		)
-		if err := rows.Scan(&id, &role, &t.Phase, &t.Worker, &t.Model, &t.ProviderKey,
+		if err := rows.Scan(&id, &handle, &role, &t.Phase, &t.Worker, &t.Model, &t.ProviderKey,
 			&t.Input, &t.Output, &t.CacheRead, &t.CacheWrite, &t.Total, &t.Calls); err != nil {
 			return fmt.Errorf("store: scan the usage day's spend: %w", err)
 		}
 		s := seat(id)
-		name(s, "", role)
+		name(s, handle, role)
 		s.Tokens = append(s.Tokens, t)
 	}
 	return rows.Err()
@@ -378,9 +381,7 @@ func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 	}
 	endedTurns := map[string]ended{}
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT turn_id, MAX(agent_id), MAX(event_time),
-		       MAX(COALESCE(json_extract(payload, '$.agent_handle'), '')),
-		       MAX(agent_role)
+		SELECT turn_id, MAX(agent_id), MAX(event_time), MAX(agent_handle), MAX(agent_role)
 		  FROM crewlet_events
 		 WHERE event_type = ? AND event_time >= ? AND event_time < ?
 		   AND turn_id != '' AND agent_id != '' AND `+suspendedExpr+` = 0
@@ -513,9 +514,7 @@ func (d *DB) usageReads(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT e.agent_id,
-		       COALESCE(json_extract(e.payload, '$.agent_handle'), ''),
-		       e.agent_role,
+		SELECT e.agent_id, e.agent_handle, e.agent_role,
 		       COALESCE(json_extract(e.payload, '$.backend'), ''),
 		       COALESCE(json_extract(e.payload, '$.via'), ''),
 		       COALESCE(json_extract(e.payload, '$.turn_id'), ''),
