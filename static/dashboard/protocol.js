@@ -460,7 +460,7 @@ function onTokenRequested(listener) {
 * from the dialog. Every REST-backed surface learned nothing at all: it had
 * fetched once on mount, so setting a token left `/setup` and `/secrets`
 * still showing the refusal that prompted the reader to set one. The screen
-* said "needs an operator token", the reader supplied it, and nothing moved.
+* said "needs an admin key", the reader supplied it, and nothing moved.
 *
 * Fired from `storeToken` and `clearToken` themselves rather than from the
 * dialog, so a future writer cannot forget to announce it.
@@ -575,6 +575,7 @@ var FALLBACK_MS = 5e3;
 var QUERY_ERROR_CODES = {
 	unknown_query: true,
 	unauthorized: true,
+	forbidden: true,
 	query_failed: true,
 	bad_params: true,
 	not_found: true,
@@ -650,7 +651,7 @@ var LiveSocket = class {
 	constructor(store) {
 		this.store = store;
 	}
-	/** Operator bearer token, sent on the handshake and with every query frame. */
+	/** The browser's key, sent on the handshake and with every query frame. */
 	setToken(token) {
 		this.token = token || "";
 		if (this.token) this.askedForToken = false;
@@ -1000,9 +1001,10 @@ var LiveSocket = class {
 * `location.origin`, which is where the dashboard is served from and the only
 * origin the engine answers on (it writes no CORS header at all).
 *
-* Every call carries the operator bearer token. The engine guards `/config`,
-* `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
-* posture is, so a call with no token is refused rather than silently served.
+* Every call carries the stored key as its bearer token. `/config`, `/secrets`
+* and `/setup` are an admin's in full, reads included (ADR-0031), whatever
+* `api.auth.anonymous` says, so a call with no key is refused rather than
+* silently served.
 */
 /**
 * What the engine said when it refused.
@@ -1043,9 +1045,28 @@ var RestError = class extends Error {
 		this.body = body;
 		this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
 	}
-	/** Whether the engine refused the credential rather than the request. */
+	/**
+	* Whether the engine refused the CREDENTIAL: none was presented, or the one
+	* presented is not a key it accepts (`401 invalid_token`). The remedy is a
+	* key.
+	*/
 	get unauthorized() {
-		return this.status === 401 || this.status === 403;
+		return this.status === 401;
+	}
+	/**
+	* Whether the engine ACCEPTED the key and refused the surface: the key
+	* reaches less than the route needs (`403 forbidden`, ADR-0031) — a
+	* member's key on an admin's surface. The remedy is an admin, never a
+	* different key typed into this browser, so a screen must not answer it
+	* with the token dialog.
+	*
+	* THE CODE AND NOT THE STATUS ALONE, because the engine answers 403 for
+	* other refusals that name their own remedy — a managed company document
+	* (`config_managed`), a key no person is linked to (`unbound`) — and each
+	* of those is read by its own code where it can arrive.
+	*/
+	get forbidden() {
+		return this.status === 403 && this.code === "forbidden";
 	}
 	/**
 	* Whether this is NOT the engine's own answer: nothing came back (status
@@ -1248,7 +1269,7 @@ async function bodyOf(method, path, options) {
 */
 var DOWNLOAD_TIMEOUT_MS = 9e5;
 /**
-* A file's bytes, fetched with the operator's token.
+* A file's bytes, fetched with the stored key.
 *
 * NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
 * guards its reads it would download the refusal instead of the file — the

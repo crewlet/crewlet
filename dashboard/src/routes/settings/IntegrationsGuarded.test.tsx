@@ -1,14 +1,13 @@
 /**
  * A banner that names a missing credential has to offer the door to it.
  *
- * `/setup` is guarded in full, reads included, so a reader with no operator
- * token gets a 401 on the listing and the screen falls back to what the
- * socket can see. That much is deliberate. What was not is that the banner
- * explaining it offered nothing that could set a token: with anonymous reads
- * allowed the socket is never refused, so the dialog's other two doors (a
- * socket refusal, and the palette) both stay shut on exactly the screen
- * that needs it. The reader is told what is missing and left with no way to
- * supply it.
+ * `/setup` is an admin's in full, reads included, so a reader with no key
+ * gets a 401 on the listing and the screen falls back to what the socket can
+ * see. That much is deliberate. What was not is that the banner explaining it
+ * offered nothing that could set a token: the socket admits a reader who sent
+ * no key at all, so the dialog's other two doors (a socket refusal, and the
+ * palette) both stay shut on exactly the screen that needs it. The reader is
+ * told what is missing and left with no way to supply it.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";

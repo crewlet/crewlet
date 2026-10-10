@@ -96,6 +96,14 @@ const (
 	// handshake and a per-run token's endpoint (the OTLP receiver, the MCP
 	// bridge), which each spelled it by hand until it was named here.
 	CodeInvalidToken Code = "invalid_token"
+
+	// CodeForbidden is a caller this node DID recognise, asking for
+	// something beyond what their key reaches (ADR-0031): a member key on
+	// an admin surface. Its own code and a 403 rather than invalid_token's
+	// 401, because the two send a person to opposite places — a 401 means
+	// "sign in", and a person who is signed in and is sent to sign in again
+	// is sent in a circle. Whom to ask instead is the dashboard's to say.
+	CodeForbidden Code = "forbidden"
 )
 
 // Valid reports whether c is one this package defines.
@@ -103,7 +111,7 @@ func (c Code) Valid() bool {
 	switch c {
 	case CodeEncodeFailed, CodeBodyTooLarge, CodeUnreadableBody,
 		CodeInvalidBody, CodeInvalidQuery, CodeInternalError, CodeDraining,
-		CodeNoRoute, CodeMethodNotAllowed, CodeInvalidToken:
+		CodeNoRoute, CodeMethodNotAllowed, CodeInvalidToken, CodeForbidden:
 		return true
 	default:
 		return false

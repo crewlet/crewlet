@@ -1229,8 +1229,13 @@ api:
                     #   host defaults to every interface. 0 / unset keeps
                     #   every route on api.port
   auth:
+    anonymous: public   # default: a caller with no key sees the company's
+                        #   name, mission and chart; `none` closes even that
     tokens:
       - id: founder
+        role: admin     # required: admin runs the engine (config, secrets,
+                        #   transcripts); member is a teammate's key — the
+                        #   company's work and pages, acting as its person
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 
 logging:

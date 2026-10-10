@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -132,10 +133,50 @@ func (s *sink) count() int {
 	return len(s.seen)
 }
 
+// mounted is the API's route table as this suite needs it: every route on a
+// plain mux, behind no guard, and the reach each route declared, which
+// [TestEveryWebhookRouteIsOpen] holds.
+type mounted struct {
+	mux     *http.ServeMux
+	reaches map[string]auth.Reach
+}
+
+func newMounted() *mounted {
+	return &mounted{mux: http.NewServeMux(), reaches: map[string]auth.Reach{}}
+}
+
+func (m *mounted) Handle(pattern string, reach auth.Reach, h http.Handler) {
+	m.reaches[pattern] = reach
+	m.mux.Handle(pattern, h)
+}
+
+func (m *mounted) HandleFunc(pattern string, reach auth.Reach, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, reach, http.HandlerFunc(h))
+}
+
+func (m *mounted) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.mux.ServeHTTP(w, r) }
+
+// EVERY WEBHOOK ROUTE IS OPEN, because no vendor holds a key of this engine:
+// each authenticates its delivery by the vendor's own signature or shared
+// token, before anything else — and a route here needing a key would answer
+// every delivery 401, on the public listener above all.
+func TestEveryWebhookRouteIsOpen(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	if len(e.mux.reaches) == 0 {
+		t.Fatal("the edge mounted nothing, so this asserts nothing")
+	}
+	for pattern, reach := range e.mux.reaches {
+		if reach != auth.ReachOpen {
+			t.Errorf("%s is mounted at %q, want open", pattern, reach)
+		}
+	}
+}
+
 // edge is one receiver plus everything the assertions need to look at.
 type edge struct {
 	db         *store.DB
-	mux        *http.ServeMux
+	mux        *mounted
 	published  *recorder
 	stream     *sink
 	events     *store.EventLog
@@ -178,7 +219,7 @@ func newEdgeOn(t *testing.T, db *store.DB, opts ...func(*webhooks.Options)) *edg
 	configured := true
 	e := &edge{
 		db:         db,
-		mux:        http.NewServeMux(),
+		mux:        newMounted(),
 		published:  &recorder{},
 		stream:     &sink{},
 		events:     db.Events(),

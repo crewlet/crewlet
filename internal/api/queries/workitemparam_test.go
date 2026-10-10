@@ -59,7 +59,7 @@ func TestTheWorkItemFilterNarrowsEventsAndTurnsAndRefusesAKey(t *testing.T) {
 			// A VALID BUCKET, so the only thing wrong is the item.
 			params := map[string]any{"work_item": bad, "bucket": "hour"}
 			if _, err := r.Answer(t.Context(), what,
-				params, ""); !errors.Is(err, queries.ErrBadParams) {
+				params, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("%s work_item=%q: err = %v, want ErrBadParams", what, bad, err)
 			}
 		}

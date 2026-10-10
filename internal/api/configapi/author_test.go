@@ -26,7 +26,7 @@ func TestAnOperatorsWriteIsRecordedAsTheOperators(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPatch, "/config", strings.NewReader(`{"mission":"ship it"}`))
 	req.Header.Set("X-Summary", "a mission")
-	req = req.WithContext(auth.WithOperator(req.Context(), "maya"))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), asAdmin("maya")))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)
 	if res.Code != http.StatusCreated {

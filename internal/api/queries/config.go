@@ -10,10 +10,9 @@ import (
 )
 
 // The config family, answered through the SAME functions the /config routes
-// call. Registered as operator-only: reading the document exposes the whole
-// company — its org chart, which integrations are wired, and every ${VAR}
-// reference by name — which is what makes /config the one prefix never
-// eligible for anonymous read.
+// call. Registered admin, as /config is mounted: reading the document exposes
+// the whole company — its org chart, which integrations are wired, and every
+// ${VAR} reference by name.
 
 // ConfigAuditLimit bounds the revision history a dashboard asks for.
 const ConfigAuditLimit = 50
@@ -38,7 +37,7 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 // the identities in it, or one entity out of it.
 //
 // The read half of the Config room's entity editor, whose write half is
-// PUT /config/{kind}/{id}. Operator-only like every other config answer —
+// PUT /config/{kind}/{id}. Admin like every other config answer —
 // this is a slice of the same document, and a per-entity read that was not
 // gated would be a way to fetch the whole company one seat at a time.
 func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {

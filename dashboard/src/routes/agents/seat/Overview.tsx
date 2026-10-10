@@ -18,7 +18,7 @@
  * A human seat's Overview asks nothing a runtime answers — no activity, no
  * memory, no turn list, no phase history: the engine never spawns a person,
  * so every one of those reads would be a question about a thing that cannot
- * exist. What it shows is their day (theirs, or an operator's, to read), the
+ * exist. What it shows is their day (theirs, and their leads', to read), the
  * work assigned to them and who they are.
  */
 
@@ -70,8 +70,7 @@ import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
 import { inboxFigure, useInboxCountsOf, waitingWords } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { apiToken } from "~/protocol/index.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { readsPersonOf, useViewer } from "~/lib/viewer.ts";
 import type { AgentMemory } from "~/contract/memory.ts";
 import type {
   AgentRow,
@@ -724,10 +723,10 @@ function About({ seat, onboardedAt }: { seat: Seat; onboardedAt?: string | undef
  * How the seat is set up: the model it runs on and the tools it is granted —
  * both on the public chart — and where its code runs, which nodes may hold
  * it and which workers it may delegate to, which are the company document's
- * and read only with an operator token.
+ * and read only with an admin's key.
  *
  * FOUR STATES FOR THE GUARDED HALF, never an empty value over a setting
- * nobody could read: read, refused (the reader holds no operator token),
+ * nobody could read: read, refused (the reader's key does not reach it),
  * absent (the active revision names no single seat by this name) and unread
  * (still in flight).
  */
@@ -742,14 +741,14 @@ function Setup({
 }) {
   const viewer = useViewer();
   const health = useEngineHealth();
-  const fleet = useQuery("fleet", undefined, { enabled: viewer.operator, pollMs: 60_000 });
+  const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
   const lease = fleet.data?.seats?.find((s) => s.handle === seat.handle);
-  // WHICH NODE HOLDS IT NOW: the fleet's lease for an operator, else what
+  // WHICH NODE HOLDS IT NOW: the fleet's lease for an admin, else what
   // the public health push says (`heldBy`), which the peek says too. Empty
-  // only while an operator's fleet read is in flight.
-  const holder = viewer.operator
+  // only while an admin's fleet read is in flight.
+  const holder = viewer.admin
     ? lease
       ? lease.node
       : fleet.data
@@ -802,11 +801,11 @@ function Setup({
       </dl>
       {reading.state !== "read" && (
         <p className="prof-note">
-          {reading.state === "refused" || (reading.state === "unread" && apiToken() === "")
-            ? // A TOKENLESS READER IS NEVER ASKED (`useSeatSetup`): they stay
-              // `unread`, and what they are missing is the credential, not a
-              // read in flight.
-              "Its sandbox, placement and workers are in the company document, which an operator token reads."
+          {reading.state === "refused"
+            ? // A READER THE ENGINE WOULD REFUSE IS NEVER ASKED, and is
+              // `refused` all the same (`useSeatSetup`): what they are
+              // missing is an admin's key, not a read in flight.
+              "Its sandbox, placement and workers are in the company document, which an admin's key reads."
             : reading.state === "absent"
               ? "The active revision names no single seat by this name, so its sandbox, placement and workers cannot be read."
               : "Reading its sandbox, placement and workers from the company document…"}
@@ -938,12 +937,12 @@ function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
 function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
-  // work in and who set it. The engine scopes it to the seat the caller's own
-  // credential is bound to, and a colleague reading it needs an operator one
+  // work in and who set it. The engine answers it to them and to the leads
+  // in their line, and to nobody else, an admin included (`readsPersonOf`)
   // — so it is asked only where it can be answered, and WITHHELD by a
   // sentence elsewhere rather than drawn as a person with nothing to do.
   const self = viewer.handle !== "" && viewer.handle === seat.handle;
-  const mayRead = viewer.operator || self;
+  const mayRead = readsPersonOf(viewer, seat.handle);
   const person = useQuery(
     "work_person",
     { handle: seat.handle },
@@ -1054,8 +1053,8 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
               <Card.Title as="h3">Their day</Card.Title>
             </Card.Header>
             <p className="prof-note">
-              Their inbox, their priorities and their pinned views are theirs. Reading another
-              person&rsquo;s needs an operator credential.
+              Their inbox, their priorities and their pinned views are theirs, and their
+              leads&rsquo; to read — nobody else&rsquo;s.
             </p>
           </Card>
         )}

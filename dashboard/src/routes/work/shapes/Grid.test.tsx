@@ -27,18 +27,23 @@ import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
 // about the column's other cells, so it reads as an anonymous, connected tab.
 vi.mock("~/lib/viewer.ts", () => ({
   useViewer: () => ({
-    operatorID: "",
-    operator: false,
+    tokenID: "",
+    role: "",
+    reach: "public",
+    admin: false,
+    linked: false,
     handle: "",
     name: "",
+    line: [],
     acts: [],
     kind: "",
     unbound: false,
     anonymous: true,
     loading: false,
     asking: false,
-    configWriter: true,
+    configWriter: false,
     configManagedBy: [],
+    admins: [],
   }),
 }));
 vi.mock("~/lib/store-hooks.ts", async () => {

@@ -754,6 +754,7 @@ func (b *Bootstrap) Warnings() []Warning {
 			placement.RoleIngress, placement.RoleIngress)))
 	}
 
+	out = append(out, b.API.Auth.adminWarnings(field("api.auth"))...)
 	out = append(out, b.API.Auth.writerWarnings(field("api.auth"))...)
 
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
@@ -880,16 +881,47 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	return p.err()
 }
 
+// adminWarnings is the key list that is valid and leaves nobody running the
+// engine: keys are configured and every one is a member.
+//
+// A WARNING RATHER THAN A REFUSAL, because it is a posture somebody can choose
+// — a deployment whose configuration changes only by editing Tier A and
+// restarting — and an admin key may be rolled out to this file after its
+// members. What makes it worth saying is what it costs and where that cost
+// surfaces: nothing can change the company document, read or write a secret,
+// take a backup or operate the fleet through the API, and the CLI's node
+// commands pick an admin key from this list, so each of them stops on a
+// missing key rather than on the decision that removed it. Not said with the
+// guard off, where every caller is an admin.
+func (a *APIAuth) adminWarnings(path Path) []Warning {
+	if a.Disabled || len(a.Tokens) == 0 {
+		return nil
+	}
+	for _, t := range a.Tokens {
+		if t.Role == RoleAdmin {
+			return nil
+		}
+	}
+	return []Warning{advisory(at(path, "tokens"), fmt.Sprintf(
+		"every key is a %s key, so nobody runs this engine through its API: "+
+			"no key can change the company configuration, read or write a "+
+			"secret, take a backup or operate the fleet, and the CLI's node "+
+			"commands have no admin key to present. Give the key of whoever "+
+			"runs the deployment role: %s", RoleMember, RoleAdmin))}
+}
+
 // writerWarnings are the company_writers settings that are valid and almost
 // certainly not what their author meant.
 //
 // WARNINGS RATHER THAN REFUSALS, because each is a posture somebody can
-// choose: a list naming no configured token is a document nobody may change
-// through the API — frozen, until Tier A changes — and a token may be listed
+// choose: a list naming no configured key is a document nobody may change
+// through the API — frozen, until Tier A changes — and a key may be listed
 // here before it is issued, on a node whose file is rolled out ahead of the
 // credential. What makes them worth saying is that the commonest way to reach
 // either is a typo, and the symptom is a 403 on the one system that was
-// supposed to be able to write.
+// supposed to be able to write. (A configured MEMBER key listed here is not
+// among them: that is refused outright, because it is the role the list
+// would be overriding — see [APIAuth.validate].)
 func (a *APIAuth) writerWarnings(path Path) []Warning {
 	if !a.CompanyManaged() {
 		return nil
@@ -904,7 +936,7 @@ func (a *APIAuth) writerWarnings(path Path) []Warning {
 			"api.auth.disabled is true, so every request is the unauthenticated "+
 				"caller, which no writer can name: nothing may change the company "+
 				"document through the API, the managing system included. Enable "+
-				"api.auth with the managing system's token"))
+				"api.auth with the managing system's admin key"))
 		return out
 	}
 	configured := make(map[string]struct{}, len(a.Tokens))
@@ -919,15 +951,15 @@ func (a *APIAuth) writerWarnings(path Path) []Warning {
 		}
 		out = append(out, advisory(idx(writers, i), fmt.Sprintf(
 			"%q names no token in api.auth.tokens, so it lets nobody write: "+
-				"add the token, or correct the id to the one the managing "+
-				"system presents", id)))
+				"add it as an admin key, or correct the id to the one the "+
+				"managing system presents", id)))
 	}
 	if named == 0 {
 		out = append(out, advisory(writers,
 			"no writer names a configured token, so nothing may change the "+
 				"company document through the API: every PUT, PATCH, entity "+
 				"write, revert and /setup connect is refused. That freezes the "+
-				"document; if a system was meant to manage it, list its token id"))
+				"document; if a system was meant to manage it, list its admin key's id"))
 	}
 	return out
 }

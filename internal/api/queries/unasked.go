@@ -123,10 +123,15 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 // said in that one. Split into two questions the second would need the first's
 // answer to know what to ask for. The page is [memread.ThreadPage]'s, and the
 // listing carries the seat's whole count beside it.
+//
+// ADMIN, AND READ BY SEAT WITH NO PERSONAL NARROWING: this is an AGENT's
+// ledger, what a seat said on a surface this engine does not own — what the
+// machine processed (ADR-0031) — rather than anybody's own record, so the
+// question names the seat it is about and there is no "mine" to default to.
 func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
-	if err != nil {
-		return nil, err
+	handle := strings.TrimSpace(p.String("handle"))
+	if handle == "" {
+		return nil, badParams("handle", "", nil)
 	}
 	return s.Memory.Threads(ctx, handle, strings.TrimSpace(p.String("conversation")),
 		p.Int("limit", 0))

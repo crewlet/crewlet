@@ -25,6 +25,14 @@ const query = vi.hoisted(() => ({
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: query.data, loading: false, error: null, refetch: query.refetch }),
 }));
+// THE READER, AS THE FRAME WOULD HAVE READ IT: stated here rather than asked,
+// since every query this file answers is the report. An admin unless a case
+// says otherwise — the report is an admin's (ADR-0031).
+const reader = vi.hoisted(() => ({ loading: false, admin: true, anonymous: false }));
+vi.mock("~/lib/viewer.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/viewer.ts")>()),
+  useViewer: () => reader,
+}));
 
 const golden = engineFile<{ answers: Record<string, RetentionGateResult> }>(
   "internal/api/testdata/gate_answer.json",
@@ -87,6 +95,28 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  Object.assign(reader, { loading: false, admin: true, anonymous: false });
+});
+
+// THE REPORT IS AN ADMIN'S, so a member's key — which the viewer has named —
+// draws no panel at all rather than a red poll that will never answer.
+test("a member's key draws no retention panel", () => {
+  Object.assign(reader, { admin: false });
+  query.data = report([node()]);
+  render(
+    <Router>
+      <RetentionPanels />
+    </Router>,
+  );
+  expect(screen.queryByText("Replication")).toBeNull();
+  cleanup();
+  Object.assign(reader, { admin: true });
+  render(
+    <Router>
+      <RetentionPanels />
+    </Router>,
+  );
+  expect(screen.getByText("Replication")).toBeTruthy();
 });
 
 // A GESTURE THAT FINISHED IS HELD UNTIL THE REPORT SHOWS IT.

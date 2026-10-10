@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -41,12 +42,12 @@ func colleagueSources(t *testing.T) queries.Sources {
 	return queries.Sources{Company: func() *config.Company { return cfg }}
 }
 
-// resolveAs asks `colleague` as a caller holding operatorID ("" is anonymous).
-func resolveAs(t *testing.T, operatorID, q string) map[string]any {
+// resolveAs asks `colleague` as caller.
+func resolveAs(t *testing.T, caller auth.Principal, q string) map[string]any {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, colleagueSources(t))
-	got, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, operatorID)
+	got, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, caller)
 	if err != nil {
 		t.Fatalf("colleague %q: %v", q, err)
 	}
@@ -69,7 +70,7 @@ func handlesOf(t *testing.T, answer map[string]any) []string {
 // was exactly somebody's handle.
 func TestColleagueExactHandleShortCircuits(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "swe")
+	got := resolveAs(t, asMember("ops-1"), "swe")
 	match, ok := got["match"].(map[string]any)
 	if !ok {
 		t.Fatalf("match = %v, want the one seat whose handle this is", got["match"])
@@ -90,7 +91,7 @@ func TestColleagueExactHandleShortCircuits(t *testing.T) {
 // whichever of them sorts first.
 func TestColleagueAmbiguousReturnsCandidatesNotAGuess(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "engineer")
+	got := resolveAs(t, asMember("ops-1"), "engineer")
 	if got["match"] != nil {
 		t.Fatalf("match = %v for a name two seats share — that is a guess", got["match"])
 	}
@@ -109,7 +110,7 @@ func TestColleagueAmbiguousReturnsCandidatesNotAGuess(t *testing.T) {
 // answer, which a screen draws differently from "say which of these".
 func TestColleagueNothingMatchedIsAnEmptyListNotNull(t *testing.T) {
 	t.Parallel()
-	got := resolveAs(t, "ops-1", "zzzz")
+	got := resolveAs(t, asMember("ops-1"), "zzzz")
 	if got["match"] != nil {
 		t.Errorf("match = %v for a name nobody has", got["match"])
 	}
@@ -119,19 +120,19 @@ func TestColleagueNothingMatchedIsAnEmptyListNotNull(t *testing.T) {
 	}
 }
 
-// A CHAT ID IS NOT PUBLIC. A seat's contact identities are read only through
-// the operator-gated configuration, so an anonymous caller pasting one must
-// not learn whose it is — while a caller holding a token resolves it exactly
-// as the agent's own lookup does.
-func TestColleagueNeverMatchesAChatIdForAnAnonymousCaller(t *testing.T) {
+// A CHAT ID IS AN ADMIN'S. A seat's contact identities are read only through
+// the admin configuration, so a member pasting one — a teammate holding a key
+// to the company's work — must not learn whose it is, while an admin resolves
+// it exactly as the agent's own lookup does.
+func TestColleagueMatchesAChatIdForAnAdminAlone(t *testing.T) {
 	t.Parallel()
-	if got := resolveAs(t, "", "U07XK2PQ"); got["match"] != nil || len(handlesOf(t, got)) != 0 {
-		t.Errorf("an anonymous caller resolved a chat id: %v", got)
+	if got := resolveAs(t, asMember("ada"), "U07XK2PQ"); got["match"] != nil || len(handlesOf(t, got)) != 0 {
+		t.Errorf("a member resolved a chat id: %v", got)
 	}
-	got := resolveAs(t, "ops-1", "U07XK2PQ")
+	got := resolveAs(t, asAdmin("ops-1"), "U07XK2PQ")
 	match, _ := got["match"].(map[string]any)
 	if match["handle"] != "ana" || match["why"] != "chat id matches exactly" {
-		t.Errorf("a credentialed caller got %v, want ana by her chat id", got)
+		t.Errorf("an admin got %v, want ana by her chat id", got)
 	}
 }
 
@@ -143,7 +144,7 @@ func TestColleagueRefusesAnEmptyOrParagraphQuery(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, colleagueSources(t))
 	for _, q := range []string{"", "   ", strings.Repeat("a", queries.ColleagueQueryMax+1)} {
-		_, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, "ops-1")
+		_, err := r.Answer(t.Context(), "colleague", map[string]any{"q": q}, asAdmin("ops-1"))
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("q of %d bytes answered %v, want bad params", len(q), err)
 		}

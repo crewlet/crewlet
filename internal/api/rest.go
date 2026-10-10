@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 )
 
@@ -17,7 +16,14 @@ import (
 // handshake snapshot. Two surfaces answering one question from two
 // implementations is how they end up disagreeing with nobody noticing, and
 // the registry exists so a route cannot read its own parameters and forget
-// the operator check on the way.
+// the reach check on the way.
+//
+// AND EACH IS MOUNTED AT ITS QUESTION'S REACH, read from the registry
+// ([queries.Registry.ReachOf]) rather than declared beside the path, so the
+// route and the question cannot disagree about who may ask: one declaration,
+// read by both. The registry still makes the decision for the route too — a
+// route mounted lower than its question is refused there — but a caller below
+// the reach is refused at the door with the same 401 or 403 either way.
 //
 // They were documented before they were built. docs/reference/api-endpoints.md
 // has listed this table since the engine shipped and thirteen of the reads
@@ -158,18 +164,42 @@ var namedRoutes = []struct {
 }
 
 // mountReads registers the named read routes.
-func (a *App) mountReads(mux httpjson.Router) {
+func (a *App) mountReads(mux auth.Router) {
 	for _, route := range namedRoutes {
-		mux.Handle(route.method+" "+route.pattern, a.serveNamed(route.what, route.path))
+		mux.Handle(route.method+" "+route.pattern, a.questionReach(route.what),
+			a.serveNamed(route.what, route.path))
 	}
 	// The four served from the stream service rather than the registry.
 	// They are the CONFIG-DERIVED surfaces plus the whole bundle, and the
 	// socket builds them from these same functions for its handshake —
 	// so a browser that cannot upgrade sees what one that could sees.
-	mux.Handle("GET /agents", a.serveFrom(func() any { return a.stream.Roster() }))
-	mux.Handle("GET /org", a.serveFrom(func() any { return a.stream.Org() }))
-	mux.Handle("GET /tools", a.serveFrom(func() any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", a.serveFrom(func() any { return a.stream.Snapshot() }))
+	//
+	// THE CHART IS PUBLIC: the classified projection is the company's
+	// public face, and the sign-in page names the company it signs you
+	// into from it. The other three are ADMIN: the roster and the bundle
+	// carry every seat's call in flight, its prompt included — what the
+	// machine is processing — and the tool list is how the engine is wired,
+	// every tool every MCP server serves it with its schema.
+	mux.Handle("GET /agents", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Roster() }))
+	mux.Handle("GET /org", auth.ReachPublic, a.serveFrom(func() any { return a.stream.Org() }))
+	mux.Handle("GET /tools", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Tools() }))
+	mux.Handle("GET /stream/snapshot", auth.ReachAdmin, a.serveFrom(func() any { return a.stream.Snapshot() }))
+}
+
+// questionReach is the reach a named route is mounted at: its question's own.
+//
+// A QUESTION THIS NODE DOES NOT REGISTER is mounted OPEN, and that is not a
+// widening: its source is absent here — no native tracker, no knowledge base —
+// so the route answers nothing but the query layer's own "no such question"
+// (`unknown_query`, 404), which the generic form answers anybody too. Mounting
+// it at a keyed reach instead would answer a member 403 for a surface that
+// does not exist, and leaving it unmounted would answer the mux's `no_route`,
+// which says the API does not have the concept at all.
+func (a *App) questionReach(what string) auth.Reach {
+	if reach := a.queries.ReachOf(what); reach != "" {
+		return reach
+	}
+	return auth.ReachOpen
 }
 
 // serveNamed answers one registry question from a named route.
@@ -189,7 +219,8 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 //
 // No registry entry, because there is no question to ask: these are the
 // sections of the handshake snapshot, and the socket reads the same functions
-// to assemble it. Guarded like every other read — the mux is wrapped whole.
+// to assemble it. Each is mounted at the reach its content needs, like every
+// other route.
 func (a *App) serveFrom(build func() any) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, build())
@@ -200,8 +231,7 @@ func (a *App) serveFrom(build func() any) http.HandlerFunc {
 // mapping so a named route and the generic form cannot answer one failure two
 // ways.
 func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, params queries.Params) {
-	operatorID, _ := auth.OperatorFrom(r.Context())
-	data, err := a.queries.AnswerWith(r.Context(), what, params, operatorID)
+	data, err := a.queries.AnswerWith(r.Context(), what, params, auth.PrincipalFrom(r.Context()))
 	if err != nil {
 		writeQueryError(w, what, err)
 		return

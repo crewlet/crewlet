@@ -61,7 +61,7 @@ if (!("scrollTo" in globalThis)) {
 // Web Storage is the third gap, and the one that only shows up on somebody
 // else's machine. jsdom exposes it from the document's ORIGIN, so whether it
 // is there depends on how the environment was constructed rather than on the
-// version: two suites that store an operator token passed every local run and
+// version: two suites that store an API key passed every local run and
 // failed in CI with `localStorage is undefined`, which is a property of the
 // runner, not of the code under test.
 //

@@ -592,9 +592,9 @@ function FacetPicker({
 }
 
 /**
- * Who made a change, by the name the rest of the product uses: the PERSON an
- * operator token was bound to where there was one, the seat otherwise, and the
- * engine where nobody did.
+ * Who made a change, by the name the rest of the product uses: the PERSON a
+ * key was bound to where there was one, the seat otherwise, and the engine
+ * where nobody did.
  */
 export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
   const who = record.actor_seat || record.actor;
@@ -640,22 +640,20 @@ function HistoryRow({
           wrapped delta grow rather than overflow. */}
       <span className="work-log-what">{describeChange(record, chrome)}</span>
       <span className="work-log-who">
-        {/* THE PERSON, NOT THE TOKEN: a change an operator token made names
-            the credential as `actor` — the audit trail — and the seat it was
+        {/* THE PERSON, NOT THE KEY: a change a key made names the
+            credential as `actor` — the audit trail — and the seat it was
             bound to as `actor_seat`, which is who the row is about. Printed
-            as the token, the log said "founder" where every other screen
-            says Jane Founder; the token stays on the title. */}
+            as the key, the log said "founder" where every other screen says
+            Jane Founder; the key stays on the title. */}
         <span
           className="truncate"
-          title={
-            record.actor_seat && record.actor ? `Through the token ${record.actor}` : undefined
-          }
+          title={record.actor_seat && record.actor ? `Through the key ${record.actor}` : undefined}
         >
           {actorName(record, chrome)}
         </span>
-        {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
-            made with an API token carries the token's own name and the author
-            kind `operator`, which is the whole point of the audit trail.
+        {/* A KEY IS NOT AN AGENT, and the tracker records which: a write made
+            with an API key carries the key's own name and the author kind
+            `operator`, which is the whole point of the audit trail.
 
             `agent` IS THE ORDINARY CASE and the one left unmarked — it is
             `tracker.AuthorAgent`, one of the four the engine mints

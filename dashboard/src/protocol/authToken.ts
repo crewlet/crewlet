@@ -58,9 +58,9 @@ export function storeToken(token: string): boolean {
  * to do with it, so the signal travels here instead, beside the token itself.
  *
  * This is the gap it closes: the dialog used to be reachable only from a
- * REFUSAL. With anonymous reads allowed the socket is never refused — it
- * connects, and only the operator-gated answers come back `unauthorized` — so
- * the banner told a reader to set a token and offered nothing that could.
+ * REFUSAL. A reader who sends no key is never refused by the socket — it
+ * connects, and only the answers a key must reach come back `unauthorized` —
+ * so the banner told a reader to set a token and offered nothing that could.
  */
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -83,7 +83,7 @@ export function onTokenRequested(listener: Listener): () => void {
  * from the dialog. Every REST-backed surface learned nothing at all: it had
  * fetched once on mount, so setting a token left `/setup` and `/secrets`
  * still showing the refusal that prompted the reader to set one. The screen
- * said "needs an operator token", the reader supplied it, and nothing moved.
+ * said "needs an admin key", the reader supplied it, and nothing moved.
  *
  * Fired from `storeToken` and `clearToken` themselves rather than from the
  * dialog, so a future writer cannot forget to announce it.

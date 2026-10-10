@@ -44,22 +44,6 @@
     "APIAuth": {
       "additionalProperties": false,
       "properties": {
-        "allow_anonymous_read": {
-          "anyOf": [
-            {
-              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
-            },
-            {
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
-            }
-          ],
-          "description": "Serve reads without a token (default true).",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
-        },
         "allowed_origins": {
           "description": "CORS origins. Empty = same-origin only.",
           "items": {
@@ -75,8 +59,25 @@
             "null"
           ]
         },
+        "anonymous": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "public",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "What a caller with no key reaches: public (the company's name, mission and chart) or none."
+        },
         "company_writers": {
-          "description": "Token ids that alone may change the company document. Empty = every token.",
+          "description": "Admin key ids that alone may change the company document. Empty = every admin key.",
           "items": {
             "type": [
               "string",
@@ -107,7 +108,7 @@
           ]
         },
         "tokens": {
-          "description": "Accepted bearer tokens. Empty refuses every write.",
+          "description": "Accepted keys, each with the role it grants. Empty: callers reach only what anonymous opens.",
           "items": {
             "$ref": "#/$defs/APIToken"
           },
@@ -169,6 +170,23 @@
             "null"
           ]
         },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "member",
+                "admin",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "member: reads the company and acts as the person this key is linked to. admin: also runs the engine — configuration, secrets, nodes, backups and every agent's transcripts."
+        },
         "token": {
           "description": "Token value or ${VAR} reference.",
           "type": [
@@ -182,6 +200,7 @@
       },
       "required": [
         "id",
+        "role",
         "token"
       ],
       "type": [

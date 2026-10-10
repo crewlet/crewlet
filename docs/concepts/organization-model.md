@@ -281,13 +281,13 @@ Each Role defines a unique **seat** with its own backstory, skills, personality,
 
 ### What anyone can read about a seat
 
-The org chart is served as a public projection ([`GET /org`](../reference/api-endpoints.md#get-org), readable without a token under the default read posture), so what it carries is decided one field at a time. Beside the founder's own prose and the hierarchy, it carries three things about how an agent seat RUNS, each resolved by the engine rather than left for a reader to work out:
+The org chart is served as a public projection ([`GET /org`](../reference/api-endpoints.md#get-org), readable without a key while `api.auth.anonymous` is `public`, the default), so what it carries is decided one field at a time. Beside the founder's own prose and the hierarchy, it carries three things about how an agent seat RUNS, each resolved by the engine rather than left for a reader to work out:
 
 - **Its token budget** — the ceilings the document writes for the seat (and, at the top, for the company) per calendar window. The meters spending against them are [`GET /budgets`](../reference/api-endpoints.md#get-budgets).
 - **Its model chain** (`llm`) — every phase's chain of provider keys, as a turn resolves it: the flat `llm_<phase>` fields over the `llm` mapping, the seat's `llm` for a phase naming nothing, then the company's `default` provider or its first. A key is the label `providers.llm` gives an entry; the model and credentials behind it are not shown.
 - **Its tool sources** (`tool_sources`) — `builtin`, then `mcp:<server>` for each MCP server the seat is granted: every shared server, and a `shared: false` template only where the seat or its unit declares credentials for it under `mcp_env`. It is the same rule the engine starts the seat's own server instances by. The credentials themselves are never shown.
 
-A human seat carries none of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the operator-gated configuration.
+A human seat carries none of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the configuration, which is an admin's.
 
 ### Handle-Based Identity
 
@@ -461,7 +461,7 @@ The lead's system prompt includes a **roster** of direct reports. Each member's 
 
 #### A lead's line
 
-A seat's **line** is everybody below it in the chart, at any depth: its reports, theirs, and so on, so a founder at the top leads everybody. It is the authority a lead holds over somebody else's queue ([A person's own state](../guides/work-tracker.md#a-persons-own-state)), and the engine derives it in one place, `org.Organization.LeadsInLine`. The dashboard offers a lead that reorder along exactly the same chain, so it never offers one the engine refuses.
+A seat's **line** is everybody below it in the chart, at any depth: its reports, theirs, and so on, so a founder at the top leads everybody. It is the authority a lead holds over somebody else's queue ([A person's own state](../guides/work-tracker.md#a-persons-own-state)), and the engine derives it in one place, `org.Organization.LeadsInLine`. The dashboard offers a lead that reorder along exactly the same chain, so it never offers one the engine refuses. It is also who may READ somebody else's personal record through the API — their inbox, their day, their saved views — which a person's own key and the key of a lead whose line they are in reach, and no other, an admin key included (see [Configuration § Auth](configuration.md#what-each-role-reaches)).
 
 It follows the same **primary line** the org chart draws. Auto-management and unit-name expansion are already folded into `manages` by the time it is read, so a lead who wrote no `manages` at all still has the team it leads in its line. But a member with two managers is in the line of the primary one only — in the two-manager shape above, the CEO that manages `Backend` by name leads its members and `Backend`'s own lead does not, so the lead cannot reorder their queues. Managing the lead rather than the unit (`manages: ["Backend Lead"]`) puts the team in the lead's line and keeps it in the CEO's. A management cycle ends the walk at its first repeat: every seat on the loop is in every other's line, and none is in its own.
 

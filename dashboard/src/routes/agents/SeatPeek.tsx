@@ -18,8 +18,8 @@
  * cost nothing. What does cost a read:
  *
  *   * `work_workload` — the seat's open work, for every reader;
- *   * `fleet` — which node holds the seat and since when — OPERATOR-ONLY, so
- *     it is asked only of an operator; every other reader is told what the
+ *   * `fleet` — which node holds the seat and since when — ADMIN-ONLY, so it
+ *     is asked only of an admin; every other reader is told what the
  *     public health push says (`heldBy`: this node, by name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
@@ -198,7 +198,7 @@ function SeatPeekBody({
 
   // THE THREE READS — see the file's doc.
   const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
-  const fleet = useQuery("fleet", undefined, { enabled: viewer.operator, pollMs: 60_000 });
+  const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
@@ -333,10 +333,10 @@ function SeatPeekBody({
 
             <dt>Running on</dt>
             <dd>
-              {!viewer.operator ? (
+              {!viewer.admin ? (
                 // WHAT THE PUBLIC PUSH SAYS, as the profile says it: this
                 // node by name, or another — never which peer, which is the
-                // operator's fleet read.
+                // admin's fleet read.
                 <span className="muted">{heldBy(seat.handle, agent, health)}</span>
               ) : lease ? (
                 <span className="seat-peek-node">

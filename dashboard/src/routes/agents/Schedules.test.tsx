@@ -238,7 +238,7 @@ async function mountScreen(scope?: string[]) {
         : what === "schedule_runs"
           ? { runs: [fire], truncated: false }
           : what === "viewer"
-            ? { operator_id: "", acts: [] }
+            ? { token_id: "", role: "", reach: "public", acts: [] }
             : {},
     );
   const view = render(

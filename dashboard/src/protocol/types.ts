@@ -32,7 +32,7 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { AccessAnswer } from "../contract/access.ts";
+import type { AccessAnswer, Reach, TokenRole } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
@@ -901,10 +901,10 @@ export interface BudgetsAnswer {
  * `__redacted__`, never a value.
  *
  * WHERE EVERYTHING THE PROJECTION DOES NOT CARRY IS READ. `/org` is
- * anonymous, so it carries a charter, a tree, the budgets and each seat's
+ * public, so it carries a charter, a tree, the budgets and each seat's
  * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
  * `llm` fields, contact identities, tool credentials, integration blocks and
- * schedules live here instead, behind the operator token.
+ * schedules live here instead, behind an admin key (ADR-0031).
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -1153,7 +1153,7 @@ export type PhaseLLM =
  * reached anonymous readers the day it landed: contact identities, per-seat
  * credentials, placement labels and sandbox setup commands among them. What
  * is NOT here — `email`, `contact`, the authored `llm_*` fields,
- * `schedules`, `integrations`, `mcp_env` — is read through the operator-gated
+ * `schedules`, `integrations`, `mcp_env` — is read through the admin-only
  * `config` query instead, as [CompanyDocument].
  *
  * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
@@ -2727,8 +2727,8 @@ export interface WorkCommentsAnswer {
   title: string;
   comments: WorkComment[];
   next_cursor?: string;
-  /** The PERSON behind each comment an operator token wrote, by comment id:
-   *  `author` is the credential, which is the audit trail and not a name. */
+  /** The PERSON behind each comment a key wrote, by comment id: `author` is
+   *  the credential, which is the audit trail and not a name. */
   comment_seats?: Record<string, string>;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2809,8 +2809,8 @@ export interface WorkChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it wrote this — who a
-   *  row DRAWS; `actor` stays the token, which is the audit trail. */
+  /** The person a key was bound to when it wrote this — who a row DRAWS;
+   *  `actor` stays the key, which is the audit trail. */
   actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
@@ -3040,7 +3040,7 @@ export interface WorkItemDetail {
   units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
-  /** The person behind each comment an operator token wrote, by comment id. */
+  /** The person behind each comment a key wrote, by comment id. */
   comment_seats?: Record<string, string>;
   /** The PERSON behind the token that filed this task, off the create's own
    *  history row: `task.reporter` is the credential, which is the audit trail
@@ -3819,8 +3819,8 @@ export interface WorkActivityRecord {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  who a row DRAWS; `actor` stays the token, which is the audit trail. */
+  /** The person a key was bound to when it made this change — who a row
+   *  DRAWS; `actor` stays the key, which is the audit trail. */
   actor_seat?: string;
   subject_kind: string;
   subject_id: string;
@@ -3902,8 +3902,8 @@ export interface WorkDecisionEvidence {
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
-  /** The person behind an operator token that asked — the seat it was bound
-   *  to — and absent where the asker already is a seat. Who a row draws;
+  /** The person behind a key that asked — the seat it was bound to — and
+   *  absent where the asker already is a seat. Who a row draws;
    *  `asked_by` stays the author. */
   asked_by_seat?: string;
   asked_at: string;
@@ -4005,8 +4005,8 @@ export interface WorkInboxNotice {
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  what a row draws in place of the token's id. */
+  /** The person a key was bound to when it made this change — what a row
+   *  draws in place of the key's id. */
   actor_seat?: string;
   /** The comment this change wrote and the agent turn that made it. */
   comment_id?: string;
@@ -4236,33 +4236,57 @@ export interface TurnsAnswer {
   coverage?: Coverage;
 }
 
-/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+/** One person holding an admin key: the human seat linked to it. */
+export interface ViewerAdmin {
+  handle: string;
+  name: string;
+}
+
+/** Who the presented key belongs to — see `lib/viewer.ts`. */
 export interface Viewer {
-  /** The operator id the token resolves to, or "" for an anonymous caller. */
-  operator_id: string;
-  /** Whether this caller may ask the operator-gated questions. */
-  operator: boolean;
-  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
-   *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
+  /** The id of the key the caller presented (`api.auth.tokens[].id`), or ""
+   *  for a caller who presented none. Never the key's value. */
+  token_id: string;
+  /** What that key is for, or "" for an anonymous caller (ADR-0031). */
+  role: TokenRole | "";
+  /** How far this caller reaches — the guard's own answer, which every
+   *  question and route is compared against. The anonymous posture's reach
+   *  for a caller with no key. */
+  reach: Reach;
+  /** Whether a human seat links this key (`contact.crewlet_operator_id`).
+   *  A DIFFERENT FACT from the role: the role says what the key reaches, the
+   *  link says who it acts as. UNLINKED IS AN ORDINARY STATE, not a
+   *  misconfiguration. */
+  linked: boolean;
+  /** The seat linked to the key, or "". */
   handle: string;
   name: string;
   kind: string;
+  /** The handles in this person's line (`org.LeadsInLine`) — whose personal
+   *  records they may read beside their own. Empty for a caller no seat
+   *  links. ALWAYS AN ARRAY. */
+  line: string[];
   /** The tools `POST /operator/act/{tool}` serves this caller: every write
-   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
-   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+   *  the operator catalogue holds for a key linked to a seat, and EMPTY for
+   *  an anonymous or unlinked caller, who may not act (ADR-0024). */
   acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
    *  "" when their team and every team above it owns none. */
   project: string;
-  /** Whether this caller's credential may CHANGE the company document.
-   *  False for an anonymous caller, and for every credential a managed
-   *  document's `api.auth.company_writers` does not list (ADR-0030). */
+  /** Whether this caller's key may CHANGE the company document: an admin
+   *  key, and on a managed document one `api.auth.company_writers` lists
+   *  (ADR-0030). False for an anonymous caller and for every member. */
   config_writer: boolean;
-  /** The token ids that alone may change a managed company document — who
-   *  manages it — and EMPTY when it is not managed. Named to an operator
-   *  only; an anonymous caller is told none. */
+  /** The admin keys that alone may change a managed company document — who
+   *  manages it — and EMPTY when it is not managed. Named to an admin only;
+   *  everybody else is told none. */
   config_managed_by: string[];
+  /** The people holding an admin key, in handle order — who to ask for what
+   *  this key does not reach. Named to a caller with a key only: anonymous is
+   *  told nobody, because no admin is ever named to a stranger. ALWAYS AN
+   *  ARRAY. */
+  admins: ViewerAdmin[];
 }
 
 /** One seat a name could mean, and why. */

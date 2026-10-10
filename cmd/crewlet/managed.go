@@ -34,7 +34,7 @@ func managedRefusal(boot *config.Bootstrap, gesture string) error {
 		"write a revision the managing system replaces at its next reconcile.\n"+
 		"Change the company where it is managed. To write it as one of those "+
 		"writers, run `crewlet config import -api <node>` with %s set to that "+
-		"token; to take the document back, remove api.auth.company_writers from "+
+		"admin key; to take the document back, remove api.auth.company_writers from "+
 		"every node's Tier A and restart",
 		strings.Join(boot.API.Auth.CompanyWriters, ", "), gesture, apiTokenEnv)
 }

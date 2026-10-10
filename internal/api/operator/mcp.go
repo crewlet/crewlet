@@ -18,9 +18,9 @@ import (
 
 // MCPPath is the route the MCP transport is mounted at.
 //
-// UNDER ITS OWN PREFIX rather than under /mcp/, which the auth package exempts
-// wholesale for the sandbox bridge — mounting here would have put a writable
-// company surface behind no credential at all, and the collision with the
+// UNDER ITS OWN PREFIX rather than under /mcp/, which is open wholesale for
+// the sandbox bridge — mounting there would have put a writable company
+// surface behind no credential at all, and the collision with the
 // bridge's own `/mcp/{token}` pattern would have made which one answered a
 // question of registration order.
 const MCPPath = "/operator/mcp"
@@ -31,10 +31,12 @@ const serverName = "crewlet-operator"
 // mcpTransport is the catalogue as an MCP server, for an operator's own AI
 // assistant.
 //
-// IT ADMITS AN UNBOUND TOKEN, which is the difference between this transport
-// and a person's: an assistant connected with a CI token or an ops-bot token
-// is a credential acting as itself, and every write it makes names that
-// credential as its author (see [WorkActor]).
+// IT ADMITS AN UNLINKED ADMIN KEY, which is the difference between this
+// transport and a person's: an assistant connected with a CI key or an ops-bot
+// key is a credential acting as itself, and every write it makes names that
+// credential as its author (see [WorkActor]). An unlinked MEMBER key it
+// refuses, because a member acts only as the person the key is linked to
+// (ADR-0031) — see [Server.MCPHandler].
 type mcpTransport struct {
 	srv *mcp.Server
 }
@@ -122,25 +124,44 @@ func (s *Server) MCPHandler() http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return s.mcp.srv }, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// THE GUARD IS THE APP'S, not a second one here: this path is in
-		// [auth.GuardedPrefixes], so a request that reaches this handler
-		// has already presented a valid operator token. Reading the id
-		// off the context rather than re-checking it is what keeps one
-		// decision about who may write.
-		operator, ok := auth.OperatorFrom(r.Context())
-		if !ok || operator == "" {
-			// UNREACHABLE if the guard is mounted, and refused rather
-			// than trusted if it somehow is not: this surface writes to
-			// the company, and a write with no writer is the one thing
-			// it must never record. Refused as JSON with the guard's own
-			// code, like every refusal this engine writes: a client reads
-			// an answer with no code as something in front of the node.
+		// THE REACH IS THE APP'S, not a second check here: this path is
+		// mounted at member reach, so a request that reaches this handler
+		// has already presented an accepted key. Reading the principal off
+		// the context rather than re-checking it is what keeps one
+		// decision about who may reach the surface.
+		caller := auth.PrincipalFrom(r.Context())
+		if caller.ID == "" {
+			// UNREACHABLE if the route table is in front, and refused
+			// rather than trusted if it somehow is not: this surface
+			// writes to the company, and a write with no writer is the
+			// one thing it must never record. Refused as JSON with the
+			// guard's own code, like every refusal this engine writes: a
+			// client reads an answer with no code as something in front
+			// of the node.
 			log.WarnContext(r.Context(), "operator_mcp_unguarded",
 				"detail", "a request reached the operator MCP surface with no "+
-					"operator on its context; the auth guard is not in front of it")
+					"principal on its context; the route table is not in front of it")
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		streamable.ServeHTTP(w, r)
+		// A MEMBER ACTS ONLY AS THE PERSON THE KEY IS LINKED TO
+		// (ADR-0031), so an unlinked member key is somebody's credential
+		// acting as nobody: refused `unbound`, exactly as the act
+		// transport refuses it. An admin key may act as itself — a CI or
+		// ops-bot credential, attributed to its own name — and a linked
+		// key of either role is the person.
+		//
+		// Resolved on EVERY REQUEST, session or not, because a config
+		// apply can unlink the key between two calls of one session — and
+		// the answer is PINNED on the request ([withSeat]), so the call
+		// this admits is made, attributed and audited as the seat it was
+		// admitted as rather than as whatever a later read of the chart
+		// says.
+		seat := seatFor(s.chart, s.env, caller.ID)
+		if seat == "" && !caller.IsAdmin() {
+			httpjson.FailWith(w, http.StatusForbidden, CodeUnbound, unboundMember(caller.ID))
+			return
+		}
+		streamable.ServeHTTP(w, r.WithContext(withSeat(r.Context(), seat)))
 	})
 }

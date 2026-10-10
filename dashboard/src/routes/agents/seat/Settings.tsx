@@ -1,6 +1,6 @@
 /**
- * How a seat is configured, from the company document — the operator-gated
- * half of a seat, which the public chart deliberately does not carry.
+ * How a seat is configured, from the company document — the admin-only half
+ * of a seat, which the public chart deliberately does not carry.
  *
  * # Read-only here, and it says where the change is made
  *

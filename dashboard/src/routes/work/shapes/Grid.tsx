@@ -858,8 +858,8 @@ function trashColumns(
         const record = removals.get(row.id);
         if (!record?.actor)
           return <EmptyValue label="Its removal is older than the loaded history" />;
-        // THE PERSON, NOT THE TOKEN — `actor_seat` where an operator token
-        // bound to a seat removed it, as the change log names the same row.
+        // THE PERSON, NOT THE KEY — `actor_seat` where a key bound to a seat
+        // removed it, as the change log names the same row.
         const who = record.actor_seat || record.actor;
         return (
           <span className="row gap-1">

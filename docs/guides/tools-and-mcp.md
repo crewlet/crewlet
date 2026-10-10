@@ -177,7 +177,7 @@ which, for a server that never started, says it registered none and why.
 
 ### Adding a server from the dashboard
 
-**Add an MCP server** on Settings › Tools & MCP (operator token required) writes
+**Add an MCP server** on Settings › Tools & MCP (admin key required) writes
 the same `mcp_servers` entry you would write in YAML: a name, a command and its
 arguments (stdio) or an address (http), `shared` or one per seat, and the
 environment or headers — values as `${NAME}` pointers into the secret store,

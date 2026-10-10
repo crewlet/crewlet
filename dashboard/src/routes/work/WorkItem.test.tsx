@@ -61,15 +61,24 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: EVERY_TOOL,
 };
 /** A token no seat is bound to: it may read, and every write says why not. */
-const UNBOUND = { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] };
+const UNBOUND = {
+  token_id: "U0OPS",
+  role: "admin",
+  reach: "admin",
+  handle: "",
+  name: "",
+  acts: [],
+};
 
 const ORG = {
   name: "Acme",
@@ -1174,7 +1183,7 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", async () => 
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { token_id: "", role: "", reach: "public", handle: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
   ],
   ["an unbound token", UNBOUND, WRITE_REASONS.unbound],

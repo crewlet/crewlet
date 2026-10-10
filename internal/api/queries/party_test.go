@@ -4,6 +4,7 @@
 package queries_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -11,15 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// partyCompany binds two operator ids to two seats and leaves a third seat
-// bound to nobody — which is what makes "somebody else's alias" a real case
-// rather than the caller's own credential read back.
+// partyCompany links two keys to two seats and leaves a third seat linked to
+// nobody, all three under Ana — which is what makes "somebody else's alias" a
+// real case rather than the caller's own key read back, and lets Ana read the
+// other two at all (a person reads their own record and their line's).
 const partyCompany = `
 name: Acme
 roles:
   - name: Ana Diaz
     handle: ana
     kind: human
+    manages: [Cy Ward, Bo Lang]
     contact:
       crewlet_operator_id: ops-1
   - name: Cy Ward
@@ -71,17 +74,17 @@ func TestThePersonalQuestionsCarryBothOfTheCallersIdentities(t *testing.T) {
 	work := &stubWork{}
 	sources := partySources(t, work)
 
-	if _, err := askAsOperator(t, sources, "work_my_work", nil); err != nil {
+	if _, err := askAsAna(t, sources, "work_my_work", nil); err != nil {
 		t.Fatalf("work_my_work: %v", err)
 	}
 	wantParty(t, work.myWorkQuery.Who, "ana", "ops-1")
 
-	if _, err := askAsOperator(t, sources, "work_inbox", nil); err != nil {
+	if _, err := askAsAna(t, sources, "work_inbox", nil); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	wantParty(t, work.inboxQuery.Who, "ana", "ops-1")
 
-	if _, err := askAsOperator(t, sources, "work_person", nil); err != nil {
+	if _, err := askAsAna(t, sources, "work_person", nil); err != nil {
 		t.Fatalf("work_person: %v", err)
 	}
 	wantParty(t, work.personQuery.Who, "ana", "ops-1")
@@ -89,15 +92,14 @@ func TestThePersonalQuestionsCarryBothOfTheCallersIdentities(t *testing.T) {
 
 // THE ALIAS BELONGS TO THE PERSON ASKED ABOUT, NOT TO THE CALLER.
 //
-// An operator reading a colleague's day must be handed THAT person's two
-// names. Resolving the alias from the credential in the caller's own hand
+// A lead reading a report's day must be handed THAT person's two names. Resolving the alias from the credential in the caller's own hand
 // would answer about `cy` and then union in `ops-1`'s rows — which is the
 // caller's own work appearing on somebody else's screen, and the one failure
 // this seam could produce that is worse than the bug it fixes.
 func TestTheAliasBelongsToThePersonAskedAbout(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, partySources(t, work), "work_my_work",
+	if _, err := askAsAna(t, partySources(t, work), "work_my_work",
 		map[string]any{"handle": "cy"}); err != nil {
 		t.Fatalf("work_my_work for a colleague: %v", err)
 	}
@@ -116,7 +118,7 @@ func TestTheViewStripCarriesBothIdentitiesAndDegradesToShared(t *testing.T) {
 	work := &stubWork{}
 	sources := partySources(t, work)
 
-	if _, err := askAsOperator(t, sources, "work_views",
+	if _, err := askAsAna(t, sources, "work_views",
 		map[string]any{"container": "workspace", "viewer": "ana"}); err != nil {
 		t.Fatalf("work_views: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestTheViewStripCarriesBothIdentitiesAndDegradesToShared(t *testing.T) {
 func TestASeatWithNoTokenCarriesNoAlias(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, partySources(t, work), "work_inbox",
+	if _, err := askAsAna(t, partySources(t, work), "work_inbox",
 		map[string]any{"handle": "bo"}); err != nil {
 		t.Fatalf("work_inbox for an unbound seat: %v", err)
 	}
@@ -150,33 +152,34 @@ func TestASeatWithNoTokenCarriesNoAlias(t *testing.T) {
 	}
 }
 
-// A HANDLE NO SEAT HOLDS IS STILL A PARTY.
-//
-// An operator naming a handle that is not in the chart — somebody who left,
-// a name still on old rows — is asking about those rows, and this lookup only
-// ever ADDS an alias. Refusing here would make the reader's answer depend on
-// the chart rather than on the rows the question is about.
-func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
+// A HANDLE NO SEAT HOLDS IS IN NOBODY'S LINE, so it is refused like any other
+// record outside the caller's line — to an admin key as to a member's
+// (ADR-0031). Somebody who left, and a name still on old rows, belong to no
+// lead the chart can name, and a key's role is not a line.
+func TestAHandleNoSeatHoldsIsInNobodysLine(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, partySources(t, work), "work_my_work",
-		map[string]any{"handle": "departed"}); err != nil {
-		t.Fatalf("work_my_work for a handle nobody holds: %v", err)
+	if _, err := askAsAna(t, partySources(t, work), "work_my_work",
+		map[string]any{"handle": "departed"}); !errors.Is(err, queries.ErrForbidden) {
+		t.Fatalf("work_my_work for a handle nobody holds = %v, want forbidden", err)
 	}
-	wantParty(t, work.myWorkQuery.Who, "departed", "")
+	if work.myWorkQuery.Who.Named() {
+		t.Errorf("the reader was called with %+v anyway", work.myWorkQuery.Who)
+	}
 }
 
 // THE SCOPE RULE SURVIVES THE NEW SHAPE.
 //
-// The party is resolved AFTER the authority check, so an anonymous caller
-// naming somebody else is still refused — and refused before the reader is
-// called, rather than being handed a party it would happily answer.
+// The party is resolved AFTER the authority check, so a caller naming somebody
+// outside their line is still refused — an admin key no seat links included —
+// and refused before the reader is called, rather than being handed a party
+// it would happily answer.
 func TestThePartyIsResolvedBehindTheScopeRule(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	if _, err := askNative(t, partySources(t, work), "work_my_work",
-		map[string]any{"handle": "cy"}); err == nil {
-		t.Fatal("an anonymous read of cy's day was answered")
+		map[string]any{"handle": "cy"}); !errors.Is(err, queries.ErrForbidden) {
+		t.Fatalf("an unlinked admin's read of cy's day = %v, want forbidden", err)
 	}
 	if work.myWorkQuery.Who.Named() {
 		t.Errorf("the reader was called with %+v anyway", work.myWorkQuery.Who)

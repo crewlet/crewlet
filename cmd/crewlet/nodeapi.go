@@ -70,28 +70,37 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 
 // nodeTokenOrEmpty is the bearer token to send, or "" when there is none.
 //
-// The environment FIRST, then Tier A's first token. The order matters: a
+// The environment FIRST, then Tier A's first ADMIN key. The order matters: a
 // checked-in config carries ${VAR} references that resolve to the same place
 // the environment does, and an operator who exported one deliberately means
-// that one. Tier A's list is what THIS node accepts, so any entry
-// authenticates; the id is stamped as the author of the write, which is why
-// the environment variable exists at all.
+// that one. The id is stamped as the author of the write, which is why the
+// environment variable exists at all.
+//
+// AN ADMIN KEY, never the first key of either role (ADR-0031). Every surface
+// this binary reaches through a node is run by whoever runs the node — the
+// configuration, the secrets, backups, retention, the fleet, the budgets —
+// and those are an admin's: a member key listed first would be refused 403 by
+// each of them, and a write it were allowed would be authored as a teammate
+// who never made it. The one gesture made AS a person (`crewlet seats`) takes
+// a key linked to a human seat, which an admin key can be.
 func nodeTokenOrEmpty(boot *config.Bootstrap) string {
 	if fromEnv := strings.TrimSpace(os.Getenv(apiTokenEnv)); fromEnv != "" {
 		return fromEnv
 	}
-	if len(boot.API.Auth.Tokens) > 0 {
-		return boot.API.Auth.Tokens[0].Token
+	for _, key := range boot.API.Auth.Tokens {
+		if key.Role == config.RoleAdmin {
+			return key.Token
+		}
 	}
 	return ""
 }
 
 // nodeAPIToken is [nodeTokenOrEmpty] for the surfaces that are always guarded.
 //
-// `/secrets` and `/config` authenticate every request including reads, so
-// having no token is not "send none and see" — it is a 401 the operator will
-// have to diagnose from the far end. Saying so here names the fix instead.
-// The lenient form stays for the routes a node may legitimately serve with
+// `/secrets` and `/config` are an admin's, reads included, so having no admin
+// key is not "send none and see" — it is a 401 the operator will have to
+// diagnose from the far end. Saying so here names the fix instead. The lenient
+// form stays for the routes a node may legitimately serve with
 // `api.auth.disabled`.
 func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
 	if token := nodeTokenOrEmpty(boot); token != "" {
@@ -101,6 +110,13 @@ func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
 		return "", nil
 	}
 	return "", fmt.Errorf(
-		"this node lists no api.auth.tokens, so nothing can authenticate to "+
-			"its %s surface; add one, or export %s", surface, apiTokenEnv)
+		"there is no admin key in api.auth.tokens, so nothing this command "+
+			"could send reaches the node's %s surface: give the key of whoever "+
+			"runs this deployment role: %s, or export %s",
+		surface, config.RoleAdmin, apiTokenEnv)
 }
+
+// adminKeySource says where a command's key came from, for a refusal that has
+// to name which key to change.
+const adminKeySource = "this command sends " + apiTokenEnv + " when it is set, " +
+	"else the first api.auth.tokens entry with role: admin"

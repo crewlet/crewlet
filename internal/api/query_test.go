@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -55,8 +56,14 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 
+	// AN ADMIN KEY, because most of what this package compares across the
+	// transports is what the machine processed — the events, the turns, the
+	// spend — which is an admin's (ADR-0031). [overREST] and [overSocket]
+	// present it unless a case names another.
+	b := closedPosture()
 	opts := api.Options{
-		State: state,
+		Bootstrap: &b,
+		State:     state,
 		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
 			Usage: db.Replicated()},
 		Now: func() time.Time { return clock },
@@ -67,15 +74,24 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	return newApp(t, opts)
 }
 
-// overREST asks a question over HTTP.
-func overREST(t *testing.T, a *api.App, what string, params url.Values) (int, any) {
+// adminKey is the key [closedPosture] accepts, as an admin — the one
+// [overREST] and [overSocket] present when a case names none.
+const adminKey = "secret"
+
+// overREST asks a question over HTTP, presenting [adminKey] — or, with a key
+// named, that key; "" asks with none.
+func overREST(t *testing.T, a *api.App, what string, params url.Values, key ...string) (int, any) {
 	t.Helper()
 	target := "/query/" + what
 	if len(params) > 0 {
 		target += "?" + params.Encode()
 	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if k := keyOf(key); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	a.ServeHTTP(rec, req)
 	res := rec.Result()
 	var body any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -84,14 +100,26 @@ func overREST(t *testing.T, a *api.App, what string, params url.Values) (int, an
 	return res.StatusCode, body
 }
 
-// overSocket asks the same question over the live channel.
-func overSocket(t *testing.T, a *api.App, what string, params map[string]any) map[string]any {
+// keyOf is the key a case named, or [adminKey].
+func keyOf(key []string) string {
+	if len(key) > 0 {
+		return key[0]
+	}
+	return adminKey
+}
+
+// overSocket asks the same question over the live channel, on a socket opened
+// with [adminKey] — or, with a key named, that key; "" opens it with none.
+func overSocket(t *testing.T, a *api.App, what string, params map[string]any, key ...string) map[string]any {
 	t.Helper()
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 
-	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil)
+	target := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"
+	if k := keyOf(key); k != "" {
+		target += "?token=" + url.QueryEscape(k)
+	}
+	conn, _, err := websocket.Dial(t.Context(), target, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -187,7 +215,8 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 // Mutation: build New's default projection with no clock, and this fails.
 func TestTheAppsOwnProjectionAnswersOnTheAppsClock(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{}) // Now pinned to clock, no State
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b}) // Now pinned to clock, no State
 
 	_, body := overREST(t, a, "tokens", nil)
 	window, _ := body.(map[string]any)
@@ -302,10 +331,10 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database
-	// path or a driver's own message, and this route is reachable under
-	// the anonymous read posture.
+	// path or a driver's own message, and a member — who reaches none of
+	// how the engine runs — asks most questions.
 	a := seededApp(t, nil)
-	a.Queries().Register("boom", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("boom", auth.ReachOpen, func(context.Context, queries.Params) (any, error) {
 		return nil, errors.New("open /var/lib/crewlet/crewlet.db: permission denied")
 	})
 
@@ -328,7 +357,7 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	a := seededApp(t, nil)
-	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("blip", auth.ReachOpen, func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("list leases: %w", coord.ErrUnavailable)
 	})
 
@@ -362,40 +391,56 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	}
 }
 
-func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
+func TestAnAdminQuestionIsRefusedAlikeOnBothTransports(t *testing.T) {
 	t.Parallel()
 	// The REST route and the socket make the same decision, so a route
-	// that read its own params and forgot the operator check is not a
-	// shape this can take.
+	// that read its own params and forgot the reach check is not a shape
+	// this can take — and both tell "sign in" from "not yours" the same way.
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "founder", Role: config.RoleAdmin, Token: "secret"},
+		{ID: "ada", Role: config.RoleMember, Token: "member-secret"},
+	}
 	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", auth.ReachAdmin, func(context.Context, queries.Params) (any, error) {
 		return map[string]any{"ok": true}, nil
 	})
 
-	status, body := overREST(t, a, "secrets", nil)
+	status, body := overREST(t, a, "secrets", nil, "")
 	if status != http.StatusUnauthorized {
 		t.Errorf("REST status = %d, want 401", status)
 	}
 	if got := body.(map[string]any)["error"]; got != "unauthorized" {
 		t.Errorf("REST error = %v", got)
 	}
-	if got := overSocket(t, a, "secrets", nil); got["error"] != "unauthorized" {
+	if got := overSocket(t, a, "secrets", nil, ""); got["error"] != "unauthorized" {
 		t.Errorf("socket answer = %v", got)
+	}
+
+	// A MEMBER KEY IS FORBIDDEN, not unauthorized: the key was accepted,
+	// and signing in again would change nothing.
+	req := httptest.NewRequest(http.MethodGet, "/query/secrets", nil)
+	req.Header.Set("Authorization", "Bearer member-secret")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
+		t.Errorf("a member's REST answer = %d %s, want 403 forbidden", rec.Code, rec.Body.String())
+	}
+	if got := overSocket(t, a, "secrets", map[string]any{}, "member-secret"); got["error"] != "forbidden" {
+		t.Errorf("a member's socket answer = %v, want forbidden", got)
 	}
 }
 
-func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
+func TestAnAdminKeyReachesTheQuestionOverREST(t *testing.T) {
 	t.Parallel()
-	// The counterfactual: the guard attaches the operator, and the route
+	// The counterfactual: the guard attaches the principal, and the route
 	// reads it from the same place every other route does.
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Role: config.RoleAdmin, Token: "secret"}}
 	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
 
 	seen := make(chan string, 1)
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", auth.ReachAdmin, func(context.Context, queries.Params) (any, error) {
 		seen <- "ran"
 		return map[string]any{"ok": true}, nil
 	})
@@ -406,7 +451,7 @@ func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	a.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 for an operator", rec.Code)
+		t.Fatalf("status = %d, want 200 for an admin", rec.Code)
 	}
 	select {
 	case <-seen:
@@ -415,15 +460,17 @@ func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	}
 }
 
-func TestTheQuerySurfaceIsGuardedLikeAnyOtherRead(t *testing.T) {
+func TestTheQuerySurfaceIsJudgedLikeTheNamedRoute(t *testing.T) {
 	t.Parallel()
-	// It carries the same LLM transcripts /events does, so a closed read
-	// posture has to close it too.
-	b := closedPosture()
-	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
-
-	if status, _ := overREST(t, a, "events", nil); status != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 under a closed posture", status)
+	// /query/{what} is open AS A ROUTE because it is many questions behind
+	// one pattern; each is judged at its own reach. It carries the same LLM
+	// transcripts /events does, so it must refuse them exactly as /events
+	// does — under the default posture as under a closed one.
+	for _, b := range []config.Bootstrap{config.DefaultBootstrap(), closedPosture()} {
+		a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
+		if status, _ := overREST(t, a, "events", nil, ""); status != http.StatusUnauthorized {
+			t.Errorf("anonymous %s: status = %d, want 401", b.API.Auth.Anonymous, status)
+		}
 	}
 }
 

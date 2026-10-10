@@ -91,18 +91,20 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
   };
 }
 
-const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+const ADMIN = {
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane",
   kind: "human",
 };
-const READER = { operator_id: "", operator: false, handle: "", name: "", kind: "" };
+const READER = { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" };
 
 let budgetAsks = 0;
 
-function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATOR) {
+function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = ADMIN) {
   location.hash = "#/spend/budgets";
   budgetAsks = 0;
   const store = new Store();
@@ -355,15 +357,35 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
   expect(calls).toHaveLength(0);
 });
 
-// NEVER HIDDEN: a reader without an operator credential sees every ceiling
-// and every pencil, disabled with the reason, and the reason once above.
+// NEVER HIDDEN: a reader without an admin's key sees every ceiling and every
+// pencil, disabled with the reason, and the reason once above.
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
   mount(answer(), READER);
   await settle();
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
   expect(pencils.length).toBe(6);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
-  expect(screen.getAllByText(/operator's API token/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/admin's API key/).length).toBeGreaterThan(0);
+});
+
+// A MEMBER'S KEY WORKS AND IS NOT AN ADMIN'S (ADR-0031): every pencil is held
+// with the person to ask, never with a request for a key they already hold.
+test("a member sees every ceiling held, naming the admin to ask", async () => {
+  mount(answer(), {
+    token_id: "ada",
+    role: "member",
+    reach: "member",
+    linked: true,
+    handle: "ada",
+    admins: [{ handle: "jane", name: "Jane Founder" }],
+  });
+  await settle();
+  const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
+  for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
+  expect(
+    screen.getAllByText(/Only an admin can change this — ask Jane Founder/).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByText(/API key/)).toBeNull();
 });
 
 // UNREADABLE IS NOT ZERO.

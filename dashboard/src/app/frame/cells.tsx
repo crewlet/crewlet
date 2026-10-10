@@ -208,7 +208,7 @@ export function SeatCell({
   name?: string;
   /**
    * What the link's tooltip says, where the handle is not the whole story —
-   * an operator's write names the person AND the token they wrote through.
+   * a key's write names the person AND the key they wrote through.
    */
   title?: string;
   /**

@@ -18,10 +18,14 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 
 const nobody: ViewerState = {
-  operatorID: "",
-  operator: false,
+  tokenID: "",
+  role: "",
+  reach: "public",
+  admin: false,
+  linked: false,
   handle: "",
   name: "",
+  line: [],
   acts: [],
   project: "",
   kind: "",
@@ -31,11 +35,15 @@ const nobody: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  admins: [],
 };
 const ada: ViewerState = {
   ...nobody,
-  operatorID: "U0FOUNDER",
-  operator: true,
+  tokenID: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  admin: true,
+  linked: true,
   handle: "ada",
   name: "Ada Lovelace",
   kind: "human",
@@ -66,7 +74,10 @@ describe("who the block says this is", () => {
   });
 
   test("an unbound token names the token, and says it is not a fault", () => {
-    const r = whoLine({ ...nobody, operatorID: "ops-7", operator: true, unbound: true }, "");
+    const r = whoLine(
+      { ...nobody, tokenID: "ops-7", role: "admin", reach: "admin", admin: true, unbound: true },
+      "",
+    );
     expect(r).toEqual({ name: "Token ops-7", detail: "Not bound to a seat" });
   });
 

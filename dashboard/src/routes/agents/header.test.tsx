@@ -38,7 +38,7 @@ function withClient(ui: React.ReactNode, schedules: number) {
   });
   const socket = new LiveSocket(store);
   (socket as unknown as { query: () => Promise<unknown> }).query = () =>
-    Promise.resolve({ operator_id: "", acts: [] });
+    Promise.resolve({ token_id: "", role: "", reach: "public", acts: [] });
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>

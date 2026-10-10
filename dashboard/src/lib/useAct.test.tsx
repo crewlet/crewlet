@@ -24,10 +24,14 @@ vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() 
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  tokenID: "founder",
+  role: "member",
+  reach: "member",
+  admin: false,
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
+  line: [],
   acts: ["set_pins", "update_work_item"],
   project: "",
   kind: "human",
@@ -35,8 +39,9 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
-  configWriter: true,
+  configWriter: false,
   configManagedBy: [],
+  admins: [],
 };
 
 interface Sent {

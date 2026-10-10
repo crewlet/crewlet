@@ -114,7 +114,7 @@ async function teams(org: OrgProjection) {
     Promise.resolve(
       what === "work_projects"
         ? { projects: [{ key: "BE", unit: { name: "Backend", resolved: true } }], total: 1 }
-        : { operator_id: "", acts: [] },
+        : { token_id: "", role: "", reach: "public", acts: [] },
     );
   render(
     <ClientContext.Provider value={{ store, socket }}>

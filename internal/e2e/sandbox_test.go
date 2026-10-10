@@ -260,6 +260,10 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
+	// AN ADMIN KEY, because the board is read the way the dashboard reads it
+	// and the sandbox runs are an admin's question: a run's row is what the
+	// machine is processing (ADR-0031).
+	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Role: config.RoleAdmin, Token: e2eOperatorToken}}
 	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
@@ -744,10 +748,16 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 }
 
 // board reads the sandbox-runs answer over the query surface, exactly as the
-// dashboard does.
+// dashboard does — with an admin's key, since the runs are an admin's question.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
-	res, err := n.server.Client().Get(n.server.URL + "/query/sandbox_runs")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		n.server.URL+"/query/sandbox_runs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
+	res, err := n.server.Client().Do(req)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

@@ -289,6 +289,7 @@ api:
   auth:
     tokens:
       - id: founder
+        role: admin
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 
 secrets:

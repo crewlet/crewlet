@@ -6,7 +6,7 @@ import type { Coverage } from "./coverage.ts";
  * the same gate as `EngineHealth`.
  *
  * A COUNT AND ONE NAME, never the rows: the envelope is public, and what each
- * alarm measured is the operator-only `work_retention` answer.
+ * alarm measured is the admin-only `work_retention` answer.
  */
 interface HealthAlarms {
   /** How many alarms are firing. Zero is a real zero: the table was evaluated. */

@@ -68,8 +68,10 @@ function mount(own: BudgetWindow | undefined, orgRefusing: boolean, budgets = BU
       ? Promise.resolve(budgets)
       : what === "viewer"
         ? Promise.resolve({
-            operator_id: "U0",
-            operator: true,
+            token_id: "U0",
+            role: "admin",
+            reach: "admin",
+            linked: true,
             handle: "jane",
             name: "Jane",
             kind: "human",

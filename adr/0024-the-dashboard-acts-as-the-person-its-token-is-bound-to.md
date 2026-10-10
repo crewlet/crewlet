@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`
+- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`, `internal/api/operator.TestAnUnlinkedMemberKeyIsRefusedTheAssistantTransport`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
@@ -11,10 +11,14 @@
 
 A person changes the company from the dashboard **as themself**: every write
 is `POST /operator/act/{tool}`, one tool of the operator catalogue per request,
-admitted only when the presented token is bound to a human seat by
-`contact.crewlet_operator_id`. A disabled guard's caller and a token no seat
-binds are refused `unbound` (403); they keep `/operator/mcp`, where a
-credential acting as itself is ordinary. The attribution is the one every
+admitted only when the presented key is linked to a human seat by
+`contact.crewlet_operator_id` — a `member` key or an `admin` key alike, because
+the role says what a key reaches and the link says who is pressing (ADR-0031).
+A disabled guard's caller and a key no seat links are refused `unbound` (403).
+An unlinked ADMIN key keeps `/operator/mcp`, where a credential acting as
+itself is ordinary — a pipeline, an operator outside the chart; an unlinked
+MEMBER key is refused `unbound` there too, because a member reaches the
+company only as the person the key was issued to. The attribution is the one every
 operator write already carries — the token as author, kind `operator`, the
 bound seat as the actor's seat — so a dashboard write and the same person's
 assistant's read identically in an audit. The seat a call is ADMITTED as is
@@ -54,6 +58,6 @@ request id, as the same operations as whatever landed.
 It does not decide what the dashboard renders for a write in flight, how it
 confirms one, or which queries it refetches — that is the dashboard's, over the
 outcome and position the answer carries. It does not move `/config`,
-`/secrets`, `/setup` or `/backup`, which stay credential-scoped surfaces of
-their own. And it does not change who may do what once admitted: every
+`/secrets`, `/setup` or `/backup`, which are admin surfaces of their own
+(ADR-0031). And it does not change who may do what once admitted: every
 authority rule is the tool's, exactly as on `/operator/mcp`.

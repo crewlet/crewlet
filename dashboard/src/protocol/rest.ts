@@ -22,9 +22,10 @@
  * `location.origin`, which is where the dashboard is served from and the only
  * origin the engine answers on (it writes no CORS header at all).
  *
- * Every call carries the operator bearer token. The engine guards `/config`,
- * `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
- * posture is, so a call with no token is refused rather than silently served.
+ * Every call carries the stored key as its bearer token. `/config`, `/secrets`
+ * and `/setup` are an admin's in full, reads included (ADR-0031), whatever
+ * `api.auth.anonymous` says, so a call with no key is refused rather than
+ * silently served.
  */
 
 import { apiToken } from "./authToken.ts";
@@ -70,9 +71,29 @@ export class RestError extends Error {
     this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
   }
 
-  /** Whether the engine refused the credential rather than the request. */
+  /**
+   * Whether the engine refused the CREDENTIAL: none was presented, or the one
+   * presented is not a key it accepts (`401 invalid_token`). The remedy is a
+   * key.
+   */
   get unauthorized(): boolean {
-    return this.status === 401 || this.status === 403;
+    return this.status === 401;
+  }
+
+  /**
+   * Whether the engine ACCEPTED the key and refused the surface: the key
+   * reaches less than the route needs (`403 forbidden`, ADR-0031) — a
+   * member's key on an admin's surface. The remedy is an admin, never a
+   * different key typed into this browser, so a screen must not answer it
+   * with the token dialog.
+   *
+   * THE CODE AND NOT THE STATUS ALONE, because the engine answers 403 for
+   * other refusals that name their own remedy — a managed company document
+   * (`config_managed`), a key no person is linked to (`unbound`) — and each
+   * of those is read by its own code where it can arrive.
+   */
+  get forbidden(): boolean {
+    return this.status === 403 && this.code === "forbidden";
   }
 
   /**
@@ -413,7 +434,7 @@ async function bodyOf(method: string, path: string, options?: RequestOptions): P
 export const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /**
- * A file's bytes, fetched with the operator's token.
+ * A file's bytes, fetched with the stored key.
  *
  * NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
  * guards its reads it would download the refusal instead of the file — the

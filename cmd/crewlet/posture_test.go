@@ -50,7 +50,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 	const token = "a-test-token"
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: token}}
 	seedEngineStore(t, boot)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot})
 	if err != nil {

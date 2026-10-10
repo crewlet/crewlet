@@ -60,7 +60,7 @@ func NewCORS(b *config.Bootstrap) *CORS {
 }
 
 // Origins reports how many origins are permitted, for the startup line that
-// states the posture beside the anonymous-read one.
+// states the posture beside the anonymous one.
 func (c *CORS) Origins() int { return len(c.allowed) }
 
 // Middleware answers preflights and stamps the permission onto a response.

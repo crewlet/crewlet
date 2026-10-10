@@ -37,11 +37,11 @@ func TestASandboxTailNeedsTheTurnAndTheJob(t *testing.T) {
 	for _, params := range []map[string]any{
 		{"turn_id": "t1"}, {"launch_id": "l1"}, {"turn_id": " ", "launch_id": "l1"},
 	} {
-		if _, err := r.Answer(t.Context(), "sandbox_tail", params, "operator"); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(t.Context(), "sandbox_tail", params, asAdmin("operator")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("sandbox_tail %v = %v; want a bad-params refusal", params, err)
 		}
 	}
-	got, err := r.Answer(t.Context(), "sandbox_tail", map[string]any{"turn_id": "t1", "launch_id": "l1"}, "operator")
+	got, err := r.Answer(t.Context(), "sandbox_tail", map[string]any{"turn_id": "t1", "launch_id": "l1"}, asAdmin("operator"))
 	if err != nil {
 		t.Fatalf("sandbox_tail: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestATailIsAskedByCursor(t *testing.T) {
 	queries.Register(r, queries.Sources{SandboxTail: tails})
 	ask := func(params map[string]any) sandbox.TailQuery {
 		t.Helper()
-		if _, err := r.Answer(t.Context(), "sandbox_tail", params, "operator"); err != nil {
+		if _, err := r.Answer(t.Context(), "sandbox_tail", params, asAdmin("operator")); err != nil {
 			t.Fatalf("sandbox_tail %v: %v", params, err)
 		}
 		return tails.asked[len(tails.asked)-1]
@@ -85,7 +85,7 @@ func TestATailIsAskedByCursor(t *testing.T) {
 		"turn_id": {"t1"}, "launch_id": {"l1"},
 		"epoch": {"transcript@0"}, "after": {"4096"}, "digest": {"ab12"},
 	})
-	if _, err := r.Answer(t.Context(), "sandbox_tail", rest.Values(), "operator"); err != nil {
+	if _, err := r.Answer(t.Context(), "sandbox_tail", rest.Values(), asAdmin("operator")); err != nil {
 		t.Fatalf("sandbox_tail over REST: %v", err)
 	}
 	want := sandbox.TailCursor{Epoch: "transcript@0", Offset: 4096, Digest: "ab12"}
@@ -98,7 +98,7 @@ func TestATailIsAskedByCursor(t *testing.T) {
 	// answered as though it were the one asked.
 	for _, after := range []any{"-1", "the end", float64(-3), 12.5, "12.5", 1e300, true} {
 		_, err := r.Answer(t.Context(), "sandbox_tail",
-			map[string]any{"turn_id": "t1", "launch_id": "l1", "after": after}, "operator")
+			map[string]any{"turn_id": "t1", "launch_id": "l1", "after": after}, asAdmin("operator"))
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("after=%v = %v; want a bad-params refusal naming the offset", after, err)
 		}

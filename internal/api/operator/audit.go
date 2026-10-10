@@ -79,7 +79,7 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 	// THE CALLER'S SEAT IS RESOLVED ONCE, here or at the transport's
 	// admission, and the tool's actor and the audit record both read that
 	// one answer — see [withSeat].
-	operatorID, _ := auth.OperatorFrom(ctx)
+	operatorID := auth.PrincipalFrom(ctx).ID
 	seat, pinned := pinnedSeat(ctx)
 	if !pinned {
 		seat = seatFor(s.chart, s.env, operatorID)

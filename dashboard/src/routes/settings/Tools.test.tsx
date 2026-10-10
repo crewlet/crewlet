@@ -11,7 +11,7 @@
  *    twice per tool and re-derive the `mcp_env` rule from it.
  *  - Each server's state and its per-node cells are the ENGINE'S; a node
  *    whose last heartbeat carried no status is unknown, never "none".
- *  - The servers are operator-only and the catalogue is not: a refused
+ *  - The servers are admin-only and the catalogue is not: a refused
  *    reader sees the refusal in the servers' place and every tool around it.
  *  - An add is the create-only PUT, checked first with the company's own
  *    warnings subtracted, and a refusal is placed beside its field.
@@ -200,14 +200,16 @@ const status: McpServersStatusAnswer = {
   ],
 };
 
-const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+const ADMIN = {
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane",
   kind: "human",
 };
-const READER = { operator_id: "", operator: false, handle: "", name: "", kind: "" };
+const READER = { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" };
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -226,7 +228,7 @@ class InertWebSocket {
 function mount(
   ui: ReactElement,
   {
-    viewer = OPERATOR,
+    viewer = ADMIN,
     refuse = false,
     roster = org,
     answer = status,
@@ -428,7 +430,7 @@ test("a search that matches nothing quotes the search", async () => {
   expect(screen.getByText("No tool matches “zzz”")).toBeDefined();
 });
 
-// THE SERVERS ARE THE OPERATOR'S AND THE CATALOGUE IS EVERYBODY'S.
+// THE SERVERS ARE AN ADMIN'S AND THE CATALOGUE IS EVERYBODY'S.
 test("a refused reader sees the refusal where the servers were, and every tool", async () => {
   mount(<Tools />, { viewer: READER, refuse: true });
   await settle();
@@ -439,7 +441,7 @@ test("a refused reader sees the refusal where the servers were, and every tool",
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
 });
 
-// NOT BEING TOLD IS NOT BEING TOLD "NONE". A reader refused the operator-only
+// NOT BEING TOLD IS NOT BEING TOLD "NONE". A reader refused the admin-only
 // status who opens a server's page was told the server does not exist, right
 // above the section that says the answer was refused.
 test("a refused reader on a server's page is never told the server does not exist", async () => {

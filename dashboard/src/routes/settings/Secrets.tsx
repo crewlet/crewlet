@@ -91,8 +91,9 @@ function refusalCode(err: RestError | null): QueryErrorCode | null {
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "This surface needs an operator token. Set one from the command palette.";
+    return "This surface needs an admin key. Set one from the command palette.";
   }
+  if (err.forbidden) return "This surface is for admins, and this browser's key is a member's.";
   return err.detail || err.code || "the engine refused the read";
 }
 

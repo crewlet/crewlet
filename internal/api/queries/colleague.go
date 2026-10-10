@@ -54,13 +54,13 @@ type colleagueAnswer struct {
 // colleague on the strength of a suggestion was guessed at, and the engine
 // does not guess (`agent/colleague`'s rule).
 //
-// THE CHAT-ID TIER NEEDS A CREDENTIAL. A seat's contact identities are read
-// only through the operator-gated configuration (organization-model.md, "What
-// anyone can read about a seat"), and an exact-id tier answered to an
-// anonymous caller would be an oracle for them: paste an id, learn whose it
-// is. So an anonymous caller resolves over handles and names alone — the
-// public projection's own fields — and a caller holding a token over
-// everything the agent's lookup reads.
+// THE CHAT-ID TIER IS AN ADMIN'S. A seat's contact identities — its Slack,
+// GitHub and Atlassian ids — are read only through the admin configuration
+// (organization-model.md, "What anyone can read about a seat"), and an
+// exact-id tier answered below that would be an oracle for them: paste an id,
+// learn whose it is. So every other caller resolves over handles and names
+// alone — the chart's own published fields — and an admin over everything the
+// agent's lookup reads.
 func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
@@ -72,7 +72,7 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 			ErrBadParams, len(text), ColleagueQueryMax)
 	}
 	corpus := builtin.Corpus(s.organization(), s.Env)
-	if operatorFrom(ctx) == "" {
+	if !callerFrom(ctx).IsAdmin() {
 		for i := range corpus {
 			corpus[i].External = nil
 		}

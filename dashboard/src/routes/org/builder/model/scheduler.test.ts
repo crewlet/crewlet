@@ -133,8 +133,10 @@ describe("classifyCheck", () => {
 
   test("refusals map to the states that halt, and failures to unreachable", () => {
     const cases: [HttpAnswer, unknown][] = [
-      [{ status: 401, body: { error: "unauthorized" } }, { status: "guarded" }],
-      [{ status: 403, body: {} }, { status: "guarded" }],
+      [{ status: 401, body: { error: "invalid_token" } }, { status: "guarded" }],
+      // A MEMBER'S KEY, accepted on the admin's document (ADR-0031): its own
+      // state, because the remedy is an admin rather than another token.
+      [{ status: 403, body: { error: "forbidden" } }, { status: "forbidden" }],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
         { status: "unreachable", detail: "restarting" },
@@ -327,8 +329,8 @@ describe("transition", () => {
     expect(recovered.state.failures).toBe(0);
   });
 
-  test("a conflict and a refused token halt checking until a reset", () => {
-    for (const status of ["conflict", "guarded"] as const) {
+  test("a conflict and a refused key halt checking until a reset", () => {
+    for (const status of ["conflict", "guarded", "forbidden", "managed"] as const) {
       const halted = transition(loaded.state, { type: "settled", request: 1, status, now: T0 });
       expect(halted.state.halted, status).toBe(true);
       const changed = transition(halted.state, { type: "changed", generation: 2, now: T0 + 1 });
@@ -373,9 +375,10 @@ describe("saveRules", () => {
       waiting: false,
       reason: "Fix the problems above first.",
     });
-    for (const status of ["conflict", "guarded"] as const) {
+    for (const status of ["conflict", "guarded", "forbidden", "managed"] as const) {
       expect(saveRules(status, true), status).toMatchObject({ review: false, save: false });
     }
+    expect(saveRules("forbidden", true).reason).toMatch(/for admins/);
     expect(saveRules("clean", false)).toMatchObject({ review: false, save: false });
   });
 });

@@ -19,50 +19,54 @@ import (
 // accepts no listed token at all, and a posture read off the document would
 // name credentials that authenticate nobody.
 type AccessPosture struct {
-	// TokenIDs are the `api.auth.tokens[].id` labels the guard accepts.
-	TokenIDs []string
-	// Disabled is `api.auth.disabled`: every caller is
-	// [org.ReservedOperatorID] and nobody is a person.
+	// Keys are the `api.auth.tokens` entries the guard accepts — each one's
+	// label and role, never its value — in label order.
+	Keys []AccessKey
+	// Disabled is `api.auth.disabled`: every caller is an admin named
+	// [org.ReservedOperatorID], and nobody is a person.
 	Disabled bool
-	// AnonymousRead is `api.auth.allow_anonymous_read`.
-	AnonymousRead bool
+	// Anonymous is `api.auth.anonymous`: what a caller with no key reaches.
+	Anonymous config.AnonymousAccess
 	// AllowedOrigins is `api.auth.allowed_origins`; empty is same-origin only.
 	AllowedOrigins []string
-	// CompanyWriters is `api.auth.company_writers`: the token ids that alone
-	// may change the company document, empty when every token may
+	// CompanyWriters is `api.auth.company_writers`: the admin keys that alone
+	// may change the company document, empty when every admin key may
 	// (ADR-0030). Read through [AccessPosture.MayWriteCompany].
 	CompanyWriters []string
 }
 
-// MayWriteCompany reports whether the credential with this id may change the
-// company document — Tier A's own reading ([config.APIAuth.MayWriteCompany]),
-// never a second one, so the viewer offers exactly the edits the config
-// surface admits.
-func (p *AccessPosture) MayWriteCompany(operatorID string) bool {
-	auth := config.APIAuth{CompanyWriters: p.CompanyWriters}
-	return auth.MayWriteCompany(operatorID)
+// AccessKey is one accepted key as the posture carries it: a label and a role.
+type AccessKey struct {
+	ID   string
+	Role config.TokenRole
 }
 
-// TokenScope is what one accepted credential reaches.
-type TokenScope string
+// RoleOf is the role of the accepted key with this id, or "" for none.
+func (p *AccessPosture) RoleOf(id string) config.TokenRole {
+	for _, k := range p.Keys {
+		if k.ID == id {
+			return k.Role
+		}
+	}
+	return ""
+}
 
-const (
-	// ScopeOperator is a credential no human seat binds: every guarded
-	// read, /config, /secrets, /setup, /backup and the operator MCP
-	// surface, acting under its own label. Not the act transport, which
-	// admits a person and nobody else (ADR-0024).
-	ScopeOperator TokenScope = "operator"
-	// ScopePerson is a credential a human seat binds with
-	// `contact.crewlet_operator_id`: everything [ScopeOperator] reaches,
-	// plus `/operator/act` as that seat — the dashboard's writes.
-	ScopePerson TokenScope = "person"
-)
-
-// TokenScopes is every scope, for the gate holding the dashboard's copy.
-var TokenScopes = []TokenScope{ScopeOperator, ScopePerson}
-
-// Valid reports whether s is a scope this build sends.
-func (s TokenScope) Valid() bool { return slices.Contains(TokenScopes, s) }
+// MayWriteCompany reports whether the key with this id may change the company
+// document: an ADMIN key (ADR-0031), and one company_writers admits when the
+// document is managed — Tier A's own reading of the list
+// ([config.APIAuth.MayWriteCompany]), never a second one, so the viewer offers
+// exactly the edits the config surface admits.
+func (p *AccessPosture) MayWriteCompany(id string) bool {
+	if p.Disabled {
+		auth := config.APIAuth{CompanyWriters: p.CompanyWriters}
+		return auth.MayWriteCompany(id)
+	}
+	if p.RoleOf(id) != config.RoleAdmin {
+		return false
+	}
+	auth := config.APIAuth{CompanyWriters: p.CompanyWriters}
+	return auth.MayWriteCompany(id)
+}
 
 // AccessBinding is how a human seat's `contact.crewlet_operator_id` stands
 // against the credentials the guard accepts.
@@ -108,25 +112,31 @@ type AccessAnswer struct {
 
 // AccessAuth is the posture the guard enforces.
 type AccessAuth struct {
-	Disabled       bool     `json:"disabled"`
-	AnonymousRead  bool     `json:"anonymous_read"`
-	AllowedOrigins []string `json:"allowed_origins"`
+	Disabled bool `json:"disabled"`
+	// Anonymous is what a caller with no key reaches: `public` (the
+	// company's name, mission and chart) or `none`.
+	Anonymous      config.AnonymousAccess `json:"anonymous"`
+	AllowedOrigins []string               `json:"allowed_origins"`
 	// CompanyWriters is `api.auth.company_writers` as Tier A orders it: the
-	// token ids that alone may change the company document (ADR-0030).
-	// ALWAYS A LIST, and empty is a real posture — every token may — so the
-	// screen that reads the deployment's auth says whether the document is
-	// managed, and by which credential, where the operator looks for it.
+	// admin keys that alone may change the company document (ADR-0030).
+	// ALWAYS A LIST, and empty is a real posture — every admin key may — so
+	// the screen that reads the deployment's auth says whether the document
+	// is managed, and by which credential, where the operator looks for it.
 	CompanyWriters []string `json:"company_writers"`
 }
 
-// AccessToken is one accepted credential: its label, what it reaches and the
-// person it acts as. Never its value.
+// AccessToken is one accepted key: its label, its role and the person it is
+// linked to. Never its value.
 type AccessToken struct {
-	ID    string     `json:"id"`
-	Scope TokenScope `json:"scope"`
-	// Seat is the human seat binding this token, or null.
+	ID string `json:"id"`
+	// Role is what the key reaches, as Tier A names it and the guard
+	// enforces it (ADR-0031). Whether a person is linked to it is a
+	// different fact, on Seat: a role says what the key may read and run,
+	// and the link says who it acts as.
+	Role config.TokenRole `json:"role"`
+	// Seat is the human seat linking this key, or null.
 	Seat *AccessSeat `json:"seat"`
-	// Yours is whether the caller presented this token.
+	// Yours is whether the caller presented this key.
 	Yours bool `json:"yours"`
 }
 
@@ -164,11 +174,12 @@ type AccessContact struct {
 // operatorIDKey is the contact field the binding is written under.
 const operatorIDKey = "crewlet_operator_id"
 
-// access answers who can reach the company through this engine and as whom.
+// access answers who can reach the company through this engine, how far, and
+// as whom.
 //
-// OPERATOR-ONLY, for the reason `/setup` guards its reads: which labels the
-// guard accepts, which person each one is and which are nobody's is a map of
-// which credential to steal. The value is never here at all — see
+// ADMIN, for the reason `/setup` is admin in full: which labels the guard
+// accepts, what each reaches, which person each one is and which are nobody's
+// is a map of which credential to steal. The value is never here at all — see
 // [AccessPosture].
 //
 // THE TWO LISTS ARE ONE JOIN, walked from both ends: a token names the seat
@@ -181,8 +192,9 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 	caller := operatorFrom(ctx)
 	organization := s.organization()
 
-	accepted := make(map[string]string, len(posture.TokenIDs))
-	for _, id := range posture.TokenIDs {
+	accepted := make(map[string]string, len(posture.Keys))
+	for _, key := range posture.Keys {
+		id := key.ID
 		// The chart's binding is compared lower-cased (see
 		// [org.HumanContact]'s CrewletOperatorID), so the join is too.
 		accepted[strings.ToLower(strings.TrimSpace(id))] = id
@@ -191,20 +203,22 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 	out := AccessAnswer{
 		Auth: AccessAuth{
 			Disabled:       posture.Disabled,
-			AnonymousRead:  posture.AnonymousRead,
+			Anonymous:      posture.Anonymous,
 			AllowedOrigins: append([]string{}, posture.AllowedOrigins...),
 			CompanyWriters: append([]string{}, posture.CompanyWriters...),
 		},
-		Tokens: make([]AccessToken, 0, len(posture.TokenIDs)),
+		Tokens: make([]AccessToken, 0, len(posture.Keys)),
 		People: []AccessPerson{},
 	}
-	for _, id := range slices.Sorted(slices.Values(posture.TokenIDs)) {
-		row := AccessToken{ID: id, Scope: ScopeOperator, Yours: caller != "" && caller == id}
+	keys := slices.SortedFunc(slices.Values(posture.Keys), func(a, b AccessKey) int {
+		return strings.Compare(a.ID, b.ID)
+	})
+	for _, key := range keys {
+		row := AccessToken{ID: key.ID, Role: key.Role, Yours: caller != "" && caller == key.ID}
 		// THE SAME LOOKUP THE VIEWER AND THE ACT TRANSPORT MAKE, so a
-		// token this screen calls a person is one those admit as one.
+		// key this screen calls a person is one those admit as one.
 		if organization != nil {
-			if seat := organization.SeatByOperatorID(id, s.Env); seat != nil && seat.IsHuman() {
-				row.Scope = ScopePerson
+			if seat := organization.SeatByOperatorID(key.ID, s.Env); seat != nil && seat.IsHuman() {
 				row.Seat = &AccessSeat{Handle: seat.Handle(), Name: seat.Name}
 			}
 		}

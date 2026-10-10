@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/learning/memread"
@@ -33,10 +34,18 @@ var (
 	// ErrUnknown is a name nothing answers.
 	ErrUnknown = errors.New("queries: unknown query")
 
-	// ErrUnauthorized is a query that needs an operator and did not get
-	// one. Returned rather than decided here, so the refusal reaches a
-	// client as a code it already handles.
-	ErrUnauthorized = errors.New("queries: query requires an operator")
+	// ErrUnauthorized is a question asked by a caller with no accepted key
+	// that needs one. Returned rather than decided here, so the refusal
+	// reaches a client as a code it already handles: sign in.
+	ErrUnauthorized = errors.New("queries: query requires a key")
+
+	// ErrForbidden is a question asked by a caller whose key was accepted
+	// and reaches less than the question needs (ADR-0031) — a member asking
+	// an admin's question. Its own sentinel rather than [ErrUnauthorized],
+	// because the remedies are opposite: signing in again would change
+	// nothing, and a screen that said "sign in" would send a signed-in
+	// person in a circle.
+	ErrForbidden = errors.New("queries: query is beyond this key's reach")
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
@@ -93,39 +102,41 @@ func refuseAs(class error, format string, args ...any) error {
 	return &refusal{sentence: fmt.Sprintf(format, args...), class: class}
 }
 
-// operatorKey is the context key this package carries the caller's operator id
-// under.
+// callerKey is the context key this package carries the caller under.
 //
 // THE CONTEXT, NOT THE PARAMS, and the distinction is a security one: params
-// are the caller's own bag, so an id read from there would be an id the caller
-// chose. This one is written in exactly one place — [Registry.AnswerWith],
-// after the operator check — so every question that asks who is calling gets
-// the same answer, on both transports, and no caller can write it.
+// are the caller's own bag, so an identity read from there would be one the
+// caller chose. This one is written in exactly one place —
+// [Registry.AnswerWith], after the reach check — so every question that asks
+// who is calling gets the same answer, on both transports, and no caller can
+// write it.
 //
 // Its own type, unexported, so nothing outside this package can collide with
 // the key or forge a value under it.
-type operatorKey struct{}
+type callerKey struct{}
 
-// withOperator returns a context carrying the caller's operator id.
+// withCaller returns a context carrying the caller.
 //
 // UNEXPORTED, because both transports reach an answer through
 // [Registry.AnswerWith] and there is nowhere else this may be set from. A
-// package that could stamp its own operator id onto a context would be a
-// second authority on who the caller is, which is the whole thing this key
-// exists to prevent.
-func withOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
+// package that could stamp its own caller onto a context would be a second
+// authority on who the caller is, which is the whole thing this key exists to
+// prevent.
+func withCaller(ctx context.Context, caller auth.Principal) context.Context {
+	return context.WithValue(ctx, callerKey{}, caller)
 }
 
-// operatorFrom reads the caller's operator id, or "" for an anonymous one.
-//
-// EMPTY IS A REAL ANSWER, not a failure: most questions here are readable
-// without a token, and "nobody presented one" is exactly what a viewer query
-// reports back.
-func operatorFrom(ctx context.Context) string {
-	id, _ := ctx.Value(operatorKey{}).(string)
-	return id
+// callerFrom reads the caller. An anonymous caller is a principal with no ID,
+// which is a real answer and not a failure: "nobody presented a key" is exactly
+// what a viewer question reports back.
+func callerFrom(ctx context.Context) auth.Principal {
+	p, _ := ctx.Value(callerKey{}).(auth.Principal)
+	return p
 }
+
+// operatorFrom reads the caller's key id, or "" for an anonymous caller — the
+// name every write and every personal question attributes to.
+func operatorFrom(ctx context.Context) string { return callerFrom(ctx).ID }
 
 // Params are one query's arguments.
 //
@@ -303,10 +314,11 @@ type Answer func(ctx context.Context, p Params) (any, error)
 type entry struct {
 	answer Answer
 
-	// operator marks a question only an authenticated operator may ask.
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
-	operator bool
+	// reach is what a caller needs to be answered (ADR-0031). REQUIRED:
+	// [Registry.Register] refuses a question that cannot say which side of
+	// the withholding rule it is on, so no question is ever served to
+	// whoever happened to ask because nobody classified it.
+	reach auth.Reach
 }
 
 // Registry is the set of questions this process can answer.
@@ -318,19 +330,16 @@ type Registry struct {
 // NewRegistry builds an empty registry.
 func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 
-// Register adds a question.
+// Register adds a question and the reach a caller needs to be answered it.
 //
 // Registering a name twice is a programming error and panics, rather than
 // silently taking one of them: two answers to one question is exactly the
 // divergence this package exists to prevent, and a wiring mistake that
-// resolved to whichever ran last would be invisible.
-func (r *Registry) Register(name string, answer Answer) {
-	r.register(name, entry{answer: answer})
-}
-
-// RegisterOperator adds a question only an authenticated operator may ask.
-func (r *Registry) RegisterOperator(name string, answer Answer) {
-	r.register(name, entry{answer: answer, operator: true})
+// resolved to whichever ran last would be invisible. So is a reach that is
+// not one of [auth.Reaches]: the zero value is "nobody said", and serving a
+// question nobody classified is how a transcript ends up on a public screen.
+func (r *Registry) Register(name string, reach auth.Reach, answer Answer) {
+	r.register(name, entry{answer: answer, reach: reach})
 }
 
 func (r *Registry) register(name string, e entry) {
@@ -339,6 +348,9 @@ func (r *Registry) register(name string, e entry) {
 	}
 	if e.answer == nil {
 		panic(fmt.Sprintf("queries: %q registered with no answer", name))
+	}
+	if !e.reach.Valid() {
+		panic(fmt.Sprintf("queries: %q registered with reach %q, which is not one of auth.Reaches", name, e.reach))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -361,32 +373,35 @@ func (r *Registry) Names() []string {
 // The signature is the socket's, because the socket is the surface with a
 // name-to-question dispatch; a REST route knows its own question and calls the
 // answer directly. Both reach the same function either way.
-func (r *Registry) Answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	return r.AnswerWith(ctx, what, FromMap(params), operatorID)
+func (r *Registry) Answer(ctx context.Context, what string, params map[string]any, caller auth.Principal) (any, error) {
+	return r.AnswerWith(ctx, what, FromMap(params), caller)
 }
 
 // AnswerWith runs one question against already-read parameters.
 //
 // The REST route reaches this one, because its parameters are a query string
 // rather than a JSON object. Both entry points meet at the same answer with the
-// same authorization check — the alternative is a route that reads its own
-// params and forgets the operator check, which is the shape of the bug this
-// package exists to make impossible.
-func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operatorID string) (any, error) {
+// same reach check — the alternative is a route that reads its own params and
+// forgets the check, which is the shape of the bug this package exists to make
+// impossible.
+func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, caller auth.Principal) (any, error) {
 	r.mu.RLock()
 	e, known := r.entries[what]
 	r.mu.RUnlock()
 	if !known {
 		return nil, fmt.Errorf("%w: %q", ErrUnknown, what)
 	}
-	if e.operator && operatorID == "" {
-		return nil, fmt.Errorf("%w: %q", ErrUnauthorized, what)
+	if !caller.Reach.Covers(e.reach) {
+		if !caller.Authenticated() {
+			return nil, fmt.Errorf("%w: %q", ErrUnauthorized, what)
+		}
+		return nil, fmt.Errorf("%w: %q", ErrForbidden, what)
 	}
 	// WHO IS ASKING, for the questions that answer differently per person.
 	// Set here rather than at each transport, because this is the one
 	// function both of them meet at, which is the same reason this package
 	// exists at all.
-	data, err := e.answer(withOperator(ctx, operatorID), p)
+	data, err := e.answer(withCaller(ctx, caller), p)
 	return data, unavailableIfTransient(err)
 }
 
@@ -413,7 +428,8 @@ func unavailableIfTransient(err error) error {
 		errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
-		errors.Is(err, ErrUnauthorized):
+		errors.Is(err, ErrUnauthorized),
+		errors.Is(err, ErrForbidden):
 		return err
 	}
 	if transient(err) {
@@ -458,18 +474,15 @@ func transient(err error) bool {
 	return errors.Is(err, coord.ErrUnavailable) || errors.As(err, &unserved)
 }
 
-// RequiresOperator reports whether a question needs one.
+// ReachOf is the reach a question declared, or "" for a name nothing answers.
 //
-// THE REGISTRY'S DECLARED POSTURE, readable without running the answer —
-// which is what a gate asserting the posture needs and the only caller there
-// is. Nothing enforces with it: [Registry.AnswerWith] makes the decision for
-// both transports, and each maps the refusal its own way (the socket to
-// `unauthorized`, a REST route to a 401 carrying the same code). It said it
-// was "for a REST route that has to make the same decision before it calls the
-// answer"; no route does, and a second enforcement point is exactly what
-// AnswerWith's own comment says must not exist.
-func (r *Registry) RequiresOperator(what string) bool {
+// THE REGISTRY'S DECLARED POSTURE, readable without running the answer: the
+// REST route a question is served on mounts at this reach, so the route and
+// the registry cannot disagree about who may ask, and the gates that hold the
+// classification read it. Nothing else enforces with it — [Registry.AnswerWith]
+// is the one decision, on both transports.
+func (r *Registry) ReachOf(what string) auth.Reach {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[what].operator
+	return r.entries[what].reach
 }

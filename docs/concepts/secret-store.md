@@ -120,7 +120,7 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 
 A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and the instant it was written, and stamping `source=migrated`. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
 
-`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN` when set, and otherwise with the first entry in the Tier A `api.auth.tokens` list; the token's id is recorded as the author of the write.
+`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN` when set, and otherwise with the first `api.auth.tokens` entry in Tier A whose `role` is `admin` — `/secrets` is an admin's surface, reads included; the key's id is recorded as the author of the write.
 
 `crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
 
@@ -128,14 +128,14 @@ Every other command reads the **Tier A** config for its keyring, never the compa
 
 ### From the dashboard
 
-Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same guarded routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding the operator token can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
+Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same admin routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding an admin key can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
 
-Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-auth-gated) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
+Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-admin) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
 
-The API's own bearer tokens are NOT in this store: they are Tier A
+The API's own keys are NOT in this store: they are Tier A
 (`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
 › **People & access** (`#/settings/people`) lists their labels — never a value
-— beside the person each one acts as, read from
+— beside each one's role and the person it acts as, read from
 [`GET /access`](../reference/api-endpoints.md#get-access).
 
 A model's keys are `${VAR}` pointers into this store too. Settings › **Models &

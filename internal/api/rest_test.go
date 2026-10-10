@@ -38,15 +38,43 @@ func status(t *testing.T, a *api.App, path string) int {
 	return rec.Result().StatusCode
 }
 
+// statusAs is status presenting key.
+func statusAs(t *testing.T, a *api.App, path, key string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	return rec.Result().StatusCode
+}
+
+// restApp is a node over [rosterCompany] that accepts one admin key, "secret"
+// (see [closedPosture]), on the default anonymous posture — so a case reads a
+// route as an admin with [getAs] and as nobody with [get].
 func restApp(t *testing.T) *api.App {
 	t.Helper()
 	c, err := config.ParseCompany([]byte(rosterCompany))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	b := closedPosture()
+	b.API.Auth.Anonymous = config.AnonymousPublic
 	return newApp(t, api.Options{
-		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Company: func() *config.Company { return c }},
+		Bootstrap: &b,
+		Runtime:   &fakeRuntime{},
+		Sources:   queries.Sources{Company: func() *config.Company { return c }},
+	})
+}
+
+// workApp is a node on the native tracker's stub reader that accepts the admin
+// key "secret".
+func workApp(t *testing.T) *api.App {
+	t.Helper()
+	b := closedPosture()
+	return newApp(t, api.Options{
+		Bootstrap: &b,
+		Runtime:   &fakeRuntime{},
+		Sources:   queries.Sources{Work: stubWorkReader{}},
 	})
 }
 
@@ -69,7 +97,7 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 		"/budgets",
 		"/stream/snapshot",
 	} {
-		if got := status(t, a, path); got != http.StatusOK {
+		if got := statusAs(t, a, path, "secret"); got != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200; it is in the published API table", path, got)
 		}
 	}
@@ -130,7 +158,7 @@ func TestAPathValueBecomesTheQuestionsParameter(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	status, body := get(t, a, "/agents/ceo")
+	status, body := getAs(t, a, "/agents/ceo")
 	if status != http.StatusOK {
 		t.Fatalf("GET /agents/ceo = %d (%v), want the seat", status, body)
 	}
@@ -141,7 +169,7 @@ func TestAPathValueBecomesTheQuestionsParameter(t *testing.T) {
 	}
 	// And a different path answers about a different seat, so the route is
 	// not returning a constant.
-	if _, other := get(t, a, "/agents/cto"); other["role"] != "CTO" {
+	if _, other := getAs(t, a, "/agents/cto"); other["role"] != "CTO" {
 		t.Errorf("GET /agents/cto answered about %v", other["role"])
 	}
 }
@@ -153,7 +181,7 @@ func TestThePathValueOverridesTheQueryString(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	_, body := get(t, a, "/agents/ceo?id=cto&role=CTO")
+	_, body := getAs(t, a, "/agents/ceo?id=cto&role=CTO")
 	if body["role"] != "CEO" {
 		t.Errorf("answered about %v; the query string is steering a route "+
 			"addressed by its path", body["role"])
@@ -168,11 +196,11 @@ func TestASeatIsAddressableByTheIdentifierTheClientHolds(t *testing.T) {
 	a := restApp(t)
 
 	// The handle, which is what a roster row's id is.
-	if code, body := get(t, a, "/query/agent?id=ceo"); code != http.StatusOK || body["role"] != "CEO" {
+	if code, body := getAs(t, a, "/query/agent?id=ceo"); code != http.StatusOK || body["role"] != "CEO" {
 		t.Errorf("asking by handle = %d %v, want the seat", code, body)
 	}
 	// The role name still works, for a caller that already had one.
-	if code, body := get(t, a, "/query/agent?role=CEO"); code != http.StatusOK || body["role"] != "CEO" {
+	if code, body := getAs(t, a, "/query/agent?role=CEO"); code != http.StatusOK || body["role"] != "CEO" {
 		t.Errorf("asking by role = %d %v, want the seat", code, body)
 	}
 	// And the roster hands out exactly that identifier.
@@ -218,8 +246,14 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 		{"/integrations", "/query/integrations"},
 		{"/budgets", "/query/budgets"},
 	} {
-		_, viaNamed := get(t, a, pair.named)
-		_, viaQuery := get(t, a, pair.generic)
+		namedStatus, viaNamed := getAs(t, a, pair.named)
+		queryStatus, viaQuery := getAs(t, a, pair.generic)
+		// ANSWERED, both: two refusals have the same shape too, and a
+		// comparison of them would certify nothing.
+		if namedStatus != http.StatusOK || queryStatus != http.StatusOK {
+			t.Errorf("%s = %d and %s = %d, want both answered", pair.named, namedStatus,
+				pair.generic, queryStatus)
+		}
 		if len(viaNamed) != len(viaQuery) {
 			t.Errorf("%s and %s answered different shapes (%v vs %v)",
 				pair.named, pair.generic, viaNamed, viaQuery)
@@ -244,13 +278,12 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 // a status-only check would pass on it.
 func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{
-		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
-	})
+	a := workApp(t)
 
+	req := httptest.NewRequest(http.MethodGet, "/work/views", nil)
+	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/views", nil))
+	a.ServeHTTP(rec, req)
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
@@ -273,15 +306,8 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 // string would refuse for the same `container` it was handed.
 func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{
-		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
-	})
-
-	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/work/views?container=project:ENG", nil))
-	if got := rec.Result().StatusCode; got != http.StatusOK {
+	a := workApp(t)
+	if got := statusAs(t, a, "/work/views?container=project:ENG", "secret"); got != http.StatusOK {
 		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
 	}
 }
@@ -397,17 +423,16 @@ func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
 // answer `not_found`.
 func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{
-		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
-	})
+	a := workApp(t)
 
+	req := httptest.NewRequest(http.MethodGet, "/work/inbox", nil)
+	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/inbox", nil))
+	a.ServeHTTP(rec, req)
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/inbox = %d, want 400: an anonymous caller names "+
+		t.Fatalf("GET /work/inbox = %d, want 400: a key no seat links names "+
 			"no seat and the question refuses, so any other status means "+
 			"/work/{id} answered the path instead", res.StatusCode)
 	}

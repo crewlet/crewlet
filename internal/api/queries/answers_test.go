@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -70,6 +71,21 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 // else to ask, so every answer is the store's with a complete coverage.
 func fleetOf(log *store.EventLog) *eventfan.Fleet { return eventfan.Solo("node-a", log) }
 
+// asAdmin and asMember are the principals a key of each role named id carries,
+// as the guard attaches them. Most cases here ask as an admin, which every
+// question's reach covers: what they are about is the answer, and the reach
+// each question declares is held by its own cases.
+func asAdmin(id string) auth.Principal {
+	return auth.Principal{ID: id, Role: config.RoleAdmin, Reach: auth.ReachAdmin}
+}
+
+func asMember(id string) auth.Principal {
+	return auth.Principal{ID: id, Role: config.RoleMember, Reach: auth.ReachMember}
+}
+
+// nobody is a caller with no key under the default posture.
+var nobody = auth.Principal{Reach: auth.ReachPublic}
+
 func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 	t.Helper()
 	r := queries.NewRegistry()
@@ -81,7 +97,7 @@ func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 // a typed value rather than a map.
 func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]any) any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(t.Context(), what, params, asAdmin("ops"))
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -90,7 +106,7 @@ func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]an
 
 func ask(t *testing.T, r *queries.Registry, what string, params map[string]any) map[string]any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(t.Context(), what, params, asAdmin("ops"))
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -119,7 +135,7 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
 		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
+	if _, err := r.Answer(t.Context(), "events", nil, asAdmin("ops")); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
 }
@@ -209,7 +225,7 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	if idle["live_call"] != nil {
 		t.Errorf("a seat with nothing in flight = %+v; want null", idle)
 	}
-	if _, err := r.Answer(t.Context(), "live_call", map[string]any{}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "live_call", map[string]any{}, asAdmin("operator")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("live_call with no seat = %v; want a bad-params refusal", err)
 	}
 }
@@ -278,7 +294,7 @@ func TestAgentAnswersASeatItHasNeverSeen(t *testing.T) {
 func TestAgentNeedsARole(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
-	if _, err := r.Answer(t.Context(), "agent", nil, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(t.Context(), "agent", nil, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
 }
@@ -341,7 +357,7 @@ func TestTheEnginesHealthIsAPushAndNeverAQuery(t *testing.T) {
 	// EVERY SEAM, so the sweep covers every registration this build has.
 	r := registryOver(t, everySeam(t))
 	for _, name := range []string{"stream", "health"} {
-		if _, err := r.Answer(t.Context(), name, nil, ""); !errors.Is(err, queries.ErrUnknown) {
+		if _, err := r.Answer(t.Context(), name, nil, asAdmin("ops")); !errors.Is(err, queries.ErrUnknown) {
 			t.Errorf("%q is answerable as a query (%v): read the health push", name, err)
 		}
 	}
@@ -404,7 +420,7 @@ func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
 	// or repeat whatever collided with it, silently.
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
-	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
+	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
@@ -493,7 +509,7 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	rows := ask(t, r, "events", nil)["events"].([]store.EventRecord)
-	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, "")
+	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, asAdmin("ops"))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -509,7 +525,7 @@ func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	for _, what := range []string{"event", "trace"} {
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(t.Context(), what, nil, asAdmin("ops")); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: err = %v, want ErrBadParams", what, err)
 		}
 	}
@@ -1080,7 +1096,7 @@ func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
 	seedEvents(t, db.Events(), 1, nil)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
-	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
+	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, asAdmin("ops"))
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}

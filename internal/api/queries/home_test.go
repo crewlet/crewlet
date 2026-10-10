@@ -50,7 +50,7 @@ func TestDecisionsCountsAsksAndRunsForTheParty(t *testing.T) {
 		{TurnID: "theirs", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			AudienceHandles: []string{"cy"}, UpdatedAt: askedAt},
 	}
-	got, err := askAsOperator(t, sources, "decisions", nil)
+	got, err := askAsAna(t, sources, "decisions", nil)
 	if err != nil {
 		t.Fatalf("decisions: %v", err)
 	}
@@ -83,13 +83,13 @@ func TestDecisionsCountsAsksAndRunsForTheParty(t *testing.T) {
 	}
 }
 
-// NOBODY TO ANSWER ABOUT IS NOT AN EMPTY LIST: a credential bound to no seat
-// is told so, the refusal every personal question gives.
+// NOBODY TO ANSWER ABOUT IS NOT AN EMPTY LIST: a key linked to no seat is told
+// so, the refusal every personal question gives.
 func TestDecisionsNeedsAPerson(t *testing.T) {
 	t.Parallel()
 	sources := partySources(t, &stubWork{})
-	if _, err := askNative(t, sources, "decisions", nil); err == nil {
-		t.Error("an anonymous caller naming nobody got an answer")
+	if _, err := askNative(t, sources, "decisions", nil); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an unlinked key naming nobody = %v, want the no-seat refusal", err)
 	}
 }
 

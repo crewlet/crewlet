@@ -21,11 +21,11 @@ import (
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
 //
-// SCOPED, NOT OPERATOR-GATED. See [Sources.viewerParty]: a caller reads the
-// seat their own token is bound to, and naming anybody else's needs an
-// operator credential. Registering it operator-only would make the landing
-// screen the most-gated screen in the product, and the human teammate — one of
-// the two readers this dashboard is for — fictional.
+// MEMBER, AND SCOPED PAST THAT. See [Sources.viewerParty]: a caller reads the
+// seat their own key is linked to and the seats in their line, and nobody
+// else's, an admin included. Registering it admin would make the landing screen
+// the most-gated screen in the product, and the human teammate — one of the two
+// readers this dashboard is for — fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
@@ -33,7 +33,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	}
 	q := tracker.InboxQuery{
 		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
-		// notices a founder's own assistant produced name the token,
+		// notices a founder's own assistant produced name the key,
 		// and an inbox asked about the seat alone showed none of them.
 		Who:         who,
 		Unread:      p.Bool("unread", false),

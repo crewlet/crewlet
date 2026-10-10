@@ -220,9 +220,9 @@ export function Inbox() {
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="warning" className="inbox-callout">
-          This token is <code className="inline">{viewer.operatorID}</code> and no seat claims it.
-          Give a human seat <code className="inline">contact.crewlet_operator_id</code> with that
-          value and this becomes their inbox.
+          This token is <code className="inline">{viewer.tokenID}</code> and no seat claims it. Give
+          a human seat <code className="inline">contact.crewlet_operator_id</code> with that value
+          and this becomes their inbox.
         </Callout>
       ) : null}
 

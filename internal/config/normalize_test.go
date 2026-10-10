@@ -26,7 +26,7 @@ func TestTierAIsTrimmedBeforeAnyRuleReadsIt(t *testing.T) {
 	b.Store.Path = " /var/lib/crewlet/node.db\n"
 	b.Stream.URL = " nats://broker.example.com:4222 \n"
 	b.API.Host = " 127.0.0.1 "
-	b.API.Auth.Tokens = []config.APIToken{{ID: " ops \n", Token: " tok_example \n"}}
+	b.API.Auth.Tokens = []config.APIToken{{ID: " ops \n", Role: config.RoleAdmin, Token: " tok_example \n"}}
 	b.API.Auth.AllowedOrigins = []string{" https://ops.example.com \n"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: " k1 \n",
@@ -259,7 +259,7 @@ func populatedBootstrap(t *testing.T) config.Bootstrap {
 	}
 	b.Store.ReplicatedPath = "/var/lib/crewlet/replicated.db"
 	b.Store.SnapshotDir = "/var/lib/crewlet/snapshots"
-	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "tok_example"}}
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Role: config.RoleAdmin, Token: "tok_example"}}
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: "k1",

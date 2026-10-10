@@ -113,7 +113,8 @@ func TestEverySurfaceBindsAPersonThroughTheNodesOwnChain(t *testing.T) {
 	t.Run("the_operator_surface", func(t *testing.T) {
 		t.Parallel()
 		work := api.EngineOperatorOptions(e).Work
-		actor, err := work.Actor(auth.WithOperator(t.Context(), "ops-founder"), nil)
+		founder := auth.Principal{ID: "ops-founder", Role: config.RoleAdmin, Reach: auth.ReachAdmin}
+		actor, err := work.Actor(auth.WithPrincipal(t.Context(), founder), nil)
 		if err != nil {
 			t.Fatalf("actor: %v", err)
 		}
@@ -133,7 +134,7 @@ func TestEverySurfaceBindsAPersonThroughTheNodesOwnChain(t *testing.T) {
 		t.Parallel()
 		boot := bootstrapFor(t, 0)
 		boot.API.Port = freePort(t)
-		boot.API.Auth.Tokens = []config.APIToken{{ID: "ops-founder", Token: "founder-test-token"}}
+		boot.API.Auth.Tokens = []config.APIToken{{ID: "ops-founder", Role: config.RoleAdmin, Token: "founder-test-token"}}
 		surface, err := serveNode(t, boot, e)
 		if err != nil {
 			t.Fatalf("serveAPI: %v", err)
@@ -151,9 +152,9 @@ func TestEverySurfaceBindsAPersonThroughTheNodesOwnChain(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &viewer); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if viewer["handle"] != "founder" {
-			t.Errorf("the founder's token views the dashboard as %v, want the founder "+
-				"the handed environment binds it to", viewer["handle"])
+		if viewer["handle"] != "founder" || viewer["linked"] != true {
+			t.Errorf("the founder's token views the dashboard as %v (linked %v), want "+
+				"the founder the handed environment binds it to", viewer["handle"], viewer["linked"])
 		}
 	})
 }

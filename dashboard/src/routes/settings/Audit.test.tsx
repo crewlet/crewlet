@@ -286,12 +286,12 @@ test("the export opens a formula-looking cell as text", () => {
   expect(csv.split("\r\n")[1]).toContain(`"'=HYPERLINK(""https://example.com"",""click"")"`);
 });
 
-// AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT.
+// A KEY'S WRITE IS A PERSON'S, AND A KEY IS NOT A SEAT.
 //
-// An `operator` write carries the token's name, which no chart holds — so the
-// cell fell to the chart's default and drew every operator as an agent's
+// An `operator` write carries the key's name, which no chart holds — so the
+// cell fell to the chart's default and drew every such writer as an agent's
 // squircle, linking "maya" to a seat page that does not exist.
-test("an operator is drawn as a person: their seat when the token is bound, plain text when not", async () => {
+test("a key's write is drawn as a person: their seat when the key is bound, plain text when not", async () => {
   serving({
     work_activity: {
       records: [
@@ -310,14 +310,14 @@ test("an operator is drawn as a person: their seat when the token is bound, plai
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("unbound write")).toBeTruthy());
 
-  // UNBOUND: the human circle and the token's name, with nothing to follow.
+  // UNBOUND: the human circle and the key's name, with nothing to follow.
   expect(screen.getByText("maya")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /maya/ })).toBeNull();
-  // BOUND: the person's seat, by its name, linked — the token stays in the
+  // BOUND: the person's seat, by its name, linked — the key stays in the
   // tooltip, since it is the audit trail.
   const bound = screen.getByRole("link", { name: /Jane Founder/ });
   expect(bound.getAttribute("href")).toBe("#/agents/seats/jane");
-  expect(bound.getAttribute("title")).toContain("U0FOUNDER");
+  expect(bound.getAttribute("title")).toBe("Jane Founder, through the key U0FOUNDER");
   // BOTH ARE CIRCLES: the kit's outline for a person.
   const circles = container.querySelectorAll(".crewlet-avatar--human");
   expect(circles.length).toBe(2);

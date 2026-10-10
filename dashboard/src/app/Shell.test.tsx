@@ -207,8 +207,10 @@ function answering(
     if (what === "viewer") {
       return Promise.resolve(
         answers.viewer ?? {
-          operator_id: "U0FOUNDER",
-          operator: true,
+          token_id: "U0FOUNDER",
+          role: "admin",
+          reach: "admin",
+          linked: true,
           handle: "ada",
           name: "Ada Lovelace",
           kind: "human",
@@ -832,13 +834,25 @@ describe("the sidebar's figures", () => {
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
-  test("Settings is a row for an operator without the lock", async () => {
+  test("Settings is a row for an admin without the lock", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
-    expect(foot.textContent).not.toContain("operator credential");
+    expect(foot.textContent).not.toContain("for admins");
+  });
+
+  // A MEMBER'S KEY IS ACCEPTED AND STILL LOCKED OUT OF SETTINGS: the lock is
+  // the role's, never whether a key is presented.
+  test("Settings carries the lock for a member", async () => {
+    const { store, socket } = answering({
+      viewer: { token_id: "ada", role: "member", reach: "member", linked: true, handle: "ada" },
+    });
+    mountShell(store, socket);
+    await settle();
+    const foot = screen.getByRole("navigation", { name: "Settings" });
+    expect(foot.textContent).toContain("most sections are for admins");
   });
 });
 
@@ -912,18 +926,18 @@ describe("the page header", () => {
   test("Settings draws its sections as a column, locked where guarded", async () => {
     location.hash = "#/settings/secrets";
     const { store, socket } = answering({
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" },
     });
     mountShell(store, socket);
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs an operator credential");
+    expect(current?.textContent).toContain("for admins");
     const general = Array.from(column.querySelectorAll("a")).find((a) =>
       a.textContent?.startsWith("General"),
     );
-    expect(general?.textContent).not.toContain("operator credential");
+    expect(general?.textContent).not.toContain("for admins");
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -974,11 +988,11 @@ describe("the page header", () => {
     expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
   });
 
-  // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
+  // NO ADMIN POLL OUTSIDE SETTINGS. The frame is mounted for the life of
   // the tab, so a figure hook that asked unconditionally would put three
-  // operator questions on a timer behind every screen of every tab.
-  const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
-  test("the operator answers are asked only while the Settings column is drawn", async () => {
+  // admin questions on a timer behind every screen of every tab.
+  const ADMIN_ANSWERS = ["fleet", "retention", "integrations"];
+  test("the admin answers are asked only while the Settings column is drawn", async () => {
     for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
@@ -986,8 +1000,8 @@ describe("the page header", () => {
       mountShell(store, socket);
       await settle();
       expect(
-        asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w)),
-        `${where} asked an operator answer`,
+        asked.map((a) => a.what).filter((w) => ADMIN_ANSWERS.includes(w)),
+        `${where} asked an admin answer`,
       ).toEqual([]);
       cleanup();
     }
@@ -996,21 +1010,21 @@ describe("the page header", () => {
     const { store, socket } = answering({}, asked);
     mountShell(store, socket);
     await settle();
-    expect(new Set(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w)))).toEqual(
-      new Set(OPERATOR_ANSWERS),
+    expect(new Set(asked.map((a) => a.what).filter((w) => ADMIN_ANSWERS.includes(w)))).toEqual(
+      new Set(ADMIN_ANSWERS),
     );
   });
 
-  test("a reader without an operator credential is asked nothing, even in Settings", async () => {
+  test.each([
+    ["no key", { token_id: "", role: "", reach: "public", handle: "", name: "", kind: "" }],
+    ["a member's key", { token_id: "ada", role: "member", reach: "member", handle: "ada" }],
+  ])("a reader with %s is asked nothing, even in Settings", async (_who, viewer) => {
     location.hash = "#/settings";
     const asked: { what: string }[] = [];
-    const { store, socket } = answering(
-      { viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } },
-      asked,
-    );
+    const { store, socket } = answering({ viewer }, asked);
     mountShell(store, socket);
     await settle();
-    expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
+    expect(asked.map((a) => a.what).filter((w) => ADMIN_ANSWERS.includes(w))).toEqual([]);
   });
 
   // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted

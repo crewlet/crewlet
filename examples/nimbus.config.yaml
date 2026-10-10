@@ -160,14 +160,28 @@ api:
   port: 80
 
   auth:
+    # What a caller presenting NO key reaches: `public` (the default) is
+    # the company's name, mission and chart, so the dashboard's sign-in
+    # page can say which company it signs you into; `none` is nothing past
+    # that page.  Neither reaches a member's view.
+    anonymous: public
     tokens:
       # The id is what a write's audit row records, and what a human seat
       # binds to with ``contact.crewlet_operator_id`` — so a person acting
-      # through the dashboard acts as themselves rather than as a token.
-      # An UNBOUND token is ordinary: an operator outside the org chart, a
-      # pipeline, an automation.  It acts as ``operator:<id>`` under this
-      # label and is never refused for it.
+      # through the dashboard acts as themselves rather than as a key.
+      #
+      # The ROLE is what the key is for, and there is no default.  `member`
+      # is a teammate's key: it reads the company's work, pages and chart
+      # and acts as the person it is linked to — never an agent's
+      # transcripts, the configuration or the secrets.  `admin` also runs
+      # the engine.  The founder runs it, so hers is an admin key; a key
+      # handed to a colleague for their inbox is a member key.
+      #
+      # An UNLINKED admin key is ordinary — a pipeline, an automation, an
+      # operator outside the org chart — and acts as ``operator:<id>``
+      # under this label.
       - id: founder
+        role: admin
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 
 # ── Secret encryption at rest (OPTIONAL) ──────────────────────────────

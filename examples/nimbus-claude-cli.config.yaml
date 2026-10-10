@@ -193,7 +193,11 @@ api:
   port: 8000
   auth:
     tokens:
+      # `admin`: the founder runs the engine — its configuration, secrets
+      # and every agent's transcripts.  A key handed to a teammate is
+      # `role: member`, which reads the company and acts as its person.
       - id: founder
+        role: admin
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 
 # ── Secret encryption at rest (OPTIONAL) ──────────────────────────────

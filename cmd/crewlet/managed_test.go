@@ -18,7 +18,7 @@ func managedBootstrap(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "managed.yaml")
 	body := "node:\n  id: cli-test\nstore:\n  path: " + filepath.Join(dir, "index.db") +
-		"\napi:\n  auth:\n    tokens:\n      - {id: operator, token: op-token}\n" +
+		"\napi:\n  auth:\n    tokens:\n      - {id: operator, role: admin, token: op-token}\n" +
 		"    company_writers: [operator]\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

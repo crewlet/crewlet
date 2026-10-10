@@ -2,22 +2,30 @@
  * Who files into a knowledge space — the units whose `space:` names it, and
  * the tracker project each of them works in.
  *
- * # Read from the guarded company document, in FOUR states
+ * # Read from the guarded company document, in FIVE states
  *
  * A unit's `space:` is guarded (`internal/api/orgprojection_test.go`: "a
  * knowledge container key: where this unit's pages are written"), so the
- * anonymous org projection carries none of it and the answer comes from the
- * company document. Four different facts come out of trying to read it, and
- * each has its own sentence:
+ * public org projection carries none of it and the answer comes from the
+ * company document, which is an admin's (ADR-0031). Five different facts come
+ * out of trying to read it, and each has its own sentence:
  *
- *  - `read`     — the document answered; an EMPTY list is then a real fact
- *                 about the company ("no unit names this space").
- *  - `no_token` — this browser holds no API token, so nothing was asked: the
- *                 refusal is known before the question.
- *  - `loading`  — a token is held and the read is in flight. Not "needs a
- *                 token": that sentence was drawn at an operator who HAS one
- *                 for as long as the read took.
- *  - `refused`  — the read answered with an error: the token did not open it.
+ *  - `read`      — the document answered; an EMPTY list is then a real fact
+ *                  about the company ("no unit names this space").
+ *  - `no_token`  — this browser presents no key, so nothing was asked: the
+ *                  refusal is known before the question.
+ *  - `forbidden` — the key is a member's, which the viewer says or the engine
+ *                  answered: the read is an admin's, and another paste of the
+ *                  same key changes nothing, so the sentence is not "could
+ *                  not be read with this token".
+ *  - `loading`   — a key is held and the read is in flight. Not "needs a
+ *                  key": that sentence was drawn at an admin who HAS one for
+ *                  as long as the read took.
+ *  - `refused`   — the read answered with any other error: the key did not
+ *                  open it.
+ *
+ * NOT ASKED WHERE THE ANSWER IS KNOWN ([knownRefusal]): a member's key asking
+ * for the document puts a refusal on the wire on every knowledge page.
  *
  * ONE HOOK for the tree's space rows and the container rail, because both
  * state the same fact about the same space and two derivations of it had
@@ -26,21 +34,29 @@
 
 import { useMemo } from "react";
 import { useQuery } from "~/lib/useQuery.ts";
+import { knownRefusal, useViewer } from "~/lib/viewer.ts";
 import { apiToken } from "~/protocol/authToken.ts";
 import { documentUnits } from "~/lib/seats.ts";
 
 export type SpaceOwners =
   | { state: "read"; units: { name: string; project?: string }[] }
   | { state: "no_token" }
+  | { state: "forbidden" }
   | { state: "loading" }
   | { state: "refused" };
 
 /** A lookup from a space key to who files into it. */
 export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: string) => SpaceOwners {
-  const token = apiToken() !== "";
-  const doc = useQuery("config", undefined, { enabled: token && (options.enabled ?? true) });
+  const known = knownRefusal(useViewer(), apiToken() !== "");
+  const doc = useQuery("config", undefined, {
+    enabled: known === null && (options.enabled ?? true),
+  });
   return useMemo(() => {
-    if (!token) return () => ({ state: "no_token" as const });
+    if (known === "unauthorized") return () => ({ state: "no_token" as const });
+    // A MEMBER'S KEY, known or answered: the one refusal a key cannot fix.
+    if (known === "forbidden" || doc.error === "forbidden") {
+      return () => ({ state: "forbidden" as const });
+    }
     if (doc.error) return () => ({ state: "refused" as const });
     if (!doc.data) return () => ({ state: "loading" as const });
     const units = documentUnits(doc.data);
@@ -52,14 +68,16 @@ export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: strin
         .filter((u) => (u.space ?? "").toUpperCase() === key.toUpperCase())
         .map((u) => ({ name: u.name, project: u.project })),
     });
-  }, [token, doc.data, doc.error]);
+  }, [known, doc.data, doc.error]);
 }
 
 /** The one sentence that states `owners`, for a tooltip or a screen reader. */
 export function ownerSentence(owners: SpaceOwners): string {
   switch (owners.state) {
     case "no_token":
-      return "Who files here needs an operator token to read";
+      return "Who files here needs an admin key to read";
+    case "forbidden":
+      return "Who files here is for admins to read";
     case "loading":
       return "Who files here is still being read";
     case "refused":

@@ -6,7 +6,7 @@
  * two meet on screen the way they are meant to: every tile carries exactly
  * ONE control, Manage and Learn more are real links, Rotate token opens the
  * settings form saying why, the filter narrows what is shown, and a reader
- * with no operator token sees every form action disabled with its reason
+ * without an admin key sees every form action disabled with its reason
  * rather than removed.
  */
 
@@ -223,16 +223,17 @@ test("the filter shows what the company has, or what it could have", async () =>
   expect(screen.getByRole("heading", { name: "Slack" })).toBeTruthy();
 });
 
-// A WRITE CONTROL IS NEVER HIDDEN. `/setup` is guarded in full, so a reader
-// with no operator token has no form to open — and every form action says so
-// on the control itself, while Manage (which writes nothing) still works.
-test("without an operator token every form action is disabled with its reason", async () => {
+// A WRITE CONTROL IS NEVER HIDDEN. `/setup` is an admin's in full, so a
+// reader without an admin key has no form to open — and every form action
+// says so on the control itself, while Manage (which writes nothing) still
+// works.
+test("without an admin key every form action is disabled with its reason", async () => {
   stubFetch({ status: 401, body: { error: "unauthorized" } });
   mount();
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
-  expect(document.body.textContent).toContain("Setting an integration up needs an operator token.");
+  expect(document.body.textContent).toContain("Setting an integration up needs an admin key.");
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
@@ -247,8 +248,9 @@ test("without an operator token every form action is disabled with its reason", 
 test("a managed document holds Connect and keeps Rotate token", async () => {
   stubFetch({ status: 200, body: listing });
   mount({
-    operator_id: "jane",
-    operator: true,
+    token_id: "jane",
+    role: "admin",
+    reach: "admin",
     config_writer: false,
     config_managed_by: ["gitops"],
   });

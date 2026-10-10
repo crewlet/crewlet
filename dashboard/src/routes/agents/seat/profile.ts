@@ -387,7 +387,7 @@ export function workersWords(role: ConfigRole): string {
  * last, so the card's head is what happens next.
  *
  * NOT the `schedules:` a seat AUTHORED in the company document: that is an
- * operator read, carries no effective zone, next run or problem, and never
+ * admin's read, carries no effective zone, next run or problem, and never
  * sees a unit schedule at all — so the rows that actually wake a seat were
  * the ones an authored read could not find.
  */

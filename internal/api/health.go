@@ -46,11 +46,11 @@ const (
 // happening, a read that did not happen, an evaluation that has not run — and
 // each says which.
 //
-// PUBLIC, like every probe: /health is unguarded and the push reaches an
-// anonymous tab. That is why the fleet and the alarm table appear here as
+// PUBLIC, like every probe: /health is open and the push reaches a tab with
+// no key. That is why the fleet and the alarm table appear here as
 // COUNTS — how many nodes, how many alarms and the one longest unanswered —
 // and never as their rows: which nodes hold what, and what each alarm
-// measured, are the operator-only `fleet` and `work_retention` answers.
+// measured, are the admin `fleet` and `retention` answers.
 type Health struct {
 	Status string `json:"status"`
 

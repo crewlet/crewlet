@@ -141,3 +141,17 @@ test("a bad_params refusal with the engine's sentence shows the sentence, not th
   render(<QueryState error="bad_params" loading={false} />);
   expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
 });
+
+// A KEY THE ENGINE ACCEPTED IS NOT ASKED FOR AGAIN. `forbidden` is a member's
+// key on an admin's question (ADR-0031): the refusal says who it is for, and
+// offers no token dialog — the reader's key works, and pasting it again would
+// be refused again. `unauthorized`, the missing key, keeps its button.
+test("a forbidden refusal says it is for admins and offers no token", () => {
+  render(<QueryState error="forbidden" loading={false} />);
+  expect(screen.getByText(/This is for admins/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /token/i })).toBeNull();
+  cleanup();
+  render(<QueryState error="unauthorized" loading={false} />);
+  expect(screen.getByRole("button", { name: /Set token/ })).toBeTruthy();
+  expect(screen.queryByText(/This is for admins/)).toBeNull();
+});

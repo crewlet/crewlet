@@ -120,10 +120,10 @@ const NO_REVISION = {
  * names.
  *
  * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
- * spaces overlap (an operator token may be called `node`), and a label alone
+ * spaces overlap (a key may be called `node`), and a label alone
  * drew a node's boot seed and the reconcile loop's reloads as a person's
  * writes. Every revision carries its kind; the label may be empty (a write
- * made with no operator identity), which is said as such.
+ * made with no key's identity), which is said as such.
  */
 export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const name = revision.created_by;

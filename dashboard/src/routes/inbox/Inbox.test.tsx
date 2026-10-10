@@ -43,8 +43,10 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  token_id: "U0FOUNDER",
+  role: "admin",
+  reach: "admin",
+  linked: true,
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
@@ -671,8 +673,24 @@ describe("the pane", () => {
 // THREE VIEWER STATES, three sentences, and every control drawn for each —
 // enabled only where the engine makes the change for this person.
 describe("who is looking", () => {
-  const NOBODY = { operator_id: "", operator: false, handle: "", name: "", kind: "", acts: [] };
-  const UNBOUND = { operator_id: "ci", operator: true, handle: "", name: "", kind: "", acts: [] };
+  const NOBODY = {
+    token_id: "",
+    role: "",
+    reach: "public",
+    handle: "",
+    name: "",
+    kind: "",
+    acts: [],
+  };
+  const UNBOUND = {
+    token_id: "ci",
+    role: "admin",
+    reach: "admin",
+    handle: "",
+    name: "",
+    kind: "",
+    acts: [],
+  };
 
   test.each([
     [

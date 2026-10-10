@@ -3,8 +3,8 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
- * ceiling, guarded by the operator credential (`useConfigWriteAccess`) rather
- * than a seat binding. The button is drawn for every reader and disabled with
+ * ceiling, an admin's (`useConfigWriteAccess`, ADR-0031) rather than a seat
+ * binding's. The button is drawn for every reader and disabled with
  * the reason for one who cannot change the configuration.
  *
  * THE ADD IS SAID AS ONE. It is the entity PUT at the new server's own address
@@ -67,7 +67,9 @@ type AddState =
 function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so the server was not added.";
+      return "The engine did not accept this browser's token, so the server was not added.";
+    case "forbidden":
+      return "Adding a server is for admins, and this browser's key is a member's — the server was not added.";
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":

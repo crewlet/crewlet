@@ -369,7 +369,7 @@ func DefaultBootstrap() Bootstrap {
 		Store:        Store{Path: DefaultStorePath},
 		Stream:       Stream{Type: StreamEmbedded, Replicas: 1},
 		Coordination: Coordination{Type: CoordinationLocal},
-		API:          API{Host: DefaultAPIHost, Auth: APIAuth{AllowAnonymousRead: true}},
+		API:          API{Host: DefaultAPIHost, Auth: APIAuth{Anonymous: AnonymousPublic}},
 	}
 }
 
@@ -2323,34 +2323,47 @@ func (p *APIPublic) validate(path Path) error {
 	return probs.err()
 }
 
-// APIAuth is the bearer-token policy for the HTTP surface.
+// APIAuth is the access policy for the HTTP surface: which keys are accepted,
+// what each one is FOR, and what a caller holding none reaches.
 //
-// Writes and the whole /config surface always require a token. Reads are
-// governed by AllowAnonymousRead, which defaults OPEN — reading is what a
-// dashboard does, and the page that would prompt for a token is itself
-// served unauthenticated, so requiring one by default puts a modal in front
-// of every first load.
+// A KEY NAMES ITS ROLE (ADR-0031). Every accepted key is either a `member`,
+// who reads what the company published and acts as the person the key is
+// linked to, or an `admin`, who also runs the engine — its configuration,
+// its secrets, its nodes and every agent's transcripts. There is no third
+// answer and no default, because the one this replaced was "every key is an
+// admin": a teammate handed a key for their inbox could read the company's
+// secret values with it.
+//
+// WHAT A CALLER WITH NO KEY REACHES is [APIAuth.Anonymous], a ceiling that
+// can never reach a member's view, let alone an admin's. It replaced a switch
+// that opened every read, transcripts included, by default.
 //
 // Exempt from auth entirely, because they authenticate by other means or
-// must be reachable to obtain a token at all: /health, /ready, the
-// dashboard shell and its assets, /webhooks/* (HMAC-verified per source)
-// and /otlp/* (signed per-run token).
+// must be reachable to obtain a key at all: /health, /ready, the dashboard
+// shell and its assets, /webhooks/* (HMAC-verified per source), /otlp/* and
+// /mcp/* (signed per-run token).
 type APIAuth struct {
-	// Tokens are the accepted bearer tokens. An empty list is a real
-	// posture, not an oversight: no token can match, so reads serve and
-	// every write and all of /config is refused.
-	Tokens []APIToken `yaml:"tokens,omitempty" json:"tokens,omitempty" desc:"Accepted bearer tokens. Empty refuses every write."`
+	// Tokens are the accepted keys. An empty list is a real posture, not an
+	// oversight: no key can match, so a caller reaches what
+	// [APIAuth.Anonymous] opens and nothing more.
+	Tokens []APIToken `yaml:"tokens,omitempty" json:"tokens,omitempty" desc:"Accepted keys, each with the role it grants. Empty: callers reach only what anonymous opens."`
 
 	// Disabled serves every route without auth and logs a loud startup
 	// warning. A local-development escape hatch, never a production one.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty" desc:"Local-dev only: serve every route unauthenticated."`
 
-	// AllowAnonymousRead governs GET/HEAD outside /config. Default true.
-	// It is a real exposure — the read surface carries LLM transcripts,
-	// diary entries and the whole event stream — so the API states which
-	// posture it took at startup, at WARNING when the bind host is not
-	// loopback.
-	AllowAnonymousRead bool `yaml:"allow_anonymous_read,omitempty" json:"allow_anonymous_read" desc:"Serve reads without a token (default true)."`
+	// Anonymous is what a caller presenting no key reaches: `public` (the
+	// default) is the company's public face — its name, mission and chart —
+	// and `none` is nothing beyond the probes, the dashboard shell and the
+	// question "who am I". Neither reaches a member's view, and nothing an
+	// agent processed (a prompt, a transcript, a diary) is ever served
+	// without a key: a wall screen holds a member key like anybody else.
+	//
+	// The default is `public` rather than `none` because the page that asks
+	// for a key is itself served without one, and a sign-in page that can
+	// name the company it signs you into is the difference between a product
+	// and a password prompt.
+	Anonymous AnonymousAccess `yaml:"anonymous,omitempty" json:"anonymous,omitempty" js:"enum=none|public" desc:"What a caller with no key reaches: public (the company's name, mission and chart) or none."`
 
 	// AllowedOrigins are the browser origins CORS permits. Empty means
 	// SAME-ORIGIN ONLY: the dashboard is served by this process, so it
@@ -2358,45 +2371,52 @@ type APIAuth struct {
 	// logged-in operator visited read every unauthenticated endpoint.
 	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"CORS origins. Empty = same-origin only."`
 
-	// CompanyWriters, when set, are the token ids that may CHANGE the
-	// company document, and no other credential may. Empty (the default)
-	// is every token, which is the posture of a company edited by people.
+	// CompanyWriters, when set, are the ADMIN keys that may CHANGE the
+	// company document, and no other admin key may. Empty (the default) is
+	// every admin key, which is the posture of a company edited by people.
+	// A member key changes the document under no setting: the role is the
+	// boundary (ADR-0031), and this list is drift control inside it, so a
+	// member key listed here is refused rather than promoted.
 	//
 	// It exists for a document something ELSE is the source of: a GitOps
 	// pipeline, or a Kubernetes operator rendering it from custom
 	// resources. Such a system overwrites the active revision with its own
 	// at every reconcile, so an edit a person made here survives only until
-	// then — and nothing told them. Listing the system's token turns that
+	// then — and nothing told them. Listing the system's key turns that
 	// silent loss into a refusal at the moment of the edit, naming who
 	// manages the document. Reads are untouched.
 	//
-	// A TOKEN ID LIST, NOT A ROLE OR A FLAG: the token id is already what
-	// every revision records as its author, so "who may write" and "who
-	// wrote" are the same vocabulary. [APIAuth.MayWriteCompany] is the one
-	// reading of it; see ADR-0030 for what counts as changing the document.
-	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Token ids that alone may change the company document. Empty = every token."`
+	// A KEY ID LIST, NOT A ROLE OR A FLAG: the key id is already what every
+	// revision records as its author, so "who may write" and "who wrote"
+	// are the same vocabulary. [APIAuth.MayWriteCompany] is the one reading
+	// of it; see ADR-0030 for what counts as changing the document.
+	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Admin key ids that alone may change the company document. Empty = every admin key."`
 }
 
 // CompanyManaged reports whether the company document is managed: some
-// token ids are named as its only writers.
+// admin key ids are named as its only writers.
 func (a *APIAuth) CompanyManaged() bool { return len(a.CompanyWriters) > 0 }
 
-// MayWriteCompany reports whether the credential with this id may change the
-// company document.
+// MayWriteCompany reports whether the key with this id passes
+// [APIAuth.CompanyWriters]: always for an unmanaged document, and only when
+// listed for a managed one.
 //
-// THE ONE READING of [APIAuth.CompanyWriters], for every surface that asks:
-// the config write path that enforces it and the viewer answer that tells the
-// dashboard whether to offer an edit. Exact comparison, because a token id is
-// lowercase by validation and recorded exactly as written on every revision.
-// The disabled guard's caller, [org.ReservedOperatorID], is never listed —
-// validation refuses it — so with the guard off a managed document is written
-// by nobody through the API, which is the managed posture rather than an
-// exception to it.
-func (a *APIAuth) MayWriteCompany(operatorID string) bool {
-	return !a.CompanyManaged() || slices.Contains(a.CompanyWriters, operatorID)
+// THE ONE READING of the list, for every surface that asks: the config write
+// path that enforces it and the viewer answer that tells the dashboard whether
+// to offer an edit. It answers the LIST's question and not the role's — the
+// config surface is mounted at admin reach, so a member key never arrives
+// here, and the viewer asks the role first (queries.AccessPosture). Exact
+// comparison, because a key id is lowercase by validation and recorded exactly
+// as written on every revision. The disabled guard's caller,
+// [org.ReservedOperatorID], is never listed — validation refuses it — so with
+// the guard off a managed document is written by nobody through the API,
+// which is the managed posture rather than an exception to it.
+func (a *APIAuth) MayWriteCompany(id string) bool {
+	return !a.CompanyManaged() || slices.Contains(a.CompanyWriters, id)
 }
 
-// APIToken is one bearer token gating writes and /config.
+// APIToken is one accepted key: the label every write it makes is recorded
+// under, the role it grants, and its value.
 type APIToken struct {
 	// ID is a short label stamped into revision audit rows (created_by):
 	// "founder", "ops", "ci-pipeline".
@@ -2406,13 +2426,87 @@ type APIToken struct {
 	// so the id has exactly one spelling that both directions agree on.
 	ID string `yaml:"id" json:"id" js:"required" desc:"Short lowercase label recorded as the author of writes made with this token."`
 
+	// Role is what this key is FOR — see [TokenRole]. REQUIRED, with no
+	// default in either direction: defaulting to admin is the posture this
+	// field exists to end, and defaulting to member would quietly lock an
+	// operator's existing pipeline out of the configuration it writes.
+	Role TokenRole `yaml:"role" json:"role" js:"required;enum=member|admin" desc:"member: reads the company and acts as the person this key is linked to. admin: also runs the engine — configuration, secrets, nodes, backups and every agent's transcripts."`
+
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 }
 
+// TokenRole is what an API key is for.
+//
+// TWO ROLES AND NO THIRD. A role between them — a "company owner" who edits
+// the company document but cannot read the secrets — is a boundary the engine
+// cannot keep: whoever writes the document can repoint a provider's endpoint
+// at a server of their own while keeping the `${VAR}` key it sends, which is
+// the concession ADR-0030 already makes about a document writer. Being
+// someone's lead is not a role either: it is a relation the org chart already
+// states, and the chart answers it (org.Organization.LeadsInLine).
+type TokenRole string
+
+const (
+	// RoleMember reads what the company published — its work, its pages,
+	// its people and what its agents are doing — and acts as the person the
+	// key is linked to. Nothing an agent processed (a prompt, a transcript,
+	// a diary) and nothing about how the engine runs.
+	RoleMember TokenRole = "member"
+	// RoleAdmin reaches everything a member does and runs the engine: the
+	// configuration, the secrets, the nodes, backups and retention, and
+	// every agent's transcripts.
+	RoleAdmin TokenRole = "admin"
+)
+
+// TokenRoles is every role, in the order a screen lists them.
+var TokenRoles = []TokenRole{RoleMember, RoleAdmin}
+
+// Valid reports whether r is a role this build knows.
+func (r TokenRole) Valid() bool { return slices.Contains(TokenRoles, r) }
+
+// AnonymousAccess is what a caller presenting no key reaches.
+type AnonymousAccess string
+
+const (
+	// AnonymousNone reaches the probes, the dashboard shell and the
+	// question "who am I" — the answer to which is "nobody".
+	AnonymousNone AnonymousAccess = "none"
+	// AnonymousPublic also reaches the company's public face: its name,
+	// mission and org chart (the classified projection `GET /org` serves).
+	AnonymousPublic AnonymousAccess = "public"
+)
+
+// AnonymousAccesses is every posture, for validation and the schema.
+var AnonymousAccesses = []AnonymousAccess{AnonymousNone, AnonymousPublic}
+
+// Valid reports whether a is a posture this build knows.
+func (a AnonymousAccess) Valid() bool { return slices.Contains(AnonymousAccesses, a) }
+
+// Role returns the role of the key with this id, or "" when no key carries it.
+func (a *APIAuth) Role(id string) TokenRole {
+	for _, t := range a.Tokens {
+		if t.ID == id {
+			return t.Role
+		}
+	}
+	return ""
+}
+
 func (a *APIAuth) validate(path Path) error {
 	var p problems
+	if !a.Anonymous.Valid() {
+		// THE ZERO VALUE IS REFUSED, not read as either posture: the
+		// default comes from [DefaultBootstrap], so an empty value here is
+		// somebody writing `anonymous: ""` or building the struct by hand,
+		// and guessing which of the two they meant guesses about who may
+		// read the company.
+		p.add(at(path, "anonymous"), ErrShape,
+			"anonymous must be %q (the company's name, mission and chart) or %q "+
+				"(nothing beyond the sign-in page); got %q",
+			AnonymousPublic, AnonymousNone, a.Anonymous)
+	}
 	seen := make(map[string]struct{}, len(a.Tokens))
 	for i, t := range a.Tokens {
 		tp := idx(at(path, "tokens"), i)
@@ -2422,6 +2516,17 @@ func (a *APIAuth) validate(path Path) error {
 		}
 		if t.Token == "" {
 			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
+		}
+		switch {
+		case t.Role == "":
+			p.add(at(tp, "role"), ErrMissing,
+				"every key needs a role: %q for a teammate (reads the company and "+
+					"acts as the person the key is linked to) or %q for whoever runs "+
+					"the engine (also configuration, secrets, nodes and transcripts)",
+				RoleMember, RoleAdmin)
+		case !t.Role.Valid():
+			p.add(at(tp, "role"), ErrShape, "role must be %q or %q; got %q",
+				RoleMember, RoleAdmin, t.Role)
 		}
 		if lower := strings.ToLower(t.ID); lower != t.ID {
 			// A TOKEN ID IS LOWERCASE, because the binding that names it
@@ -2491,23 +2596,35 @@ func (a *APIAuth) validate(path Path) error {
 			p.add(wp, ErrConflict, "writer %q is listed twice", id)
 		}
 		writers[id] = struct{}{}
+		// A WRITER IS AN ADMIN. The role is the boundary on who may change
+		// the company document at all; company_writers narrows WHICH admin
+		// keys may, so a managing system is not overwritten by hand. A
+		// member listed here would be granted through the back door what
+		// the role withholds — refused rather than ignored, because an
+		// ignored entry is a writer the managing system's operator believes
+		// exists. Only a key this file configures can be judged; one that
+		// is not here yet is [APIAuth.writerWarnings]' to mention.
+		if role := a.Role(id); role == RoleMember {
+			p.add(wp, ErrConflict, "writer %q is a member key, and only an admin "+
+				"key may change the company document: give that key role: %s, or "+
+				"list the managing system's admin key instead", id, RoleAdmin)
+		}
 	}
 
-	// The pairing that leaves nothing reachable. No tokens means no
-	// candidate can ever match, and with reads closed too every route is
-	// guarded by a credential that does not exist — a process that starts
-	// cleanly, binds its port, and answers 401 to everything including
-	// its own dashboard.
+	// The pairing that leaves nothing reachable. No keys means no
+	// candidate can ever match, and with anonymous callers reaching
+	// nothing either, every screen is behind a key that does not exist —
+	// a process that starts cleanly, binds its port, and answers its own
+	// dashboard with a sign-in page nobody can get past.
 	//
 	// Checked HERE rather than at API startup, so `crewlet validate`
 	// catches it on a laptop rather than a deployment catching it at
 	// bind time.
-	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
+	if len(a.Tokens) == 0 && a.Anonymous == AnonymousNone {
 		p.add(at(path, "tokens"), ErrMissing,
-			"allow_anonymous_read is false and no tokens are configured, so "+
-				"every route is guarded by a token that does not exist and "+
-				"nothing is reachable. Configure at least one token, or leave "+
-				"allow_anonymous_read at its default to serve reads without one")
+			"anonymous is %q and no keys are configured, so nothing past the "+
+				"sign-in page is reachable and there is no key to sign in with. "+
+				"Configure at least one key", AnonymousNone)
 	}
 	return p.err()
 }
@@ -2525,8 +2642,13 @@ func (a *APIAuth) validate(path Path) error {
 //
 // `*` is the sharpest of them, and it is refused rather than honoured: it was
 // this field's own previous default, and what it does is let any site a
-// logged-in operator visits read every unauthenticated endpoint — which on
-// this API means LLM transcripts, diary entries and the whole event stream.
+// person visits read, through their browser, whatever this API serves without
+// a key — the company's name, mission and chart under the default
+// `anonymous: public` — from wherever that person's browser can reach the
+// API, a private network included. Nothing a key reaches is exposed by it —
+// a key is something the dashboard sends itself, a header or the socket's
+// query, never a cookie a browser attaches on its own — which is why the
+// refusal names the anonymous surface and not the whole API.
 func checkOrigin(path Path, origin string) error {
 	var p problems
 	switch {
@@ -2535,9 +2657,10 @@ func checkOrigin(path Path, origin string) error {
 			"entry, or name a site as scheme://host[:port]")
 	case origin == "*":
 		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
-			"than honoured: it would let any site a logged-in operator "+
-			"visits read this API — which carries LLM transcripts, diary "+
-			"entries and the whole event stream. Name each site, as "+
+			"than honoured: it would let any site somebody visits read, "+
+			"through their browser, what this API serves without a key "+
+			"(api.auth.anonymous) from wherever that browser can reach it, "+
+			"a private network included. Name each site, as "+
 			"https://ops.example.com", origin)
 	case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
 		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+

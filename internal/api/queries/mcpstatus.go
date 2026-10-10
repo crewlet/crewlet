@@ -122,7 +122,7 @@ type MCPServerNode struct {
 // not answer in time, only one whose last heartbeat carried no status, and
 // that is a column of its own rather than a row of zeros.
 //
-// OPERATOR-ONLY, like `fleet`: it names the nodes, the launch commands and
+// ADMIN, like `fleet`: it names the nodes, the launch commands and
 // the first line of each failure, which is the shape of the deployment rather
 // than the company's work.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {

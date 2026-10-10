@@ -78,11 +78,11 @@ export interface Section {
   /** Shown under the label in the command palette. */
   hint: string;
   /**
-   * Everything under this section needs an operator credential: the
-   * navigation draws its key mark beside it and never hides it, and the frame
-   * draws ONE refusal (`OperatorRequired`) in place of the screen for a viewer
-   * the engine has said holds none — a screen that mounted anyway was refused
-   * and drew the refusal as zeros. A section only PART of which is guarded is
+   * Everything under this section is an ADMIN's (ADR-0031): the navigation
+   * draws its key mark beside it and never hides it, and the frame draws ONE
+   * refusal (`AdminRequired`) in place of the screen for a viewer the engine
+   * has said is not an admin — a screen that mounted anyway was refused and
+   * drew the refusal as zeros. A section only PART of which is guarded is
    * not: its screen says so where the guarded part is.
    */
   guarded?: boolean;
@@ -127,7 +127,7 @@ export interface WorkspaceRow {
    * is the same question on every section of it.
    */
   keep?: string[];
-  /** The whole workspace is operator-scoped: drawn with a lock, never hidden. */
+  /** The whole workspace is an admin's: drawn with a lock, never hidden. */
   guarded?: boolean;
   /**
    * A sentence at the end of the section tabs that holds for every section —
@@ -457,7 +457,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // exist, so an operator on a fresh browser would conclude the product has
     // nowhere to configure anything. General is the one section a reader without a
     // credential can read — the charter is the org projection's, which is
-    // public — so the workspace is not guarded as a whole; its operator
+    // public — so the workspace is not guarded as a whole; its admin
     // sections are.
     key: "settings",
     label: "Settings",
@@ -565,7 +565,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Audit log",
         icon: "shield",
         path: ["settings", "audit"],
-        hint: "Every write a person or a token made, across all four subsystems",
+        hint: "Every write a person or a key made, across all four subsystems",
         group: "Engine",
         guarded: true,
       },

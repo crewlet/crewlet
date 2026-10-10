@@ -60,7 +60,7 @@ function keep(draft: Partial<KeptDraft>): void {
 const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 
 // ONLY THE LOG. The document holds contact identities, emails and policies,
-// and kept in storage it would outlive the operator's token.
+// and kept in storage it would outlive the key that read it.
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine });
@@ -212,7 +212,7 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   const engine = new Engine(company());
   engine.script = () => json({ error: "unauthorized" }, 401);
   mountBuilder({ engine });
-  await screen.findByText("Editing the organization needs an operator token.");
+  await screen.findByText("Editing the organization needs an admin key.");
   // WAITED FOR, NOT READ ON THE SPOT. The refusal is rendered from state and
   // the draft is dropped by the EFFECT that state schedules, so the message
   // is in the DOM one commit before the storage is cleared. Reading it in the

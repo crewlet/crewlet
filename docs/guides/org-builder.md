@@ -19,9 +19,10 @@ under [Editing a node](#editing-a-node), field by field.
 
 ## Opening the builder
 
-The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: an operator token the engine accepts
-(unless the node runs with `api.auth.disabled`). What the builder shows is
+The configuration is an admin's, reads included, so the builder needs what any
+other configuration client needs: an admin key the engine accepts (unless the
+node runs with `api.auth.disabled`). A member key is refused `403 forbidden`
+by the configuration surface, whatever the browser shows. What the builder shows is
 decided from what the engine answers, never from whether the browser holds a
 token:
 
@@ -30,7 +31,8 @@ token:
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
 | `404 no_active_revision`, while the organization names a company | "This node has not caught up with the fleet's configuration yet." Try again once the node has applied the fleet's revision, or use another node |
-| `401` or `403` | a request for a token, with **Set token** |
+| `401` | a request for an admin key, with **Set token** |
+| `403 forbidden` | "Editing the organization is for admins." The key was accepted and is a member's, so another paste of it changes nothing and there is no **Set token**: it names the admin to ask instead — the first admin the engine names, or "an admin" when no person holds an admin key |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
 
@@ -46,10 +48,10 @@ written by a refused save, so there is nothing to settle afterwards.
 When another system [manages the company
 document](../concepts/configuration.md#managed-configuration) — Tier A names
 its writers in `api.auth.company_writers` — the builder opens read-only for
-every other token: the organization is drawn, every editing control is
+every other admin key: the organization is drawn, every editing control is
 disabled, and a callout says who manages it. Change the company at its source
 and let that system write it. The org chart's **Add seat** is disabled with the
-same sentence. A writer's token edits as usual.
+same sentence. A writer's key edits as usual.
 
 ### Arriving from a link
 
@@ -79,10 +81,10 @@ reached from the node's **Open seat**, say), opens that node's editor, since
 the builder cannot tell that address from a link somebody sent you. A link
 naming a node the draft does not hold selects nothing and opens nothing.
 
-Changing the operator token while a draft is open keeps the draft. The
+Changing the key while a draft is open keeps the draft. The
 builder reads the configuration again and checks the draft under the new
-token; if the engine refuses it, editing pauses until a token it accepts is
-set.
+key; if the engine refuses it, editing pauses until a key it accepts is
+set, and if the new key is a member's, editing pauses with who to ask.
 
 ## Creating the company
 
@@ -298,8 +300,9 @@ current draft:
 | Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
 | Read-only here | this process cannot write the configuration |
 | The configuration changed | another revision was activated after this draft was started |
-| The engine refused the token | set a token the engine accepts to continue |
-| Needs an operator token | the engine asks for a token and none is set; set one to continue |
+| The engine refused the key | set an admin key the engine accepts to continue |
+| Needs an admin key | the engine asks for a key and none is set; set an admin's to continue |
+| For admins | this browser's key is a member's, and the configuration is an admin's, reads included: the draft is kept on the page, and the callout names the admin to ask |
 
 A change is checked about a third of a second after it is made, so a burst of
 changes (a held key, several undos) is checked once.
@@ -699,9 +702,9 @@ opens and finds a kept draft:
 - **Made for creating a company, where a company now exists** (or the other
   way around): it is discarded, and the builder says so.
 
-The kept draft is removed when you save, when you discard, when the operator
-token changes, and when the engine refuses the token, because each of those
-may mean the tab has changed hands. Session storage does not outlive the tab,
+The kept draft is removed when you save, when you discard, when the key
+changes, and when the engine refuses the key or answers that it is a member's,
+because each of those may mean the tab has changed hands. Session storage does not outlive the tab,
 so while the draft holds changes the browser asks before the tab closes. It
 asks on a reload too, because a browser cannot tell the two apart; the draft
 itself survives the reload.

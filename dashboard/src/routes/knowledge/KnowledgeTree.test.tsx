@@ -14,9 +14,10 @@
  *  - ON A PHONE THE SPACES FOLD: the column stacks above the screen there, so
  *    no tree row — and no read of one — stands between a reader and the page
  *    they followed a link to until they open the disclosure.
- *  - WHO FILES INTO A SPACE HAS FOUR STATES, and an operator whose read is in
- *    flight is never told they need a token; a project the space key does not
- *    already name is DRAWN, not only put in a tooltip.
+ *  - WHO FILES INTO A SPACE HAS FIVE STATES, and an admin whose read is in
+ *    flight is never told they need a key, nor a member that another key is
+ *    the remedy; a project the space key does not already name is DRAWN, not
+ *    only put in a tooltip.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -26,6 +27,7 @@ import { KnowledgeTree } from "./KnowledgeTree.tsx";
 import { installWindow } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -71,9 +73,11 @@ function mount(answers: Record<string, Answer>) {
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <KnowledgeTree />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <KnowledgeTree />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return asked;
@@ -313,14 +317,14 @@ test("a company on a vendor wiki is told there is no tree here, not shown an err
   await waitFor(() => expect(screen.getByText(/no tree to browse here/)).toBeTruthy());
 });
 
-test("who files into a space: four states, each its own sentence", async () => {
+test("who files into a space: five states, each its own sentence", async () => {
   const eng = () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] });
   const key = () => screen.getByText("ENG").closest(".ktree-key")!.textContent;
 
   // NO TOKEN: nothing is asked, and the sentence says why.
   let asked = mount({ knowledge: everyMode, containers: eng });
   await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
-  expect(key()).toMatch(/needs an operator token to read/);
+  expect(key()).toMatch(/needs an admin key to read/);
   expect(asked.some((a) => a.what === "config")).toBe(false);
 
   // A TOKEN AND A READ IN FLIGHT: not "needs a token".
@@ -329,7 +333,7 @@ test("who files into a space: four states, each its own sentence", async () => {
   asked = mount({ knowledge: everyMode, containers: eng, config: () => new Promise(() => {}) });
   await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
   expect(key()).toMatch(/still being read/);
-  expect(key()).not.toMatch(/needs an operator token/);
+  expect(key()).not.toMatch(/needs an admin key/);
   expect(asked.some((a) => a.what === "config")).toBe(true);
 
   // REFUSED.
@@ -340,6 +344,24 @@ test("who files into a space: four states, each its own sentence", async () => {
     config: () => Promise.reject(new Error("unauthorized")),
   });
   await waitFor(() => expect(key()).toMatch(/could not be read with this token/));
+
+  // A MEMBER'S KEY: the document is an admin's (ADR-0031), and another key is
+  // not the remedy — whether the viewer said so or the engine answered it.
+  cleanup();
+  mount({
+    knowledge: everyMode,
+    containers: eng,
+    viewer: () => ({ token_id: "ada", role: "member", reach: "member", linked: true }),
+  });
+  await waitFor(() => expect(key()).toMatch(/is for admins to read/));
+  expect(key()).not.toMatch(/with this token/);
+  cleanup();
+  mount({
+    knowledge: everyMode,
+    containers: eng,
+    config: () => Promise.reject(new Error("forbidden")),
+  });
+  await waitFor(() => expect(key()).toMatch(/is for admins to read/));
 
   // READ: the unit, and its project DRAWN where the key does not name it.
   cleanup();

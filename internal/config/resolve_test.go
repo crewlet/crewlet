@@ -47,6 +47,7 @@ api:
   auth:
     tokens:
       - id: founder
+        role: admin
         token: "${ACME_TOKEN}"
 `), EnvOnly())
 	if err != nil {
@@ -116,6 +117,7 @@ api:
   auth:
     tokens:
       - id: founder
+        role: admin
         token: "${ACME_ABSENT_TOKEN}"
 `), &doc); err != nil {
 		t.Fatal(err)

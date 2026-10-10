@@ -31,12 +31,15 @@ func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
 	return res.StatusCode, body
 }
 
-// guarded is a bootstrap with one token and anonymous reads ON — the default
-// posture, and the one that makes the write/read distinction load-bearing.
+// guarded is a bootstrap on the default anonymous posture with one ADMIN key,
+// `ops` presenting "t0ken", and one MEMBER key, `ada` presenting "m3mber" — so
+// a case can show an admin route refusing all three kinds of caller but one.
 func guarded() *config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = true
-	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "t0ken"}}
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "ops", Role: config.RoleAdmin, Token: "t0ken"},
+		{ID: "ada", Role: config.RoleMember, Token: "m3mber"},
+	}
 	return &b
 }
 
@@ -56,19 +59,23 @@ func (f *fakeBackup) Take(_ context.Context, dir string) (backup.Manifest, error
 }
 
 // A backup copies every credential the company holds and every seat's memory
-// to a path the caller names. It is a write, so the anonymous-read posture —
-// which is ON by default — must never open it.
-func TestABackupIsRefusedWithoutAToken(t *testing.T) {
+// to a path the caller names. That is running the engine, so it is an ADMIN's:
+// a caller with no key is told to sign in, and a member key — one a teammate
+// holds — is forbidden it.
+func TestABackupIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	taker := &fakeBackup{}
 	a := newApp(t, api.Options{Bootstrap: guarded(), Backup: taker})
 
-	status, _ := post(t, a, "/backup?dir=/tmp/x", "")
-	if status == http.StatusOK {
-		t.Fatal("an unauthenticated caller took a backup")
+	if status, _ := post(t, a, "/backup?dir=/tmp/x", ""); status != http.StatusUnauthorized {
+		t.Fatalf("an unauthenticated caller's backup = %d, want 401", status)
+	}
+	status, body := post(t, a, "/backup?dir=/tmp/x", "m3mber")
+	if status != http.StatusForbidden || body["error"] != "forbidden" {
+		t.Fatalf("a member key's backup = %d %v, want 403 forbidden", status, body)
 	}
 	if taker.dir != "" {
-		t.Errorf("the refused request reached the backup subsystem anyway (dir=%q)", taker.dir)
+		t.Errorf("a refused request reached the backup subsystem anyway (dir=%q)", taker.dir)
 	}
 }
 

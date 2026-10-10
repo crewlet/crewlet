@@ -81,11 +81,16 @@ api:
                     # service registers a webhook URL against this engine —
                     # see guides/deployment.md.)
   auth:
-    # Needed for WRITES and for /config. Reads — the dashboard, /events,
-    # /agents — serve without one by default; add
-    # `allow_anonymous_read: false` here to guard those too.
+    # Every key names its ROLE, and there is no default. `admin` runs the
+    # engine — the configuration, the secrets, every agent's transcripts —
+    # and this one is yours. A key for a teammate is `role: member`: the
+    # company's work, pages and chart, acting as the person it is linked to.
+    # A caller with NO key sees the company's name, mission and chart and
+    # nothing else (`anonymous: public`, the default; `none` closes even
+    # that).
     tokens:
       - id: founder
+        role: admin
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 ```
 
@@ -373,11 +378,15 @@ to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. It lands on **Home**, which is
-what a person opening this wants first: how the company is (who is working,
-what waits on you, the work in progress and finished, the tokens spent), the
-decisions only you can make — answered right there, an option of an agent's
-question is a button — who is working now, and what the company has done. With
+Open the dashboard at <http://localhost:8000/>. **On its first load it asks for
+a key** — paste the value of `$CREWLET_API_TOKEN_FOUNDER`. Without one it can
+show the company's name and chart and nothing more, because nothing your agents
+do is served to a caller with no key; the browser remembers the key, so this is
+once. It lands on **Home**, which is what a person opening this wants first:
+how the company is (who is working, what waits on you, the work in progress and
+finished, the tokens spent), the decisions only you can make — answered right
+there, an option of an agent's question is a button — who is working now, and
+what the company has done. With
 no company activity yet each card says so, and a condition the engine itself
 raised takes over the sentence under the greeting.
 
@@ -413,7 +422,7 @@ hundredth — and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
-**Bind your token to your seat** and the personal screens become yours: give a
+**Link your key to your seat** and the personal screens become yours: give a
 human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
 person. My work is one tab per claim on somebody's attention — what they hold,
@@ -423,32 +432,33 @@ whose day is on screen. The **Queue** is the work list narrowed to that
 person: the same Filter, Display and scope controls, opening grouped by when
 each task is due; read in priority order, its rows are reordered by dragging
 them. A question put to them is answered on its row in **Asked of me**. Until
-then the dashboard says so rather than guessing: an unbound token is an
+then the dashboard says so rather than guessing: an unlinked admin key is an
 ordinary state, not a fault.
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
 `>` to actions — or paste an event, trace or turn id out of a log to open it.
-Type a question of three words or more and pause, and a bound token gets a
+Type a question of three words or more and pause, and a linked key gets a
 short answer written from your company's own pages and tasks, with its sources
 and the tokens it spent, charged to the company's budget. From the same box you
 can assign the task you found to an agent, ask an agent about what you typed
 (the answer lands in your Inbox) or file it as a task — each made as you, filed
 in the project on screen or your team's, and where neither says, in the project
-you pick from the list it offers; on a token that is not bound to a person each
+you pick from the list it offers; on a key that is not linked to a person each
 row says why it cannot act instead.
 
-Once bound, **what you file through your own assistant counts as yours** on
-both screens. The record still names the token — a write through
+Once linked, **what you file through your own assistant counts as yours** on
+both screens. The record still names the key — a write through
 `/operator/mcp` is attributed to the credential, with author kind `operator`,
 because a tracker whose author field is chosen by the writer is not an audit
-trail — and the personal reads match your seat handle *or* that token id, so
+trail — and the personal reads match your seat handle *or* that key's id, so
 the item you reported and the one a colleague assigned you land on the same
-day. An operator reading somebody else's screen gets *their* two names from
-the chart, never the token in your hand.
+day. A lead reading the screen of somebody in their line gets *that person's*
+two names from the chart, never the key in your hand — and nobody else reads
+it, an admin key included.
 
 Your own AI assistant can read and write the same records over MCP. Point any
-client at `/operator/mcp` with your API token:
+client at `/operator/mcp` with your API key:
 
 ```json
 {
@@ -465,24 +475,25 @@ client at `/operator/mcp` with your API token:
 It gets the same tracker and knowledge-base tools a seat holds — eighteen over
 the tracker and five over the pages — and eleven more that no seat is given:
 the saved views, the catalogue write, a person's own queue and inbox, the
-trash, and the board drag. Its writes are attributed to the token's own name rather than to a
-seat — so an audit can tell your edit from an agent's. See
+trash, and the board drag. Its writes are attributed to the key's own name rather than to a
+seat — so an audit can tell your edit from an agent's. A teammate's member key
+works there too once it is linked to their seat; an unlinked member key is
+refused `unbound`, because a member reaches the company as a person. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 The same picture is available over the API:
 
 ```bash
-curl -s http://localhost:8000/agents | python3 -m json.tool
 curl -s http://localhost:8000/health
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
+  http://localhost:8000/agents | python3 -m json.tool
 ```
 
-No token on those: reads serve without one by default, which is why the
-dashboard opened without asking you for anything. That also means anyone who can
-reach port 8000 can read the LLM transcripts on `/events` — fine on a laptop,
-a decision to make deliberately anywhere else. Set
-`api.auth.allow_anonymous_read: false` to guard reads, at which point every call
-above needs `-H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER"` and the
-dashboard prompts for the token on first load. See
+`/health` is a probe and needs no key. `/agents` does, and an admin's: it
+carries each seat's live call, prompts included, and what an agent processed —
+prompts, transcripts, diaries, the event log, the spend — is read with an admin
+key only. A teammate's member key reads the work, the pages, the chart and who
+is working on what, and is refused those with `403 forbidden`. See
 [Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
@@ -504,7 +515,7 @@ Or create the company from the dashboard: open **Agents** and its **Edit
 org** button (`#/agents/edit`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
-it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
+it needs an admin key — the one you signed in with. The
 dashboard adds no model provider — Settings › Models & keys edits one the
 configuration already declares — so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a

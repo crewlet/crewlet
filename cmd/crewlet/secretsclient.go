@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -238,8 +239,13 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 	case status == http.StatusNotFound:
 		return missingSurface(c.base, "/secrets", body.Error)
 	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+		return fmt.Errorf("%s refused the key: set %s to one of its "+
+			"api.auth.tokens with role: admin", c.base, apiTokenEnv)
+	case status == http.StatusForbidden && body.Error == string(httpjson.CodeForbidden):
+		// A MEMBER KEY: accepted, and the secret store is an admin's
+		// surface, reads included (ADR-0031).
+		return fmt.Errorf("%s accepted the key, but it is a member key and the "+
+			"secret store is an admin's: %s", c.base, adminKeySource)
 	}
 	msg := body.Error
 	if msg == "" {

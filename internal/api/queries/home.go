@@ -537,8 +537,8 @@ type DecisionItem struct {
 // instant beside the page.
 //
 // THE SAME SCOPE RULE AS `work_my_work` — see [Sources.viewerParty]: a caller
-// reads the person their own token is bound to, and naming anybody else needs
-// an operator credential.
+// reads the person their own key is linked to and the people in their line,
+// and nobody else.
 func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
