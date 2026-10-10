@@ -329,29 +329,30 @@ judged against the replicated estate the data node holds:
   so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row — [live or retired](#live-and-retired-references) —
-  names**. The day is the grace an upload in flight is given between storing
-  its object and writing its row. Only a name under the
-  engine's `files/` corner is the collector's: anything else in the bucket, or
-  under the prefix, is never counted, judged or deleted. A collection that
+  names**. It deletes up to sixteen at a time while the listing goes on. The
+  day is the grace an upload in flight is given between storing its object
+  and writing its row. Only a name under the engine's `files/` corner is the
+  collector's: anything else in the bucket, or under the prefix, is never
+  counted, judged or deleted. A collection that
   cannot read the whole estate — this node holds a record it could not apply
   — **stops deleting**: a row it could not read may name any object, and the
   report says what it deleted before it stopped and why it stopped.
 - **Audit, daily.** It asks the store about every object a **live** row names,
-  a page of rows at a time. An object the store does not hold (**missing** — asked
-  about once more before it is called so, at the end of the pass or, once a
-  hundred thousand others are waiting for theirs, at once) or holds at
-  another size, or under another SHA-256 where the store keeps one
-  (**damaged** — `nats` keeps one, S3 does not), is a file that cannot be
-  downloaded, and raises [`objects_missing`](#alarms) naming the first hundred
-  such files as `PROJECT/path`.
+  up to thirty-two at a time, reading the rows a page at a time. An object the
+  store does not hold (**missing** — asked about once more before it is called
+  so, at the end of the pass or, once a hundred thousand others are waiting
+  for theirs, at once) or holds at another size, or under another SHA-256
+  where the store keeps one (**damaged** — `nats` keeps one, S3 does not), is
+  a file that cannot be downloaded, and raises [`objects_missing`](#alarms)
+  naming the first hundred such files by name, as `PROJECT/path`.
 
 A pass that fails is tried again ten minutes later. The duty records each pass
 in the coordination store, so every node's [`/fleet`](../reference/api-endpoints.md#get-fleet)
 and `crewlet objects status` show the same report, naming the node that ran it,
 and a node taking the duty over picks up the schedule and the last audit's
 findings where the last holder left them, rather than running both passes
-again or forgetting what was missing. An audit that fails never hides what the
-last one to run to its end found.
+again or forgetting what was missing. An audit that fails, or is stopped part
+way, never hides what the last one to run to its end found.
 
 ### Live and retired references
 
@@ -502,9 +503,30 @@ dashboard draws the same under **Settings › Nodes**.
   holding the inventory in memory, and judges it 500 keys to a query against
   an index on the file row's object column, so a pass over a few million
   objects takes minutes, once an hour, on one node. The audit reads the live
-  rows a page at a time and asks the store about each between pages, so it
-  never holds a read of the estate open across the store's round trips; a
+  rows a page at a time and asks the store about them outside every read, so
+  it never holds a read of the estate open across the store's round trips; a
   retired row costs it nothing, and costs a backup on `s3` no request.
+- **The collector asks the store in parallel, and no harder.** The audit keeps
+  up to 32 questions out to the store at once, so it asks 32 divided by the
+  store's mean latency a second, over the engine's own warm connections, and
+  inside the 5,500 reads a second AWS documents for a prefix unless a question
+  averages under 6 ms. Against a bucket held 20 ms away the S3 backend's
+  benchmark answered 1,380–1,450 HEADs a second with 32 out, and about 610 at
+  50 ms, where one at a time answers 47 and 19: two million objects are 23–24
+  minutes and 55 rather than twelve hours and twenty-nine. A collection keeps
+  up to 16 deletions out, a quarter of the 3,500 writes a second AWS documents
+  for a prefix only if a deletion averages under 18 ms, which leaves the rest
+  to the company's uploads. On `nats` a question is a read from the bucket
+  stream's leader and a deletion three requests to it, two of them replicated
+  writes; the backend's own benchmark answered 15,000–19,000 questions a
+  second with 32 out on a member's own client, against 4,800–8,600 one at a
+  time, and 5,600–23,400 against 2,100–2,800 from a follower at three
+  replicas — about two minutes for two million objects on a member, where one
+  at a time took four to seven. The S3 figures are against an in-process fake
+  held that far away; no real bucket has been measured. Both bounds are on
+  requests in flight rather than tuned rates: a store that slows down is asked
+  more slowly, and one that fails stops the pass with at most that many
+  requests out.
 - **The estate is still whole on every data node.** Only file bytes leave it.
   Every row — a file's included — is on every data node.
 

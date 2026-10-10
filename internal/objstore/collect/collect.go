@@ -105,36 +105,48 @@
 // asked after: the company has let its object go, and a store that lost it
 // lost nothing anybody can miss.
 //
-// THE ESTATE IS READ A PAGE AT A TIME AND THE BACKEND IS ASKED BETWEEN PAGES,
-// never inside a read: a read of the estate holds one of the node's few
-// reader connections and the snapshot under it, and a question to the backend
-// is a network round trip — tens of thousands of them inside one read would
-// hold the connection for the length of the audit.
+// THE ESTATE IS READ A PAGE AT A TIME, BY ONE GOROUTINE, AND THE BACKEND IS
+// ASKED OUTSIDE EVERY READ — up to [auditConcurrency] questions at once while
+// the walk reads on, never inside a read: a read of the estate holds one of the
+// node's few reader connections and the snapshot under it, and a question to
+// the backend is a network round trip — tens of thousands of them inside one
+// read would hold the connection for the length of the audit.
 //
 // WHAT AN AUDIT FOUND OUTLIVES THE AUDIT THAT FAILED AFTER IT, and the duty
 // moving: the report keeps the last audit that ran to its end beside the
 // last attempt ([AuditReport.Found]), and a node taking the duty picks both
 // up from the fleet's record ([Collector.Restore]), so a broker that stopped
 // answering mid-audit, or a holder that went away, never clears an alarm about
-// files the store has lost.
+// files the store has lost. An audit its caller stopped has not run to its end
+// either, however its questions fared: what it counted by then is a floor.
 //
-// # How long an audit takes
+// # How hard the store is asked
 //
-// THE AUDIT ASKS ONE OBJECT AT A TIME, each question answered before the next
-// is sent, so it lasts one backend round trip per referenced object — which
-// each backend's package doc records as `make bench` measured it, across a
-// store of ten thousand objects. For a company of two million objects:
+// A pass makes one request per object — a stat each for the audit, a deletion
+// for each object collected — and one at a time they are round trips in a row:
+// an audit of two million objects was two million of them, end to end. So the
+// audit asks up to [auditConcurrency] questions at once and a collection has
+// up to [deleteConcurrency] deletions in flight beside its listing.
 //
-//   - the broker's bucket answered a solo fleet's node 4,800–8,600 times a
-//     second, and a follower of a three-member fleet, which asks the stream's
-//     leader across a route, 2,100–2,800: four to seven minutes, and twelve to
-//     sixteen;
-//   - an S3 bucket answers in its round trip, 47 a second at 20 ms and 19 at
-//     50: twelve hours, and twenty-nine — the second longer than the
-//     [AuditInterval] between audits.
+// THE BOUNDS ARE CLOSED LOOPS, never a rate: a request goes out only when one
+// in flight has been answered, so a store that slows down is asked more slowly
+// by itself, and one that fails stops the pass at its first failure with at
+// most the bound outstanding — and the pass returns only once every request it
+// made has ended. Neither is configurable: a closed loop already adapts to a
+// store that answers slowly, and an operator has no better number than the
+// one the shared transport keeps warm connections for
+// (httpx.MaxIdleConnsPerHost, which the audit's bound is held to by a test).
 //
-// Asked 32 at a time, the same S3 bucket answered 1,380–1,450 and about 610 a
-// second: 23–24 minutes, and 55.
+// ONLY THE STORE'S REQUESTS ARE PARALLEL. The estate is read by one goroutine
+// — the walk, and each batch the collection judges — because a read holds one
+// of the node's few reader connections and its snapshot, and one node runs one
+// pass at a time; the bound is what one pass may ask of a store the whole
+// fleet shares. The sweep of unfinished uploads stays one at a time: it
+// abandons what a crash left, a handful a day.
+//
+// What the audit names is chosen by NAME, the first [MissingShown] files by
+// project and path, never by the order its questions were answered in, which
+// running them at once leaves to chance.
 package collect
 
 import (
@@ -144,7 +156,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -195,8 +210,70 @@ const PinsPerDay = int(24*time.Hour/CollectInterval + 24*time.Hour/AuditInterval
 // listing and the read — never the store's whole inventory.
 const judgeBatch = 500
 
+// auditConcurrency is how many questions the audit has out to the store at
+// once.
+//
+// THIRTY-TWO. An audit is one question per object a required row names, and
+// asked one at a time they are round trips in a row: two million objects are
+// two million round trips end to end, most of a day at any latency a network
+// store answers in, of a pass due daily that holds the duty's only turn for
+// all of it. With thirty-two out the audit asks 32 divided by the store's
+// mean latency a second — whatever the store's latency is; nothing here
+// assumes a figure for it, and what each backend answers is its own
+// benchmark's, below.
+//
+// AND NO MORE, because the bound is what keeps the store from being flooded:
+// a question goes out only when one of the thirty-two has been answered, so a
+// store that slows down is asked more slowly by itself, and one that fails
+// stops the audit at its first failure with at most thirty-two questions out.
+//
+//   - S3 documents at least 5,500 GET and HEAD requests a second per
+//     partitioned prefix, and every object the engine writes is under one
+//     (`files/`). Thirty-two out reach that only if a HEAD averaged under
+//     5.8 ms, which leaves the rest of the rate to the company's own
+//     downloads, each a GET on the same prefix. A throttled request is the
+//     SDK's to retry with backoff, and its retry quota stops the retrying
+//     once a run of throttles drains it. Against a bucket held 20 ms away
+//     the backend's benchmark answered 47 HEADs a second for each one out,
+//     and 19 at 50 ms: 1,380–1,450 and about 610 a second with thirty-two
+//     out, so two million objects are 23–24 minutes and 55 rather than
+//     twelve hours and twenty-nine.
+//   - It is the shared transport's warm connections to one host
+//     (httpx.MaxIdleConnsPerHost), so every question rides a connection
+//     already open rather than paying a TLS handshake of its own.
+//   - On `nats` a question is one read from the bucket stream's leader. The
+//     backend's benchmark answered a stat across ten thousand objects
+//     4,800–8,600 times a second one at a time on a member's own client and
+//     15,000–19,000 with thirty-two out; through a leaf 2,900–4,200 and
+//     15,000–25,000; and from a follower at three replicas, whose every
+//     question crosses a route to the leader, 2,100–2,800 and 5,600–23,400.
+//     The depth buys a few times the stats a second, for a fraction as long:
+//     two million objects are about two minutes on a member rather than four
+//     to seven.
+//
+// Those figures are the backends' own benchmarks (`make bench`; four vCPUs of
+// a 2.8 GHz Xeon, 2026-10-10), recorded in internal/objstore/natsobj's and
+// s3obj's package docs — the S3 ones against an in-process fake held that far
+// away, since no real bucket has been measured.
+const auditConcurrency = 32
+
+// deleteConcurrency is how many deletions a collection has in flight at once.
+//
+// SIXTEEN, half the audit's, because a deletion is a WRITE. On S3 a prefix's
+// writes — AWS documents at least 3,500 PUT, POST and DELETE requests a second
+// — are what the company's uploads spend too, every part of a multipart upload
+// included, and sixteen out reach a quarter of them only if a DELETE averaged
+// under 18 ms. On `nats` a deletion is three requests to the bucket stream's
+// leader — a read of the object's metadata, then a purge of it and a purge of
+// the object's pieces, each purge a write replicated through the stream's
+// group — the costliest thing the object store asks of the broker. Asked one at
+// a time a collection's deletions are round trips in a row; sixteen out divide
+// that by sixteen.
+const deleteConcurrency = 16
+
 // MissingShown is how many unreadable files a status names: the counts are
-// always whole, and the list is what an operator restores first.
+// always whole, and the list — the first by name — is what an operator
+// restores first.
 const MissingShown = 100
 
 // maxSuspects is how many references the audit holds at once for their second
@@ -300,8 +377,10 @@ type AuditFindings struct {
 	Missing    int `json:"missing"`
 	Damaged    int `json:"damaged"`
 
-	// MissingFiles names the first [MissingShown] files that cannot be
-	// read, missing and damaged alike.
+	// MissingFiles names the [MissingShown] files that come first by name
+	// (NamedBy, then the key) among those that cannot be read, missing and
+	// damaged alike — by name rather than by when the audit found them,
+	// which its questions running at once leave to chance.
 	MissingFiles []MissingFile `json:"missing_files,omitempty"`
 }
 
@@ -409,6 +488,8 @@ func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	err := c.collect(ctx, &r, cutoff)
 	if ctx.Err() == nil {
 		c.sweep(ctx, &r, cutoff)
+	} else if err != nil {
+		err = stopped(ctx, "pass")
 	}
 	r.At = c.opts.Now().UTC()
 	if err != nil {
@@ -427,6 +508,14 @@ func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	return r, err
 }
 
+// stopped is the error of a pass its caller stopped: why ctx ended, in place
+// of the cancellation each of its calls to the store failed with. The engine
+// ends a pass when its duty moves to another node, and a report and a log line
+// reading "context canceled" would say nothing of that.
+func stopped(ctx context.Context, pass string) error {
+	return fmt.Errorf("objstore/collect: the %s was stopped: %w", pass, context.Cause(ctx))
+}
+
 // errIncomplete stops a pass that met an estate it cannot call complete.
 var errIncomplete = errors.New("a record this node could not apply may refer to objects in the store")
 
@@ -436,13 +525,21 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		r.Skipped = err.Error()
 		return err
 	}
+	// THE DELETIONS RUN BESIDE THE LISTING, at most [deleteConcurrency] at
+	// once: the listing goes on judging the next batch while the last one's
+	// are in flight, and waits only when all of them are. The estate is still
+	// read by this goroutine alone — only the store's deletions are parallel —
+	// and a deletion that fails ends dctx, which stops the listing.
+	deletes, dctx := errgroup.WithContext(ctx)
+	deletes.SetLimit(deleteConcurrency)
+	var deleted atomic.Int64
 	var batch []objstore.Key
 	judge := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
 		defer func() { batch = batch[:0] }()
-		refs, complete, rerr := c.opts.References.referenced(ctx, batch, v)
+		refs, complete, rerr := c.opts.References.referenced(dctx, batch, v)
 		if rerr != nil {
 			return rerr
 		}
@@ -454,15 +551,21 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 				r.Referenced++
 				continue
 			}
-			if derr := c.opts.Store.Delete(ctx, k); derr != nil {
-				return derr
+			if derr := dctx.Err(); derr != nil {
+				return derr // a deletion failed: judge nothing more
 			}
-			r.Deleted++
+			deletes.Go(func() error {
+				if derr := c.opts.Store.Delete(dctx, k); derr != nil {
+					return derr
+				}
+				deleted.Add(1)
+				return nil
+			})
 		}
 		return nil
 	}
 	backend := c.opts.Store.Backend()
-	err = backend.List(ctx, func(info objstore.Info) error {
+	err = backend.List(dctx, func(info objstore.Info) error {
 		// THE GRAMMAR IS READ HERE, not by the backend: see the package
 		// doc for the two kinds of name.
 		k, ours := keyNamed(info.Name)
@@ -490,6 +593,22 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		if jerr := judge(); jerr != nil {
 			err = errors.Join(err, jerr)
 		}
+	}
+	// ON EVERY PATH, so no deletion outlives the pass, and what was deleted
+	// before it stopped is counted beside why it stopped.
+	derr := deletes.Wait()
+	r.Deleted = int(deleted.Load())
+	if derr != nil {
+		// A DELETION FAILED, and that is the pass's failure. The listing's
+		// own error rides beside it unless it is only the cancellation the
+		// failed deletion caused; an estate it could not call complete is
+		// reported where it always is.
+		if errors.Is(err, errIncomplete) {
+			r.Skipped = err.Error()
+		} else if err != nil && (ctx.Err() != nil || !errors.Is(err, context.Canceled)) {
+			derr = errors.Join(derr, err)
+		}
+		return fmt.Errorf("objstore/collect: %w", derr)
 	}
 	if errors.Is(err, errIncomplete) {
 		r.Skipped = err.Error()
@@ -545,6 +664,9 @@ func (c *Collector) sweep(ctx context.Context, r *CollectionReport, cutoff time.
 func (c *Collector) Audit(ctx context.Context) (AuditReport, error) {
 	var r AuditReport
 	files, err := c.audit(ctx, &r)
+	if err != nil && ctx.Err() != nil {
+		err = stopped(ctx, "audit")
+	}
 	r.At = c.opts.Now().UTC()
 	c.mu.Lock()
 	if err != nil {
@@ -571,6 +693,10 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		return nil, err
 	}
 	var (
+		// mu guards what the questions write, from up to
+		// [auditConcurrency] goroutines at once: the counts of what is
+		// missing and damaged, the files shown, and the suspects.
+		mu    sync.Mutex
 		shown []MissingFile
 		// q is the references the store answered "not found" for, asked
 		// about again once the walk is over — or sooner, once
@@ -580,14 +706,14 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		q        = suspects{limit: c.suspectsHeld}
 		complete = true
 	)
+	// note shows ref among the files that cannot be read if it is among the
+	// first [MissingShown] by name. Called with mu held.
 	note := func(ref Reference, damaged bool) {
-		if len(shown) < MissingShown {
-			shown = append(shown, MissingFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Damaged: damaged})
-		}
+		shown = showFirst(shown, MissingFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Damaged: damaged})
 	}
 	// judge is the store's answer about one reference: missing (false),
 	// or held and checked against the row.
-	judge := func(ref Reference) (bool, error) {
+	judge := func(ctx context.Context, ref Reference) (bool, error) {
 		info, err := c.opts.Store.Stat(ctx, ref.Object.Key)
 		switch {
 		case errors.Is(err, objstore.ErrNotFound):
@@ -596,58 +722,131 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 			return false, fmt.Errorf("ask the store for %s: %w", ref.Object.Key, err)
 		}
 		if info.Size != ref.Object.Size || (info.Digest != "" && info.Digest != ref.Object.Hash) {
+			mu.Lock()
 			r.Damaged++
 			note(ref, true)
+			mu.Unlock()
 		}
 		return true, nil
 	}
 	// recheck is a suspect's second look: missing once the store has not
 	// found it twice.
-	recheck := func(ref Reference) error {
-		held, err := judge(ref)
-		if err != nil {
+	recheck := func(ctx context.Context, ref Reference) error {
+		held, err := judge(ctx, ref)
+		if err != nil || held {
 			return err
 		}
-		if !held {
-			r.Missing++
-			note(ref, false)
-		}
+		mu.Lock()
+		r.Missing++
+		note(ref, false)
+		mu.Unlock()
 		return nil
 	}
+	// firstLook is one reference's first question. A suspect it pushes out
+	// of the queue gets its second look here, in the slot this question
+	// already holds — never in a slot of its own, which the walk may be
+	// waiting on.
+	firstLook := func(ctx context.Context, source string, ref Reference) error {
+		held, err := judge(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("audit %s's references: %w", source, err)
+		}
+		if held {
+			return nil
+		}
+		mu.Lock()
+		due, over := q.push(ref)
+		mu.Unlock()
+		if !over {
+			return nil
+		}
+		return recheck(ctx, due)
+	}
+
+	// THE WALK READS THE ESTATE ON THIS GOROUTINE ALONE and hands each
+	// reference to a question, at most [auditConcurrency] of them out at
+	// once: a visit waits for a free slot, so the walk reads its next page
+	// only once the questions have caught up with this one, and a question
+	// that fails ends actx, which stops the walk at its next visit.
+	asks, actx := errgroup.WithContext(ctx)
+	asks.SetLimit(auditConcurrency)
+	var walkErr error
 	for i, s := range c.opts.References {
+		source := s.Name()
 		// ONE QUESTION PER REFERENCE, and no set of the keys asked about:
 		// a key is named only by the write that uploaded it, so no two
 		// rows name one, and a set would hold the company's whole
 		// inventory in memory for nothing.
-		whole, err := s.EachRequired(ctx, v[i], func(ref Reference) error {
+		whole, err := s.EachRequired(actx, v[i], func(ref Reference) error {
+			if aerr := actx.Err(); aerr != nil {
+				return aerr // a question failed: walk no further
+			}
 			r.Referenced++
-			held, err := judge(ref)
-			if err != nil || held {
-				return err
-			}
-			if due, over := q.push(ref); over {
-				return recheck(due)
-			}
+			asks.Go(func() error { return firstLook(actx, source, ref) })
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("objstore/collect: audit %s's references: %w", s.Name(), err)
+			walkErr = fmt.Errorf("audit %s's references: %w", source, err)
+			break
 		}
 		complete = complete && whole
 	}
-	for _, ref := range q.drain() {
-		if err := recheck(ref); err != nil {
-			return nil, fmt.Errorf("objstore/collect: %w", err)
-		}
+	// ON EVERY PATH, so no question outlives the pass. A question that failed
+	// is the root of a walk that stopped for it, so it is the one reported.
+	if err := asks.Wait(); err != nil {
+		return nil, fmt.Errorf("objstore/collect: %w", err)
 	}
-	slices.SortFunc(shown, func(a, b MissingFile) int {
-		if c := strings.Compare(a.NamedBy, b.NamedBy); c != 0 {
-			return c
+	if walkErr != nil {
+		return nil, fmt.Errorf("objstore/collect: %w", walkErr)
+	}
+	// THE SECOND LOOKS STILL WAITING, at the same bound, in a group of their
+	// own: the walk's group ended its context with its Wait.
+	again, gctx := errgroup.WithContext(ctx)
+	again.SetLimit(auditConcurrency)
+	for _, ref := range q.drain() {
+		if gctx.Err() != nil {
+			break // the audit is stopping: ask no more
 		}
-		return strings.Compare(a.Object.String(), b.Object.String())
-	})
+		again.Go(func() error { return recheck(gctx, ref) })
+	}
+	if err := again.Wait(); err != nil {
+		return nil, fmt.Errorf("objstore/collect: %w", err)
+	}
+	// AN AUDIT WHOSE CONTEXT ENDED HAS NOT RUN TO ITS END, however its
+	// questions fared. The drain stops BETWEEN two questions once it ends, so
+	// a stop that lands while nothing is out starts no question that could
+	// fail, and every Wait above answers nil. What it counted is then a
+	// floor: reported as the findings, it would replace the last whole
+	// audit's and clear the alarm they raise.
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("objstore/collect: %w", context.Cause(ctx))
+	}
 	r.Completed = complete
 	return shown, nil
+}
+
+// compareShown is the order the files that cannot be read are shown in: by the
+// file, then by its object.
+func compareShown(a, b MissingFile) int {
+	if c := strings.Compare(a.NamedBy, b.NamedBy); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Object.String(), b.Object.String())
+}
+
+// showFirst is shown, kept in [compareShown]'s order, with f in it if f is among
+// the first [MissingShown] — so a status names the same files whichever order
+// the audit's questions were answered in, and never holds more than it shows.
+func showFirst(shown []MissingFile, f MissingFile) []MissingFile {
+	i, _ := slices.BinarySearchFunc(shown, f, compareShown)
+	if i >= MissingShown {
+		return shown
+	}
+	shown = slices.Insert(shown, i, f)
+	if len(shown) > MissingShown {
+		shown = shown[:MissingShown]
+	}
+	return shown
 }
 
 // suspects is the references the store answered "not found" for, waiting for
