@@ -10,8 +10,10 @@
 // the backend's, that a read whose context ends stops rather than hands over
 // what it had in hand, that a delete leaves nothing a listing could find, and
 // that a listing visits every name it holds — verbatim, once, however slowly
-// it is read — and that an upload begun and never finished, which no listing
-// of the names shows, is found and removed by the two verbs that exist for it.
+// it is read — that an upload begun and never finished, which no listing
+// of the names shows, is found and removed by the two verbs that exist for it,
+// and that a name holding something the backend cannot read as an object is a
+// definite answer, listed and deletable, rather than a failure.
 //
 // And ONE BENCHMARK SUITE ([Bench]) every backend runs from a
 // `BenchmarkBackend` of its own, as it runs [Run] from `TestContract`: the
@@ -63,6 +65,14 @@ type Options struct {
 	// where the backend cannot know one) and its ID. Nil is a backend that
 	// can never hold one, which the suite then holds to listing none.
 	Unfinished func(t *testing.T, b objstore.Backend) objstore.Pending
+
+	// Spoil leaves under name, in b, something the backend holds and
+	// cannot read as an object — by the backend's own means, as a client
+	// writing garbage into its format or a disk returning it would — which
+	// the suite then holds to [objstore.ErrCorrupt]. Nil is a backend that
+	// can never hold one: an S3 bucket answers a name with an object or
+	// with nothing.
+	Spoil func(t *testing.T, b objstore.Backend, name string)
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -97,6 +107,7 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"a_listing_waits_for_a_slow_visitor", aListingWaitsForASlowVisitor},
 		{"names_are_kept_verbatim", namesAreKeptVerbatim},
 		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
+		{"a_name_holding_no_object_is_corrupt_listed_and_deletable", aNameHoldingNoObjectIsCorrupt},
 	}
 	for _, c := range cases {
 		// IN PARALLEL: each case is handed a backend of its own from the
@@ -640,5 +651,55 @@ func anUnfinishedUploadIsPendingUntilAbandoned(t *testing.T, b objstore.Backend,
 	}
 	if data, err := get(t, b, "finished", 0, -1); err != nil || !bytes.Equal(data, large(opts)) {
 		t.Fatalf("abandoning the unfinished uploads touched a finished object: %d bytes, %v", len(data), err)
+	}
+}
+
+// A NAME HOLDING SOMETHING THE BACKEND CANNOT READ AS AN OBJECT IS A DEFINITE
+// ANSWER: a stat and a get answer [objstore.ErrCorrupt] — never a failure,
+// which a reader would retry for ever and the audit would stop on every day
+// without naming the file — a listing hands the name on, holding nothing, so
+// the collector can judge it, and a delete clears it like any other name. A
+// whole object beside it is untouched throughout.
+func aNameHoldingNoObjectIsCorrupt(t *testing.T, b objstore.Backend, opts Options) {
+	data := []byte("a whole object")
+	put(t, b, "whole", data)
+	if opts.Spoil == nil {
+		// A BACKEND THAT CAN HOLD NO SUCH NAME never answers one: its
+		// whole objects are never called corrupt.
+		if _, err := b.Stat(t.Context(), "whole"); err != nil {
+			t.Fatalf("Stat of a whole object = %v", err)
+		}
+		return
+	}
+	put(t, b, "spoiled", []byte("bytes about to be made unreadable"))
+	before := time.Now().Add(-time.Minute)
+	opts.Spoil(t, b, "spoiled")
+
+	if info, err := b.Stat(t.Context(), "spoiled"); !errors.Is(err, objstore.ErrCorrupt) {
+		t.Fatalf("Stat of a name holding no object = %+v, %v; want ErrCorrupt", info, err)
+	}
+	if _, err := get(t, b, "spoiled", 0, -1); !errors.Is(err, objstore.ErrCorrupt) {
+		t.Fatalf("Get of a name holding no object = %v; want ErrCorrupt", err)
+	}
+	all := listed(t, b)
+	switch got := all["spoiled"]; {
+	case len(got) != 1:
+		t.Fatalf("a listing visited the spoiled name %d times, want once: %+v", len(got), all)
+	case got[0].Size != 0 || got[0].Digest != "":
+		t.Fatalf("a listing said the spoiled name holds %+v; want no bytes and no digest", got[0])
+	case got[0].Written.Before(before) || got[0].Written.After(time.Now().Add(time.Minute)) ||
+		got[0].Written.Location() != time.UTC:
+		t.Fatalf("a listing dated the spoiled name %v, want about now, in UTC", got[0].Written)
+	}
+	if got := all["whole"]; len(got) != 1 || got[0].Size != int64(len(data)) {
+		t.Fatalf("a listing beside a spoiled name visited the whole object as %+v", got)
+	}
+
+	if err := b.Delete(t.Context(), "spoiled"); err != nil {
+		t.Fatalf("Delete of a name holding no object: %v", err)
+	}
+	gone(t, b, "spoiled", "a delete of a name holding no object")
+	if got, err := get(t, b, "whole", 0, -1); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the whole object beside the spoiled name read back %q, %v", got, err)
 	}
 }

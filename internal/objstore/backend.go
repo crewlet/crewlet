@@ -16,6 +16,14 @@ var ErrNotFound = errors.New("objstore: no such object")
 // handed over exactly that many that hash to something other than the row's
 // digest. Never handed to a reader as the object ([Store.Open]).
 //
+// AND A NAME THE BACKEND HOLDS SOMETHING UNDER THAT IS NO OBJECT AT ALL — the
+// broker's object store holding metadata that does not decode — which its
+// stat and its get answer with this rather than with a failure: it is as
+// definite as a wrong digest, since asking again reads the same thing and no
+// get will ever hand the object's bytes back, and a failure there would have
+// every reader retry for ever, the audit stop on it every day without naming
+// the file, and a backup refuse to finish rather than record it lost.
+//
 // ONLY A DEFINITE ANSWER IS CORRUPTION. A read that FAILED before the end — a
 // deadline, a dropped link, a broker that stopped answering — is a failed
 // read and nothing more, whatever its library calls it: the object may be
@@ -146,8 +154,10 @@ type Backend interface {
 	Put(ctx context.Context, name string, r io.Reader, m PutMeta) error
 
 	// Get streams n bytes of name from offset off — to the end when n is
-	// negative — or answers [ErrNotFound]. A range that begins at or past
-	// the end is an empty stream; one that runs past it is short.
+	// negative — or answers [ErrNotFound], or [ErrCorrupt] where what the
+	// backend holds under name is no object it can read. A range that
+	// begins at or past the end is an empty stream; one that runs past it
+	// is short.
 	//
 	// ctx bounds the WHOLE read, the stream included, and must carry a
 	// deadline: a read that stops moving has to end somewhere, and a
@@ -160,16 +170,23 @@ type Backend interface {
 	// The bytes are what the backend holds; checking them is [Store]'s.
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
 
-	// Stat answers what the backend holds under name, or [ErrNotFound].
+	// Stat answers what the backend holds under name, or [ErrNotFound], or
+	// [ErrCorrupt] where what it holds there is no object it can read.
 	Stat(ctx context.Context, name string) (Info, error)
 
-	// Delete removes name. Deleting what is not there is not an error.
+	// Delete removes name — what it holds whether or not it can be read as
+	// an object. Deleting what is not there is not an error.
 	Delete(ctx context.Context, name string) error
 
 	// List hands every object the backend holds to visit, each name once
 	// and in no particular order, stopping at the first error visit
 	// returns. A visitor may be slow — it judges and deletes as it goes —
 	// and a listing does not skip or repeat a name for it.
+	//
+	// A NAME HOLDING NO OBJECT THE BACKEND CAN READ ([ErrCorrupt]) is handed
+	// on too, holding no bytes and dated by when the backend stored what it
+	// holds there: the collector judges every name it lists, and one a
+	// listing left out would be kept, and billed, for ever.
 	List(ctx context.Context, visit func(Info) error) error
 
 	// Pending hands every upload the backend began and has not finished to

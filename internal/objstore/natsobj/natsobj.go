@@ -438,6 +438,20 @@ func metaSubject(name string) string {
 
 func pieceSubject(nuid string) string { return "$O." + Bucket + ".C." + nuid }
 
+// nameOfMeta is the name a metadata subject spells, and whether it spells one
+// — [metaSubject] read back.
+func nameOfMeta(subject string) (string, bool) {
+	token, ok := strings.CutPrefix(subject, metaSubject(""))
+	if !ok || token == "" {
+		return "", false
+	}
+	name, err := base64.URLEncoding.DecodeString(token)
+	if err != nil || len(name) == 0 {
+		return "", false
+	}
+	return string(name), true
+}
+
 // meta reads name's metadata from the stream's leader: the object, a delete
 // marker the library's own delete left — `nats object rm`, or any other client
 // of the bucket's documented format — (Deleted set), or
@@ -454,16 +468,15 @@ func (b *Backend) meta(ctx context.Context, name string) (jetstream.ObjectInfo, 
 	}
 	var info jetstream.ObjectInfo
 	if err := json.Unmarshal(msg.Data, &info); err != nil {
-		return jetstream.ObjectInfo{}, fmt.Errorf("%w: %s's metadata is unreadable: %w",
-			errUnreadable, name, err)
+		// [objstore.ErrCorrupt], A DEFINITE ANSWER: the leader holds this
+		// name's metadata and it names no object anything could read — and
+		// reading it again reads the same bytes. A delete still clears it.
+		return jetstream.ObjectInfo{}, fmt.Errorf("%w: %s's metadata does not decode: %w",
+			objstore.ErrCorrupt, name, err)
 	}
 	info.ModTime = msg.Time.UTC()
 	return info, nil
 }
-
-// errUnreadable is metadata that does not decode — no object anything could
-// read, and one a delete can still clear.
-var errUnreadable = errors.New("natsobj: unreadable metadata")
 
 // live is name's metadata when it names an object, [objstore.ErrNotFound]
 // when the name holds nothing or only a delete marker.
@@ -979,7 +992,7 @@ func (b *Backend) Delete(ctx context.Context, name string) error {
 	switch {
 	case errors.Is(err, objstore.ErrNotFound):
 		return nil
-	case err != nil && !errors.Is(err, errUnreadable):
+	case err != nil && !errors.Is(err, objstore.ErrCorrupt):
 		return fmt.Errorf("natsobj: delete %s: %w", name, err)
 	}
 	if err := b.stream.Purge(ctx, jetstream.WithPurgeSubject(metaSubject(name))); err != nil {
@@ -1021,13 +1034,15 @@ const listResets = 5
 // in one slice, which is the company's whole inventory in memory at once.
 //
 // Every name is visited as it is — what one means is not this backend's to
-// judge — except one whose metadata cannot be read, which is no object
-// anything could get and is logged rather than visited. A name holding only
-// the delete marker the library's own delete left — `nats object rm`, or any
-// other client of the bucket's documented format — is visited too, as an
-// object of no bytes written when the marker was: the marker is a message the
-// stream keeps for ever until something purges it, and the collector clears
-// it with the same delete it makes of any name ([Backend.Delete]).
+// judge. A name holding only the delete marker the library's own delete left —
+// `nats object rm`, or any other client of the bucket's documented format — is
+// visited too, as an object of no bytes written when the marker was: the
+// marker is a message the stream keeps for ever until something purges it,
+// and the collector clears it with the same delete it makes of any name
+// ([Backend.Delete]). So is a name whose metadata does not decode, which a
+// stat and a get answer as [objstore.ErrCorrupt]: named by its subject, which
+// spells the name, and dated when the broker stored the metadata — left out,
+// it would be the one name in the bucket nothing ever judged or cleared.
 func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) error {
 	return b.eachMeta(ctx, func(info *jetstream.ObjectInfo) error {
 		return visit(infoOf(info))
@@ -1036,8 +1051,10 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 
 // eachMeta hands visit the newest metadata on every name's subject, its
 // ModTime the instant the broker stored it — a delete marker the library's
-// own delete left included — and logs and steps over metadata it cannot decode.
-// See [Backend.List] for why it is a consumer of its own.
+// own delete left included, and metadata it cannot decode as an object of no
+// bytes and no pieces named by its subject. It logs and steps over only a
+// subject that spells no name at all. See [Backend.List] for why it is a
+// consumer of its own.
 func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
 	// NO STALL: a listing is waited on for as long as its caller allows,
 	// since a visitor that is slow holds the next name back on purpose.
@@ -1059,11 +1076,24 @@ func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo
 			return fmt.Errorf("natsobj: list the bucket: %w", err)
 		}
 		var info jetstream.ObjectInfo
-		switch jerr := json.Unmarshal(msg.Data(), &info); {
-		case jerr != nil:
-			log.WarnContext(ctx, "object_metadata_unreadable", "subject", msg.Subject(),
-				"error", jerr, "detail", "an object no get could read; it is left where it is")
-		default:
+		named := true
+		if jerr := json.Unmarshal(msg.Data(), &info); jerr != nil {
+			// NO OBJECT, AND STILL A NAME: what the subject spells, held
+			// with no bytes and no pieces — see [Backend.List].
+			name, ok := nameOfMeta(msg.Subject())
+			if ok {
+				info = jetstream.ObjectInfo{ObjectMeta: jetstream.ObjectMeta{Name: name}}
+			} else {
+				log.WarnContext(ctx, "object_metadata_unnamed", "subject", msg.Subject(),
+					"error", jerr, "detail", "metadata on a subject that spells no name; "+
+						"nothing can judge or clear it, so it is left where it is")
+				named = false
+			}
+		}
+		// STEPPED OVER, NEVER RETURNED FROM: the walk still advances below,
+		// since the next message is read at the bottom of the loop and a
+		// `continue` here would read this one again for ever.
+		if named {
 			info.ModTime = meta.Timestamp
 			if verr := visit(&info); verr != nil {
 				return verr
