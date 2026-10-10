@@ -4,7 +4,7 @@
  * The contract directory's own rules — the half of them no Go gate can see.
  *
  * `src/contract/` is the ONE home of every declaration an engine gate holds
- * against the engine: the event categories, the turn bands, the wake reasons,
+ * against the engine: the event categories, the wake reasons,
  * the tracker's closed sets, the wire shapes the engine's tests read by name.
  * `internal/clientsource`'s contract test holds the directory from the Go side
  * — every row declared here, every export a row. What it cannot hold is what

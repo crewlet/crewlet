@@ -4186,17 +4186,25 @@ Four rules replace it, and each one names what it fixes.
    curator promoting a skill off a cluster of many seats' turns, which names
    none because there is no single right one to name.
 
-   The engine holds the line either way:
-   `internal/events/types/turnbands_client_test.go` reads the dashboard's own
-   declarations and fails the build both ways — on a band entry that can never
-   fill, and on a kept-out type that has since *gained* a `turn_id` and is
-   therefore ready to come back, which is how the four repairs above announced
-   themselves. It covers the **absorbed** map too, on the same terms and for
-   the same reason: those rows are drawn, in the inventory below, so a type
-   there that the query cannot return is a line that never appears. The one
-   exception is declared rather than assumed — the live progress event is
-   stream-only and in no table, which is a different fact from a repair
-   somebody owes, and is kept on a roster of its own that says so.
+   **The engine files the rows, and the screen draws what it is handed.** The
+   `turn` answer tags every row with its band (`types.BandOf`, beside the
+   event catalogue) and answers the absorbed inventory and the problem count
+   beside them, so this page sorts nothing itself. The rule moved out of the
+   browser because a member's account of the same turn — its *story*, which
+   tells a teammate what an agent did on their work with no prompt, tool or
+   token in it — has to be built from these same rows on the server, the only
+   place that can withhold the rest; a rule written once in Go and once in
+   TypeScript is two accounts of one turn the day they disagree.
+   `internal/events/types/turnband_test.go` holds the sets both ways — on a
+   band entry that can never fill, and on a kept-out type that has since
+   *gained* a `turn_id` and is therefore ready to come back, which is how the
+   four repairs above announced themselves. It covers the **absorbed** map
+   too, on the same terms and for the same reason: those rows are drawn, in
+   the inventory below, so a type there that the query cannot return is a
+   line that never appears. The one exception is declared rather than assumed
+   — the live progress event is stream-only and in no table, which is a
+   different fact from a repair somebody owes, and is kept on a roster of its
+   own that says so.
 
    A band is not a rendering, though, and *What the turn was given* was
    rendering half of its own. `prompt.size` — a row of integers per phase,
@@ -6231,8 +6239,7 @@ forwarding its caller's path, which is named with its reason.
 **What the engine owns is declared once, in `src/contract/`.** Several lists
 exist on both sides by necessity — the dashboard is a separate build in a
 separate language and cannot import a Go identifier — so where a screen must
-know a set the engine owns (the event categories, the turn bands, the wake
-reasons, the work tracker's sort keys, change kinds and grouping axes, the
+know a set the engine owns (the event categories, the wake reasons, the work tracker's sort keys, change kinds and grouping axes, the
 config kinds, the query error codes, the push kinds, the feed length, the
 write vocabulary and its refusal codes, the questions a write is read back
 through) or read

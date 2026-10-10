@@ -71,14 +71,6 @@ var contract = []Entry{
 	// categories.ts
 	{"CATEGORIES", ReadLiteral, "internal/events.TestCategoryChipsAreTheEngines"},
 
-	// turnbands.ts
-	{"WENT_WRONG", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-	{"GIVEN", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-	{"DID", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-	{"LEFT_BEHIND", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-	{"TURN_STOP", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-	{"ABSORBED", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
-
 	// reasons.ts
 	{"PHRASES", ReadLiteral, "internal/api/queries.TestEveryWakeReasonReadsAsEnglishOnTheClient"},
 

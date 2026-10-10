@@ -1,17 +1,19 @@
 /**
- * The three things the Turn header DERIVES, each of which was quietly wrong.
+ * The things the Turn header DERIVES, each of which was quietly wrong.
  *
  * None of them is a rendering question, which is why they are pure functions
- * and tested as such: how many problems a turn had, what window it ran in,
- * and what word describes how it ended are decisions about records, and each
- * one was making a claim the rest of the same page contradicted — a badge
- * counting two problems over a panel holding one row, a duration that began
- * at the first worker rather than at the turn, and an em dash captioned "no
- * turn record" printed above the panel rendering that record.
+ * and tested as such: what window a turn ran in and what word describes how
+ * it ended are decisions about records, and each one was making a claim the
+ * rest of the same page contradicted — a duration that began at the first
+ * worker rather than at the turn, and an em dash captioned "no turn record"
+ * printed above the panel rendering that record. How many PROBLEMS a turn had
+ * is the third, and it is the engine's now: the `turn` answer counts them over
+ * the rows it bands (`bandTurn` in `internal/api/queries/insight.go`, whose
+ * test carries those cases).
  */
 
 import { describe, expect, test } from "vitest";
-import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
+import { outcomeOf, turnFacts, type TurnView } from "./Turn.tsx";
 // THE SPAN RULE LIVES BESIDE THE PHASES IT MEASURES NOW. The turn CARD had a
 // second one — two LANDING instants subtracted, which drops the first phase's
 // own length — so the two are one function and one set of cases.
@@ -24,50 +26,6 @@ import { phaseRecord } from "~/test/phaseRecord.ts";
 function record(payload: Record<string, unknown>): EventRecord {
   return { payload } as unknown as EventRecord;
 }
-
-function row(type: string): EventRecord {
-  return { type } as unknown as EventRecord;
-}
-
-describe("problemCount", () => {
-  test("a stop the engine wrote two records about is one problem", () => {
-    // internal/engine/telemetry.go closes a failed turn with the summary
-    // (`failed: true`) and then a dedicated `turn.guard_breach` — one stop,
-    // two events. Summing them put "2 problems" in the header over the one
-    // row the panel below it renders.
-    expect(problemCount([row("turn.guard_breach")], true)).toBe(1);
-    expect(problemCount([row("budget_exhausted")], true)).toBe(1);
-    expect(problemCount([row("llm_unavailable")], true)).toBe(1);
-  });
-
-  test("a failure with no record of its own still counts", () => {
-    // A turn the REVIEWER decided against carries the flag and nothing else:
-    // `publishFailure` writes nothing when no guard fired and no error came
-    // back. At zero the header would say nothing and `clean` would go on to
-    // claim "nothing went wrong" about a turn that failed.
-    expect(problemCount([], true)).toBe(1);
-  });
-
-  test("the flag is deduped against its own record, never against the rows", () => {
-    // The case a plain `||` swallowed: a reviewer-failed turn that ALSO
-    // recovered a provider hand-off has two independent problems, and only
-    // one of them is a row. `sandbox_run_failed` is a failure the engine
-    // publishes elsewhere, so it does not describe this turn's stop either.
-    expect(problemCount([row("provider_fallback")], true)).toBe(2);
-    expect(problemCount([row("sandbox_run_failed")], true)).toBe(2);
-    // …and the dedupe still fires when the stop record is among several.
-    expect(problemCount([row("provider_fallback"), row("turn.guard_breach")], true)).toBe(2);
-  });
-
-  test("rows without a failure are counted as they are", () => {
-    // A provider fallback is in `WENT_WRONG` and is not a failed turn.
-    expect(problemCount([row("provider_fallback"), row("notification_skipped")], false)).toBe(2);
-  });
-
-  test("a clean turn has nothing to count", () => {
-    expect(problemCount([], false)).toBe(0);
-  });
-});
 
 describe("turnSpan", () => {
   // A FINISHED phase, which is what the query answers with: its landing
@@ -240,6 +198,7 @@ describe("turnFacts", () => {
       iterations: 0,
       traceIds: [],
       story: tellStory([]),
+      absorbed: [],
       trouble: 0,
       clean: false,
       coverage: null,

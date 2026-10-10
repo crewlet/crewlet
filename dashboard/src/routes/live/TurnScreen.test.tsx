@@ -16,12 +16,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TURN_TABS, TurnPeek, TurnScreen } from "./Turn.tsx";
 import { WATCH_TAB, watchHref } from "~/lib/turns.ts";
-import { ABSORBED } from "~/contract/turnbands.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
+import type { EventRecord, TurnAnswer, TurnBand, TurnEventRow } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { rosterOf } from "~/test/seats.ts";
 
@@ -45,7 +44,28 @@ afterEach(() => {
 
 const TURN = "t-77";
 
-function event(over: Partial<EventRecord> & { type: string }): EventRecord {
+/**
+ * The band the engine files each type these cases use in — what `types.BandOf`
+ * answers for it, stated as the fixtures' premise. The engine's answer is
+ * pinned in Go (`internal/events/types/turnband_test.go`); what these cases
+ * test is that the screen draws whatever band a row arrives in.
+ */
+const FILED: Record<string, TurnBand> = {
+  agent_phase_started: "absorbed",
+  agent_phase_completed: "absorbed",
+  agent_turn_completed: "absorbed",
+  turn_completed: "absorbed",
+  auxiliary_spend: "absorbed",
+  agent_turn_started: "given",
+  prefetch_summary: "given",
+  "prompt.size": "given",
+  agent_turn_steered: "given",
+  provider_fallback: "went_wrong",
+  sandbox_run_started: "did",
+  reflection_completed: "left_behind",
+};
+
+function event(over: Partial<TurnEventRow> & { type: string }): TurnEventRow {
   return {
     id: over.type + "-" + (over.timestamp ?? ""),
     source: "engine",
@@ -57,12 +77,13 @@ function event(over: Partial<EventRecord> & { type: string }): EventRecord {
     parent_span_id: "",
     topic: "",
     timestamp: "2026-09-13T10:00:00Z",
+    band: (Object.hasOwn(FILED, over.type) ? FILED[over.type] : undefined) ?? "rest",
     ...over,
-  } as EventRecord;
+  } as TurnEventRow;
 }
 
 /** A finished execute phase that took `durationMs`, as the engine publishes it. */
-function phase(at: string, durationMs: number, over: Record<string, unknown> = {}): EventRecord {
+function phase(at: string, durationMs: number, over: Record<string, unknown> = {}): TurnEventRow {
   return event({
     type: "agent_phase_completed",
     timestamp: at,
@@ -88,7 +109,7 @@ function phase(at: string, durationMs: number, over: Record<string, unknown> = {
  * never produces.
  */
 let measured = 0;
-function promptSize(payload: Record<string, unknown>): EventRecord {
+function promptSize(payload: Record<string, unknown>): TurnEventRow {
   measured++;
   return event({
     type: "prompt.size",
@@ -120,7 +141,15 @@ function mount(
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, nodes: [], ...answer })
+      ? Promise.resolve({
+          turn_id: TURN,
+          events: [],
+          absorbed: [],
+          problems: 0,
+          truncated: false,
+          nodes: [],
+          ...answer,
+        })
       : Promise.resolve({});
   return frame(store, socket);
 }
@@ -227,6 +256,26 @@ test("a cut view withholds the clean badge, and a complete one gives it", async 
   cleanup();
   mount({ events: complete, truncated: true });
   await screen.findByText(/middle not shown/);
+  expect(screen.queryByText("nothing went wrong")).toBeNull();
+});
+
+// THE BADGE IS THE ENGINE'S COUNT. `problems` is counted over the rows the
+// engine banded, a stop it wrote two records about counted once — so the
+// header says what the answer says, and a page that recounted would be a
+// second rule beside it. A count is also what takes the clean badge away.
+test("the problem badge reads the answer's own count", async () => {
+  mount({
+    problems: 2,
+    events: [
+      phase("2026-09-13T10:01:30Z", 90_000),
+      event({
+        type: "agent_turn_completed",
+        timestamp: "2026-09-13T10:01:31Z",
+        payload: { turn_id: TURN, failed: true, decision: "failed" },
+      }),
+    ],
+  });
+  expect(await screen.findByText("2 problems")).toBeTruthy();
   expect(screen.queryByText("nothing went wrong")).toBeNull();
 });
 
@@ -640,14 +689,14 @@ test("a turn that ran once carries no attempt badge", async () => {
 });
 
 /**
- * A ROW IS STYLED BY THE RULE THAT FILED IT.
+ * A ROW IN "WHAT WENT WRONG" IS DRAWN AS A FAILURE.
  *
- * `bandOf` puts a row in "What went wrong" through `isFailed`, which reads the
- * payload's own flag as well as the promoted `failed` column — the first is
- * what a LIVE event carries and the second is all that survives into history,
- * which is why `internal/events` declares the pair once in Go. The row used to
- * style on `event.failed` alone, so a live failure appeared in the panel with
- * no red edge and no glyph: the same turn drawn two ways on one screen.
+ * The row's red edge reads `isFailed`, which takes the payload's own flag as
+ * well as the promoted `failed` column — the first is what a LIVE event
+ * carries and the second is all that survives into history, which is why
+ * `internal/events` declares the pair once in Go. The row used to style on
+ * `event.failed` alone, so a failure appeared in the panel with no red edge
+ * and no glyph: the same turn drawn two ways on one screen.
  */
 test("a failure carried only on the payload is still drawn as one", async () => {
   mount({
@@ -678,18 +727,25 @@ test("a failure carried only on the payload is still drawn as one", async () => 
  *
  * Every panel on this screen draws a subset of the turn's rows, and on an
  * ordinary turn most of the answer is absorbed: a start and a record per
- * phase, plus both halves of the turn's own record. `ABSORBED` has named a
- * destination per type all along and `Story.absorbed` said it was counted "so
- * the screen can say where they went" — and no screen said, so the rows
- * stopped at the band. A row the query returned and the page silently dropped
- * is indistinguishable from a row the store never held, which is the one
- * shape this page was rebuilt to stop repeating.
+ * phase, plus both halves of the turn's own record. The engine names where
+ * each kind went and counts them into the answer's `absorbed`, and before this
+ * note no screen said, so the rows stopped at the band. A row the query
+ * returned and the page silently dropped is indistinguishable from a row the
+ * store never held, which is the one shape this page was rebuilt to stop
+ * repeating.
  */
 test("the rows it does not list are accounted for, by where each went", async () => {
   // A SELF-ITERATING TURN, so the rows and the kinds of row are different
   // numbers: five absorbed rows of three types. A note counting its own lines
-  // would read "3" here and be wrong about the only thing it is for.
+  // would read "3" here and be wrong about the only thing it is for. The
+  // inventory is the ENGINE's, stated as it would answer it.
+  const absorbed = [
+    { type: "agent_phase_started", destination: "the phase card it opens", count: 2 },
+    { type: "agent_phase_completed", destination: "its own phase card", count: 2 },
+    { type: "turn_completed", destination: "the turn's header and record", count: 1 },
+  ];
   mount({
+    absorbed,
     events: [
       event({
         type: "agent_phase_started",
@@ -714,14 +770,15 @@ test("the rows it does not list are accounted for, by where each went", async ()
   // trigger, so a reader gets it without opening anything.
   const trigger = await screen.findByRole("button", { name: /Already on this page/ });
   expect(trigger.textContent, "the trigger does not count the rows it stands for").toContain("5");
-  // WHERE EACH WENT is the answer to the next question, and it is the map's
-  // own words rather than a paraphrase of them beside it.
+  // WHERE EACH WENT is the answer to the next question, and it is the
+  // engine's own words rather than a paraphrase of them beside it.
   fireEvent.click(trigger);
   const row = screen.getByText("agent_phase_started").parentElement!;
   expect(row.textContent, "a repeated type does not say how many it stands for").toContain("2");
-  expect(screen.getByText(ABSORBED.agent_phase_started!)).toBeTruthy();
-  expect(screen.getByText(ABSORBED.agent_phase_completed!)).toBeTruthy();
-  expect(screen.getByText(ABSORBED.turn_completed!)).toBeTruthy();
+  for (const group of absorbed) expect(screen.getByText(group.destination)).toBeTruthy();
+  // AND NONE OF THEM IS LISTED AS A ROW AS WELL — an absorbed row drawn in a
+  // band too would be on the page twice.
+  expect(screen.queryByText("Also published")).toBeNull();
 });
 
 /**
@@ -1049,7 +1106,7 @@ test("a watch link lands on the transcript with the running phase open", async (
  * Mount on a watch link over the seat's push and the turn's stored events,
  * answering `sandbox_tail` with `tail` — the page a reader lands on.
  */
-function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
+function mountWatching(seat: Record<string, unknown>, events: TurnEventRow[], tail?: unknown) {
   location.hash = watchHref(TURN);
   const store = new Store();
   rosterOf(store, [seat] as never);

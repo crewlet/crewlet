@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
@@ -91,6 +92,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// came for, and a follow-up that could not be read costs the attempt
 	// count rather than the screen.
 	key, siblings := s.attemptsOf(ctx, id, records, detail.At)
+	banded, absorbed, problems := bandTurn(records)
 	return map[string]any{
 		"turn_id": id,
 		// The unit of work this run was an attempt at, and every run of it
@@ -99,7 +101,18 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// which is a trigger with nothing to collapse on.
 		"work_key": key,
 		"attempts": siblings,
-		"events":   records,
+		// EVERY ROW WITH ITS BAND, filed here by [types.BandOf] rather
+		// than by the screen: a member's story of this turn is built from
+		// these same rows by the same rule, and a rule written once in Go
+		// and once in TypeScript is two accounts of one turn the day they
+		// disagree.
+		"events": banded,
+		// WHERE THE ROWS THAT ARE NOT ROWS WENT, by type and counted, and
+		// how many things went wrong — both read off the bands, so the
+		// screen's inventory and its problem count cannot disagree with
+		// the rows it lists.
+		"absorbed": absorbed,
+		"problems": problems,
 		// SAYS WHAT IS MISSING, exactly as `trace` does, so a client can say
 		// the gap is the middle rather than warning that the page cannot
 		// answer its own headline question.
@@ -115,6 +128,93 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		"nodes": nonNilStrings(detail.Nodes),
 	}, nil
 }
+
+// TurnRow is one row of a turn's answer and the band it is filed in.
+//
+// EMBEDDED, so the record's fields stay where every reader of an event already
+// finds them and `band` is one more key — additive, as every answer's evolution
+// is.
+type TurnRow struct {
+	store.EventRecord
+	Band types.TurnBand `json:"band"`
+}
+
+// AbsorbedGroup is one kind of row the Turn screen draws elsewhere, how many
+// of it the turn published, and where it went.
+//
+// BY TYPE, NOT BY DESTINATION, because the destination is the claim and the
+// type is what makes it checkable: two types share "the turn's header and
+// record", and merged into one line a reader cannot tell which pair of records
+// it stands for. ACROSS THE WHOLE TURN rather than run by run: a turn's phase
+// starts and phase records interleave one for one, so a consecutive-only rule
+// would report a group per row and say nothing at all.
+type AbsorbedGroup struct {
+	Type        string `json:"type"`
+	Destination string `json:"destination"`
+	Count       int    `json:"count"`
+}
+
+// bandTurn files a turn's rows, in the order they were read, and answers the
+// absorbed inventory and the problem count beside them — never nil.
+//
+// THE PROBLEM COUNT IS EVERY ROW THAT WENT WRONG, PLUS THE TURN'S OWN FAILURE
+// when no row already describes it — the Turn header's badge, which must agree
+// with the panel under it.
+//
+// ONE STOP IS ONE PROBLEM, however many records the engine wrote about it. The
+// failed completion and the dedicated record behind it — a guard breach, an
+// exhausted chain, an unavailable provider ([types.StopsTheTurn]) — are
+// published in the same breath about the SAME stop (internal/engine closes a
+// failed turn with its completion and then `publishFailure`), so adding the
+// flag to the rows counted one event twice: "2 problems" over a panel holding
+// one row.
+//
+// The flag is deduped against THAT RECORD, never against the row count. A turn
+// the reviewer decided against carries the flag with no dedicated record behind
+// it — `publishFailure` writes nothing when no guard fired and no error came
+// back — and it can carry an unrelated `provider_fallback` in the same breath.
+// Against the count, the flag would have been swallowed by that fallback and a
+// failed turn reported as one problem rather than two; with no rows at all, a
+// failed turn would have been called clean.
+//
+// The NEWEST completion is the one asked: a turn that parked on a coding run
+// completes once per segment, and only its last can say how it ended.
+func bandTurn(records []store.EventRecord) ([]TurnRow, []AbsorbedGroup, int) {
+	rows := make([]TurnRow, 0, len(records))
+	absorbed := []AbsorbedGroup{}
+	at := map[string]int{}
+	problems, stopped, failed := 0, false, false
+	for _, rec := range records {
+		band := types.BandOf(rec.Type, rec.Failed)
+		rows = append(rows, TurnRow{EventRecord: rec, Band: band})
+		switch band {
+		case types.BandAbsorbed:
+			if i, seen := at[rec.Type]; seen {
+				absorbed[i].Count++
+				break
+			}
+			at[rec.Type] = len(absorbed)
+			absorbed = append(absorbed, AbsorbedGroup{
+				Type: rec.Type, Destination: types.AbsorbedInto(rec.Type), Count: 1,
+			})
+		case types.BandWentWrong:
+			problems++
+			stopped = stopped || types.StopsTheTurn(rec.Type)
+		}
+		if rec.Type == agentTurnCompleted {
+			failed = rec.Failed
+		}
+	}
+	if failed && !stopped {
+		problems++
+	}
+	return rows, absorbed, problems
+}
+
+// agentTurnCompleted is the dashboard-facing completion record's wire type,
+// taken from the payload type itself: a literal is the one place the name
+// silently stops matching.
+var agentTurnCompleted = types.AgentTurnCompleted{}.EventType()
 
 // attemptsOf reports the unit of work a run was an attempt at, and every run
 // of it the fleet still holds, oldest first — an attempt that ran on another
