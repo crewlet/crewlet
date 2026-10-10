@@ -48,7 +48,7 @@ import {
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";

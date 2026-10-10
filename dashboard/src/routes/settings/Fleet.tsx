@@ -71,7 +71,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { usePublishFleet } from "~/app/Shell.tsx";
+import { usePublishFleet } from "~/app/page.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";

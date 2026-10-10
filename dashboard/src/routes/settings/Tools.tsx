@@ -67,7 +67,7 @@ import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
 import type { McpServerStatus } from "~/contract/mcp.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 
 /**
  * What a capability is drawn as.

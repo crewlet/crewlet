@@ -69,7 +69,7 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage } from "~/app/page.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";

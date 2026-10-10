@@ -64,7 +64,7 @@ import { useNow } from "~/lib/clock.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/page.tsx";
 import { href } from "~/app/router.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 

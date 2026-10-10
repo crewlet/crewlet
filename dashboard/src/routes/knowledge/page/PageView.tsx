@@ -40,7 +40,7 @@ import {
 import { useParam } from "~/app/router.tsx";
 import { pageSpaceKey, pageUpKey } from "~/app/crumbs.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { usePageLabels, usePageMenu } from "~/app/page.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
