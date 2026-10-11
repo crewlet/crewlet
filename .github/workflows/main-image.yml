@@ -18,10 +18,13 @@ name: main image
 # and a signing identity to a run no merge started.
 #
 # THE RELEASE'S BUILD, without goreleaser: a release run needs a semver tag
-# on the commit, and a snapshot run pushes nothing. The binaries are built
-# with .goreleaser.yaml's settings and staged in the layout it stages, and the
-# image from the same Dockerfile for the same two platforms. Change the build
-# in .goreleaser.yaml and change it here.
+# on the commit, and a snapshot run pushes nothing. `make image-context`
+# builds the binaries with .goreleaser.yaml's settings and stages them in the
+# layout it stages, and the image is built from the same Dockerfile for the
+# same two platforms.
+#
+# THE IMAGES `main` NO LONGER NAMES ARE DELETED, so the package holds the
+# image of main and the releases rather than one image per push.
 #
 # ITS OWN WORKFLOW rather than a job in release.yml: docs-publish.yml reads
 # every completed push run of `release` as a new v* tag.
@@ -57,7 +60,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      # The image, to this repository's own GHCR namespace.
+      # The image, to this repository's own GHCR namespace, and the deletion
+      # of the ones it replaces (which the package must also allow: the
+      # repository holds its Admin role).
       packages: write
       # The keyless signature: cosign mints a short-lived certificate from
       # this run's OIDC identity, as the release does.
@@ -72,32 +77,15 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # The two linux binaries, stamped `main-` and twelve hex digits of the
-      # commit (the length Go gives a commit in a pseudo-version), staged
-      # beside the license and both notices files the Dockerfile copies. The
-      # amd64 binary is run before anything is pushed: a -X flag that names
-      # nothing still links, and its only symptom is a binary that reports its
-      # module version instead of the commit.
-      - name: build the binaries and the image context
+      # The binaries and the context the Dockerfile builds from, by the
+      # Makefile's image-context, which builds them as a release does and runs
+      # the one this runner can before anything is pushed. Stamped `main-` and
+      # twelve hex digits of the commit: the length Go gives a commit in a
+      # pseudo-version.
+      - name: build the image context
         run: |
-          set -euo pipefail
           version="main-${GITHUB_SHA:0:12}"
-          context="${RUNNER_TEMP}/image"
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -trimpath \
-              -ldflags "-s -w -X github.com/crewlet/crewlet/internal/version.value=${version}" \
-              -o "${context}/linux/${arch}/crewlet" ./cmd/crewlet
-          done
-          reported="$("${context}/linux/amd64/crewlet" --version | awk '{print $2}')"
-          if [ "${reported}" != "${version}" ]; then
-            echo "::error::the binary reports ${reported}; this commit is ${version}"
-            exit 1
-          fi
-          go run ./scripts/notices -out "${context}/build/notices/THIRD_PARTY_NOTICES.txt" \
-            -main ./cmd/crewlet -targets linux/amd64,linux/arm64
-          install -D -m 0644 LICENSE "${context}/LICENSE"
-          install -D -m 0644 static/dashboard/THIRD_PARTY_NOTICES.txt \
-            "${context}/static/dashboard/THIRD_PARTY_NOTICES.txt"
+          make image-context VERSION="${version}" IMAGE_CONTEXT="${RUNNER_TEMP}/image"
           echo "VERSION=${version}" >> "${GITHUB_ENV}"
 
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -131,3 +119,19 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "ghcr.io/crewlet/crewlet@${DIGEST}"
+
+      # The images no tag names any more, which is every earlier image of
+      # main. Untagged IMAGES, not untagged package VERSIONS: GHCR lists each
+      # platform manifest, attestation and signature of a tagged image as a
+      # version of its own, so deleting every untagged version
+      # (actions/delete-package-versions) deletes them out from under `main`
+      # and every release. This action keeps a tagged image's children and
+      # deletes the signatures whose image is gone. Only images older than an
+      # hour: a push uploads an image's platform manifests moments before the
+      # index that tags them, and a release's push can be in flight.
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: crewlet
+          delete-untagged: true
+          delete-orphaned-images: true
+          older-than: 1 hour

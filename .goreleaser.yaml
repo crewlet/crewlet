@@ -18,12 +18,13 @@
 # rehearsal exists at all is the whole point of keeping this declarative: the
 # PyPI pipeline it replaced could only rehearse by uploading to TestPyPI.
 #
-# THE IMAGE OF MAIN is not built here. .github/workflows/main-image.yml builds
-# it from the same Dockerfile, for the same two platforms, with this build's
-# settings (CGO_ENABLED=0, -trimpath, -s -w, the -X stamp, the notices) — by
-# `go build` and `docker buildx`, because it is stamped `main-<commit>` and
-# pushed only as `main`, which neither a release nor a snapshot run of this
-# file can do. Change the build here and change it there.
+# THE IMAGE OF MAIN is not built here. `make image-context` builds its binaries
+# with this build's settings (CGO_ENABLED=0, -trimpath, -s -w, the -X stamp,
+# the notices) and .github/workflows/main-image.yml builds the image from the
+# same Dockerfile for the same two platforms, because it is stamped
+# `main-<commit>` and pushed only as `main`, which neither a release nor a
+# snapshot run of this file can do. Change the build here and change it in the
+# Makefile.
 version: 2
 
 project_name: crewlet

@@ -70,16 +70,16 @@ WORKDIR /home/crewlet
 # goreleaser stages each platform's binary under its own TARGETPLATFORM
 # directory in the build context, so ONE Dockerfile serves every architecture
 # and no stage here cross-compiles anything. The image of main is built from
-# this file too, by .github/workflows/main-image.yml, which stages its context
-# in the same layout: a path changed here is changed there.
+# this file too, from the context `make image-context` stages in the same
+# layout: a path changed here is changed there.
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 
 # The license and third-party notices, where Debian keeps a package's: the
 # image redistributes the binary and everything it links, so it owes the same
 # notices the release archives carry. goreleaser stages these three files from
-# the checkout (dockers_v2 extra_files in .goreleaser.yaml), and main-image.yml
-# stages the same three.
+# the checkout (dockers_v2 extra_files in .goreleaser.yaml), and
+# `make image-context` stages the same three.
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 

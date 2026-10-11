@@ -77,8 +77,10 @@ uses the same token and the same permission, so the first push to `main` after
 Once the package exists, check two things on it (**Package settings** for
 `ghcr.io/crewlet/crewlet`): its visibility is **public** — GHCR makes a package
 that a workflow creates private, and then nobody without a token can pull it —
-and **Manage Actions access** lists this repository with write access, which
-both workflows need.
+and **Manage Actions access** gives this repository the **Admin** role: the
+release workflow needs write access to push, and `main-image.yml` needs Admin
+to delete the images `main` no longer names, which fails with a 403 under
+anything less.
 
 Releasing from a workstation is not supported. It skips the signature and the
 provenance the OIDC identity carries, and it would produce binaries nobody
@@ -240,22 +242,26 @@ whole commit too.
 
 Not by goreleaser, which fits neither way it runs: a release run needs a
 semver tag on the commit, and a snapshot run pushes nothing. The workflow runs
-the same build plainly, in three steps:
+the same build plainly, in four steps:
 
-1. **The binaries.** `go build` of the two linux targets with
+1. **The binaries.** `make image-context` builds the two linux targets with
    `.goreleaser.yaml`'s settings (`CGO_ENABLED=0`, `-trimpath`, `-s -w`, the
-   version stamped with `-X`), staged with the license and both notices files
-   the way goreleaser stages a release's image context. The amd64 binary is
-   run and must report the commit's version before anything is pushed: an
-   unstamped build reports a module version, never `main-<commit>`, and that
-   is the only symptom a stamp that applies to nothing has.
+   version stamped with `-X`) and stages them with the license and both
+   notices files the way goreleaser stages a release's image context. The
+   binary the runner can run must report the commit's version before anything
+   is pushed: an unstamped build reports a module version, never
+   `main-<commit>`, and that is the only symptom a stamp that applies to
+   nothing has.
 2. **The image.** `docker/build-push-action` builds the same `Dockerfile` for
    linux/amd64 and linux/arm64, pushes it and tags it `main`.
 3. **The signature**, keyless, by the digest the push reported, as
    `docker_signs` signs a release's image.
+4. **The cleanup.** Every image no tag names any more (the earlier images of
+   `main`) is deleted once it is an hour old, with the signatures of the
+   images deleted.
 
 A change to the release build is a change to both `.goreleaser.yaml` and the
-workflow, and each says so. `main` moves at the push and is signed a moment
+Makefile's `image-context`, and each says so. `main` moves at the push and is signed a moment
 later, so a run that fails or is cancelled between the two leaves `main` on
 an image `cosign verify` refuses until a later run signs one. A failed run is
 red on `main`'s commit; a cancelled one was superseded by a newer push, whose
@@ -274,18 +280,18 @@ so a check that an image came from `main` is never satisfied by a release and
 the other way round. To bind the check to one commit as well, add
 `--certificate-github-workflow-sha` with the commit's **full** hash: Fulcio
 writes the commit a run was based on into the certificate. Verify with cosign
-3, or cosign 2 with `--new-bundle-format`. `main` moves, so a deployment that
-must keep running one build pins the digest it verified
-(`ghcr.io/crewlet/crewlet@sha256:…`) rather than the tag.
+3, or cosign 2 with `--new-bundle-format`. `main` moves, and the image it
+moved from is deleted within the hour, so a digest of `main` is not one to
+pin: a deployment that must keep running one build runs a release.
 
 ### What it costs
 
 Each run compiles two targets and builds the two-platform image once, its
-arm64 leg under QEMU. Cancelling a superseded run
-keeps a burst of merges to one finished build. Every push leaves the image
-before it in the package, untagged, and nothing prunes those; one a
-deployment pins by digest must stay, so prune by age with a generous window,
-and never touch a `v*` tag.
+arm64 leg under QEMU. Cancelling a superseded run keeps a burst of merges to
+one finished build. The package keeps the image of `main` and the releases:
+each run deletes the images no tag names once they are an hour old, the hour
+covering an image still being pushed, whose platform manifests are uploaded
+just before the index that tags them.
 
 ### Rehearsing it
 
@@ -294,8 +300,11 @@ request that changes what the image is built from — the `Dockerfile`,
 `go.mod`, `internal/version/**`, `scripts/notices/**` — runs release.yml's
 snapshot job, which builds the release image from the same `Dockerfile` and
 checks the binary's version. A change to `main-image.yml` itself is first
-exercised on `main`: read its run after the merge. Locally, the build step is
-plain shell; run it with `GITHUB_SHA`, `RUNNER_TEMP` and `GITHUB_ENV` set.
+exercised on `main`: read its run after the merge. Locally,
+`make image-context VERSION=main-dev` stages the context in `build/image`, and
+`docker buildx build --platform linux/amd64 --load -f Dockerfile build/image`
+builds the image from it; the push, the signature and the cleanup run on
+`main` only.
 
 ---
 
@@ -384,11 +393,18 @@ doing the thing, or starts doing more — so read the file when you touch it:
 - **The sign step signs the digest the push reported.** Sign `:main` by tag
   instead and a newer run's push landing in between gets this run's signature
   over an image it did not build. It stays green.
-- **`main-image.yml` builds as `.goreleaser.yaml` does.** The flags, the `-X`
-  stamp's path, the platforms and the staged context are written in both, and
-  nothing compares them: a change to one alone gives the image of `main` a
+- **`make image-context` builds as `.goreleaser.yaml` does.** The flags, the
+  `-X` stamp's path, the platforms and the staged context are written in both,
+  and nothing compares them: a change to one alone gives the image of `main` a
   different build from a release's, and the run passes as long as the binary
   still reports its version.
+- **The cleanup deletes untagged IMAGES, never untagged package versions.**
+  GHCR lists each platform manifest, attestation and signature of a tagged
+  image as a version of its own, so a cleanup deleting every untagged version
+  (`actions/delete-package-versions` with `delete-only-untagged-versions`)
+  deletes them out from under `main` and every release, and the next pull of
+  either fails with *manifest unknown*. Its `older-than` keeps an image still
+  being pushed. The run stays green either way.
 - **The image of `main` is its own workflow, named `main image`.** Fold it into
   `release.yml` and `docs-publish.yml`, which reads every completed `release`
   run whose event was a push as a new tag, republishes the docs site on every

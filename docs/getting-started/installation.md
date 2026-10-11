@@ -93,9 +93,9 @@ crewlet main-4e45c6b992a2 (4e45c6b992a2133639abebeec271236969b4ead4)
 ```
 
 It is not a release and is promised nothing: compatibility is promised only
-between tags. Because the tag moves, a deployment that must keep running one
-build pins the digest it verified (`ghcr.io/crewlet/crewlet@sha256:…`) rather
-than `main`. It is signed by digest like a release's image, by a different
+between tags. The tag moves on every push to `main` and the image it moved from
+is deleted within the hour, so a deployment that must keep running one build
+runs a release rather than `main`. It is signed by digest like a release's image, by a different
 workflow, so it verifies under a different identity (cosign 3, or cosign 2
 with `--new-bundle-format`):
 
