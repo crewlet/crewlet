@@ -160,7 +160,17 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// THE TRIM LICENSES REMOVING RECORDS THIS NODE HAS NOT APPLIED — which
 	// is what a node that was away finds when its peers were counted
 	// without it — and publishes that before it purges them.
+	//
+	// THE CHECKPOINT IS READ AGAIN ONCE THE APPLIERS HAVE STOPPED, because the
+	// node goes on writing its own log while it runs — a barrier record for
+	// a linearizable read lands on it at boot — and its appliers apply what
+	// lands. Read before the halt, a record that landed and was applied in
+	// between left the node one record further on than the floors and the
+	// purge below are counted from: the purge then removed only a record the
+	// node had applied, and the node was rightly replaying rather than below
+	// (eight runs in thirty, measured).
 	s.haltAppliers()
+	at = running.runner.Committed()
 	for range 5 {
 		barrierOn(t, running)
 	}
