@@ -151,8 +151,9 @@ type SeatResult struct {
 // it, on a timer.
 //
 // It is also idempotent in the way that matters: an account is recognised by
-// the description this engine wrote on it, so a second pass over the same org
-// finds what the first made rather than creating it twice.
+// the marker this engine wrote into its display name ([AccountName]), so a
+// second pass over the same org finds what the first made rather than
+// creating it twice. Not the description, which Atlassian accepts and drops.
 //
 // # THE SINK IS COMPLETED WHATEVER THE PASS DID
 //
