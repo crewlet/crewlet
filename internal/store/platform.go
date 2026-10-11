@@ -40,7 +40,10 @@ package store
 //
 // The declaration below is deliberate: it does not compile, and the compiler's
 // message quotes the string, so `go build` on an unsupported platform prints
-// the reason rather than a list of undefined symbols from lock_unix.go.
+// the reason rather than a list of undefined symbols. That holds only while
+// this package's own dependencies compile there, which is why internal/filelock
+// carries a refusing twin for a platform with no flock rather than stopping
+// the build one package earlier with nothing to say about it.
 type unsupportedPlatform struct{}
 
 var _ unsupportedPlatform = "crewlet builds for linux/amd64, linux/arm64, darwin/amd64 " +

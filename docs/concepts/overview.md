@@ -223,6 +223,9 @@ internal/
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The two local files: this node's own estate, and
 │                         #   the replicated one a state log's applier writes
+├── filelock/             # One process's exclusive claim on a path, released
+│                         #   by the kernel however its holder exits — what
+│                         #   keeps a second process off the store's file
 ├── estate/               # The replicated estate ROUTED: one router on every
 │                         #   node, answering in-process where this node's
 │                         #   copy of the operation's domain serves and
