@@ -649,6 +649,13 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		if manifest.Objects, err = pass.finish(ctx); err != nil {
 			return Manifest{}, err
 		}
+		if retried := pass.retried.Load(); retried > 0 {
+			log.WarnContext(ctx, "backup_objects_retried",
+				"dir", dir, "retried", retried,
+				"detail", "the object store failed to answer for these objects at first and "+
+					"answered when asked again; the backup carries them, and a store that "+
+					"needs a second try this often is one to look at before it stops answering")
+		}
 		if pass.removed > 0 {
 			log.InfoContext(ctx, "backup_objects_removed_since_copy",
 				"dir", dir, "removed", pass.removed,

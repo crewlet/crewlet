@@ -24,3 +24,7 @@ const (
 	FetchConcurrency       = backupFetchConcurrency
 	StreamCheckConcurrency = streamCheckConcurrency
 )
+
+// FetchAttempts is how many times a backup asks the store about one object
+// before a failure that is not definite refuses it.
+const FetchAttempts = fetchAttempts

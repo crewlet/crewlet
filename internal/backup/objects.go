@@ -14,9 +14,12 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -166,9 +169,10 @@ var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could
 //
 // A CLOSED LOOP, like the collector's bounds: an object goes out only when one
 // in flight has finished, so a store that slows down is read more slowly by
-// itself, and the first object it does not answer for ends the copy with at
-// most sixteen out — the backup is refused for that object anyway, and a store
-// that stopped answering is not sent the rest of a terabyte.
+// itself, and the first object it still does not answer for once it has been
+// asked again ([fetchAttempts]) ends the copy with at most sixteen out — the
+// backup is refused for that object anyway, and a store that stopped answering
+// is not sent the rest of a terabyte.
 const backupFetchConcurrency = 16
 
 // streamCheckConcurrency is how many objects a backup asks the store about at
@@ -236,6 +240,12 @@ type objectPass struct {
 	// hold and no restored row names: a record past the copy replaced or
 	// removed the file.
 	removed int
+
+	// retried is how many objects the store failed to answer for at least
+	// once and then answered ([objectPass.retrying]) — logged when the pass
+	// ends, so a store that is answering a backup only on its second try is
+	// seen before it stops answering it at all.
+	retried atomic.Int64
 }
 
 // newObjectPass is dir's objects, read from the replicated copy at copyPath.
@@ -324,7 +334,7 @@ func (p *objectPass) place(ctx context.Context, ref reference, replayed bool) er
 		return fmt.Errorf("%w: the backup owes objects — %s (%s) the first of them — and "+
 			"this node runs no object store", ErrObjectsUnreachable, ref.NamedBy, ref.Object.Key)
 	}
-	reused, err := placeObject(ctx, p.root, p.prev, ref.Object, p.objs)
+	reused, err := p.carry(ctx, ref)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	art := p.artifact()
@@ -486,7 +496,12 @@ func (p *objectPass) ask(ctx context.Context, ref reference) (bool, error) {
 			"them — and this node cannot ask the store about them",
 			ErrObjectsUnreachable, p.objs.Stream, ref.NamedBy, ref.Object.Key)
 	}
-	info, err := p.objs.Stat(ctx, ref.Object.Key)
+	var info objstore.Info
+	err := p.retrying(ctx, objstore.ReadBase, func(ctx context.Context) error {
+		var serr error
+		info, serr = p.objs.Stat(ctx, ref.Object.Key)
+		return serr
+	})
 	switch {
 	case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt):
 		return false, nil
@@ -724,21 +739,88 @@ func sortLost(lost []LostObject) {
 // object — the directory, not the store.
 var errDestination = errors.New("backup: the destination")
 
-// placeObject puts one object into the backup: from prev when it holds an
-// intact copy, else from the object store. It answers whether it was reused.
-func placeObject(ctx context.Context, root, prev string, o objstore.Object,
-	objs *Objects) (bool, error) {
-	if prev != "" {
-		if ok, err := reuseObject(ctx, root, prev, o); err != nil || ok {
+// carry puts one object into the backup: from the previous backup when it
+// holds an intact copy, else from the object store, whose read is retried
+// ([objectPass.retrying]). It answers whether it was reused.
+func (p *objectPass) carry(ctx context.Context, ref reference) (bool, error) {
+	o := ref.Object
+	if p.prev != "" {
+		if ok, err := reuseObject(ctx, p.root, p.prev, o); err != nil || ok {
 			return ok, err
 		}
 	}
-	body, err := objs.Open(ctx, o)
-	if err != nil {
-		return false, err
+	return false, p.retrying(ctx, objstore.ReadBudget(o.Size), func(ctx context.Context) error {
+		body, err := p.objs.Open(ctx, o)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = body.Close() }()
+		return writeObject(p.root, o, body)
+	})
+}
+
+// fetchAttempts is how many times a backup asks the store about one object —
+// a read on `s3`, a stat on `nats` — before a failure that is not a definite
+// answer refuses the backup ([unanswered]).
+//
+// FOUR, paced at [fetchRetryBase] doubling to [fetchRetryCeiling]: a second,
+// two and four between them, seven in all with a fifth of each spread either
+// way — longer than a broker election's five seconds, which is what a stat on
+// the bucket stream fails across, and than the connection reset or the stall
+// a GET from a bucket ends in now and then. Nothing below retries for it: a
+// store's own client retries a request only until its response begins, and
+// [objstore.ReadStall] or a reset part way through a body is final. And it is
+// worth retrying at a backup's scale where it would not be at a request's: a
+// first copy is two million reads over hours, refused whole — with no
+// manifest, and every object read again by the next attempt — for the first
+// one that fails.
+//
+// NO LONGER THAN ONE BUDGET IN ALL: every attempt runs inside the object's
+// own read budget ([objstore.ReadBudget]; a stat's is [objstore.ReadBase]), so
+// a retry never lets one object hold its slot longer than a single read could.
+// IN THE SAME SLOT, so the bound on what is out at once still holds; a store
+// that has stopped answering ends the pass once the first object out has spent
+// its attempts.
+const fetchAttempts = 4
+
+// fetchRetryBase and fetchRetryCeiling pace [fetchAttempts] — see there.
+const (
+	fetchRetryBase    = time.Second
+	fetchRetryCeiling = 5 * time.Second
+)
+
+// retrying runs try — one question about one object — until it answers, it
+// fails definitely, or [fetchAttempts] are spent, all inside budget, and
+// answers its last error. Definite is a store's own answer about the object
+// ([objstore.ErrNotFound], [objstore.ErrCorrupt]) and a failure of the
+// backup's own disk ([errDestination]), each of which asking again cannot
+// change; so is the pass ending.
+func (p *objectPass) retrying(ctx context.Context, budget time.Duration,
+	try func(context.Context) error) error {
+
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		err := try(ctx)
+		switch {
+		case err == nil:
+			if attempt > 1 {
+				p.retried.Add(1)
+			}
+			return nil
+		case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt),
+			errors.Is(err, errDestination), attempt == fetchAttempts, ctx.Err() != nil:
+			return err
+		}
+		wait := time.NewTimer(backoff.Jitter(
+			backoff.Doubling(attempt, fetchRetryBase, fetchRetryCeiling), 0.2))
+		select {
+		case <-wait.C:
+		case <-ctx.Done():
+			wait.Stop()
+			return err
+		}
 	}
-	defer func() { _ = body.Close() }()
-	return false, writeObject(root, o, body)
 }
 
 // reuseObject takes one object from the previous backup's directory, reporting
