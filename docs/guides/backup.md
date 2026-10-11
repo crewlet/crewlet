@@ -132,16 +132,22 @@ What is worth knowing about it:
   snapshot the backup takes anyway carries them, so no object is copied on its
   own: the manifest's `objects.stream` names the stream. Once the snapshot is
   taken, the backup asks the stream's leader about every object a live row of
-  the replicated copy names, and `objects.objects` and `objects.bytes` count
-  the ones it holds — a key is never reused, so an object the store holds after
-  the snapshot finished is one the snapshot holds too. On `s3` the backup reads
-  every object a **live** row of the replicated copy names — read from the copy
-  itself, for the position's reason below — from the bucket, four at a time so
-  a backup never saturates the store every upload and download also uses, and
-  streams each to disk, checking it against its file's size and SHA-256 as it
-  is written. Each lands under `objects/files/<key>` — the bucket's own layout
-  under its prefix — first under a temporary name, renamed only once it has
-  checked out. An object only a
+  the replicated copy names, **thirty-two at a time** — the collector's audit
+  asks the same question at the same depth — and `objects.objects` and
+  `objects.bytes` count the ones it holds: a key is never reused, so an object
+  the store holds after the snapshot finished is one the snapshot holds too. On
+  `s3` the backup reads every object a **live** row of the replicated copy names
+  — read from the copy itself, for the position's reason below — from the
+  bucket, **sixteen at a time**: a few hundred requests a second at most, under
+  a tenth of what S3 serves one prefix, so the company's own downloads keep the
+  rest, while a first copy of a large company's files comes sixteen streams
+  wide. Each is streamed to disk and checked against its file's size and
+  SHA-256 as it is written, and lands under `objects/files/<key>` — the
+  bucket's own layout under its prefix — first under a temporary name, renamed
+  only once it has checked out. Either way the copy's rows are read **a page at
+  a time**, in key order across every table, while the objects of the page
+  before are fetched: the backup holds a page of references, never the
+  company's whole inventory. An object only a
   [retired](../concepts/object-store.md#live-and-retired-references) row names
   is neither copied nor asked after: a restore brings the row back without it,
   and nothing is owed it.
@@ -168,7 +174,10 @@ What is worth knowing about it:
   `objects_missing` alarm is what sends somebody to replace the file. An
   object the store did not *answer* about may be intact there, so it **fails
   the backup** (`POST /backup` answers 503 `objects_unreachable`), naming it:
-  take it again once the store answers. The manifest's `objects` records
+  take it again once the store answers. The **first** such object stops the
+  backup, with nothing left in flight — it is refused for that one whatever the
+  rest do, and a store that has stopped answering is not sent the rest of the
+  company's files. The manifest's `objects` records
   `dir` or `stream`, `objects`, `bytes`, `reused`, `reused_from` and `lost`; a
   copy naming no file has none.
 - **Streams are enumerated, not listed.** A namespace stream is created on
