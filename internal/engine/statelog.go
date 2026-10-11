@@ -2159,7 +2159,7 @@ func floored(health statelog.Health, domain string, floors publishedFloors) (sta
 func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
-		return tracker.NewApplier(s.nodeID), nil
+		return tracker.NewApplier(), nil
 	case search.Domain{}.Name():
 		return search.NewApplier(), nil
 	case pages.Domain{}.Name():

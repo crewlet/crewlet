@@ -209,7 +209,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier(nodeID)
+	r.writer, r.applier = writer, tracker.NewApplier()
 	r.reader, r.waiter = reader, waiter
 	return r
 }

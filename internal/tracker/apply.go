@@ -35,14 +35,17 @@ import (
 //     on every node and stall the whole fleet's log.
 
 // Applier writes this node's copy of the tracker's state.
-type Applier struct {
-	// NodeID is this node's own id, which the eviction gate compares a
-	// record's writer against.
-	NodeID string
-}
+//
+// It carries NO NODE IDENTITY, and that is the purity rule rather than an
+// omission: [statelog.Applier] forbids one, because an applier that could
+// read which node it runs on could write rows its peers do not. The eviction
+// gate needs none either — it compares the record's own
+// [statelog.Record.Writer] against the eviction rows in this transaction —
+// so every node's applier is the same value.
+type Applier struct{}
 
-// NewApplier builds the applier for one node.
-func NewApplier(nodeID string) *Applier { return &Applier{NodeID: nodeID} }
+// NewApplier builds the applier, which is the same on every node.
+func NewApplier() *Applier { return &Applier{} }
 
 // Committed is the post-commit half, and it is deliberately empty.
 //
