@@ -79,8 +79,10 @@ export const Composer = forwardRef<
     index: OrgIndex;
     /** What the empty field says, where the mode's own wording does not fit. */
     placeholder?: string;
+    /** Told once what was written has been posted, so a reply target can close. */
+    onSent?: () => void;
   }
->(function Composer({ item, mode, to, index, placeholder: said }, ref) {
+>(function Composer({ item, mode, to, index, placeholder: said, onSent }, ref) {
   const write = useAct("comment_on_work_item");
   const [text, setText] = useState("");
   const [picker, setPicker] = useState<"link" | "page" | "ask" | null>(null);
@@ -127,7 +129,10 @@ export const Composer = forwardRef<
     const result = await write.run(args, {
       done: mode.kind === "reply" ? `Replied on ${item}` : `Commented on ${item}`,
     });
-    if (result && (result.kind === "applied" || result.kind === "pending")) setText("");
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      setText("");
+      onSent?.();
+    }
   };
 
   const placeholder =

@@ -1292,6 +1292,47 @@ test("a comment is posted on the task", async () => {
   ]);
 });
 
+// A REPLY SENT CLOSES ITS TARGET. The "Replying to" banner stayed over the
+// field after the reply was posted, offering to cancel a reply already sent:
+// the page's callback was one the composer only called from an answer mode
+// this page never used.
+test("a reply sent closes the banner that said who it answers", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: {
+        item: "t-1",
+        key: "ENG-42",
+        title: "Fix the login race",
+        comments: [
+          {
+            id: "c-9",
+            task: "t-1",
+            author: "ada",
+            author_kind: "agent",
+            body: "Is the port flapping?",
+            created_at: "2031-04-12T09:00:00Z",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  expect(screen.getByText(/^Replying to/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: /^Reply to/ }), {
+    target: { value: "Yes, every 20s." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Send$/ }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "comment_on_work_item",
+      args: { item: "ENG-42", body: "Yes, every 20s.", reply_to: "c-9" },
+    },
+  ]);
+  expect(screen.queryByText(/^Replying to/)).toBeNull();
+});
+
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
 // sliced to 200 characters — not even the engine's figure, which is 300 bytes —
 // so a long opening line arrived as half a sentence nobody wrote. Past the cap
