@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -1406,6 +1407,208 @@ func TestASeatNothingConcludedAboutIsStillReported(t *testing.T) {
 	// renders as a bare subject sends them to read logs.
 	if strings.TrimSpace(findings[0].Detail) == "" {
 		t.Error("the finding says nothing about what to do")
+	}
+}
+
+// seatLookupWorld is an organization whose agent seats each hold their own
+// token, answered by GitHub as the token's name says: `ghp_unreachable`
+// drops the connection before any answer, `ghp_revoked` is refused,
+// `ghp_installation` answers 200 with no login, and any other `ghp_<login>`
+// authenticates as `<login>`.
+//
+// The org credential is `ghp_crewlet-engine` and resolves like the last
+// kind, so the pass always gets past its own probe to the seat walk.
+func seatLookupWorld(t *testing.T, seats map[string]string) github.Options {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); token {
+		case "ghp_unreachable":
+			// NO ANSWER AT ALL: the connection closes before a status
+			// line, which is what a dial that failed or a read that timed
+			// out looks like to the client — an error with no status.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.Close()
+		case "ghp_revoked":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message": "Bad credentials"}`))
+		case "ghp_installation":
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			_, _ = w.Write([]byte(`{"login": "` + strings.TrimPrefix(token, "ghp_") + `"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := github.NewClient(github.ClientOptions{
+		APIBase: server.URL, WebBase: server.URL, Token: "ghp_crewlet-engine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := make([]*org.Role, 0, len(seats))
+	for _, handle := range slices.Sorted(maps.Keys(seats)) {
+		roles = append(roles, &org.Role{
+			Name: strings.ToUpper(handle), DeclaredHandle: handle,
+			MCPEnv: map[string]map[string]string{
+				github.SeatEnv: {"GITHUB_TOKEN": seats[handle]},
+			},
+		})
+	}
+	return github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true},
+		Org:    &org.Organization{Name: "Acme", Roles: roles},
+		Value:  func(v string) string { return v },
+	}
+}
+
+// A SEAT LOOKUP GITHUB NEVER ANSWERED IS THE ENGINE FAILING TO LOOK, so the
+// pass raises it rather than reporting the seat.
+//
+// It became identity_failed — a GitHub organization owner sent to look for a
+// broken credential, asked again on the vendor admin's backoff — because a
+// dial that failed or a read that timed out was filed exactly like a token
+// GitHub refused, with the transport error as the reason. A network blip, or
+// a node draining mid-pass, reported every credentialled seat it caught as an
+// account that cannot authenticate. [integration.Reconciler]'s contract, and
+// Jira's seat walk, say the opposite: an error is the engine failing to look,
+// which the loop records as its own fault and retries.
+func TestASeatLookupGitHubNeverAnsweredIsRaisedRatherThanReported(t *testing.T) {
+	t.Parallel()
+	opts := seatLookupWorld(t, map[string]string{
+		"analyst": "ghp_unreachable",
+		"eng":     "ghp_eng-bot",
+		"ops":     "ghp_unreachable",
+	})
+	res, err := github.Reconcile(t.Context(), opts)
+	if err == nil {
+		t.Fatalf("a seat lookup that got no answer was reported as %+v — a "+
+			"statement about the seat's credential nobody at GitHub made",
+			res.Findings())
+	}
+	if errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("an unanswered lookup was marked as a refused credential: %v", err)
+	}
+	// THE FIRST SUCH SEAT IN SEAT ORDER, never whichever lookup lost the
+	// race: the fault is the surface's last error, and one that named a
+	// different seat on every pass over one unchanged world would read as a
+	// fleet of seats failing in turn.
+	if !strings.Contains(err.Error(), "account analyst's") {
+		t.Errorf("the fault does not name the first seat whose lookup went "+
+			"unanswered: %v", err)
+	}
+	// AND THE LOOP READS IT AS ITS OWN WORK, retried on the engine's backoff,
+	// which is the whole difference from the vendor's finding it was.
+	state, _ := integration.Observe(integration.State{}, integration.KindGitHub, nil,
+		err, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if state.Report.Actor != integration.ActorEngine {
+		t.Errorf("the loop reports this pass as owed by %q, want the engine "+
+			"retrying its own fault", state.Report.Actor)
+	}
+	// THE SEATS ARE STILL HANDED BACK, because `crewlet github provision`
+	// prints them beside the error, and the one that did answer is named.
+	if res == nil || len(res.Seats) != 3 {
+		t.Fatalf("result = %+v, want every seat described for the command line", res)
+	}
+	for _, seat := range res.Seats {
+		switch seat.Handle {
+		case "eng":
+			if seat.Login != "eng-bot" {
+				t.Errorf("the seat GitHub answered for resolved to %q", seat.Login)
+			}
+		default:
+			// UNANSWERED, NEVER REFUSED: the command line sorts the seats
+			// by this, and "refused" printed beside the error is the
+			// claim the error exists not to make.
+			if seat.Routes() || seat.Reason == "" ||
+				seat.Outcome != github.IdentityUnanswered || seat.Refused() ||
+				!seat.Outcome.Valid() {
+				t.Errorf("an unanswered seat is described as %+v", seat)
+			}
+		}
+	}
+}
+
+// AND A SEAT LOOKUP GITHUB DID ANSWER IS STILL A FINDING OWED AT GITHUB,
+// whatever the answer was — or the rule above would be a way of never
+// reporting a broken credential at all.
+//
+// The login-less 200 is the case a status-only reading gets wrong: GitHub
+// answered, and answered the same way every time, so it is a fact about the
+// credential and not a fault the engine retries for ever.
+func TestASeatLookupGitHubAnsweredIsReportedAtGitHub(t *testing.T) {
+	t.Parallel()
+	opts := seatLookupWorld(t, map[string]string{
+		"analyst": "ghp_revoked",
+		"app":     "ghp_installation",
+		"eng":     "ghp_eng-bot",
+	})
+	res, err := github.Reconcile(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("a lookup GitHub answered was raised as the engine failing "+
+			"to look: %v", err)
+	}
+	reported := map[string]integration.Finding{}
+	for _, f := range res.Findings() {
+		reported[f.Subject] = f
+	}
+	for _, handle := range []string{"analyst", "app"} {
+		f, ok := reported[handle]
+		if !ok {
+			t.Errorf("%s's answered lookup produced no finding: %+v", handle, res.Findings())
+			continue
+		}
+		if f.Kind != integration.FindingIdentityFailed {
+			t.Errorf("%s is %s, want %s", handle, f.Kind, integration.FindingIdentityFailed)
+		}
+		integrationtest.AssertVendorFault(t, f)
+	}
+	if _, ok := reported["eng"]; ok {
+		t.Errorf("a seat that resolved was reported: %+v", reported["eng"])
+	}
+}
+
+// THE ORGANIZATION CREDENTIAL IS CALLED REFUSED ONLY WHEN GITHUB REFUSED IT.
+//
+// The pass's own probe said "was refused" whatever went wrong, so a timeout
+// read in the surface's last error as a credential GitHub would not accept,
+// and sent an operator to rotate a token that was fine — the wording
+// [integration.Refusal] exists to decide, from the classification rather than
+// from a guess, and which jira's probe already takes from it.
+func TestTheOrgCredentialIsCalledRefusedOnlyWhenGitHubRefusedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		token   string
+		refused bool
+	}{
+		{token: "ghp_revoked", refused: true},
+		{token: "ghp_unreachable", refused: false},
+	} {
+		t.Run(tc.token, func(t *testing.T) {
+			t.Parallel()
+			opts := seatLookupWorld(t, nil)
+			client, err := github.NewClient(github.ClientOptions{
+				APIBase: opts.Client.APIBase(), WebBase: opts.Client.WebBase(),
+				Token: tc.token,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts.Client = client
+			_, err = github.Reconcile(t.Context(), opts)
+			if err == nil {
+				t.Fatal("a probe GitHub did not resolve was not raised")
+			}
+			if got := errors.Is(err, integration.ErrCredentialRejected); got != tc.refused {
+				t.Errorf("marked as a refused credential: %v, want %v (%v)", got, tc.refused, err)
+			}
+			if got := strings.Contains(err.Error(), "was refused"); got != tc.refused {
+				t.Errorf("says \"was refused\": %v, want %v: %v", got, tc.refused, err)
+			}
+		})
 	}
 }
 

@@ -179,8 +179,8 @@ agent carries its own [GitHub App](#one-github-app-per-agent), and a seat that n
 no `mcp_env.github` credential is acting through it — so the reconcile reports
 that seat as *unclaimed* rather than as a failed identity, and the provisioning
 command prints it under "act through their own GitHub App" rather than under a
-list of things to fix. The four outcomes a seat can have are therefore
-**resolved** (a token named an account), **unclaimed** (no token, which is
+list of things to fix. Leaving aside a lookup GitHub never answered (below), a
+seat has four outcomes: **resolved** (a token named an account), **unclaimed** (no token, which is
 expected), **unset** (a slot whose `${VAR}` resolved to nothing) and
 **refused** (a token GitHub would not turn into an account). The last two are
 findings, and different people's: an unset slot never reached GitHub, so it
@@ -192,6 +192,19 @@ That distinction was missing, and its absence was loud: every agent seat in a
 company on the app design was reported as a failed identity, permanently
 degraded, with the integration card saying each of them could receive no
 GitHub events while all of them were working.
+
+**Refused means GitHub answered.** A seat is *refused* when GitHub looked at
+its token and gave an answer that names nobody: a `401` or any other status,
+or a `200` with no login (an installation token). A lookup that never got an
+answer — a dial that failed, a read that timed out, a pass cancelled by a
+node draining — says nothing about the token, so that seat is a fifth
+outcome, **unanswered**, and no finding at all: the pass fails, the card
+reads *Waiting for the provider* with the transport error as its last error,
+and the engine asks again on its own backoff, as it does for every surface it
+could not read. It used to be filed as refused, and so as `identity_failed`,
+which sent a GitHub organization owner looking for a broken credential over a
+network blip. `crewlet github provision` prints such a seat under its own
+heading, beside the error the run exits with, rather than as refused.
 
 ### Human seats
 

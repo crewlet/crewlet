@@ -142,16 +142,21 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 // followed by three NO ACCOUNT lines — the same false alarm that
 // [github.Result.Findings] was fixed to stop reporting, relocated to the
 // command line. The counts follow [github.SeatIdentity]'s own vocabulary now,
-// so the two cannot drift again.
+// so the two cannot drift again — which is why a seat GitHub never answered
+// for is a group of its own rather than REFUSED: printed beside the error the
+// run returns for it, "refused" would send the operator to an account at
+// GitHub over a request that never got there.
 func printGitHubResult(w io.Writer, res *github.Result) {
 	fmt.Fprintf(w, "\nAuthenticated as %s.\n", res.Login)
 
-	var unclaimed, refused []github.SeatIdentity
+	var unclaimed, refused, unanswered []github.SeatIdentity
 	for _, seat := range res.Seats {
 		switch {
 		case seat.Routes():
 		case seat.Refused():
 			refused = append(refused, seat)
+		case seat.Outcome == github.IdentityUnanswered:
+			unanswered = append(unanswered, seat)
 		default:
 			unclaimed = append(unclaimed, seat)
 		}
@@ -177,6 +182,17 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 		fmt.Fprintf(w, "\n%d seat(s) name a credential this run could not resolve:\n", len(refused))
 		for _, seat := range refused {
 			fmt.Fprintf(w, "  %-16s REFUSED — %s\n", seat.Handle, seat.Reason)
+		}
+	}
+	if len(unanswered) > 0 {
+		// NOT REFUSED, and kept out of that list on purpose: GitHub said
+		// nothing about these credentials, so the run stopped and
+		// returned an error, and the honest instruction is to run it
+		// again rather than to go and look at an account.
+		fmt.Fprintf(w, "\n%d seat(s) GitHub did not answer for, so this run stopped:\n",
+			len(unanswered))
+		for _, seat := range unanswered {
+			fmt.Fprintf(w, "  %-16s NO ANSWER — %s\n", seat.Handle, seat.Reason)
 		}
 	}
 

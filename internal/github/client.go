@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,14 +227,22 @@ func (c *Client) Me(ctx context.Context) (string, error) {
 		// 200 with no login is a shape nothing documents, and
 		// registering a seat under "" would make it the routing target
 		// for every event whose login field was missing.
-		return "", fmt.Errorf(
-			"github: /user answered with no login, so there is no account to " +
-				"register this seat under — an installation token authenticates " +
-				"as an app rather than as a person and cannot hold a seat's " +
-				"identity")
+		return "", ErrNoLogin
 	}
 	return strings.ToLower(out.Login), nil
 }
+
+// ErrNoLogin is GitHub ANSWERING /user, successfully, with no login.
+//
+// A sentinel rather than prose because a caller has to tell it apart from a
+// lookup GitHub never answered, and it carries no status to be told by: it
+// arrived as a 200. It is an answer about the credential — the same one
+// however often it is asked — where a request that failed before any answer
+// says nothing about the credential at all. See [resolveSeats].
+var ErrNoLogin = errors.New(
+	"github: /user answered with no login, so there is no account to register " +
+		"this seat under — an installation token authenticates as an app rather " +
+		"than as a person and cannot hold a seat's identity")
 
 // ParticipantsOf is everyone who has COMMENTED on an issue or pull request,
 // plus everyone who has REVIEWED a pull request.
