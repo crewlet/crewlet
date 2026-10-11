@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
@@ -23,7 +24,7 @@ type Options struct {
 	Key   string
 
 	// Plan names the seats wanting an identity, from [PlanFor].
-	Plan *provision.Plan
+	Plan *Plan
 
 	// Sink records what is minted. A sink that cannot mint is a DRY RUN:
 	// the pass reads what exists and creates nothing, which is what a check
@@ -56,8 +57,16 @@ type Result struct {
 	// Seats is one entry per seat the plan named.
 	Seats []SeatResult
 
-	// Notes are the caveats: a seat whose token slot is a literal.
+	// Notes are the caveats: a seat this pass provisions whose address
+	// slot is missing or is not a whole ${VAR}, so the address Atlassian
+	// assigns has nowhere to go.
 	Notes []string
+
+	// ByHand is the seats whose Atlassian credential the company manages
+	// itself, from [Plan.ByHand]: no account is made for them and nothing
+	// about them is wrong. See [Result.Findings] for what that is reported
+	// as.
+	ByHand []string
 
 	// NoKeyring is a pass this node could not run in full because it has
 	// nowhere to seal what provisioning creates.
@@ -251,6 +260,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return res, nil
 	}
 	res.Notes = append(res.Notes, opts.Plan.Notes...)
+	res.ByHand = append(res.ByHand, opts.Plan.ByHand...)
 
 	existing, err := opts.Client.ListServiceAccounts(ctx, opts.Key, opts.OrgID)
 	if err != nil {
@@ -855,16 +865,52 @@ func (r *Result) Findings() []integration.Finding {
 			})
 		}
 	}
-	// THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S: a seat whose mcp_env
-	// slot is not a whole ${VAR}, so a minted token or the address Atlassian
-	// assigns has nowhere to be written. Every one of them is fixed by an
-	// edit here, so a config fault, the company admin's. They were short
-	// grants — a seat holding less than its tier, which only a person AT
-	// Atlassian can widen — and sent an Atlassian admin to look for access
-	// that was never the problem.
+	// THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S: a seat this pass
+	// provisions whose address slot is missing or not a whole ${VAR}, so the
+	// address Atlassian assigns has nowhere to be written and the seat's
+	// token authenticates as nobody. Every one of them is fixed by an edit
+	// here, so a config fault, the company admin's. They were short grants —
+	// a seat holding less than its tier, which only a person AT Atlassian can
+	// widen — and sent an Atlassian admin to look for access that was never
+	// the problem.
 	for _, note := range r.Notes {
 		out = append(out, integration.Finding{
 			Kind: integration.FindingConfigFault, Detail: note,
+		})
+	}
+	// AND THE SEATS THE COMPANY MANAGES BY HAND, said once, as what they are:
+	// a decision the document already states.
+	//
+	// AN ADVISORY. [integration.FindingCoveragePartial]'s verdict is ready
+	// and the company admin's: the integration is doing exactly what it was
+	// asked, over fewer seats than it could, and provisioning one of them is
+	// a choice in this company's own document. These seats used to arrive as
+	// plan notes, which made each one a config fault — degraded, Action
+	// required, re-asked hourly — that no pass could ever clear, because
+	// nothing about it was wrong. Before that they were short grants, which
+	// sent an Atlassian admin to widen access nobody had withheld.
+	//
+	// ONE FINDING rather than one per seat: there is nothing per seat to do
+	// differently, and the handles are in the list, where a reader with room
+	// lays them out. Whether a credential put there by hand actually works is
+	// asked by the products' own surfaces, which authenticate every seat with
+	// it — not something this pass, which never touches the credential, can
+	// say.
+	if len(r.ByHand) > 0 {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCoveragePartial,
+			Subject: "atlassian coverage",
+			// "EACH ONE'S", so the sentence reads correctly at one agent and
+			// at thirty with no second number agreement in it. The last
+			// clause is the remedy and it is optional, so it stays in the
+			// sentence rather than becoming a Remedy line, which would make
+			// a decision read as work outstanding.
+			Detail: "Crewlet provisions no Atlassian account for " +
+				integration.Count(len(r.ByHand), "agent") + " the company manages " +
+				"by hand: each one's mcp_env token slot holds a credential rather " +
+				"than a whole ${VAR} — point it at a variable for Crewlet to " +
+				"provision it",
+			Subjects: slices.Clone(r.ByHand),
 		})
 	}
 	return out

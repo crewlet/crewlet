@@ -2,6 +2,7 @@ package atlassian
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -46,14 +47,36 @@ func HandleFrom(displayName string) string {
 	return strings.TrimSpace(handle)
 }
 
+// Plan is what one Atlassian pass intends to do: the seats it provisions, the
+// caveats about them, and the seats it deliberately leaves to the company.
+type Plan struct {
+	provision.Plan
+
+	// ByHand is the handles of the seats whose Atlassian credential the
+	// company manages itself: an agent whose mcp_env token slot holds a
+	// value rather than a whole ${VAR}, so there is nowhere to write a token
+	// this engine mints and no account for it to create.
+	//
+	// APART FROM [provision.Plan.Notes], because the two are opposite facts
+	// with opposite owners. A note is a seat this engine provisions and
+	// cannot finish — its address has nowhere to go — which only an edit of
+	// the company document fixes. This is a DECISION the document already
+	// states, which no edit is owed for and no pass will ever change. Filed
+	// as a note it was a finding that never cleared: a short grant once, a
+	// config fault since, either way telling somebody to fix a seat that was
+	// set up exactly as they meant it. See [Result.Findings] for what it is
+	// reported as instead.
+	ByHand []string
+}
+
 // PlanFor is the seats this company wants an Atlassian identity for.
 //
 // A seat opts IN by naming a ${VAR} in one of its mcp_env Atlassian blocks,
 // exactly as every other provisioned app works: the variable is where the
 // minted token is written, and a seat with nowhere to put one is a seat this
-// pass leaves alone rather than an error.
-func PlanFor(o *org.Organization) (*provision.Plan, error) {
-	plan := &provision.Plan{}
+// pass leaves alone — [Plan.ByHand] — rather than an error.
+func PlanFor(o *org.Organization) (*Plan, error) {
+	plan := &Plan{}
 	if o == nil {
 		return plan, nil
 	}
@@ -71,12 +94,10 @@ func PlanFor(o *org.Organization) (*provision.Plan, error) {
 		}
 		name, ok := provision.SoleVar(value)
 		if !ok {
-			// THE NOTE NAMES THE SHAPE, NEVER THE VALUE: it is printed in a
-			// report an operator pastes into a ticket, and the value is
-			// either a credential or a string containing one.
-			plan.Note("%s: mcp_env %s is not a whole ${VAR} reference, so there is "+
-				"nowhere to write a minted token — point it at a variable, or "+
-				"manage this seat's account by hand", handle, key)
+			// THE HANDLE AND NOTHING ELSE, never the slot's value: it is
+			// reported where an operator pastes it into a ticket, and the
+			// value is either a credential or a string containing one.
+			plan.ByHand = append(plan.ByHand, handle)
 			continue
 		}
 		entry := provision.Seat{Handle: handle, Role: seat.Name, TokenVar: name}
@@ -100,5 +121,9 @@ func PlanFor(o *org.Organization) (*provision.Plan, error) {
 		}
 		plan.Add(entry)
 	}
+	// ORDERED BY HANDLE, as [provision.Plan.Add] keeps the seats and for its
+	// reason: a report read beside the previous pass's must list the same
+	// seats in the same places.
+	slices.Sort(plan.ByHand)
 	return plan, nil
 }
