@@ -1651,6 +1651,12 @@ type copyVerdict struct {
 	// be read.
 	answers bool
 	refusal statelog.ReadRefusal
+
+	// unread names every log whose health could not be read, which this
+	// reading says nothing about: a fault held on one of them is carried
+	// ([localEstate.refresh]), and a fault held on a log that WAS read and
+	// found sound is not.
+	unread []string
 }
 
 // shutEstate is the fault a copy whose file is not open is judged by: no log
@@ -1737,6 +1743,7 @@ func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 		}
 		health, err := s.health(ctx, running)
 		if err != nil {
+			out.unread = append(out.unread, running.domain.Name())
 			if out.answers {
 				out.answers, out.refusal = false, statelog.RefuseBrokerUnreachable
 			}

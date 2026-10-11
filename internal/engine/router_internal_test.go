@@ -97,10 +97,11 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 			"service, and the seats read the estate from another data node", reason)
 	}
 
-	// A BLIP DOES NOT BRING IT BACK: a reading that reached no broker keeps
-	// the fault it had.
+	// A BLIP DOES NOT BRING IT BACK: a reading that could not read the
+	// faulted log keeps the fault it had.
 	now = now.Add(servingRecheck)
-	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable}
+	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable,
+		unread: []string{"tracker", "pages"}}
 	if _, ok := judged(t.Context(), l); ok {
 		t.Fatal("a reading that reached no broker put a wrong copy back into service")
 	}
@@ -108,6 +109,20 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	verdict = copyVerdict{answers: true}
 	if _, ok := judged(t.Context(), l); !ok {
 		t.Fatal("a copy found sound again is still not served")
+	}
+
+	// NOR DOES A BLIP ON ANOTHER LOG KEEP IT OUT: the faulted log was read
+	// and found sound, and only a log that held no fault went unread.
+	now = now.Add(servingRecheck)
+	verdict = copyVerdict{fault: "tracker", answers: true}
+	if _, ok := judged(t.Context(), l); ok {
+		t.Fatal("a copy that is wrong again is still served")
+	}
+	now = now.Add(servingRecheck)
+	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable, unread: []string{"pages"}}
+	if _, ok := judged(t.Context(), l); !ok {
+		t.Fatal("a copy whose faulted log was read and found sound stayed out of " +
+			"service because another log's health could not be read")
 	}
 }
 
