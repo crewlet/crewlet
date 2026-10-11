@@ -104,6 +104,26 @@ describe("why a backup was not taken", () => {
     expect(refusal.message).not.toMatch(/api_backup_failed/);
   });
 
+  // AN OBJECT STORE THAT DID NOT ANSWER is the fleet's state, and the engine's
+  // hint says what to check — a clause, said as a sentence of its own before
+  // the one that follows it rather than run into it.
+  test("an unreachable object store is said in the engine's hint", () => {
+    const refusal = backupRefusal(
+      new RestError(503, { error: "objects_unreachable", hint: "check the S3 bucket" }),
+    );
+    expect(refusal.field).toBe(false);
+    expect(refusal.message).toMatch(/^Check the S3 bucket\. Whatever was written there /);
+    expect(refusal.message).not.toMatch(/api_backup_failed/);
+    // A hint already written as a sentence keeps its one full stop, and the
+    // page's own sentence for none is followed by the next one.
+    const stopped = backupRefusal(
+      new RestError(503, { error: "objects_unreachable", hint: "Check the S3 bucket." }),
+    );
+    expect(stopped.message).toMatch(/^Check the S3 bucket\. Whatever was written there /);
+    const bare = backupRefusal(new RestError(503, { error: "objects_unreachable" }));
+    expect(bare.message).toMatch(/[^.]\. Whatever was written there /);
+  });
+
   test("a refused credential says what to set", () => {
     expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
       /operator token/,

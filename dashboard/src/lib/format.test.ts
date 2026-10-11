@@ -32,6 +32,7 @@ import {
   parseUTC,
   plural,
   relTime,
+  sentence,
   splitConversationKey,
   conversationLabel,
   tsKey,
@@ -225,6 +226,23 @@ describe("text", () => {
     expect(humanize("agent_phase_completed")).toBe("Agent phase completed");
     expect(humanize("phase.tool_skill_blocked")).toBe("Phase tool skill blocked");
     expect(humanize("")).toBe("");
+  });
+
+  // A HINT IS A CLAUSE, and said before a sentence of a screen's own it has to
+  // end as one, or the two run together. A clause already stopped keeps its
+  // one mark, and an empty one is not a lone full stop.
+  test("a clause becomes a sentence of its own", () => {
+    expect(sentence("take the backup again")).toBe("Take the backup again.");
+    expect(sentence("  the S3 bucket; take the backup again ")).toBe(
+      "The S3 bucket; take the backup again.",
+    );
+    expect(sentence("Check the path. A route this build does not have.")).toBe(
+      "Check the path. A route this build does not have.",
+    );
+    expect(sentence("is it there?")).toBe("Is it there?");
+    expect(sentence("If-None-Match asks for a create")).toBe("If-None-Match asks for a create.");
+    expect(sentence("")).toBe("");
+    expect(sentence("   ")).toBe("");
   });
 });
 

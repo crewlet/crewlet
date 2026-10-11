@@ -1,6 +1,7 @@
 import { Button, EmptyState, Kbd } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "~/app/router.tsx";
+import { sentence } from "~/lib/format.ts";
 
 /**
  * A path the route table does not have.
@@ -21,7 +22,7 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       title={`This URL names ${what}, and there is no such screen.`}
       description={
         <>
-          {hint ? <>{capitalise(hint)}. </> : null}
+          {hint ? <>{sentence(hint)} </> : null}
           The address was <code className="inline">{route.hash}</code>. Every screen is reachable
           from the sidebar, and any event, trace or turn id can be pasted into the command{" "}
           {/* THE PLATFORM'S OWN CHORD, drawn by the part the sidebar's search
@@ -40,8 +41,4 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       }
     />
   );
-}
-
-function capitalise(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
