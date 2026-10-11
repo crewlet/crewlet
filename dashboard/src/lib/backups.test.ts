@@ -114,14 +114,30 @@ describe("why a backup was not taken", () => {
     expect(refusal.field).toBe(false);
     expect(refusal.message).toMatch(/^Check the S3 bucket\. Whatever was written there /);
     expect(refusal.message).not.toMatch(/api_backup_failed/);
-    // A hint already written as a sentence keeps its one full stop, and the
-    // page's own sentence for none is followed by the next one.
-    const stopped = backupRefusal(
-      new RestError(503, { error: "objects_unreachable", hint: "Check the S3 bucket." }),
-    );
-    expect(stopped.message).toMatch(/^Check the S3 bucket\. Whatever was written there /);
-    const bare = backupRefusal(new RestError(503, { error: "objects_unreachable" }));
+  });
+
+  // A REFUSAL THE FLEET'S OWN STATE CAUSES — an object store that did not
+  // answer, a newer build's record on a log the backup replays, a copy keyed to
+  // a recreated log, a log missing records — is said in the engine's hint, as a
+  // sentence of its own, never as a copy that failed on this node.
+  test.each([
+    [503, "objects_unreachable", /did not answer/],
+    [409, "record_unreadable", /newer build/],
+    [409, "log_recreated", /recreated/],
+    [503, "log_gap", /take the backup again/],
+  ])("a %i %s is said in the engine's hint, or its own sentence", (status, code, own) => {
+    const hinted = backupRefusal(new RestError(status, { error: code, hint: "do the thing" }));
+    expect(hinted.field).toBe(false);
+    expect(hinted.message).toMatch(/^Do the thing\. Whatever was written there /);
+    expect(hinted.message).toMatch(/not a backup\.$/);
+    expect(hinted.message).not.toMatch(/api_backup_failed/);
+    // A hint already written as a sentence keeps its one full stop.
+    const stopped = backupRefusal(new RestError(status, { error: code, hint: "Do the thing." }));
+    expect(stopped.message).toMatch(/^Do the thing\. Whatever was written there /);
+    const bare = backupRefusal(new RestError(status, { error: code }));
+    expect(bare.message).toMatch(own);
     expect(bare.message).toMatch(/[^.]\. Whatever was written there /);
+    expect(bare.message).not.toMatch(/api_backup_failed/);
   });
 
   test("a refused credential says what to set", () => {

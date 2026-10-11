@@ -5981,8 +5981,11 @@ to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field; a backup
 already running on that node (`409 backup_running`) is said as that rather than as a
-failed copy, and an object store that did not answer (`503 objects_unreachable`) in
-the engine's own hint. The request
+failed copy, and a refusal the fleet's own state causes — an object store that did
+not answer (`503 objects_unreachable`), a newer build's record on a log the backup
+replays (`409 record_unreadable`), a copy keyed to a recreated log (`409
+log_recreated`) or a log missing records the copy needs (`503 log_gap`) — in the
+engine's own hint. The request
 waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Three tiles (the
 newest backup the trim counts, the `backup_floor` policy, and how many were
