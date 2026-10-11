@@ -14,10 +14,10 @@ name: release
 # dockers_v2 builds and pushes in ONE step, so `--skip=publish` would skip
 # the image build entirely and leave the Dockerfile untested.
 #
-# An image of every commit on main is built from the same .goreleaser.yaml by
-# main-image.yml, a workflow of its own: docs-publish.yml reads every
-# completed run of THIS workflow whose event was a push as a new v* tag, so a
-# push-to-main trigger here would republish the docs site on every merge.
+# The image of main is built by main-image.yml, a workflow of its own:
+# docs-publish.yml reads every completed run of THIS workflow whose event was
+# a push as a new v* tag, so a push-to-main trigger here would republish the
+# docs site on every merge.
 #
 # EVERY ACTION IS PINNED BY COMMIT SHA, with its release in a trailing comment
 # that Dependabot keeps in step when it bumps the pin. A version tag is a ref
@@ -40,11 +40,6 @@ on:
       - ".goreleaser.yaml"
       - "Dockerfile"
       - ".github/workflows/release.yml"
-      # main-image.yml builds the image of main from this pipeline, and its
-      # own dry run skips the image (building it there would push it), so a
-      # pull request that changes only that workflow gets its image build
-      # from this job.
-      - ".github/workflows/main-image.yml"
       - "go.mod"
       - "internal/version/**"
       # The before hook's generator: a module it can no longer read, or a
@@ -105,16 +100,16 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # goreleaser ITSELF IS PINNED EXACTLY, in every goreleaser step of
-      # this file and of main-image.yml, and the same version in each, so
-      # the snapshot rehearses with the build that publishes. Not a range
-      # like `~> v2`: the action downloads the newest release in it on every
-      # run and checks it only against the checksums file of that same
-      # release, so a new goreleaser — broken or compromised — would run
-      # here unreviewed, in the jobs holding the Releases, the registry and
-      # the signing identity. The cost is that Dependabot never bumps a
-      # `with:` input, so this pin is moved by hand (CONTRIBUTING.md says
-      # how): take the newest v2 release from goreleaser's own releases.
+      # goreleaser ITSELF IS PINNED EXACTLY, in every goreleaser step, and
+      # the same version in each, so the snapshot rehearses with the build
+      # that publishes. Not a range like `~> v2`: the action downloads the
+      # newest release in it on every run and checks it only against the
+      # checksums file of that same release, so a new goreleaser — broken or
+      # compromised — would run here unreviewed, in the job holding the
+      # Releases, the registry and the signing identity. The cost is that
+      # Dependabot never bumps a `with:` input, so this pin is moved by hand
+      # (CONTRIBUTING.md says how): take the newest v2 release from
+      # goreleaser's own releases.
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3

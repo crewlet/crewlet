@@ -635,16 +635,14 @@ worth knowing:
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
 - **One pin nothing watches: goreleaser itself.** Every goreleaser step in
-  `.github/workflows/release.yml` and `.github/workflows/main-image.yml` asks
-  for an exact goreleaser
+  `.github/workflows/release.yml` asks for an exact goreleaser
   (`version: v2.18.3`), and Dependabot bumps the action's ref but never a
   `with:` input. It is exact anyway, because a range would download whatever
   goreleaser released last into the job that publishes and signs, with
-  nobody reviewing it — and main-image.yml runs on every merge and every
-  hour. So move it by hand: take the newest release from
+  nobody reviewing it. So move it by hand: take the newest release from
   [goreleaser's releases](https://github.com/goreleaser/goreleaser/releases),
-  change every step in both files together, and rehearse with `make snapshot`
-  on that version.
+  change every step together, and rehearse with `make snapshot` on that
+  version.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
@@ -860,15 +858,16 @@ one, so there is nothing for a tag to disagree with. The whole pipeline
 rehearses locally with `make snapshot`, without a tag and without touching
 GitHub; the full process is in [RELEASING.md](RELEASING.md).
 
-The commit at the head of every push to `main` also gets a signed image, from
-the same goreleaser config, and so does `main`'s tip at each hourly run:
-`ghcr.io/crewlet/crewlet:<the commit's Go module pseudo-version>`, which never
-moves, and `ghcr.io/crewlet/crewlet:main`, which follows the tip
-([RELEASING.md](RELEASING.md#images-from-main)). A commit reached only through
-a merge's second parent, or pushed together with later commits, gets none. That
-image is **not a release**: it creates no Release, carries no notes, and is
-owed nothing below — a deployment that pins a `main` commit has opted out of the
-compatibility a tag promises.
+`main` has a signed image too, `ghcr.io/crewlet/crewlet:main`, rebuilt on
+every push to `main` and moved to that build — one tag, and the only one it
+ever pushes ([RELEASING.md](RELEASING.md#images-from-main)). Its binary
+reports `main-<the first 12 hex digits of the commit>`. A newer push cancels
+the run before it, so when pushes land close together only the newest commit
+is built, and a commit that starts no push run is never built: Dependabot's
+bumps, merged with `GITHUB_TOKEN`, start none, so `main` stays on the last
+pushed commit's image until the next push. That image is **not a release**: it
+creates no Release, carries no notes, and is owed nothing below — a deployment
+that runs `main` has opted out of the compatibility a tag promises.
 
 ### Nothing is released until a tag ships it
 

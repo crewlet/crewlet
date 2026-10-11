@@ -4,10 +4,10 @@ Maintainer runbook for publishing Crewlet. A release is one command — pushing 
 `v*` tag — and everything else is done by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) driving
 [goreleaser](https://goreleaser.com) from
-[`.goreleaser.yaml`](.goreleaser.yaml). The same config also builds images of
-commits on `main`, from
-[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml); those
-are not releases, and [Images from main](#images-from-main) covers them.
+[`.goreleaser.yaml`](.goreleaser.yaml). The image of `main`, rebuilt on every
+push to `main` by
+[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml), is not
+a release; [Images from main](#images-from-main) covers it.
 
 Nothing here is needed to *use* Crewlet; it is process for people with commit
 rights on this repository, which is why it lives beside
@@ -188,9 +188,8 @@ leg fails inside `apt-get` with an exit code and no explanation. Add
 CI runs the same thing for you: the snapshot job fires on demand
 (**Actions → release → Run workflow**) and on any pull request touching
 `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
-`scripts/notices/**`, the workflow itself or `main-image.yml`. That is what
-stops the release pipeline running for the first time
-on the tag that publishes.
+`scripts/notices/**` or the workflow itself. That is what stops the release
+pipeline running for the first time on the tag that publishes.
 
 Neither release job saves a cache. Both restore the module cache `ci.yml`'s
 `build + vet` job saves on `main`, read-only, and neither restores a build
@@ -203,174 +202,110 @@ surface never stores an entry only its own ref could read.
 
 ## Images from main
 
-The commit at the head of every push to `main` gets an engine image too, from
-[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml), and so
-does `main`'s tip at every hourly run. It is built by **the release's own
-pipeline** — `goreleaser release` over the same `.goreleaser.yaml`,
-`Dockerfile`, ldflags and buildx call — and pushed to the release's repository,
-`ghcr.io/crewlet/crewlet`, for linux/amd64 and linux/arm64, signed the same
-keyless way. Three things differ: the run sets `CREWLET_MAIN_IMAGE`, which
-disables the GitHub Release and its changelog (`.goreleaser.yaml` says so); it
-passes `--skip=archive`, so there are no archives and no checksums; and it
-passes `--skip=sign` and signs the image itself, with `docker_signs`' own
-arguments, as the job's **last** step — after the image has proved its version
-on every platform — so a signature from this workflow means the image passed.
-**An image of `main` is not a release**: it gets no Release page, no notes,
-and none of what a tag promises (see
+`ghcr.io/crewlet/crewlet:main` is the engine image of `main`, from
+[`.github/workflows/main-image.yml`](.github/workflows/main-image.yml). **It is
+not a release**: it gets no Release page, no notes, and none of what a tag
+promises (see
 [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)).
+It is ONE tag, and it moves:
 
-**Not every commit `main` contains has an image.** A merge's second parent and
-the branch commits behind it, a commit pushed together with later ones, and a
-commit superseded before the next hourly run (below) all have a Go module
-version — `go get github.com/crewlet/crewlet@<commit>` resolves each — but no
-image. A deployment that pins a `main` commit should pin one that has: the
-merge commit, or a pull request's squash commit.
+- **Every push to `main` rebuilds it** from the push's head commit and moves
+  `main` to that build. Nothing else is ever pushed: no tag per commit, never
+  `latest`, never a release's tag.
+- **A newer push cancels the run before it.** Push runs share one concurrency
+  group with `cancel-in-progress`, so when pushes land close together only the
+  newest commit is built.
+- **A commit that starts no run is never built.** Dependabot's bumps are merged
+  with `GITHUB_TOKEN`, and GitHub starts no workflow for a push that token
+  made, so `main` stays on the last pushed commit's image until the next push
+  to `main`.
+- **A run pushes only while its commit is still `main`'s tip**, read just
+  before the push. A re-run of an older run would otherwise move `main`
+  backwards; it builds and proves, then pushes nothing. So does a run whose
+  commit had a bump merged on top of it while it built. A re-run joins the push
+  group too, so re-running an older run while a newer one is in flight cancels
+  the newer one: re-run the newest.
 
-### Its tags
+### What the binary reports
 
-| Tag | Names | Moves? |
-|---|---|---|
-| `v0.1.1-0.20261010171839-4e45c6b992a2` | that one commit: its **Go module pseudo-version**, exactly as `proxy.golang.org` reports it, and exactly what `crewlet version` in the image prints | **never** — written once, never rebuilt |
-| `main` | the image of `main`'s tip once that image is published; until then, the last tip whose image was | when the tip's image is published — usually minutes after a merge, within the hour for one that started no run |
+`crewlet version` in the image prints `main-` and the first twelve hex digits
+of the commit, then Go's own record of the whole commit:
+`crewlet main-4e45c6b992a2 (4e45c6b992a2133639abebeec271236969b4ead4)`. The
+commit is the only identity a build of `main` has. `main-` says where it came
+from and has no leading `v`, so nothing — a reader, a version comparison, a
+`latest` guard — takes it for a release; twelve hex digits is the length Go
+gives a commit in a pseudo-version, and never names two commits of this
+repository. The image's `org.opencontainers.image.revision` label carries the
+whole commit too.
 
-The pseudo-version is the point of the first tag. A deployment that pins a
-`main` commit pins it by that string already — it is what `go get
-github.com/crewlet/crewlet@<commit>` writes into a `go.mod` — so the module, the
-image and the running engine's own report agree with no translation. Go derives
-it, not this workflow: the newest `v*` tag the commit descends from with its
-patch plus one, then `-0.<UTC committer time>-<12 hex of the commit>`. The
-workflow builds a small package of the module and reads the version Go stamped
-into it, asserts the suffix is this commit's own time and hash (a shallow clone
-would have answered `v0.0.0-…`, which no proxy reports), and before publishing
-asks `proxy.golang.org` for the same commit and requires the same answer.
+### How it is built
 
-One disagreement is expected and harmless: a release tag pushed onto an
-**ancestor** of `main`'s tip (an earlier commit rather than the tip) changes
-Go's base for the tip at once, while the proxy may keep serving the version it
-cached before the tag existed. Every hourly run for that tip then fails the
-cross-check — saying so — until the next merge, whose commit nobody asked the
-proxy about before; nothing is published wrongly meanwhile.
+Not by goreleaser, which fits neither way it runs: a release run needs a
+semver tag on the commit, and a snapshot run loads one image per platform into
+the local daemon and pushes nothing, so one `main` index could only be made
+from it by pushing a tag per platform first. The workflow runs the same build
+plainly — `go build` of the two linux targets with `.goreleaser.yaml`'s
+settings (`CGO_ENABLED=0`, `-trimpath`, `-s -w`, the version stamped with
+`-X`), the notices generator for those two targets, and `docker buildx build`
+of the same `Dockerfile`, for linux/amd64 and linux/arm64, from a context
+staged the way goreleaser stages a release's. A change to the release build is
+a change to both files, and `.goreleaser.yaml`, the `Dockerfile` and the
+workflow each say so. Then, in order:
 
-Neither tag can be `latest` or a release's tag. A pseudo-version always has a
-pre-release part, so the `{{ if not .Prerelease }}latest{{ end }}` guard drops
-`latest` — that template is what prevents it. After the push, the image job
-also asserts the run pushed exactly one tag, the commit's own: that detects a
-template change that let another tag through (it cannot undo the push), and
-fails the run before the image is signed. A commit that carries a release tag
-reports that tag instead of a pseudo-version, and the workflow publishes
-nothing for it: the release owns that image.
+1. **The proof, before anything is pushed.** Each platform's image is built
+   into the runner's Docker and run, and must report the commit's version.
+   That is also what catches a stamp that applies to nothing: an unstamped
+   build reports a module version, never `main-<commit>`.
+2. **The push, by digest.** The two-platform image — the same builder and
+   context, every step a cache hit from the proof — is pushed with no tag.
+3. **The signature**, keyless, by that digest, as `docker_signs` signs a
+   release's image.
+4. **The retag.** Only then does `main` move to the same manifest, and the job
+   asserts the digest is unchanged, so the signature covers what `main` names.
 
-### Never rebuilt
+So `main` never names an unsigned image: a cancel or a failure before the
+retag leaves `main` where it was, and one after leaves it on the new image,
+already signed. An image pushed by a run that stopped before the retag stays
+in the package untagged, and nothing names it.
 
-A rebuild is never the same image — the `created` label is the build's time —
-so the per-commit tag is written once. The `plan` job asks the registry for the
-tag directly and acts on the HTTP status: 404 builds, 200 skips, and anything
-else fails the run rather than being read as "absent". It asks with the same
-`pull,push` scope the push uses, so it can only see "absent" where the push
-would be creating the tag. The `image` job then asks **again**, under its own
-token, immediately before goreleaser runs, and goes on only on a 404: GitHub's
-*Re-run failed jobs* re-runs `image` without `plan` and reuses `plan`'s old
-answer, so without the second check a re-run after a failed proof would push
-the same tag a second time with a different digest. If that check stops a
-re-run, use *Re-run all jobs*, so `plan` judges the tag.
-
-A tag that exists must carry the main workflow's signature **for that commit**
-(`--certificate-github-workflow-sha`). The signature is the image job's last
-step, so a tag without one was pushed by a run that failed its proof or its
-signing, and it fails every later run for that commit: signing bytes a run did
-not build would vouch for them, and treating them as published would let
-`main` name an image the workflow rejected. **Delete that version in the
-package's settings and re-run**; nothing deletes it for you.
-
-### How `main` stays on the newest commit
-
-Two quick merges build in parallel and can finish in either order, and GitHub
-keeps only one *pending* run per concurrency group, cancelling it when another
-queues. So the job that moves `main` never points it at its own commit. Each run
-of it — one at a time, in one group — asks GitHub for `main`'s tip at that
-moment, asks the proxy for the tip's version, and points `main` at that image if
-it is published and signed for that commit — by this workflow, or by the
-release workflow at that tag when the tip is a tagged release, each checked as
-an exact identity plus the tip's commit (`--certificate-github-workflow-sha`),
-so a wrong answer from the proxy names an image whose certificate carries
-another commit and fails. If the tip's image is not published yet, `main`
-stays where it is — on the last tip whose image was, even if a commit between
-them has one: the tip's own run comes later and moves it, and for a tip whose
-build failed, the next hourly run does. So `main` only ever moves forward, and
-never onto anything but the image of a commit that was `main`'s tip.
-The move is a retag of the same manifest, and the job asserts the digest is
-unchanged, so the signature over that digest covers `main` too.
-
-### Commits that start no run
-
-Dependabot's bumps are merged with `GITHUB_TOKEN`, and GitHub starts no `push`
-workflow for an event that token authored. The workflow therefore also runs
-**hourly**: it builds `main`'s tip if that has no image and otherwise only
-checks that `main` names it. So `main` lags a Dependabot merge by up to an
-hour, and a commit that was superseded before the next hourly run gets no image
-of its own — pin the commit after it.
-
-### Verifying an image of main
+### Verifying the image of main
 
 ```bash
-cosign verify ghcr.io/crewlet/crewlet:v0.1.1-0.20261010171839-4e45c6b992a2 \
+cosign verify ghcr.io/crewlet/crewlet:main \
   --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/main-image.yml@refs/heads/main' \
-  --certificate-github-workflow-sha 4e45c6b992a2133639abebeec271236969b4ead4 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 The identity names `main-image.yml` on `main`, which no release image carries,
 so a check that an image came from `main` is never satisfied by a release and
-the other way round. The identity alone names the workflow, not the commit:
-every image of `main` carries it. `--certificate-github-workflow-sha` with the
-commit's **full** hash is what proves this image was built from the commit
-you pinned — Fulcio writes the commit a run was based on into the
-certificate — so a deployment pinning a commit passes it. The signature is
-cosign 3's (`cosign sign` writes the Sigstore bundle format by default); verify
-with cosign 3, or cosign 2 with `--new-bundle-format`. When `main` names a
-tagged release's image, verify it as a release:
-[Verifying an image](#verifying-an-image).
+the other way round. To bind the check to one commit as well, add
+`--certificate-github-workflow-sha` with the commit's **full** hash: Fulcio
+writes the commit a run was based on into the certificate. Verify with cosign
+3, or cosign 2 with `--new-bundle-format`. `main` moves, so a deployment that
+must keep running one build pins the digest it verified
+(`ghcr.io/crewlet/crewlet@sha256:…`) rather than the tag.
 
 ### What it costs
 
-Each image job compiles all four release targets from cold — goreleaser builds
-the darwin binaries even with `--skip=archive`, though only the linux ones go
-into the image — and builds the arm64 image under QEMU: the price of building
-with the release's one recipe rather than a second one. The hourly `plan` run
-is a full clone and one small build when there is nothing to publish.
-
-Every image adds one tag and its signature to the package, and
-nothing prunes them. Pruning is safe only for a version no deployment pins; a
-pin to a commit's tag is a promise that tag keeps resolving. If the package ever
-needs pruning, prune by age with a generous window and never touch a `v*` tag
-that is a release.
+Each run compiles two targets and builds the arm64 image under QEMU, once:
+the push takes every step from the proof's cache. Cancelling a superseded run
+keeps a burst of merges to one finished build. Every push leaves the image
+before it in the package, untagged, and nothing prunes those; one a
+deployment pins by digest must stay, so prune by age with a generous window,
+and never touch a `v*` tag.
 
 ### Rehearsing it
 
-A pull request that touches `main-image.yml`, `.goreleaser.yaml`, the
-`Dockerfile`, `go.mod`, `internal/version/**` or `scripts/notices/**` runs the
-workflow's **dry run**: the same version computation on the pull request's merge
-commit, the same local tag and the same goreleaser run with
-`--skip=archive,sign,docker` and **no `GITHUB_TOKEN`**, then the binary's
-version compared with the commit's. The publish phase still runs there, so if
-`CREWLET_MAIN_IMAGE` stopped disabling the Release, goreleaser fails with
-`missing GITHUB_TOKEN`; `--skip=publish` would hide that, because a skipped
-publisher never asks for its token. The image itself is skipped (`dockers_v2`
-builds and pushes in one step); its build is release.yml's snapshot job, whose
-paths include `main-image.yml` for that reason and which builds the same
-`dockers_v2` block. **What no pull request runs is this workflow's own image
-path** — its goreleaser invocation with the push, the proof, the signing and
-the `main` retag. A change to those is first exercised on `main`; read the
-image job's run after the merge.
-Locally, in a full clone with a clean tree (Go adds `+dirty` otherwise, and a
-shallow clone has no tags to start from):
-
-```bash
-v="$(go build -o /tmp/stamp ./scripts/notices && go version -m /tmp/stamp | awk '$1=="mod"{print $3}')"
-git tag "$v"   # local only; never push it
-CREWLET_MAIN_IMAGE=true GORELEASER_CURRENT_TAG="$v" goreleaser release --clean --skip=archive,docker
-git tag -d "$v"
-```
+A pull request that touches `main-image.yml`, the `Dockerfile`, `go.mod`,
+`internal/version/**` or `scripts/notices/**` runs the workflow's **dry run**:
+the same build and the same proof on both platforms, with `contents: read`, no
+secret, nothing pushed and nothing signed. **What no pull request runs is the
+publish step** — the tip check, the push by digest, the signature and the
+retag. A change to it is first exercised on `main`; read the publish job's run
+after the merge. Locally, the build and proof steps are plain shell: run the
+build with `GITHUB_SHA`, `RUNNER_TEMP` and `GITHUB_ENV` set, export the
+`VERSION` and `CONTEXT` it writes there, and run the proof, with binfmt
+registered for the arm64 leg.
 
 ---
 
@@ -387,9 +322,9 @@ release pipeline does when it runs:
 - **The snapshot job builds everything** — all four targets, the archives, the
   checksums and the container image — on demand and on any pull request
   touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
-  `scripts/notices/**`, the workflow or `main-image.yml`. A dependency that
-  needs cgo, or a `Dockerfile` that no longer copies from `${TARGETPLATFORM}`,
-  fails there rather than at tag time.
+  `scripts/notices/**` or the workflow. A dependency that needs cgo, or a
+  `Dockerfile` that no longer copies from `${TARGETPLATFORM}`, fails there
+  rather than at tag time.
 - **Both release jobs run the built binary** and compare what it reports against
   the version goreleaser recorded in `dist/metadata.json`. That is the only
   symptom the ldflags stamp has: rename `internal/version.value`, move the
@@ -405,20 +340,13 @@ release pipeline does when it runs:
   is the tag itself, so the publish job's check proves the published binary
   names its tag but not that the `-X` flag put it there. Keep the snapshot
   job's paths covering `internal/version/**` for that reason.
-- **Every image of `main` proves itself before it is signed, and `main` names
-  only a signed one.** The `plan` job checks the version against
-  `proxy.golang.org`; the image job asks the registry again that the tag is
-  absent, then checks that goreleaser built that version, that the run pushed
-  exactly one tag and it is the commit's own (never `latest` or a release's),
-  that the tag resolves to the digest goreleaser pushed and that the image
-  prints the commit's version on every platform it was built for — and only
-  then signs it and verifies the signature under the main workflow's identity
-  and the commit. Like the publish job's, that version check cannot see a
-  stamp that applies to nothing (the commit carries its version as a local
-  tag); the snapshot job is the one that can. The `main` retag checks the
-  signature of what it points at against the tip's commit and that the digest
-  did not change. The pull-request dry run proves the version path and that
-  `CREWLET_MAIN_IMAGE` disables the Release, with no token to create one.
+- **The image of `main` is proved before it is pushed, and `main` names only a
+  signed image.** Each platform's image is run and must report
+  `main-<commit>` — on every pull request touching its build, and on every
+  push before the push — then the image is pushed by digest and signed before
+  `main` moves to it, and the retag is checked to keep the digest. That proof
+  sees a stamp that applies to nothing as the snapshot job's does, since an
+  unstamped build never reports `main-<commit>`.
 
 ### What nothing guards — check these by hand
 
@@ -453,34 +381,28 @@ doing the thing, or starts doing more — so read the file when you touch it:
   Release for one tag and the loser fails after its artifacts are built — and
   the opposite mistake, a trigger that ends up somewhere Actions ignores, means
   pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
-- **`CREWLET_MAIN_IMAGE` is read in exactly two places in `.goreleaser.yaml`,
-  `release.disable` and `changelog.disable`, and set by `main-image.yml` alone.**
-  Set it in release.yml and a tag publishes an image with no Release. Drop
-  `release.disable` and a merge to `main` fails with `missing GITHUB_TOKEN` —
-  the dry run catches that one first — or, if someone hands the image job a
-  token with `contents: write` to "fix" it, creates a Release for a
-  pseudo-version. Drop `changelog.disable` and every run asks GitHub's API to
-  generate release notes from the last tag to a commit that is not a release,
-  holding no token to ask with; the dry run does not catch that one.
-- **`main-image.yml` publishes only from `push` and `schedule`.** Its `plan` job
-  requires `github.event_name != 'pull_request'` and this repository's name, the
-  `image` and `tag-main` jobs run only behind it (`needs`), and there is no
+- **`main-image.yml` publishes only from a push to `main`.** Its `publish` job
+  is the only one holding `packages: write` and `id-token: write`, and it
+  requires a `push` event and this repository's name; there is no
   `pull_request_target`, `workflow_run` or `workflow_dispatch` trigger. Adding
-  one, or loosening the `if:`, would hand `packages: write` and an OIDC signing
+  one, or loosening the `if:`, would hand the registry and an OIDC signing
   identity to a run something other than a merge started. The `dry-run` job
   must keep the workflow-level `contents: read` and no secret: it runs for
   forks' pull requests.
-- **The `tag-main` job keeps its own concurrency group with
-  `cancel-in-progress: false`, and keeps resolving `main`'s tip itself.** Point
-  it at its own run's commit, or let two of it run at once, and two quick merges
-  can leave `main` naming the older image with every run green.
-- **The image job signs last and checks the registry first.** Move the
-  signature before the proof (back into goreleaser's `docker_signs`, say) and
-  an image that failed its proof is signed, which `plan` then reads as
-  published and `tag-main` points `main` at; drop the image job's own
-  existence check and a *Re-run failed jobs* rebuilds a published tag. Drop a
-  `--certificate-github-workflow-sha` and any image of `main` passes for any
-  commit. All of it stays green.
+- **Push runs keep ONE concurrency group with `cancel-in-progress`, and the
+  publish step keeps its tip check.** Key the push group per run or per commit
+  and two runs push side by side, the older one able to land last; drop the tip
+  check and a re-run of an older run moves `main` backwards. Every run stays
+  green either way.
+- **The publish step pushes by digest, signs, and only then retags.** Tag
+  `main` in the push itself and `main` names an unsigned image until the
+  signature lands — and for good, if the run is cancelled or fails first. It
+  stays green.
+- **`main-image.yml` builds as `.goreleaser.yaml` does.** The flags, the `-X`
+  stamp's path, the platforms and the staged context are written in both, and
+  nothing compares them: a change to one alone gives the image of `main` a
+  different build from a release's, and the dry run passes it as long as the
+  image still reports its version.
 - **The image of `main` is its own workflow, named `main image`.** Fold it into
   `release.yml` and `docs-publish.yml`, which reads every completed `release`
   run whose event was a push as a new tag, republishes the docs site on every

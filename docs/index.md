@@ -22,7 +22,7 @@ author it — see
 
 ## Getting Started
 
-- **[Installation](getting-started/installation.md)** — Install the binary or run the signed container image (a release's tag, or a `main` commit's image pinned by its Go module pseudo-version), and verify either; why there is no infrastructure to bring up, and what the compose profiles are for
+- **[Installation](getting-started/installation.md)** — Install the binary or run the signed container image (a release's tag, or `main`, rebuilt on every push to `main`), and verify either; why there is no infrastructure to bring up, and what the compose profiles are for
 - **[Quickstart](getting-started/quickstart.md)** — Build a four-agent company and watch its first turn, with LLM provider options (Anthropic / OpenAI / any OpenAI-compatible)
 - **[Choosing Your Stack](getting-started/choosing-your-stack.md)**: the decision guide for every external dependency (the LLM provider, the tracker and knowledge base, the code host, chat and the code sandbox), what each path sets up for you, and what you must create manually
 - **[Authoring with an AI Assistant](getting-started/ai-authoring.md)** — Let an AI write your company config: a step-by-step walkthrough, the `company-architect` skill, `crewlet schema` for editor autocomplete, and the `crewlet validate -json` fix loop
