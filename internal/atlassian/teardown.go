@@ -14,8 +14,9 @@ type TeardownOptions struct {
 	OrgID  string
 	Key    string
 
-	// Plan names the seats whose accounts this engine created.
-	Plan *provision.Plan
+	// Plan names the seats whose accounts this engine created. Its
+	// [Plan.ByHand] seats have none, and are never touched.
+	Plan *Plan
 }
 
 // Teardown deletes the service accounts this engine created.

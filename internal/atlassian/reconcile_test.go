@@ -273,7 +273,7 @@ func reconcile(
 	ctx context.Context, t *testing.T, o *stubOrg, s provision.TokenSink,
 ) (*atlassian.Result, error) {
 	t.Helper()
-	plan := &provision.Plan{}
+	plan := &atlassian.Plan{}
 	plan.Add(provision.Seat{
 		Handle: "sre-lead", Role: "SRE Lead",
 		TokenVar: "SEAT_TOKEN", EmailVar: "SEAT_EMAIL",
@@ -1113,19 +1113,68 @@ func TestRevokingATokenAlreadyGoneSucceeds(t *testing.T) {
 	}
 }
 
-// AND THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S. A seat whose mcp_env
-// slot is not a whole ${VAR} has nowhere for a minted token or an assigned
-// address to be written, and only an edit of the document fixes that. They
-// were short grants, owed by an Atlassian admin who can widen nothing that
-// is missing here.
+// AND THE PLAN'S CAVEATS ARE THE COMPANY DOCUMENT'S. A seat this pass
+// provisions whose address slot is not a whole ${VAR} has nowhere for the
+// address Atlassian assigns to be written, so its token authenticates as
+// nobody, and only an edit of the document fixes that. They were short
+// grants, owed by an Atlassian admin who can widen nothing that is missing
+// here.
 func TestAPlanNoteIsTheCompanyAdmins(t *testing.T) {
 	t.Parallel()
 	res := &atlassian.Result{Notes: []string{
-		"data-analyst: mcp_env jira.JIRA_API_TOKEN is not a whole ${VAR} reference",
+		"release-manager: no mcp_env address slot, so this seat cannot use the account",
 	}}
 	findings := res.Findings()
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want the one note", findings)
 	}
 	integrationtest.AssertConfigFault(t, findings[0])
+}
+
+// BUT A SEAT THE COMPANY MANAGES BY HAND IS A DECISION, NOT A FAULT.
+//
+// An agent whose token slot holds a credential rather than a ${VAR} is set up
+// exactly as somebody meant it: the company holds that credential itself, and
+// no pass will ever do anything for the seat or owe anything about it. It was
+// a plan note, so a config fault — Action required, re-asked hourly, for ever,
+// over nothing wrong — and before that a short grant sending an Atlassian
+// admin to widen access nobody had withheld. It is the coverage advisory: the
+// surface stays ready, settles on its ordinary cadence, and says once which
+// agents it leaves to the company.
+func TestASeatManagedByHandIsAnAdvisoryRatherThanAFault(t *testing.T) {
+	t.Parallel()
+	res := &atlassian.Result{ByHand: []string{"data-analyst", "release-manager"}}
+
+	findings := res.Findings()
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one advisory for both seats", findings)
+	}
+	got := findings[0]
+	if got.Kind != integration.FindingCoveragePartial {
+		t.Fatalf("kind = %q, want %q", got.Kind, integration.FindingCoveragePartial)
+	}
+	if !slices.Equal(got.Subjects, res.ByHand) {
+		t.Errorf("subjects = %v, want the seats %v", got.Subjects, res.ByHand)
+	}
+	if !strings.Contains(got.Detail, "2 agents") {
+		t.Errorf("detail = %q, want the count in it", got.Detail)
+	}
+	// AND WHAT THE CARD READS IS READY, on the settled cadence rather than
+	// the hourly ask a configuration edit waits on.
+	report := integration.Classify(findings)
+	if report.Phase != integration.PhaseReady {
+		t.Errorf("a company managing seats by hand reads %s, want ready", report.Phase)
+	}
+	schedule := integration.DefaultSchedule
+	if next := schedule.Next(report, 1); next != schedule.Settled {
+		t.Errorf("asked again after %s, want the settled %s", next, schedule.Settled)
+	}
+	// AND A REAL FAULT BESIDE IT STILL HEADS THE CARD: an advisory ranks
+	// beneath every problem, so a seat genuinely missing its address is not
+	// hidden by one that is fine.
+	res.Notes = []string{"release-manager: no mcp_env address slot"}
+	if worst := integration.Classify(res.Findings()); worst.Phase != integration.PhaseDegraded {
+		t.Errorf("a note beside the advisory reads %s, want degraded", worst.Phase)
+	}
 }

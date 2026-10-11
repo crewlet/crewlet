@@ -1,10 +1,13 @@
 package atlassian_test
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // AN ACCOUNT IS RECOGNISED BY ITS DISPLAY NAME, and it has to be.
@@ -68,6 +71,48 @@ func TestATokenLabelNamesOnlyItsOwnSeat(t *testing.T) {
 		if atlassian.MintedFor(c.label, c.handle) {
 			t.Errorf("MintedFor(%q, %q) = true, want a token this engine did not mint "+
 				"for that seat", c.label, c.handle)
+		}
+	}
+}
+
+// A SEAT WHOSE TOKEN SLOT HOLDS A CREDENTIAL IS LEFT TO THE COMPANY.
+//
+// It is planned for nothing — no account, no token — and recorded as managed
+// by hand rather than as a caveat, because it is a decision the document
+// states rather than something missing from it. The slot's value never
+// travels: it is a credential, and the plan is reported where an operator
+// pastes it into a ticket.
+func TestASeatHoldingItsOwnCredentialIsLeftToTheCompany(t *testing.T) {
+	t.Parallel()
+	const pasted = "a-token-somebody-pasted-in"
+	plan, err := atlassian.PlanFor(&org.Organization{Name: "Nimbus", Roles: []*org.Role{
+		{Name: "Zed Ops", MCPEnv: map[string]map[string]string{
+			"atlassian": {"ATLASSIAN_API_TOKEN": "Bearer " + pasted},
+		}},
+		{Name: "SRE Lead", MCPEnv: map[string]map[string]string{
+			"jira": {"JIRA_API_TOKEN": "${SRE_TOKEN}", "JIRA_USERNAME": "${SRE_EMAIL}"},
+		}},
+		{Name: "Data Analyst", MCPEnv: map[string]map[string]string{
+			"jira": {"JIRA_API_TOKEN": pasted},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	// ORDERED BY HANDLE, as the seats are, so a report reads the same pass
+	// after pass whatever order the chart declares them in.
+	if want := []string{"data-analyst", "zed-ops"}; !slices.Equal(plan.ByHand, want) {
+		t.Errorf("by hand = %v, want %v", plan.ByHand, want)
+	}
+	if len(plan.Seats) != 1 || plan.Seats[0].Handle != "sre-lead" {
+		t.Errorf("seats = %+v, want only sre-lead provisioned", plan.Seats)
+	}
+	if len(plan.Notes) != 0 {
+		t.Errorf("notes = %v, want none: a seat managed by hand is not a caveat", plan.Notes)
+	}
+	for _, said := range slices.Concat(plan.ByHand, plan.Notes) {
+		if strings.Contains(said, pasted) {
+			t.Errorf("the plan repeats a seat's credential: %q", said)
 		}
 	}
 }

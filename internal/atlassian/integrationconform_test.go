@@ -539,7 +539,8 @@ func standUp(
 // only thing it changes is that the measured pass is the third rather than the
 // second, over a world that is if anything more converged.
 func convergedAtlassian(
-	t *testing.T, tb integrationtest.TB, tune func(*org.Organization), wantNotes int,
+	t *testing.T, tb integrationtest.TB, tune func(*org.Organization),
+	keeps []integration.FindingKind,
 ) *world {
 	t.Helper()
 	vendor := &atlassianOrg{}
@@ -566,25 +567,18 @@ func convergedAtlassian(
 		if err != nil {
 			tb.Fatalf("the pass that converges the world failed: %v", err)
 		}
-		if !slices.ContainsFunc(findings, func(f integration.Finding) bool {
-			return f.Kind != integration.FindingConfigFault
-		}) {
+		if slices.Equal(kindsOf(findings), keeps) {
 			break
 		}
 	}
-	for _, f := range findings {
-		// A NOTE ABOUT A SEAT THE COMPANY PROVISIONS BY HAND SURVIVES
-		// CONVERGENCE — no pass can clear it — and nothing else may.
-		if f.Kind != integration.FindingConfigFault {
-			tb.Fatalf("the world is not converged: the seeding pass reported %+v", findings)
-		}
-	}
-	// AND THE COUNT IS PINNED, so a converged world cannot quietly grow a
-	// finding nobody expected — or lose the ones the second row is built to
-	// carry through the pass.
-	if len(findings) != wantNotes {
-		tb.Fatalf("the seeding pass reported %d finding(s), want %d: %+v",
-			len(findings), wantNotes, findings)
+	// WHAT SURVIVES CONVERGENCE IS PINNED, kind by kind and in order — what
+	// a seat set up by hand leaves behind, which no pass can clear, and
+	// nothing else. A count alone would let the converged world quietly
+	// trade one kind for another: the hand-managed seat was a config fault
+	// for as long as a count of two stood here, and nothing could tell.
+	if got := kindsOf(findings); !slices.Equal(got, keeps) {
+		tb.Fatalf("the world is not converged: the seeding pass reported %v, want "+
+			"exactly %v: %+v", got, keeps, findings)
 	}
 	// AND CONVERGING IT CHANGED NOTHING ABOUT WHAT IS REPORTED.
 	//
@@ -710,11 +704,7 @@ func outstandingAtlassian(
 		tb.Fatalf("a pass over the outstanding world (%s) raised rather than "+
 			"reporting: %v", b.what, err)
 	}
-	got := make([]integration.FindingKind, 0, len(findings))
-	for _, f := range findings {
-		got = append(got, f.Kind)
-	}
-	if !slices.Equal(got, b.kinds) {
+	if got := kindsOf(findings); !slices.Equal(got, b.kinds) {
 		tb.Fatalf("the outstanding world (%s) reported %v, want exactly %v: %+v",
 			b.what, got, b.kinds, findings)
 	}
@@ -729,15 +719,24 @@ func outstandingAtlassian(
 	return w
 }
 
+// kindsOf is what a pass reported, kind by kind, in its order.
+func kindsOf(findings []integration.Finding) []integration.FindingKind {
+	out := make([]integration.FindingKind, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, f.Kind)
+	}
+	return out
+}
+
 // THE CONTRACT IS CERTIFIED AGAINST THE REAL RECONCILER.
 func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 	t.Parallel()
 	for _, row := range []struct {
 		name string
 		tune func(*org.Organization)
-		// notes is how many findings a converged pass over this world still
-		// reports. See the count pinned in convergedAtlassian.
-		notes int
+		// keeps is what a converged pass over this world still reports. See
+		// what convergedAtlassian pins.
+		keeps []integration.FindingKind
 		// broken is the same company with something genuinely wrong with it.
 		broken broken
 	}{
@@ -764,23 +763,31 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 
 		// And a company that manages some of Atlassian by hand. Both of
 		// these are CONVERGED — no pass can do anything more for either
-		// seat — and both leave a note behind, which is what makes the
+		// seat — and both leave a finding behind, which is what makes the
 		// suite's two clauses about findings say something here instead of
-		// running over an empty slice.
+		// running over an empty slice. Opposite findings, which is the
+		// point of carrying both: one seat is set up exactly as meant, and
+		// the other is missing what it needs.
 		{
-			name:  "seats the company provisions by hand",
-			notes: 2,
+			name: "seats the company provisions by hand",
+			keeps: []integration.FindingKind{
+				integration.FindingConfigFault,
+				integration.FindingCoveragePartial,
+			},
 			tune: func(o *org.Organization) {
 				o.Roles = append(o.Roles,
-					// A literal where a ${VAR} belongs: nowhere to write a
-					// minted token, so the plan leaves the seat out entirely.
+					// A literal where a ${VAR} belongs: the company holds this
+					// seat's credential itself, so the plan leaves the seat
+					// out entirely and says so as an advisory — a decision,
+					// which no pass will change and nobody owes an edit for.
 					&org.Role{Name: "Data Analyst", MCPEnv: map[string]map[string]string{
 						"jira": {"JIRA_API_TOKEN": "a-token-somebody-pasted-in"},
 					}},
 					// And a token slot with no address slot beside it. This one
 					// IS provisioned — it gets an account, a grant and a token —
 					// and the address Atlassian assigned has nowhere to go, so
-					// the seat authenticates as nobody until a person adds one.
+					// the seat authenticates as nobody until a person adds one:
+					// a config fault, the company admin's.
 					&org.Role{Name: "Release Manager", MCPEnv: map[string]map[string]string{
 						"confluence": {"CONFLUENCE_API_TOKEN": "${ATLASSIAN_TOKEN_RELEASE_MANAGER}"},
 					}},
@@ -793,19 +800,20 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 				// either — and it stays that way until somebody sets
 				// secrets.keys in the bootstrap configuration. The three
 				// seats report as having no account because they genuinely
-				// have none, and the two notes survive from the plan.
+				// have none, and what the plan found survives from it.
 				what: "a node with no keyring", keyring: false,
-				// The keyring and the two notes are this deployment's own
-				// configuration, so all three are config faults owed by the
-				// company's admin; the seats with no account are the
-				// engine's, which is what the keyring is in the way of.
+				// The keyring and the missing address slot are this
+				// deployment's own configuration, so both are config faults
+				// owed by the company's admin; the seats with no account are
+				// the engine's, which is what the keyring is in the way of;
+				// and the seat managed by hand is the advisory it always is.
 				kinds: []integration.FindingKind{
 					integration.FindingConfigFault,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,
 					integration.FindingConfigFault,
-					integration.FindingConfigFault,
+					integration.FindingCoveragePartial,
 				},
 			},
 		},
@@ -820,7 +828,7 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 			var current *world
 			integrationtest.Run(t, integrationtest.Reconciler{
 				Converged: func(tb integrationtest.TB) integration.Reconciler {
-					current = convergedAtlassian(t, tb, row.tune, row.notes)
+					current = convergedAtlassian(t, tb, row.tune, row.keeps)
 					return current
 				},
 				Outstanding: func(tb integrationtest.TB) integration.Reconciler {
