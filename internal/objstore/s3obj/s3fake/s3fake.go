@@ -295,6 +295,22 @@ func (s *Server) Keys() []string {
 	return slices.Sorted(maps.Keys(s.objects))
 }
 
+// Put stores data under key exactly as one completed put of it would — its
+// entity tag, the current time, no content type — for a suite that fills a
+// bucket from outside the object store: copying a backup's `objects/` into a
+// fresh bucket, as a restore's `aws s3 sync` does (docs/guides/backup.md).
+//
+// THE BYTES ARE COPIED, so a caller reusing its buffer for the next file
+// cannot rewrite the object it already stored.
+func (s *Server) Put(key string, data []byte) {
+	stored := slices.Clone(data)
+	tag := etag(stored)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[key] = object{data: stored, modified: now(), etag: tag}
+	s.sorted = nil
+}
+
 // Uploads is the key of every multipart upload started and neither completed
 // nor abandoned, sorted — what a bucket bills for and no listing shows.
 func (s *Server) Uploads() []string {
