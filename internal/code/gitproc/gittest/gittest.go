@@ -1,7 +1,7 @@
 // Package gittest is THE CLIENT GIT EVERY TEST DRIVES, the stand-in gits a
 // test swaps for the real one, and repositories shaped the way the engine
-// shapes them. It and gitproc are the only packages under internal/ that may
-// exec git (gitproc's TestOnlyGitprocExecsGit).
+// shapes them. It and gitproc are the only packages of the module outside
+// cmd/ that may start git (gitproc's TestOnlyGitprocExecsGit).
 //
 // HERMETIC because a developer's own configuration — a commit.gpgSign, a
 // url.<base>.insteadOf, a credential helper, an init.defaultBranch —
@@ -13,6 +13,11 @@
 // Git is a PREREQUISITE of the suite, not a property of the machine: [Require]
 // fails a test on a machine without git 2.40 or newer and never skips it,
 // because a skip there would be a pass the suite never earned.
+//
+// A client trusts one repository a test did not make: the checkout this
+// module was compiled from, for a test whose subject is the repository itself
+// ([Client.ModuleCheckout]) — whoever owns it, because the developer's own
+// safe.directory is global configuration and never reaches a client.
 package gittest
 
 import (
@@ -25,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // ClientDeadline bounds one client invocation: a fixture's commit or a clone
@@ -103,6 +110,9 @@ type Client struct {
 	git  string
 	home string
 	env  []string
+	// opts are git's own options, given before every subcommand: the one
+	// path a client trusts whoever owns it ([Client.ModuleCheckout]).
+	opts []string
 }
 
 // clientConfig is every client's whole configuration. gc and maintenance are
@@ -148,7 +158,64 @@ func NewClient(t testing.TB) *Client {
 // Env is a copy of c with extra "NAME=value" variables (GIT_PROTOCOL, a
 // credential helper's, GIT_TRACE_PACKET while debugging a case).
 func (c *Client) Env(kv ...string) *Client {
-	return &Client{git: c.git, home: c.home, env: append(append([]string(nil), c.env...), kv...)}
+	return &Client{git: c.git, home: c.home, env: slices.Concat(c.env, kv), opts: c.opts}
+}
+
+// ModuleCheckout is c trusting the checkout this module's tests were compiled
+// from, and that checkout's top level — for a test whose SUBJECT is this
+// repository (what its attributes make of a path), never for a fixture, which
+// a test makes and owns.
+//
+// TRUSTED ON THE COMMAND LINE, FOR THAT PATH ALONE. Git refuses a repository
+// whose owner is not the process's unless safe.directory names it, and
+// honours that key only from protected configuration — the system's, the
+// global and the command line's — of which a client reads only the last. So a
+// checkout another uid owns (a container running as root over a bind mount, a
+// devcontainer whose uid is not the files') is refused as dubious ownership,
+// though the developer trusts it in their own ~/.gitconfig, which go build's
+// VCS stamping already needs there. What a client keeps out of a test is the
+// machine's say in what git ANSWERS; whether to read the tree go test is
+// already running from is not that, so the client trusts it itself — and
+// nothing else, so a fixture beside it is refused as before.
+//
+// The path is [sourcetree.Root], the module root with its links resolved,
+// because git compares it byte for byte with the top level it resolves (a
+// trailing slash, or a link's spelling, is refused); and git is asked to
+// confirm that the module root IS the checkout's top level, so a path a test
+// hands check-attr relative to the module is resolved against the tree it
+// names.
+//
+// It FAILS RATHER THAN SKIPS, as [Require] does and as
+// scripts/check-signoff.sh does outside a repository: a test whose subject is
+// this checkout has not passed when it cannot read it, and a skip would be one
+// internal/skipgate refuses anyway, with the coverage living nowhere else. An
+// ownership refusal is told apart from a tree that is no checkout, because
+// the remedies differ.
+func (c *Client) ModuleCheckout(t testing.TB) (*Client, string) {
+	t.Helper()
+	root := sourcetree.Root(t)
+	trusted := c.trusting(root)
+	out, stderr, err := trusted.Try(t, root, nil, "rev-parse", "--show-toplevel")
+	switch {
+	case err != nil && strings.Contains(stderr, "dubious ownership"):
+		t.Fatalf("git refuses the checkout at %s as another user's although this client trusts that "+
+			"path: git names its top level by another path, and only the module root is trusted "+
+			"(the module root must be the checkout's top level, links resolved): %v\n%s", root, err, stderr)
+	case err != nil:
+		t.Fatalf("%s is not a git working tree, so a test whose subject is this checkout cannot "+
+			"read it: %v\n%s", root, err, stderr)
+	}
+	if top := strings.TrimSpace(out); top != root {
+		t.Fatalf("the checkout's top level is %s, not the module root %s, so a path relative to "+
+			"the module would be resolved against another tree", top, root)
+	}
+	return trusted, root
+}
+
+// trusting is c with the repository whose top level is dir trusted whoever
+// owns it (safe.directory, given on the command line).
+func (c *Client) trusting(dir string) *Client {
+	return &Client{git: c.git, home: c.home, env: c.env, opts: slices.Concat(c.opts, []string{"-c", "safe.directory=" + dir})}
 }
 
 // Run runs git in dir ("" is the client's HOME, which is no repository) and
@@ -168,7 +235,7 @@ func (c *Client) Try(t testing.TB, dir string, stdin io.Reader, args ...string) 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), ClientDeadline)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, c.git, args...)
+	cmd := exec.CommandContext(ctx, c.git, slices.Concat(c.opts, args)...)
 	procgroup.Set(cmd)
 	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
 	cmd.WaitDelay = waitDelay

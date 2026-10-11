@@ -126,12 +126,13 @@ import (
 //
 // So ANY path a test takes out of its own package starts here: a page under
 // docs/, the examples, the schemas, the dashboard's build, another package's
-// sources, or the directory `go list ./...` must run in. Two anchors are not
-// this one, each for a reason of its own: the package's own directory — its
-// testdata, its own sources — because `go test` runs every test binary there
-// by contract, so a path relative to it has no depth to count; and the working
-// tree's top level that static's merge test asks git for, because
-// `git check-attr` resolves paths against exactly that.
+// sources, or the directory `go list ./...` must run in. One anchor is not this
+// one: the package's own directory — its testdata, its own sources — because
+// `go test` runs every test binary there by contract, so a path relative to it
+// has no depth to count. A test that hands git a path of this tree starts here
+// too, and has git confirm that this is the working tree's top level, which
+// `git check-attr` resolves paths against (gittest's ModuleCheckout, for
+// static's merge test).
 func Root(t testing.TB) string {
 	t.Helper()
 	root, err := ModuleRoot()

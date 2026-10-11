@@ -260,6 +260,24 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
+	// Environment: the right to chown. Unlike the entries above, this one
+	// DOES fire on the gates' runners, which run unprivileged — and the
+	// coverage it skips is held on every machine by its sibling case, which
+	// makes the owner differ through git's own switch rather than the
+	// filesystem.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/code/gitproc/gittest",
+		Test:    "TestACheckoutAnotherUserOwnsIsReadOnlyWhereTrusted/chowned_to_another_uid",
+		When:    Environment,
+		Why: "Needs a process that may chown (root, or CAP_CHOWN) to hand a repository to " +
+			"another uid. The git_assumes_another_owner case drives the same refusal and the " +
+			"same safe.directory comparison through GIT_TEST_ASSUME_DIFFERENT_OWNER on every " +
+			"machine, the module's own checkout included; this one is what says that switch " +
+			"stands in for a real owner.",
+	},
+
+	// -----------------------------------------------------------------
 	// Environment: enough free disk for the scenario's own headroom. The
 	// state logs' ceilings are sized against a REAL embedded broker, whose
 	// cap is three quarters of the volume it stores on — a number a test
