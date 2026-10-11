@@ -99,7 +99,7 @@ func TestDecisionsNeedsAPerson(t *testing.T) {
 func TestWorkFlowParams(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	sources := queries.Sources{Work: work}
+	sources := nativeSources(queries.Native{Work: work})
 	if _, err := askNative(t, sources, "work_flow", nil); err != nil {
 		t.Fatalf("work_flow: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 	pageStore := &stubPages{changes: []pages.PageChange{
 		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
 	}}
-	sources := queries.Sources{Work: work, Pages: pageStore}
+	sources := nativeSources(queries.Native{Work: work, Pages: pageStore})
 	got, err := askNative(t, sources, "company_feed", map[string]any{"limit": 2})
 	if err != nil {
 		t.Fatalf("company_feed: %v", err)
@@ -164,7 +164,7 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 		t.Errorf("the pages half was handed the tracker's floor: %+v", pageStore.fresh)
 	}
 
-	if _, err := askNative(t, queries.Sources{Work: work}, "company_feed",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: work}), "company_feed",
 		map[string]any{"kinds": "page"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("asking for pages where none are kept = %v, want bad params", err)
 	}
@@ -209,7 +209,10 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 		{Task: "a", Kind: tracker.FeedCompleted, At: base,
 			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
-	sources := queries.Sources{Work: work, Usage: usage.Reader{Estate: db.Replicated()}}
+	sources := queries.Sources{
+		Native: nativeOf(queries.Native{Work: work}),
+		Usage:  usage.Reader{Estate: db.Replicated()},
+	}
 	for _, kinds := range []string{"", "schedule"} {
 		got, err := askNative(t, sources, "company_feed", map[string]any{"kinds": kinds})
 		if err != nil {

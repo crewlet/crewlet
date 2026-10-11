@@ -145,10 +145,11 @@ type routeMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
-// Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup,
-// Retention, Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New]
-// refuses a missing one by name.
+// Runtime, Sources.Company, Sources.Events, Sources.NodeID, Sources.Coord,
+// Sources.Native, Sources.Retention, the Inbound edge's Publisher, Claims,
+// Secrets and AppFlow, Config, Secrets, Setup, Retention, Capacity,
+// FleetBroker, Backup and Audit are REQUIRED, and [New] refuses a missing one
+// by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -157,9 +158,17 @@ type routeMounter interface {
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
 //
-// What stays optional is what a real node can lack: a native tracker (a company
-// on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
-// unset environment variable), and the defaults a test injects.
+// That holds for the native tracker and knowledge base too, and for the state
+// log's retention answer: what a real node can lack there is the BACKEND (a
+// company on Jira, a node whose first company has not been applied yet), which
+// [queries.Sources.Native] and [queries.Sources.Retention] answer per question —
+// never the seam that asks. Left nil, every native question answered
+// `unknown_query` for the life of the process, the very symptom of a runtime
+// read once at assembly, and nothing said it was the wiring.
+//
+// What stays optional is what a real node can lack outright: an operator MCP
+// surface, a telemetry receiver or a tool bridge (an unset environment
+// variable), and the defaults a test injects.
 type Options struct {
 	// Bootstrap supplies the auth posture, and whether the public routes
 	// have a listener of their own (api.public — see [App.Public]). Nil is
@@ -186,13 +195,14 @@ type Options struct {
 	// clock, or the one surface answers on two.
 	State *livestate.LiveState
 
-	// Sources are what the read surface answers from. Company, Events and
-	// NodeID are required; see above. NodeID is the node's RESOLVED id, and
-	// it names this node on the health body as well as in the fleet answer,
-	// so the two cannot disagree about who answered. Any other source left
-	// nil makes its questions UNREGISTERED rather than failing, which is the
-	// honest answer for a node that does not have that surface at all (no
-	// knowledge backend, no native tracker) and distinct from an empty one.
+	// Sources are what the read surface answers from. Company, Events,
+	// NodeID, Coord, Native and Retention are required; see above. NodeID is
+	// the node's RESOLVED id, and it names this node on the health body as
+	// well as in the fleet answer, so the two cannot disagree about who
+	// answered. Any other source left nil makes its questions UNREGISTERED
+	// rather than failing, which is the honest answer for a node that does
+	// not have that surface at all (no memory reader, no sandbox tail) and
+	// distinct from an empty one.
 	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
@@ -283,7 +293,7 @@ type Options struct {
 	Purger TaskPurger
 
 	// Files serves a project's file bytes. Nil leaves the byte routes
-	// unmounted; the listing is [queries.Sources.Files].
+	// unmounted; the listing is [queries.Native.Files].
 	Files ProjectFiles
 
 	// Capacity drives a stream's byte ceiling.
@@ -605,6 +615,8 @@ func (o Options) missing() error {
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
 		{"Sources.Coord", o.Sources.Coord == nil},
+		{"Sources.Native", o.Sources.Native == nil},
+		{"Sources.Retention", o.Sources.Retention == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},

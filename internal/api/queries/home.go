@@ -29,7 +29,7 @@ import (
 const DefaultFlowPoints = 14
 
 // workFlow answers the status and completion series — see [tracker.Reader.Flow].
-func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
+func (s Sources) workFlow(ctx context.Context, n Native, p Params) (any, error) {
 	bucket := period.Period(strings.TrimSpace(p.String("bucket")))
 	if bucket == "" {
 		bucket = period.Day
@@ -46,7 +46,7 @@ func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.Work.Flow(ctx, tracker.FlowQuery{
+	return n.Work.Flow(ctx, tracker.FlowQuery{
 		Project: strings.TrimSpace(p.String("project")),
 		Bucket:  bucket, Points: points,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -210,13 +210,13 @@ const feedSourceReads = 4
 // the last row of it this page consumed. So a row is never repeated and never
 // skipped however the three interleave, and a source that has nothing more
 // stops being asked.
-func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
-	kinds, err := feedKinds(p.String("kinds"), s.feedKept())
+func (s Sources) companyFeed(ctx context.Context, n Native, p Params) (any, error) {
+	kinds, err := feedKinds(p.String("kinds"), s.feedKept(n))
 	if err != nil {
 		return nil, err
 	}
 	for _, kind := range kinds {
-		if (kind == FeedPage && s.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
+		if (kind == FeedPage && n.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
 			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node — the "+
 				"company has no native %s here", ErrBadParams, kind,
 				map[FeedKind]string{FeedPage: "knowledge base", FeedSchedule: "usage domain"}[kind])
@@ -246,7 +246,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	}
 	if work := trackerKinds(kinds); len(work) > 0 && cursor[feedSourceWork] != feedEnd {
 		if openErr := open(feedSourceWork, func(position string) (feedPageOf, error) {
-			page, done, lvl, readErr := s.feedWork(ctx, work, actor, position, limit, fresh)
+			page, done, lvl, readErr := feedWork(ctx, n.Work, work, actor, position, limit, fresh)
 			complete = complete && done
 			if level == "" {
 				level = lvl
@@ -263,7 +263,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 		// so the pages half is read at the surface's own default level.
 		pagesFresh := statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}
 		if openErr := open(feedSourcePages, func(position string) (feedPageOf, error) {
-			page, done, lvl, readErr := s.feedPages(ctx, actor, position, limit, pagesFresh)
+			page, done, lvl, readErr := feedPages(ctx, n.Pages, actor, position, limit, pagesFresh)
 			complete = complete && done
 			if level == "" {
 				level = lvl
@@ -377,15 +377,16 @@ func foldRun(last *FeedEntry, entry FeedEntry) bool {
 	return true
 }
 
-// feedKept is the kinds this node keeps a source for: the tracker's three
-// always (the question is registered on the tracker), and the page and
-// schedule kinds where their domains are here.
-func (s Sources) feedKept() []FeedKind {
+// feedKept is the kinds this node keeps a source for, in this answer's view
+// of the native backends: the tracker's three always (the question is
+// answered only where the tracker is), and the page and schedule kinds where
+// their domains are here.
+func (s Sources) feedKept(n Native) []FeedKind {
 	out := []FeedKind{FeedCompleted, FeedCreated, FeedHandoff}
 	if s.Usage != nil {
 		out = append(out, FeedSchedule)
 	}
-	if s.Pages != nil {
+	if n.Pages != nil {
 		out = append(out, FeedPage)
 	}
 	return out
@@ -421,14 +422,14 @@ func trackerKinds(kinds []FeedKind) []tracker.FeedKind {
 	return out
 }
 
-func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
+// feedWork reads one page of the tracker's share of the feed from work —
+// this answer's own view of the tracker, which [Sources.companyFeed] answers
+// only where it is held.
+func feedWork(ctx context.Context, work WorkReader, kinds []tracker.FeedKind, actor,
 	position string, limit int, fresh statelog.Freshness) (
 	feedPageOf, bool, statelog.ReadLevel, error) {
 
 	var src feedPageOf
-	if s.Work == nil {
-		return src, true, "", nil
-	}
 	q := tracker.FeedQuery{
 		Kinds: kinds, Actor: actor, Limit: limit,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -441,7 +442,7 @@ func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
 		}
 		q.Before = &before
 	}
-	page, err := s.Work.CompanyFeed(ctx, q)
+	page, err := work.CompanyFeed(ctx, q)
 	if err != nil {
 		return src, false, "", err
 	}
@@ -454,7 +455,10 @@ func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
 	return src, page.Complete, page.Level, nil
 }
 
-func (s Sources) feedPages(ctx context.Context, actor, position string, limit int,
+// feedPages reads one page of the knowledge base's share of the feed from
+// knowledge — this answer's own view of it, which [Sources.companyFeed] asks
+// only where the page kind is kept.
+func feedPages(ctx context.Context, knowledge PageReader, actor, position string, limit int,
 	fresh statelog.Freshness) (feedPageOf, bool, statelog.ReadLevel, error) {
 
 	var src feedPageOf
@@ -469,7 +473,7 @@ func (s Sources) feedPages(ctx context.Context, actor, position string, limit in
 		}
 		q.Cursor = cursor
 	}
-	activity, err := s.Pages.Activity(ctx, q)
+	activity, err := knowledge.Activity(ctx, q)
 	if err != nil {
 		return src, false, "", err
 	}
@@ -539,44 +543,42 @@ type DecisionItem struct {
 // THE SAME SCOPE RULE AS `work_my_work` — see [Sources.viewerParty]: a caller
 // reads the person their own token is bound to, and naming anybody else needs
 // an operator credential.
-func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
+func (s Sources) decisions(ctx context.Context, n Native, p Params) (any, error) {
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	asks, err := n.Work.Decisions(ctx, tracker.DecisionsQuery{
+		Who:   who,
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, s.clock(), s.zone())
+	if err != nil {
+		return nil, err
+	}
 	var items []DecisionItem
-	total, capped := 0, false
 	var oldest *time.Time
 	older := func(at time.Time) {
 		if oldest == nil || at.Before(*oldest) {
 			oldest = &at
 		}
 	}
-	answer := map[string]any{"handle": who.Handle}
-	if s.Work != nil {
-		fresh, err := freshness(p)
-		if err != nil {
-			return nil, err
-		}
-		asks, err := s.Work.Decisions(ctx, tracker.DecisionsQuery{
-			Who:   who,
-			Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-			MinPosition: fresh.MinPosition,
-		}, s.clock(), s.zone())
-		if err != nil {
-			return nil, err
-		}
-		for i := range asks.Asks {
-			ask := asks.Asks[i]
-			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask})
-		}
-		total += asks.Total.Total
-		capped = asks.Total.Capped
-		if asks.OldestAt != nil {
-			older(*asks.OldestAt)
-		}
-		answer["read_level"] = asks.Level
-		answer["complete"] = asks.Complete
+	for i := range asks.Asks {
+		ask := asks.Asks[i]
+		items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask})
+	}
+	total, capped := asks.Total.Total, asks.Total.Capped
+	if asks.OldestAt != nil {
+		older(*asks.OldestAt)
+	}
+	answer := map[string]any{
+		"handle":     who.Handle,
+		"read_level": asks.Level,
+		"complete":   asks.Complete,
 	}
 	if s.Sandbox != nil {
 		runs, err := s.Sandbox.ListActive(ctx)

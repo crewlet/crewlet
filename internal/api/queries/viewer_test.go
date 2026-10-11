@@ -41,7 +41,7 @@ func viewerSources(t *testing.T, work *stubWork) queries.Sources {
 	}
 	return queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Work:    work,
+		Native:  nativeOf(queries.Native{Work: work}),
 	}
 }
 
@@ -150,7 +150,7 @@ func TestADisabledGuardIsNeverAPerson(t *testing.T) {
 	queries.Register(r, queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Env:     handedOnly(t, "CREWLET_TEST_BOUND_OPERATOR", "Anonymous"),
-		Work:    &stubWork{},
+		Native:  nativeOf(queries.Native{Work: &stubWork{}}),
 	})
 	answered, err := r.Answer(t.Context(), "viewer", nil, caller)
 	got := answerMap(t, answered, err)
@@ -411,7 +411,10 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	s := queries.Sources{Company: func() *config.Company { return cfg }, Work: &stubWork{}}
+	s := queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Native:  nativeOf(queries.Native{Work: &stubWork{}}),
+	}
 
 	answered, err := askAsOperator(t, s, "viewer", nil)
 	if got := answerMap(t, answered, err); got["project"] != "ENG" {

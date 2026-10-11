@@ -31,7 +31,7 @@ func TestTheWorkAnswersCutTheirDayOnTheCompanysClock(t *testing.T) {
 	work := &stubWork{}
 	sources := queries.Sources{
 		Company: func() *config.Company { return current },
-		Work:    work,
+		Native:  nativeOf(queries.Native{Work: work}),
 		Now:     func() time.Time { return now },
 	}
 

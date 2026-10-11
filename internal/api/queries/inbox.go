@@ -26,7 +26,7 @@ import (
 // operator credential. Registering it operator-only would make the landing
 // screen the most-gated screen in the product, and the human teammate — one of
 // the two readers this dashboard is for — fictional.
-func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
+func (s Sources) workInbox(ctx context.Context, n Native, p Params) (any, error) {
 	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		}
 		q.Since = at
 	}
-	answer, err := s.Work.Inbox(ctx, q, time.Now().UTC())
+	answer, err := n.Work.Inbox(ctx, q, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

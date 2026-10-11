@@ -1210,7 +1210,7 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 	}
 
 	w := &stubWork{}
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 		"work_search", map[string]any{"q": long})
 	refused("work_search", err)
 	if w.searchText != "" {
@@ -1231,7 +1231,7 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 	}
 	// AT THE BOUND it is a search on both.
 	at := strings.Repeat("p", knowledge.MaxQueryBytes)
-	if _, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+	if _, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 		"work_search", map[string]any{"q": at}); err != nil {
 		t.Errorf("work_search at the bound: %v", err)
 	}

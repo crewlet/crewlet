@@ -173,6 +173,12 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Sources.Coord == nil {
 		opts.Sources.Coord = coordmemory.New()
 	}
+	if opts.Sources.Native == nil {
+		opts.Sources.Native = func() queries.Native { return queries.Native{} }
+	}
+	if opts.Sources.Retention == nil {
+		opts.Sources.Retention = func(context.Context) (any, bool) { return nil, false }
+	}
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
 	}
@@ -241,6 +247,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Sources.Coord", "Sources.Native", "Sources.Retention",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
 		"Audit",

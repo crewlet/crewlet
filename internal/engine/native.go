@@ -705,8 +705,8 @@ func (n *native) shutdown(ctx context.Context) {
 // IT TAKES A CONTEXT because where this node's copy does not serve the answer
 // is a request, and a sweep that is shutting down must not wait on it.
 func (e *Engine) NativeHydrated(ctx context.Context) bool {
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) || e.router == nil {
+	run := e.nativeHalves()
+	if (!run.tracker && !run.wiki) || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -715,7 +715,7 @@ func (e *Engine) NativeHydrated(ctx context.Context) bool {
 		return false
 	}
 	trackerServed, pagesServed, err := e.router.Serves(ctx)
-	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+	if err != nil || (run.tracker && !trackerServed) || (run.wiki && !pagesServed) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -727,16 +727,44 @@ func (e *Engine) NativeHydrated(ctx context.Context) bool {
 	return true
 }
 
-// nativeHalves is which halves this company runs natively here, however this
-// node reaches them — false where it runs no native runtime at all.
-func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
+// halves is which halves this company runs natively here, as one reading of
+// this node's runtime found them ([Engine.nativeHalves]).
+type halves struct {
+	// tracker and wiki say which halves the company runs natively, however
+	// this node reaches them: through its own copy on a data node, through a
+	// data node on a node without `data`. Both false on a node running no
+	// native runtime — none built yet, which is a node that booted with no
+	// company and has not applied one — and on one whose company runs both
+	// halves on vendors.
+	tracker, wiki bool
+	// own is this data node's own runtime, for a reader that needs more of
+	// it than which halves it runs (the ranked item search, [OperatorNative])
+	// — and nil on a node without `data`, which holds no runtime of its own
+	// and reaches every half through a data node, and on a node running none.
+	// Taken in the same reading as the halves, so the two never describe
+	// different runtimes.
+	own *native
+}
+
+// nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
+// halves a node runs, read by seat admission ([Engine.NativeHydrated]), by
+// whether a node may keep its seats ([Engine.serviceable]) and by every read
+// seam the operator's surfaces are handed ([OperatorNative]) — so a change to
+// what counts as running a half (a new kind of runtime, a half that needs more
+// than its reader) is made here once and cannot reach one of them and not the
+// others.
+//
+// One atomic load on a node without `data` and two on a data node, which holds
+// no remote runtime: the two pointers are never both set, since a node builds
+// one runtime or the other once per process.
+func (e *Engine) nativeHalves() halves {
 	if r := e.remote.Load(); r != nil {
-		return r.tracker, r.wiki, true
+		return halves{tracker: r.tracker, wiki: r.wiki}
 	}
 	if n := e.native.Load(); n != nil {
-		return n.trackerReader != nil, n.pageReader != nil, true
+		return halves{tracker: n.trackerReader != nil, wiki: n.pageReader != nil, own: n}
 	}
-	return false, false, false
+	return halves{}
 }
 
 // SeatsServiceable reports whether this node may KEEP the seats it holds: it
@@ -782,8 +810,7 @@ func (e *Engine) SeatsServiceable() (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(now time.Time) (bool, string) {
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) {
+	if run := e.nativeHalves(); !run.tracker && !run.wiki {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked() {
@@ -1965,11 +1992,68 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 // operator is answered as the seats are, from this node's copy while it serves
 // and from another data node's while it does not.
 func OperatorWork(e *Engine) (estate.Work, bool) {
-	runTracker, _, ok := e.nativeHalves()
-	if !ok || !runTracker || e.router == nil {
-		return estate.Work{}, false
+	reads := OperatorNative(e)
+	return reads.Work, reads.Tracker
+}
+
+// OperatorReads is every native read seam the operator's surfaces are handed —
+// the tracker, the knowledge base and the ranked item search — as ONE READING
+// of this node's runtime found them.
+//
+// ONE READING, because a surface that asks per request takes all three at once
+// for one answer, and three separate accessors each loaded the runtime again:
+// a node whose first apply published its runtime between two of them handed one
+// answer a view with no tracker beside a knowledge base that had one — two
+// moments in one answer. Taken here, the view describes the runtime as it was at
+// one instant, at the cost of one atomic load on a node without `data` and two
+// on a data node, and no lock, no I/O and no allocation.
+type OperatorReads struct {
+	// Work is the tracker's read side, the router's — the zero facade where
+	// Tracker is not set, for [OperatorWork]'s rule.
+	Work estate.Work
+	// Pages is the knowledge base's read side, the router's, a page's
+	// backlinks included — the zero facade where Wiki is not set, for
+	// [OperatorPages]' rule.
+	Pages estate.Pages
+	// Tracker and Wiki say which halves this company runs natively here.
+	Tracker, Wiki bool
+	// Search says the ranked item search is served — through Work, which
+	// is the seam it is. It needs the tracker AND this node's index, which
+	// is why it is a half of its own: a runtime can hold the board with no
+	// item searcher, and the index is built under either backend, so on a
+	// company whose tracker is a vendor's it holds pages and no task.
+	// [WorkSearcher]'s rule.
+	Search bool
+}
+
+// OperatorNative is [OperatorReads] for e at this instant — the one reading
+// [OperatorWork], [OperatorPages] and [WorkSearcher] are each a view of, so the
+// rule for when a seam is handed out is stated once. Which halves the company
+// runs is [Engine.nativeHalves]' answer rather than a derivation of its own, so
+// the operator is handed a half exactly where seat admission waits on it.
+func OperatorNative(e *Engine) OperatorReads {
+	if e.router == nil {
+		return OperatorReads{}
 	}
-	return e.router.Work(), true
+	run := e.nativeHalves()
+	out := OperatorReads{
+		Tracker: run.tracker,
+		Wiki:    run.wiki,
+		// THE TRACKER'S SEARCH, so the tracker as well as the index: the
+		// index is built under either backend, and on a company whose
+		// tracker is a vendor's it holds no task to rank. A NODE WITHOUT
+		// `data` holds no index of its own (`own` is nil) and asks a data
+		// node for the ranked search as it asks for everything else, so it
+		// serves one wherever it serves the board.
+		Search: run.tracker && (run.own == nil || run.own.itemSearch != nil),
+	}
+	if out.Tracker {
+		out.Work = e.router.Work()
+	}
+	if out.Wiki {
+		out.Pages = e.router.Pages()
+	}
+	return out
 }
 
 // OperatorWorkWriter is the tracker's write side for those surfaces, acting as
@@ -1989,11 +2073,8 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 // through it too ([estate.Pages.LinkedFrom]): they read the tracker's copy as
 // well as the knowledge base's, and are answered only where both serve.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
-	_, wiki, ok := e.nativeHalves()
-	if !ok || !wiki || e.router == nil {
-		return estate.Pages{}, false
-	}
-	return e.router.Pages(), true
+	reads := OperatorNative(e)
+	return reads.Pages, reads.Wiki
 }
 
 // OperatorPageWriter is the knowledge base's write side for those surfaces, or

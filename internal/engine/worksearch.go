@@ -99,16 +99,10 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // node without `data`: the index is built under either backend
 // ([indexedCorpora]), so on a company whose tracker is a vendor's it holds
 // pages and no task, and a searcher handed out there ranks nothing and reads
-// as "nothing matched".
+// as "nothing matched". That rule is [OperatorNative]'s, stated once for every
+// operator read seam and read here from the same one reading.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
-	if r := e.remote.Load(); r != nil {
-		if !r.tracker {
-			return nil
-		}
-		return e.router.Work()
-	}
-	n := e.native.Load()
-	if n != nil && n.trackerReader != nil && n.itemSearch != nil && e.router != nil {
+	if reads := OperatorNative(e); reads.Search {
 		return e.router.Work()
 	}
 	return nil

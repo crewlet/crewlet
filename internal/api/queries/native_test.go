@@ -308,6 +308,19 @@ var personalQuestions = map[string]bool{
 	"decisions":     true,
 }
 
+// nativeOf is a [queries.Sources.Native] that answers n to every question —
+// a node whose native runtime existed before the surface was assembled and
+// never changes, which is what every case here that is not ABOUT the runtime
+// appearing later needs.
+func nativeOf(n queries.Native) func() queries.Native {
+	return func() queries.Native { return n }
+}
+
+// nativeSources is a surface holding the native backends n and nothing else.
+func nativeSources(n queries.Native) queries.Sources {
+	return queries.Sources{Native: nativeOf(n)}
+}
+
 // askNative runs one question against a registry built from these sources,
 // returning the error rather than failing on it: every case here is about a
 // refusal, which the shared `ask` helper turns into a Fatalf.
@@ -330,14 +343,208 @@ func askAsOperator(t *testing.T, s queries.Sources, what string,
 	return r.Answer(t.Context(), what, params, "ops-1")
 }
 
-// A QUESTION WITH NO SOURCE IS UNREGISTERED, not registered-and-empty. A
-// company on Jira has no native record for this node to have a copy of, and a
-// board answering "no work" would say the opposite of what is true.
+// nativeQuestions names, for every question the native backends answer, the
+// one backend it is ABOUT — the one whose absence makes the question unknown.
+// It is NOT the list of native questions: that is [registeredNative]'s,
+// derived from what Register registers, and the sweep below holds this map to
+// it in both directions, so a native question added without an entry here
+// fails rather than escaping the sweep.
+var nativeQuestions = map[string]string{
+	"work_items": "Work", "work_item": "Work", "work_comments": "Work",
+	"work_item_turns": "Work", "work_views": "Work", "work_saved_views": "Work",
+	"work_projects": "Work", "work_project": "Work", "work_workload": "Work",
+	"work_activity": "Work", "work_my_work": "Work", "work_inbox": "Work",
+	"work_routing": "Work", "work_catalogue": "Work", "work_person": "Work",
+	"work_flow": "Work", "company_feed": "Work", "decisions": "Work",
+	"pages": "Pages", "page": "Pages", "containers": "Pages",
+	"page_activity": "Pages", "page_revision": "Pages",
+	"work_files":  "Files",
+	"work_search": "WorkSearch",
+}
+
+// registeredNative is every question a surface registers BECAUSE an engine is
+// beside it: the names a registry over a [queries.Sources.Native] holds and a
+// registry over nothing does not. Derived rather than listed, for the reason a
+// hand list fails here — it drifts in the unsafe direction, and a native
+// question it does not name is one no case asks on a node without its backend.
+func registeredNative() []string {
+	with, without := queries.NewRegistry(), queries.NewRegistry()
+	queries.Register(with, nativeSources(queries.Native{}))
+	queries.Register(without, queries.Sources{})
+	return slices.DeleteFunc(with.Names(), func(name string) bool {
+		return slices.Contains(without.Names(), name)
+	})
+}
+
+// everyNativeBut is every native backend, empty, except the one named.
+func everyNativeBut(field string) queries.Native {
+	n := queries.Native{Work: emptyWork{}, Pages: emptyPages{}, Files: emptyFiles{},
+		Backlinks: stubBacklinks{}, WorkSearch: emptyWork{}}
+	switch field {
+	case "Work":
+		n.Work = nil
+	case "Pages":
+		n.Pages = nil
+	case "Files":
+		n.Files = nil
+	case "WorkSearch":
+		n.WorkSearch = nil
+	default:
+		panic("no native backend " + field)
+	}
+	return n
+}
+
+// A QUESTION WITH NO SOURCE IS UNKNOWN, not answered empty. A company on Jira
+// has no native record for this node to have a copy of, and a board answering
+// "no work" would say the opposite of what is true.
+//
+// THREE SHAPES OF "NO SOURCE", and each answers the same: a surface with no
+// engine beside it (no Native at all, so nothing is registered), a node whose
+// runtime has no native backend NOW (the questions are registered and each
+// answer finds nothing to ask), and a node holding every native backend but
+// the one the question is about — which is what holds each answer to its OWN
+// backend: the board's file list on a node with the tracker's rows and no file
+// reader, or the ranked search on one still building its index.
+//
+// EVERY NATIVE QUESTION THE REGISTRY HOLDS, never a list of them: the set is
+// derived from what Register registers, and the backend map is held to it in
+// both directions. An answer reaching a backend it was not guarded on calls a
+// method on a nil interface, and the socket runs a query on a goroutine of its
+// own, so a question this sweep did not reach would stop the process the first
+// time a node without its backend was asked it.
 func TestTheNativeQuestionsAreAbsentWithoutTheirReaders(t *testing.T) {
-	for _, what := range []string{"work_items", "work_item", "pages", "page", "containers"} {
-		if _, err := askNative(t, queries.Sources{}, what, nil); !errors.Is(err, queries.ErrUnknown) {
-			t.Errorf("%s on a node with no native backend answered %v, want unknown", what, err)
+	t.Parallel()
+	registered := registeredNative()
+	if len(registered) == 0 {
+		t.Fatal("a surface with an engine beside it registered no native question")
+	}
+	for what := range nativeQuestions {
+		if !slices.Contains(registered, what) {
+			t.Errorf("%s is declared native here and is not registered as one", what)
 		}
+	}
+	for _, what := range registered {
+		if _, err := askNative(t, queries.Sources{}, what, nil); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("%s with no engine beside the surface answered %v, want unknown", what, err)
+		}
+		if _, err := askNative(t, nativeSources(queries.Native{}), what,
+			nil); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("%s on a node with no native backend now answered %v, want unknown", what, err)
+		}
+		field, declared := nativeQuestions[what]
+		if !declared {
+			t.Errorf("%s is registered as a native question and nothing here says which "+
+				"backend it is about: add it to nativeQuestions", what)
+			continue
+		}
+		if _, err := askNative(t, nativeSources(everyNativeBut(field)), what,
+			nil); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("%s on a node with every native backend but its own (%s) answered %v, "+
+				"want unknown", what, field, err)
+		}
+	}
+}
+
+// A NATIVE QUESTION IS ASKED OF THE RUNTIME ON EVERY CALL, never of the one
+// that existed when the registry was built. The native runtime is built at
+// boot or at the first apply whose company runs a state log, and the read
+// surface is assembled once, after the engine — so a node that booted with no
+// company built its registry before it had a tracker, and a registry that
+// captured what it saw then answered `unknown_query` to every board question
+// until the process restarted. The retention answer is the same defect: the
+// trim starts with the runtime.
+//
+// ONE REGISTRY throughout, and the backends both appear and go, which is what
+// tells an answer asked per call from one that captured its first answer or
+// its second. The engine's own runtime only appears — its halves are fixed
+// until the process restarts, whatever a later revision says — and what goes
+// in a running process is the retention answer, at the engine's teardown.
+func TestANativeQuestionIsAskedOfTheRuntimeOnEveryCall(t *testing.T) {
+	t.Parallel()
+	var (
+		now     queries.Native
+		running bool
+	)
+	report := map[string]any{"floor": 7}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Native: func() queries.Native { return now },
+		Retention: func(context.Context) (any, bool) {
+			if !running {
+				return nil, false
+			}
+			return report, true
+		},
+	})
+	absent := func(when string) {
+		t.Helper()
+		if _, err := r.Answer(t.Context(), "work_items", nil, ""); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("work_items %s answered %v, want unknown", when, err)
+		}
+		if _, err := r.Answer(t.Context(), "retention", nil, "ops-1"); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("retention %s answered %v, want unknown", when, err)
+		}
+	}
+	absent("before the runtime exists")
+
+	now = queries.Native{Work: &stubWork{answer: tracker.Answer{
+		Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}}, Complete: true}}}
+	running = true
+	got, err := r.Answer(t.Context(), "work_items", nil, "")
+	if err != nil {
+		t.Fatalf("work_items once the runtime exists: %v", err)
+	}
+	if rows, _ := got.(map[string]any)["items"].([]tracker.TaskRow); len(rows) != 1 || rows[0].Key != "ENG-1" {
+		t.Errorf("work_items once the runtime exists = %v, want the runtime's one row", got)
+	}
+	doc, err := r.Answer(t.Context(), "retention", nil, "ops-1")
+	if err != nil {
+		t.Fatalf("retention once the state log runs: %v", err)
+	}
+	if fmt.Sprint(doc) != fmt.Sprint(report) {
+		t.Errorf("retention = %v, want the running state log's own document %v", doc, report)
+	}
+
+	now, running = queries.Native{}, false
+	absent("after the runtime went")
+}
+
+// A SUPPLEMENT MISSING IS NOT A FAILURE. Where an answer is about one backend
+// and only enriched by another, the second being absent changes what the
+// answer carries and never whether it is given: the company feed without a
+// knowledge base is the tracker's kinds — and a page kind ASKED FOR by name is
+// refused naming what is missing, rather than answered empty — and a page
+// without a backlink index is the page without `linked_from`.
+func TestASupplementMissingIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{feed: tracker.FeedPage{Complete: true}}
+	only := nativeSources(queries.Native{Work: work})
+	if _, err := askNative(t, only, "company_feed", nil); err != nil {
+		t.Fatalf("company_feed with no knowledge base: %v", err)
+	}
+	want := []tracker.FeedKind{tracker.FeedCompleted, tracker.FeedCreated, tracker.FeedHandoff}
+	if !slices.Equal(work.feedQuery.Kinds, want) {
+		t.Errorf("company_feed with no knowledge base asked the tracker for %v, want %v",
+			work.feedQuery.Kinds, want)
+	}
+	_, err := askNative(t, only, "company_feed", map[string]any{"kinds": "page"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "knowledge base") {
+		t.Errorf("kinds=page with no knowledge base = %v, want bad params naming the knowledge base", err)
+	}
+
+	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: "p-1", Title: "Deploying"}}}
+	got, err := askNative(t, nativeSources(queries.Native{Pages: stub}), "page", map[string]any{"id": "p-1"})
+	if err != nil {
+		t.Fatalf("page with no backlink index: %v", err)
+	}
+	page, ok := got.(queries.PageAnswer)
+	if !ok || page.Page.Title != "Deploying" {
+		t.Fatalf("page with no backlink index = %#v, want the page", got)
+	}
+	if page.LinkedFrom != nil || page.LinkedFromStatus != "" {
+		t.Errorf("page with no backlink index carried linked_from %v (%q), want it absent",
+			page.LinkedFrom, page.LinkedFromStatus)
 	}
 }
 
@@ -353,11 +560,13 @@ func TestTheNativeQuestionsAreAbsentWithoutTheirReaders(t *testing.T) {
 func TestAReadThatFailedIsNotRenderedAsEmpty(t *testing.T) {
 	sentinel := errors.New("the store could not be reached")
 	w := &stubWork{err: sentinel}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", nil); !errors.Is(err, sentinel) {
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items",
+		nil); !errors.Is(err, sentinel) {
 		t.Errorf("a failed board read answered %v, want the failure", err)
 	}
 	p := &stubPages{err: sentinel}
-	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); !errors.Is(err, sentinel) {
+	if _, err := askNative(t, nativeSources(queries.Native{Pages: p}), "pages",
+		nil); !errors.Is(err, sentinel) {
 		t.Errorf("a failed page listing answered %v, want the failure", err)
 	}
 }
@@ -366,12 +575,13 @@ func TestAReadThatFailedIsNotRenderedAsEmpty(t *testing.T) {
 // to an operator as a dead link, not as the server being broken.
 func TestAMissingRecordIsNotFound(t *testing.T) {
 	w := &stubWork{err: tracker.ErrNoTask}
-	_, err := askNative(t, queries.Sources{Work: w}, "work_item", map[string]any{"id": "ENG-999"})
+	_, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_item",
+		map[string]any{"id": "ENG-999"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing item answered %v, want not-found", err)
 	}
 	p := &stubPages{err: pages.ErrNotFound}
-	_, err = askNative(t, queries.Sources{Pages: p}, "page", map[string]any{"id": "nope"})
+	_, err = askNative(t, nativeSources(queries.Native{Pages: p}), "page", map[string]any{"id": "nope"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing page answered %v, want not-found", err)
 	}
@@ -386,7 +596,7 @@ func TestAMissingRecordIsNotFound(t *testing.T) {
 // answer that can disagree with the first.
 func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_item",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_item",
 		map[string]any{"id": "ENG-1"}); err != nil {
 		t.Fatalf("work_item: %v", err)
 	}
@@ -411,7 +621,7 @@ func TestTheItemQueryStandsTheDueDateOnTheCompanyClock(t *testing.T) {
 	now := time.Date(2031, time.April, 17, 6, 30, 0, 0, time.UTC)
 	w := &stubWork{}
 	src := queries.Sources{
-		Work:    w,
+		Native:  nativeOf(queries.Native{Work: w}),
 		Now:     func() time.Time { return now },
 		Company: func() *config.Company { return &config.Company{Timezone: "America/Los_Angeles"} },
 	}
@@ -441,7 +651,8 @@ func TestTheItemQueryAsksWithTheChart(t *testing.T) {
 	w := &stubWork{}
 	cfg := company(t)
 	if _, err := askNative(t, queries.Sources{
-		Work: w, Company: func() *config.Company { return cfg },
+		Native:  nativeOf(queries.Native{Work: w}),
+		Company: func() *config.Company { return cfg },
 	}, "work_item", map[string]any{"id": "ENG-1"}); err != nil {
 		t.Fatalf("work_item: %v", err)
 	}
@@ -464,7 +675,7 @@ func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		Turns: []tracker.TaskTurn{{TurnID: "run-2", Ordinal: 2, Tokens: 900}},
 		Next:  "41",
 	}}
-	got, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
+	got, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_item_turns",
 		map[string]any{"id": "ENG-1", "cursor": "88", "limit": 500})
 	if err != nil {
 		t.Fatalf("work_item_turns: %v", err)
@@ -478,12 +689,12 @@ func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		t.Errorf("answered %#v, want the reader's page with its cursor", got)
 	}
 
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_item_turns",
 		map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("no id answered %v, want bad_params", err)
 	}
 	gone := &stubWork{err: tracker.ErrNoTask}
-	if _, err := askNative(t, queries.Sources{Work: gone}, "work_item_turns",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: gone}), "work_item_turns",
 		map[string]any{"id": "ENG-404"}); !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a task that does not exist answered %v, want not_found", err)
 	}
@@ -503,7 +714,7 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		Comments:       []tracker.Comment{{ID: "c-21", Body: "older"}},
 		CommentsCursor: "1700000000:c-20",
 	}}
-	got, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+	got, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_comments",
 		map[string]any{"item": "ENG-1", "cursor": "1800000000:c-41", "limit": 500})
 	if err != nil {
 		t.Fatalf("work_comments: %v", err)
@@ -518,14 +729,14 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 	if answer["next_cursor"] != "1700000000:c-20" || answer["key"] != "ENG-1" {
 		t.Errorf("the answer lost the next cursor or the key: %v", answer)
 	}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_comments",
 		map[string]any{}); err == nil {
 		t.Error("a thread asked of no item was answered")
 	}
 	// AN EMPTY THREAD IS A LIST: an absent key reads like an answer that
 	// failed to carry one.
 	w.detail = tracker.TaskDetail{Task: tracker.Task{ID: "t-2", Key: "ENG-2"}}
-	got, _ = askNative(t, queries.Sources{Work: w}, "work_comments",
+	got, _ = askNative(t, nativeSources(queries.Native{Work: w}), "work_comments",
 		map[string]any{"item": "ENG-2"})
 	if list, ok := got.(map[string]any)["comments"].([]tracker.Comment); !ok || list == nil {
 		t.Errorf("an empty thread answered %v rather than an empty list", got)
@@ -542,7 +753,7 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 // nothing assigned.
 func TestABoardFilterReachesTheReader(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items", map[string]any{
 		"container": "project:eng", "assignee": "swe", "tag": "urgent",
 		"status": "todo,in_progress", "q": "deploy", "limit": 10,
 	}); err != nil {
@@ -586,7 +797,8 @@ func TestAnAbsentContainerIsNeither(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := &stubWork{}
-			if _, err := askNative(t, queries.Sources{Work: w}, "work_items", tc.params); err != nil {
+			if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items",
+				tc.params); err != nil {
 				t.Fatalf("work_items: %v", err)
 			}
 			if w.query.Scope.Workspace != tc.workspace || w.query.Scope.Project != tc.project {
@@ -600,13 +812,14 @@ func TestAnAbsentContainerIsNeither(t *testing.T) {
 // tool-skill pages, everything but them, and everything.
 func TestSkillsIsThreeStated(t *testing.T) {
 	p := &stubPages{}
-	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); err != nil {
+	if _, err := askNative(t, nativeSources(queries.Native{Pages: p}), "pages", nil); err != nil {
 		t.Fatalf("pages: %v", err)
 	}
 	if p.filter.Skills != nil {
 		t.Errorf("an absent `skills` reached the reader as %v", *p.filter.Skills)
 	}
-	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"skills": false}); err != nil {
+	if _, err := askNative(t, nativeSources(queries.Native{Pages: p}), "pages",
+		map[string]any{"skills": false}); err != nil {
 		t.Fatalf("pages: %v", err)
 	}
 	if p.filter.Skills == nil || *p.filter.Skills {
@@ -621,7 +834,7 @@ func TestSkillsIsThreeStated(t *testing.T) {
 func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
 	p := &stubPages{list: []pages.Summary{{ID: "p1", Title: "Runbooks"}}}
 	p.total, p.after = 412, "next-window"
-	got, err := askNative(t, queries.Sources{Pages: p}, "pages",
+	got, err := askNative(t, nativeSources(queries.Native{Pages: p}), "pages",
 		map[string]any{"container": "ENG", "roots": true, "after": "cursor-1", "limit": 500})
 	if err != nil {
 		t.Fatalf("pages: %v", err)
@@ -636,14 +849,15 @@ func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
 	}
 	// ROOTS AND A PARENT ARE OPPOSITE QUESTIONS, refused rather than one
 	// silently winning.
-	_, err = askNative(t, queries.Sources{Pages: p}, "pages",
+	_, err = askNative(t, nativeSources(queries.Native{Pages: p}), "pages",
 		map[string]any{"roots": true, "parent": "p1"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("roots with a parent answered %v, want bad params", err)
 	}
 	// AND A CURSOR THE READER REFUSES IS THE CALLER'S MISTAKE.
 	p.err = fmt.Errorf("wrapped: %w", pages.ErrBadCursor)
-	_, err = askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"after": "junk"})
+	_, err = askNative(t, nativeSources(queries.Native{Pages: p}), "pages",
+		map[string]any{"after": "junk"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a refused cursor answered %v, want bad params", err)
 	}
@@ -653,7 +867,7 @@ func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
 // nothing: a board that answered empty for `status=done` (which is not a
 // status here) would send somebody looking for the missing items.
 func TestAnUnknownStatusIsRefusedNamingTheSet(t *testing.T) {
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}}, "work_items",
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}}), "work_items",
 		map[string]any{"status": "finished"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("an unknown status answered %v, want bad params", err)
@@ -673,7 +887,7 @@ func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
 		Rows:      []tracker.TaskRow{{ID: "i1", Key: "ENG-1"}},
 		TotalHint: 42, Level: statelog.ReadStale, Complete: true,
 	}}
-	got, err := askNative(t, queries.Sources{Work: w}, "work_items", nil)
+	got, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items", nil)
 	if err != nil {
 		t.Fatalf("work_items: %v", err)
 	}
@@ -707,7 +921,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 		Detail: "this node is 40 000 records behind", RetryAfter: 12 * time.Second,
 	}}
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Work: work})
+	queries.Register(r, nativeSources(queries.Native{Work: work}))
 
 	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
 	if !errors.Is(err, queries.ErrUnavailable) {
@@ -737,7 +951,7 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 		Detail: "this node holds a record at a version it cannot decode",
 	}}
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Work: work})
+	queries.Register(r, nativeSources(queries.Native{Work: work}))
 
 	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
 	if err == nil {
@@ -759,7 +973,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 		RetryAfter: time.Second}
 	work := &stubWork{err: fmt.Errorf("%w: %w", tracker.ErrTooBroad, behind)}
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Work: work})
+	queries.Register(r, nativeSources(queries.Native{Work: work}))
 
 	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
@@ -793,7 +1007,7 @@ func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
 		{"the activity", "work_activity", map[string]any{"container": "workspace"},
 			&stubWork{err: unserved}},
 	} {
-		_, err := askNative(t, queries.Sources{Work: tc.work}, tc.what, tc.params)
+		_, err := askNative(t, nativeSources(queries.Native{Work: tc.work}), tc.what, tc.params)
 		if !errors.Is(err, queries.ErrUnavailable) || errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: a read no copy could answer = %v, want %v and never %v", tc.name,
 				err, queries.ErrUnavailable, queries.ErrBadParams)
@@ -822,7 +1036,7 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 			// AS AN OPERATOR, because naming somebody else's
 			// handle is what the credential buys — see
 			// TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName.
-			if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+			if _, err := askAsOperator(t, nativeSources(queries.Native{Work: w}), "work_views",
 				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
 				t.Fatalf("work_views: %v", err)
 			}
@@ -841,7 +1055,7 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	// with no views from one that does not exist.
 	for _, raw := range []string{"", "team:eng", "project:", "ENG"} {
 		w := &stubWork{}
-		_, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		_, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_views",
 			map[string]any{"container": raw})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
@@ -879,7 +1093,7 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 		if tc.sort != "" {
 			args["sort"] = tc.sort
 		}
-		if _, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+		if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_projects",
 			args); err != nil {
 			t.Fatalf("work_projects%+v: %v", args, err)
 		}
@@ -910,7 +1124,7 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 		{"sort", "-progress", "sort"},
 	} {
 		w := &stubWork{}
-		_, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+		_, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_projects",
 			map[string]any{tc.key: tc.value})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s=%s answered %v, want a bad-parameter refusal",
@@ -947,7 +1161,7 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 		{"no type", fmt.Errorf("tracker: no type \"epic\": %w", tracker.ErrNoType),
 			queries.ErrBadParams},
 	} {
-		_, err := askNative(t, queries.Sources{Work: &stubWork{err: tc.err}},
+		_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{err: tc.err}}),
 			"work_project", map[string]any{"key": "ENG", "for_type": "epic"})
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: answered %v, want %v", tc.name, err, tc.want)
@@ -978,7 +1192,7 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	// authorization failure rather than a bad parameter — the remedy is a
 	// different credential, not a different handle.
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); !errors.Is(
 		err, queries.ErrUnauthorized) {
 
@@ -994,7 +1208,7 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
 	// these records in the first place.
 	w = &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askAsOperator(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
 		t.Fatalf("an operator naming a seat's handle: %v", err)
 	}
@@ -1006,7 +1220,7 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
 	// answer with an empty viewer, never a refusal.
 	w = &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace"}); err != nil {
 		t.Fatalf("the shared strip, asked anonymously: %v", err)
 	}
@@ -1024,7 +1238,7 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askAsOperator(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo",
 			"counts": "true"}); err != nil {
 		t.Fatalf("counts for a named viewer: %v", err)
@@ -1035,7 +1249,7 @@ func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
 	}
 
 	w = &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace", "counts": "true"}); !errors.Is(
 		err, queries.ErrBadParams) {
 		t.Errorf("counts on the shared strip answered %v, want a bad-params "+
@@ -1046,7 +1260,7 @@ func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
 	}
 
 	w = &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+	if _, err := askAsOperator(t, nativeSources(queries.Native{Work: w}), "work_views",
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
 		t.Fatalf("a strip without counts: %v", err)
 	}
@@ -1071,7 +1285,7 @@ func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
 		Totals:   []tracker.Total{{Key: "points:sum", Column: "points", Op: "sum"}},
 		Complete: true,
 	}}
-	got, err := askNative(t, queries.Sources{Work: w}, "work_items",
+	got, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items",
 		map[string]any{"container": "project:eng", "group_by": "status"})
 	if err != nil {
 		t.Fatalf("work_items: %v", err)
@@ -1115,8 +1329,8 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 			tracker.Answer{Complete: true}, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := askNative(t, queries.Sources{Work: &stubWork{
-				answer: tc.answer}}, "work_items", tc.params)
+			got, err := askNative(t, nativeSources(queries.Native{
+				Work: &stubWork{answer: tc.answer}}), "work_items", tc.params)
 			if err != nil {
 				t.Fatalf("work_items: %v", err)
 			}
@@ -1243,7 +1457,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 				return work, pages
 			}
 			work, pages := fresh()
-			src := queries.Sources{Work: work, Pages: pages}
+			src := nativeSources(queries.Native{Work: work, Pages: pages})
 			ask := askNative
 			if personalQuestions[tc.what] {
 				ask = askAsOperator
@@ -1260,7 +1474,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			// AND THE ASK IS HONOURED, which is the half twelve of these
 			// questions dropped on the floor.
 			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
+			src = nativeSources(queries.Native{Work: work, Pages: pages})
 			asked := map[string]any{"read_level": "linearizable"}
 			for k, v := range tc.args {
 				asked[k] = v
@@ -1277,7 +1491,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			// AND A BARE `session` IS REFUSED RATHER THAN QUIETLY
 			// SERVED: it waits for a position, and none was named.
 			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
+			src = nativeSources(queries.Native{Work: work, Pages: pages})
 			bad := map[string]any{"read_level": "session"}
 			for k, v := range tc.args {
 				bad[k] = v
@@ -1291,7 +1505,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			// read-your-writes over this wire: a write answered with
 			// where it landed and the caller hands that back.
 			work, pages = fresh()
-			src = queries.Sources{Work: work, Pages: pages}
+			src = nativeSources(queries.Native{Work: work, Pages: pages})
 			own := map[string]any{
 				"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",
 			}
@@ -1407,7 +1621,7 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			for k, v := range tc.args {
 				all[k] = v
 			}
-			src := queries.Sources{Work: work, Pages: pages}
+			src := nativeSources(queries.Native{Work: work, Pages: pages})
 			if _, err := ask(t, src, tc.what, all); err != nil {
 				t.Fatalf("%s: %v", tc.what, err)
 			}
@@ -1480,7 +1694,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
 				work, pages := &stubWork{}, &stubPages{}
-				src := queries.Sources{Work: work, Pages: pages}
+				src := nativeSources(queries.Native{Work: work, Pages: pages})
 				args := map[string]any{"min_position": want.String()}
 				if level != "" {
 					args["read_level"] = level
@@ -1500,7 +1714,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			// AND A MALFORMED ONE IS REFUSED AS BAD PARAMETERS, naming
 			// the key, rather than silently read as no floor.
 			work, pages := &stubWork{}, &stubPages{}
-			src := queries.Sources{Work: work, Pages: pages}
+			src := nativeSources(queries.Native{Work: work, Pages: pages})
 			args := map[string]any{"min_position": "4711"}
 			for k, v := range tc.args {
 				args[k] = v
@@ -1533,7 +1747,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 // is answerable only on a surface that HAS a viewer, and this was the surface.
 func TestABoardMayNameItsViewer(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items", map[string]any{
 		"viewer": "ada", "assignee": "ada",
 	}); err != nil {
 		t.Fatalf("work_items naming a viewer: %v", err)
@@ -1559,7 +1773,7 @@ func TestABoardMayNameItsViewer(t *testing.T) {
 // the question is whether this surface hands the viewer over at all.
 func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_items", map[string]any{
 		"viewer": "ada",
 	}); err != nil {
 		t.Fatalf("work_items naming a viewer: %v", err)
@@ -1583,7 +1797,7 @@ func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
 // refusal belongs here, at the edge where the string still exists.
 func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_activity", map[string]any{
 		"container": "workspace", "actor_kinds": "root",
 	}); err == nil {
 		t.Fatal("work_activity accepted actor_kinds=root — nothing is written " +
@@ -1597,7 +1811,7 @@ func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 	// AND THE KINDS THE ENGINE DOES WRITE UNDER ALL ARRIVE, in the order
 	// they were named — a gate that refused everything would pass the case
 	// above and take the screen with it.
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_activity", map[string]any{
 		"container": "workspace", "actor_kinds": "operator, human",
 	}); err != nil {
 		t.Fatalf("work_activity naming two real actor kinds: %v", err)
@@ -1615,7 +1829,7 @@ func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 func TestEverySavedViewIsAskedForAViewerAndCountedOnlyForOne(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_saved_views",
+	if _, err := askAsOperator(t, nativeSources(queries.Native{Work: w}), "work_saved_views",
 		map[string]any{"viewer": "ada-okonkwo", "counts": "true"}); err != nil {
 		t.Fatalf("every view, counted, for a named viewer: %v", err)
 	}
@@ -1626,7 +1840,7 @@ func TestEverySavedViewIsAskedForAViewerAndCountedOnlyForOne(t *testing.T) {
 	}
 
 	w = &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_saved_views",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_saved_views",
 		map[string]any{"counts": "true"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("counts with nobody named answered %v, want a bad-params "+
 			"refusal naming viewer=", err)

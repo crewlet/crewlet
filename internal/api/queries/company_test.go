@@ -3075,15 +3075,17 @@ func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
 			LastTurnID: "run-a", LastWorkKey: "wk-1", LastQuery: "dhcp"},
 		read("skill_loaded", 1, at, "run-a", ""))
 	sources := f.sources()
-	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
-		"run-a": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
-	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
-	sources.Backlinks = stubBacklinks{links: search.Backlinks{
-		Pages: []search.PageLink{{ID: "p-2", Container: "ENG", Title: "On-call"}},
-		Tasks: []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry", Status: "todo",
-			Via: []string{search.TaskLinkedPage}}},
-		PagesTotal: 1, TasksTotal: 1,
-	}}
+	sources.Native = nativeOf(queries.Native{
+		Work: &stubWork{places: map[string]tracker.TurnPlace{
+			"run-a": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}},
+		Pages: &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}},
+		Backlinks: stubBacklinks{links: search.Backlinks{
+			Pages: []search.PageLink{{ID: "p-2", Container: "ENG", Title: "On-call"}},
+			Tasks: []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry", Status: "todo",
+				Via: []string{search.TaskLinkedPage}}},
+			PagesTotal: 1, TasksTotal: 1,
+		}},
+	})
 
 	reads := asMap(t, askRaw(t, registryOver(t, sources), "page_reads", map[string]any{"page": readPage}))
 	holdShape(t, "PageReadsAnswer", []map[string]any{reads}, false)

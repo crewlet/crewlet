@@ -101,18 +101,20 @@ func everySeam(t *testing.T) queries.Sources {
 		// fleet record, which answers every run `not_running`.
 		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
 		Config:      surface,
-		Work:        emptyWork{},
-		Pages:       emptyPages{},
-		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
-		// no index is a real shape this sweep can describe.
-		WorkSearch: emptyWork{},
-		// A PROJECT'S FILES, their own seam for the same reason.
-		Files: emptyFiles{},
+		Native: nativeOf(queries.Native{
+			Work:  emptyWork{},
+			Pages: emptyPages{},
+			// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
+			// no index is a real shape this sweep can describe.
+			WorkSearch: emptyWork{},
+			// A PROJECT'S FILES, their own seam for the same reason.
+			Files: emptyFiles{},
+		}),
 		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
-		Retention: func(context.Context) any { return nil },
+		Retention: func(context.Context) (any, bool) { return nil, true },
 		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
 		FleetBroker: emptyBroker{},
 		// THE GUARD'S POSTURE, which the API always supplies from the

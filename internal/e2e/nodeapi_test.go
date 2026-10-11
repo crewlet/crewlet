@@ -171,13 +171,13 @@ func wireAPI(
 		// WHAT A PERSON MAY DO, off the same surface the act route
 		// serves, as cmd/crewlet wires it.
 		OperatorActs: operators.Acts,
-	}
-	// THE TRACKER'S READS, through this node's estate router as cmd/crewlet
-	// wires them, and set only when this node runs one: a nil reader in the
-	// interface would register every work question and panic on the first
-	// ask, where an unset one leaves them honestly unregistered.
-	if reader, ok := engine.OperatorWork(e); ok {
-		sources.Work = reader
+		// THE NATIVE TRACKER AND KNOWLEDGE BASE — the board, the pages,
+		// the file rows, the backlinks and the ranked search — and the
+		// state log's retention answer, through the constructors
+		// cmd/crewlet builds them with, so a harness node answers every
+		// native question a deployment's does, asked per question.
+		Native:    api.EngineReads(e),
+		Retention: api.EngineRetention(e),
 	}
 
 	opts := api.Options{
