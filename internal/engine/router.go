@@ -224,6 +224,23 @@ func (l *localEstate) serves(ctx context.Context, domain string) bool {
 	return l.verdict(ctx, n).serves(domain)
 }
 
+// copyOutOfService is the first of domains, in the order given, whose copy on
+// this node is out of service ([localEstate.serves], ADR-0031) — or false
+// where every one serves, or where this node holds no estate to judge. A
+// fleet duty that decides from those domains' rows asks it before it claims
+// ([dutyDecline]).
+func (e *Engine) copyOutOfService(ctx context.Context, domains ...string) (string, bool) {
+	if e == nil || e.local == nil {
+		return "", false
+	}
+	for _, domain := range domains {
+		if !e.local.serves(ctx, domain) {
+			return domain, true
+		}
+	}
+	return "", false
+}
+
 // verdict is the copy's verdict, read again once it is older than
 // [servingRecheck].
 //

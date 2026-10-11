@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -199,23 +200,59 @@ func (e *Engine) releaseDuties(ctx context.Context) {
 	}
 	ctx, done := seat.StopStep(context.WithoutCancel(ctx))
 	defer done()
-	owner := e.node.Owner()
 	for _, name := range e.duties.list() {
-		resource := coord.WorkerResource(name)
-		lease, err := e.backends.Coord.Get(ctx, resource)
-		if err != nil {
-			log.WarnContext(ctx, "duty_not_released", "duty", name, "error", err,
-				"detail", "the duty could not be read, so a peer takes it over once its lease lapses")
-			continue
-		}
-		if lease == nil || lease.Owner != owner {
-			continue
-		}
-		if _, err := e.backends.Coord.Release(ctx, resource, owner, lease.Epoch); err != nil {
+		released, err := e.releaseDuty(ctx, name)
+		switch {
+		case err != nil:
 			log.WarnContext(ctx, "duty_not_released", "duty", name, "error", err,
 				"detail", "a peer takes the duty over once its lease lapses")
-			continue
+		case released:
+			log.InfoContext(ctx, "duty_released", "duty", name)
 		}
-		log.InfoContext(ctx, "duty_released", "duty", name)
 	}
+}
+
+// releaseDuty gives back the fleet duty name if this incarnation holds it, and
+// reports whether it did.
+//
+// Released at the epoch the store reports for this owner, so a lease a peer
+// has since taken is never touched — and so it needs no memory of the tenure
+// a claim was granted: the store's record is the one that counts.
+func (e *Engine) releaseDuty(ctx context.Context, name string) (bool, error) {
+	owner := e.node.Owner()
+	resource := coord.WorkerResource(name)
+	lease, err := e.backends.Coord.Get(ctx, resource)
+	if err != nil {
+		return false, fmt.Errorf("read the %s duty's lease: %w", name, err)
+	}
+	if lease == nil || lease.Owner != owner {
+		return false, nil
+	}
+	released, err := e.backends.Coord.Release(ctx, resource, owner, lease.Epoch)
+	if err != nil {
+		return false, fmt.Errorf("give the %s duty's lease back: %w", name, err)
+	}
+	return released, nil
+}
+
+// workerGiveBack is the give-back of the fleet duty [Engine.workerDuty] claims
+// under name, for a holder that stops running it while it is still up — a
+// duty DECLINED because a copy it decides from is out of service
+// ([dutyDecline]). It reports whether this node held the duty and gave it
+// back.
+//
+// GIVEN BACK RATHER THAN LEFT TO LAPSE, because a duty's lease is sized to
+// outlive several of its ticks: a holder that merely stopped claiming kept the
+// trim from every node for its 45-minute lease plus a 15-minute tick — the
+// duty that bounds every log's disk — and the collector and the embedding duty
+// for their own TTLs. Given back, the next node whose copies serve takes it at
+// its next tick.
+//
+// Nil wherever workerDuty claims no lease — a node that runs no workers, or
+// one with no coordination store — since there is nothing to give back.
+func (e *Engine) workerGiveBack(name string) func(context.Context) (bool, error) {
+	if !e.profile.RunsWorkers() || e.backends == nil || e.backends.Coord == nil || e.node == nil {
+		return nil
+	}
+	return func(ctx context.Context) (bool, error) { return e.releaseDuty(ctx, name) }
 }

@@ -68,8 +68,14 @@ being counted about a minute after that record lands.
 
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
 `worker:retention`. Only a data node may claim it, since the trim reads the
-estate it holds. Every node still evaluates its own alarms on every tick,
-whatever duty it holds.
+estate it holds — and not one whose copy of the tracker or the knowledge base
+is out of service, since the evictions it counts are in those rows: such a node
+declines the duty (`retention_duty_declined`), gives its lease back if it holds
+it (`retention_duty_given_back`), and one whose copies serve takes it at its
+next tick ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+Left to lapse, the duty's 45-minute lease would leave every log untrimmed for
+up to an hour.
+Every node still evaluates its own alarms on every tick, whatever duty it holds.
 
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on

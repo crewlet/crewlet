@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -281,6 +282,41 @@ func TestARefusedRenewalStopsTheWorkAtOnce(t *testing.T) {
 	}
 	if clk.tickWithin(renewal.every(), 100*time.Millisecond) {
 		t.Fatal("the renewals went on after the duty was lost")
+	}
+}
+
+// A KEPT DUTY THIS NODE DECLINES ENDS ITS WORK UNRENEWED (ADR-0031): once a
+// copy the work decides from has gone out of service, the renewal due next
+// asks the store nothing, ends the work at once, and none is asked after it —
+// renewed, the work would go on deciding from the copy that went wrong. Stop
+// says DECLINED rather than lost or unconfirmed, because the lease is still
+// this node's and its holder has to give it back.
+func TestADeclinedKeptDutyEndsItsWorkUnrenewed(t *testing.T) {
+	t.Parallel()
+	clk := newFakeDutyClock()
+	var declined atomic.Bool
+	renewal := dutyRenewal{duty: "x", ttl: 4 * time.Minute, clock: clk}.declining(
+		func(context.Context) bool { return declined.Load() })
+	claim := newScriptedClaim()
+	work, kept := renewal.keep(t.Context(), claim.claim, clk.Now())
+
+	clk.tick(t, time.Minute)
+	claim.await(t)
+	alive(work, t, "while every copy it decides from served")
+	declined.Store(true)
+	clk.tick(t, time.Minute)
+	ended(work, t)
+	if cause := context.Cause(work); !errors.Is(cause, errDutyDeclined) {
+		t.Fatalf("the work ended with %v, want %v", cause, errDutyDeclined)
+	}
+	if n := claim.count(); n != 1 {
+		t.Fatalf("the lease was asked for %d times; want once, and never once the duty was declined", n)
+	}
+	if held, err := kept.Stop(); held || !errors.Is(err, errDutyDeclined) {
+		t.Fatalf("Stop = %v, %v; want declined, for the holder to give the lease back", held, err)
+	}
+	if clk.tickWithin(time.Minute, 100*time.Millisecond) {
+		t.Fatal("the renewals went on after the duty was declined")
 	}
 }
 

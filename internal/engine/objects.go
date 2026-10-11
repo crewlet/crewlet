@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,12 +134,45 @@ type collectorDuty struct {
 	// resumed is whether the schedule has been read back from the fleet's
 	// record since this node took the duty.
 	resumed bool
+
+	// decidesFrom is every domain whose rows name the objects it collects
+	// and audits ([copiesNamedBy]); declines is whether this node is
+	// declining the duty because its copy of one is out of service, and
+	// giveBack gives the duty back where it holds it on a turn that does
+	// ([Engine.workerGiveBack]) — nil holds no lease to give.
+	decidesFrom []string
+	declines    dutyDecline
+	giveBack    func(context.Context) (bool, error)
 }
 
-// newCollectorDuty is the duty's state over c, renewed on the system's clock.
-func newCollectorDuty(c *collect.Collector) *collectorDuty {
+// copiesNamedBy is every domain whose rows refs reads — the domains a declared
+// table names an object in — once each, in refs' order: what the collector
+// decides from, read off the references it was built with so no list beside
+// them can drift from what it reads.
+func copiesNamedBy(refs collect.References) []string {
+	var out []string
+	for _, src := range refs {
+		if !slices.Contains(out, src.Name()) {
+			out = append(out, src.Name())
+		}
+	}
+	return out
+}
+
+// newCollectorDuty is the duty's state over c, renewed on the system's clock,
+// deciding from the domains named and giving the duty back through giveBack
+// when it declines — nil where there is no lease to give back.
+//
+// ITS RENEWALS ASK NO DECLINE: unlike the embedding duty's training, a pass
+// reads the rows that name objects through the read authority, which refuses a
+// copy out of service ([dutyDecline]), so a pass whose copy goes wrong under it
+// stops at its next read on its own, and the next turn declines.
+func newCollectorDuty(c *collect.Collector, decidesFrom []string,
+	giveBack func(context.Context) (bool, error)) *collectorDuty {
+
 	return &collectorDuty{collector: c,
-		renewal: newDutyRenewal(objectCollectorDuty, collectorDutyTTL)}
+		renewal:     newDutyRenewal(objectCollectorDuty, collectorDutyTTL),
+		decidesFrom: decidesFrom, giveBack: giveBack}
 }
 
 // collectionReport is what the collector's duty records in the coordination
@@ -167,7 +201,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
-	duty := newCollectorDuty(c)
+	duty := newCollectorDuty(c, copiesNamedBy(refs), e.workerGiveBack(objectCollectorDuty))
 	o.duty.Store(duty)
 	claim := e.workerDuty(objectCollectorDuty, collectorDutyTTL)
 	o.collector = startLoop(ctx, sleep, func(ctx context.Context) time.Duration {
@@ -180,9 +214,23 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 // collectorTurn is one turn of the duty: claim it, keep it while whichever
 // pass is due runs, and record what the pass found if the duty is still this
 // node's when it ends.
+//
+// DECLINED FIRST, before the claim, while this node's copy of a domain whose
+// rows name objects is out of service ([dutyDecline]) — given back if this
+// node holds it, and otherwise declined as an unanswered claim is: the node
+// runs no pass, keeps what it believed, and forgets the resume, since another
+// node may take the duty and record a newer pass meanwhile ([collectorDuty.settle]).
 func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) (bool, error),
 	duty *collectorDuty) {
 
+	if _, out := duty.declines.check(ctx, collectorDecline, e.copyOutOfService,
+		duty.decidesFrom); out {
+		duty.declines.giveBack(ctx, collectorDecline, duty.giveBack)
+		duty.mu.Lock()
+		duty.resumed = false
+		duty.mu.Unlock()
+		return
+	}
 	asked := duty.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
 	held, err := true, error(nil)     // a node with nobody to claim from runs it alone
 	if claim != nil {

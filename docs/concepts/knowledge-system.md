@@ -307,7 +307,12 @@ search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
 source once and publishes a record; every node applies it. The company pays the
-bill once and holds the answer everywhere.
+bill once and holds the answer everywhere. A node whose copy of the vectors, the
+tracker or the knowledge base is out of service does not hold the duty, since
+what it publishes and withdraws would be decided from rows it has stopped
+serving. It gives the duty back if it holds it, and a node whose copies serve
+takes it at its next tick
+([singleton duties](seat-ownership.md#singleton-duties)).
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -328,7 +333,10 @@ seven and a half of arithmetic. The training renews the duty's lease as it
 runs, and stops publishing — handing its cores back within a fraction of a
 second — the moment a renewal answers that another node holds the duty, or
 once no renewal has confirmed it for two and a quarter minutes (its
-three-minute lease less one of the four renewals it makes in a lease); a
+three-minute lease less one of the four renewals it makes in a lease). It
+stops the same way at the first renewal after this node's copy of the vectors,
+the tracker or the knowledge base goes out of service — renewing nothing, and
+giving the duty back once it has stopped. A
 renewal the coordination store refuses, or holds on to while its leader moves,
 costs it nothing, since none waits longer than one renewal for its answer. And
 a tick is

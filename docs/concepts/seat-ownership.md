@@ -121,7 +121,7 @@ engine treats them as opposites, one log at a time
 | | What it means | What the node does |
 |---|---|---|
 | **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until its copies of the tracker and the knowledge base are level — the logs a seat's tools read every turn; being behind on another log withholds nothing. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Takes that log's copy out of service and keeps every seat.** Calls on that log's records go to the other data nodes, exactly as a node holding no data is served, its other logs' copies keep serving, and other nodes asking it for that log are told its copy is `out_of_service`. The node logs `estate_copy_not_served` naming the `domain` and the `reason` — the fault that holds: `evicted`, `below_floor`, `wrong_stream`, `stalled` or `deferred` — when a copy goes out of service, and serves it again once a reading finds the copy sound |
+| **Wrong** | The copy cannot become current by applying more records | **Takes that log's copy out of service and keeps every seat.** Calls on that log's records go to the other data nodes, exactly as a node holding no data is served, its other logs' copies keep serving, and other nodes asking it for that log are told its copy is `out_of_service`. The node logs `estate_copy_not_served` naming the `domain` and the `reason` — the fault that holds: `evicted`, `below_floor`, `wrong_stream`, `stalled` or `deferred` — when a copy goes out of service, and serves it again once a reading finds the copy sound — and declines every fleet duty that decides from that log's rows |
 
 Six states are *wrong*, each a fact about one log's rows rather than about how
 far along they are:
@@ -526,6 +526,26 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
 A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
+
+A duty that decides from a domain's rows — the trim (the evictions the
+tracker's and the knowledge base's rows hold), the embedding duty (the
+tracker's, the knowledge base's and the vectors' rows) and the object
+collector (the tracker's) — is declined by a node whose copy of any of them is
+out of service: it does not claim it, it gives the duty's lease back if it
+holds it, and a node whose copies serve takes the duty at its own next tick
+rather than once the lease lapses
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+Deciding from a wrong copy would act for the whole fleet on rows the node has
+stopped serving: withdraw the vectors of tasks its copy never applied, purge
+past a node its copy still counts as evicted, or hold the collector while every
+pass it ran was refused. The node logs `<duty>_declined` naming the domain —
+`embed_duty_declined`, `retention_duty_declined` or
+`object_collector_declined` — once, `<duty>_given_back` when it gave back a
+lease it held (and `<duty>_not_given_back`, tried again a tick later, when the
+lease store did not answer), and `<duty>_resumed` when the copy is back in
+service. A training tick that is running when its copy goes out of service is
+cut off, as one that loses its lease is, and gives the duty back once it has
+returned.
 
 A claim is not the only way a tick declines. The `integration-reconcile` loop asks a second question first — is this node's [config posture](control-plane.md) current? — and on `shed` or `stuck` it declines *without claiming*, so the lease lapses and a peer on the current revision takes it. That question is about this node's own configuration rather than about ownership, and it is asked only there: the loop is the one duty whose work reaches outside the deployment, so a stale document means accounts and webhooks converged to a revision the fleet has replaced.
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -64,7 +65,10 @@ import (
 // node holds the duty, or once no renewal has confirmed it for as long as the
 // lease is sure to last; a renewal the store refuses, or holds on to while its
 // leader moves, costs it nothing, and a step cut off publishes nothing, so the
-// singleton never has two writers.
+// singleton never has two writers. Each renewal first asks whether a copy the
+// duty decides from has gone out of service since the tick began (ADR-0031):
+// if one has, the tick is cut off unrenewed, and gives the duty back once it
+// has returned ([embedDuty.declinedMidTick]).
 //
 // And every tick is bounded by [embedTickBudget], because a renewal is also
 // what would keep a WEDGED tick holding the duty for ever — a budget of
@@ -143,6 +147,16 @@ type embedDuty struct {
 	refusals    *search.Refusals
 	refusalsFor embedConfiguration
 
+	// copies names the first of the domains given whose copy on this node is
+	// out of service ([Engine.copyOutOfService]) — nil judges no copy, and
+	// every one serves; declines is whether this node is declining the duty
+	// because a copy it decides from is ([embedDuty.decidesFrom]), and
+	// giveBack gives the duty back where this node holds it when it does
+	// ([Engine.workerGiveBack]) — nil holds no lease to give.
+	copies   func(ctx context.Context, domains ...string) (string, bool)
+	declines dutyDecline
+	giveBack func(context.Context) (bool, error)
+
 	stop context.CancelFunc
 	done chan struct{}
 }
@@ -157,6 +171,9 @@ type tickReport struct {
 	// overran says the tick went its budget without progress and was cut
 	// off ([errTickOverran]).
 	overran bool
+	// declined names the domain whose copy, out of service on this node,
+	// made the tick decline the duty ([dutyDecline]); empty where it did not.
+	declined string
 }
 
 // startEmbedding arms the duty, or does nothing on a node that cannot run it.
@@ -199,6 +216,8 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		publisher: running.publisher,
 		corpora:   corpora,
 		claim:     e.workerDuty(embedDutyName, embedDutyTTL),
+		copies:    e.copyOutOfService,
+		giveBack:  e.workerGiveBack(embedDutyName),
 		metrics:   e.metrics,
 		log:       running,
 		db:        e.backends.Store,
@@ -318,10 +337,48 @@ func (d *embedDuty) run(ctx context.Context) {
 	}
 }
 
+// decidesFrom is every domain whose rows the duty decides from: the vectors it
+// publishes and withdraws, and the domain each corpus's sources are read from
+// ([sourceDomains]) — what a tick's stale and withdrawn selections join. A
+// corpus whose source maps to no domain is named by its source, which no
+// verdict knows and a test refuses.
+func (d *embedDuty) decidesFrom() []string {
+	out := []string{search.Domain{}.Name()}
+	for _, c := range d.corpora {
+		domain, known := sourceDomains[c.Source()]
+		if !known {
+			domain = string(c.Source())
+		}
+		if !slices.Contains(out, domain) {
+			out = append(out, domain)
+		}
+	}
+	return out
+}
+
+// declinedMidTick is whether this node now declines the duty, asked before
+// every renewal of a running tick ([dutyRenewal.declining]): a training tick
+// runs for minutes, and one renewed only on whether the lease was still held
+// would carry on deciding from a copy that went out of service after it began.
+func (d *embedDuty) declinedMidTick(ctx context.Context) bool {
+	_, out := d.declines.check(ctx, embedDecline, d.copies, d.decidesFrom())
+	return out
+}
+
 // tick embeds one tick's worth of sources, if this node holds the duty, and
 // reports what it did.
+//
+// IT DECLINES FIRST, before it claims, while this node's copy of a domain it
+// decides from is out of service ([dutyDecline]): the vectors it would publish
+// and withdraw are every node's, decided from rows this node has stopped
+// serving.
 func (d *embedDuty) tick(ctx context.Context) tickReport {
 	var report tickReport
+	if domain, out := d.declines.check(ctx, embedDecline, d.copies, d.decidesFrom()); out {
+		d.declines.giveBack(ctx, embedDecline, d.giveBack)
+		report.declined = domain
+		return report
+	}
 	work := ctx
 	if d.claim != nil {
 		asked := d.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
@@ -334,12 +391,22 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 			return report
 		}
 		// FROM HERE THE TICK KEEPS THE DUTY AS IT RUNS, so a training may
-		// outlive any number of leases ([dutyRenewal.keep]). Nothing the tick
-		// ends with depends on Stop's answer: what it published the broker
+		// outlive any number of leases ([dutyRenewal.keep]), and is cut off
+		// the moment a copy it decides from goes out of service under it
+		// ([embedDuty.declinedMidTick]). Nothing else the tick ends with
+		// depends on Stop's answer: what it published the broker
 		// arbitrated, and the next tick claims afresh.
 		var kept *keptDuty
-		work, kept = d.renewal.keep(ctx, d.claim, asked)
-		defer func() { _, _ = kept.Stop() }()
+		work, kept = d.renewal.declining(d.declinedMidTick).keep(ctx, d.claim, asked)
+		defer func() {
+			// A TICK CUT OFF BECAUSE A COPY WENT OUT OF SERVICE gives the
+			// duty back once it has RETURNED, never from the renewal that
+			// cut it off: a publish already on its way would otherwise
+			// land after another node had taken the duty.
+			if _, err := kept.Stop(); errors.Is(err, errDutyDeclined) {
+				d.declines.giveBack(ctx, embedDecline, d.giveBack)
+			}
+		}()
 	}
 	provider, model, configured := d.engine.embedModel()
 	if !configured {
