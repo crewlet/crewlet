@@ -62,10 +62,11 @@ func everyLog() *stateLog {
 }
 
 // collectorReferences is the collector's references as the engine builds them,
-// from the declared tables over the domains a runtime with a tracker offers.
+// from the declared tables over the domains a runtime running a state log
+// offers.
 func collectorReferences(t *testing.T) collect.References {
 	t.Helper()
-	refs, err := collect.Sources(references.All, (&native{trackerReader: &tracker.Reader{}}).objectEstates()...)
+	refs, err := collect.Sources(references.All, (&native{trackerObjects: &tracker.Reader{}}).objectEstates()...)
 	if err != nil {
 		t.Fatalf("the collector's references: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 	}
 
 	var named []string
-	for _, estate := range (&native{trackerReader: &tracker.Reader{}}).objectEstates() {
+	for _, estate := range (&native{trackerObjects: &tracker.Reader{}}).objectEstates() {
 		named = append(named, estate.Name())
 	}
 	if collector := copiesNamedBy(collectorReferences(t)); !sameNames(collector, named) {

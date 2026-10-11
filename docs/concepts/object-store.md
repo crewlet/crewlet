@@ -331,14 +331,20 @@ judged against the replicated estate the data node holds:
   so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row — [live or retired](#live-and-retired-references) —
-  names**. It deletes while the listing goes on: on S3, each batch of up to
-  500 objects it judged in one `DeleteObjects` request, one batch at a time;
-  on `nats`, or on a gateway that refuses that request, each object on its
-  own, up to sixteen at a time — [How far it scales](#how-far-it-scales) says
-  why those bounds. The day is the grace an upload in flight is given between
-  storing its object and writing its row. Only a name under the engine's
-  `files/` corner is the collector's: anything else in the bucket, or under
-  the prefix, is never counted, judged or deleted. A collection that
+  names**. The collector reads the rows of every domain that declares a table
+  naming objects, whichever of the engine's own backends the company runs — a
+  company that moved its tracker off native and keeps its knowledge base here
+  still holds its project files' rows, and their objects are still audited and
+  kept. A company that runs none of the engine's own backends runs no state
+  log, and so no collector: nothing is deleted or audited until it runs one of
+  them again. It deletes while the listing goes on: on S3, each batch of up
+  to 500 objects it judged in one `DeleteObjects` request, one batch at a
+  time; on `nats`, or on a gateway that refuses that request, each object on
+  its own, up to sixteen at a time — [How far it scales](#how-far-it-scales)
+  says why those bounds. The day is the grace an upload in flight is given
+  between storing its object and writing its row. Only a name under the
+  engine's `files/` corner is the collector's: anything else in the bucket, or
+  under the prefix, is never counted, judged or deleted. A collection that
   cannot read the whole estate — this node holds a record it could not apply
   — **stops deleting**: a row it could not read may name any object, and the
   report says what it deleted before it stopped and why it stopped.

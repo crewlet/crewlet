@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,7 +32,7 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	n := &native{trackerReader: &tracker.Reader{}}
+	n := &native{trackerObjects: &tracker.Reader{}}
 	if _, err := collect.Sources(references.All, n.objectEstates()...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
@@ -69,13 +71,134 @@ func TestEveryRequiredTableNamesItsDomainsLog(t *testing.T) {
 	}
 }
 
-// A runtime without a tracker has no files, so no estate the collector reads —
-// and the engine starts no collector rather than one over nothing, which would
-// read every object as unreferenced.
-func TestARuntimeWithNoTrackerOffersTheObjectStoreNoEstate(t *testing.T) {
+// A RUNTIME THAT RUNS NO STATE LOG OFFERS NO ESTATE — a zero runtime, a
+// test's, holds no domain's rows — and the collector over it is REFUSED, by
+// name, and the refusal reaches the caller that logs it: never a collector
+// over nothing, which would read every object as unreferenced, and never a
+// collector skipped without a word, which is how every company whose tracker
+// was not native went without one and nothing said so.
+func TestARuntimeThatRunsNoStateLogOffersNoEstate(t *testing.T) {
 	t.Parallel()
-	if got := (&native{}).objectEstates(); len(got) != 0 {
-		t.Fatalf("a runtime with no tracker offered %d estates", len(got))
+	n := &native{}
+	if got := n.objectEstates(); len(got) != 0 {
+		t.Fatalf("a runtime that runs no state log offered %d estates", len(got))
+	}
+	store, err := objstore.NewStore(memobj.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{objects: &objectStore{store: store}}
+	err = e.startCollectorOver(t.Context(), n)
+	if err == nil {
+		t.Fatal("a collector over a runtime that offers no estate was not refused: " +
+			"a node holding no domain's rows would go without a collector and say nothing")
+	}
+	named := false
+	for _, ref := range references.All {
+		named = named || strings.Contains(err.Error(), ref.Table)
+	}
+	if !named {
+		t.Errorf("the refusal names no declared table, so the line it is logged as "+
+			"does not say which files go uncollected: %v", err)
+	}
+	if e.objects.duty.Load() != nil {
+		t.Error("a collector was started over a runtime that offers no estate")
+	}
+}
+
+// noTrackerDoc is a company that keeps its knowledge base here and its work
+// nowhere: it runs the state log, and with it the tracker's log, for its pages
+// alone.
+const noTrackerDoc = `
+name: Nimbus
+tracker:
+  backend: none
+knowledge:
+  backend: native
+roles:
+  - name: SWE
+    handle: swe
+`
+
+// EVERY DOMAIN A DECLARATION NAMES HAS AN ESTATE THE COLLECTOR READS, WHATEVER
+// BACKENDS THE COMPANY CHOSE — and the collector runs over them.
+//
+// The register runs every domain's log or none, so a domain's rows exist
+// because its log runs, never because its tool surface does: a company that
+// keeps its pages here and its work in Jira, or nowhere, still applies the
+// tracker's log and still holds every `tracker_files` row it ever wrote — a
+// company that moved its tracker off native holds all of its project files'.
+// [collect.Sources] refuses a declared table whose domain has no estate,
+// because its objects would read as unreferenced. So an estate built only
+// where the tracker's TOOLS are left such a node with no collector at all —
+// nothing audited, nothing collected — and with NOTHING SAYING SO: the empty
+// list never reached Sources, because the collector's start returned before
+// building them, so no warning was written and no status line showed it.
+//
+// EACH ARM NAMES THE BRANCH IT COVERS and holds its premise: the native
+// tracker's arm the estate read through the tools' own reader, the other the
+// estate built for the object store alone, where no tool reader exists. The
+// second arm covers that branch only while the company it boots is served no
+// tracker tools — so that is asserted, not assumed.
+func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
+	t.Parallel()
+	declared := map[string]bool{}
+	for _, ref := range references.All {
+		declared[ref.Domain] = true
+	}
+	for name, arm := range map[string]struct {
+		doc string
+		// toolReader is whether this node serves the company's tracker
+		// TOOLS, which decides the branch its estate is built on.
+		toolReader bool
+	}{
+		"native tracker":                    {doc: companyWithoutSandboxDoc, toolReader: true},
+		"no tracker, native knowledge base": {doc: noTrackerDoc, toolReader: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newSandboxNode(t, parseCompany(t, arm.doc))
+			n := e.native.Load()
+			if n == nil || n.log == nil {
+				t.Fatal("the premise: the company runs a state log, and this node runs none")
+			}
+			if (n.trackerReader != nil) != arm.toolReader {
+				t.Fatalf("the premise: this arm covers the estate built where the "+
+					"tracker's tools are served = %v, and this node serves them = %v",
+					arm.toolReader, n.trackerReader != nil)
+			}
+			estates := n.objectEstates()
+			offered := map[string]bool{}
+			for _, estate := range estates {
+				if offered[estate.Name()] {
+					t.Errorf("the %s domain is offered twice", estate.Name())
+				}
+				offered[estate.Name()] = true
+			}
+			if !maps.Equal(offered, declared) {
+				t.Errorf("the runtime offers the estates of %v; the declared tables "+
+					"name the domains %v", slices.Sorted(maps.Keys(offered)),
+					slices.Sorted(maps.Keys(declared)))
+			}
+			if _, err := collect.Sources(references.All, estates...); err != nil {
+				t.Fatalf("the collector cannot be built from this runtime's estates: %v", err)
+			}
+			// AND IT RUNS: the duty's first pass is taken as the node boots,
+			// so a collection is recorded where every node reads it — over
+			// the estates above, pinned through each one's own log.
+			if e.objects == nil || e.objects.duty.Load() == nil {
+				t.Fatal("the node started no object collector")
+			}
+			var report CollectionReport
+			waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
+				r, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
+				report = r
+				return err == nil && found
+			})
+			if !report.Status.Collect.Completed {
+				t.Errorf("the collector's first pass did not complete: %+v", report.Status.Collect)
+			}
+		})
 	}
 }
 
