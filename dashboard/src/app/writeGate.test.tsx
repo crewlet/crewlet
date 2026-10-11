@@ -102,8 +102,20 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a page's Comment and Reply (comment_on_page)",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
-  "routes/knowledge/NewPage.tsx": {
-    why: "the New page sheet's Write the page, filed in a space or under a page (write_page)",
+  "routes/knowledge/Composer.tsx": {
+    why:
+      "the composer's Publish and Save as draft, one write_page with its status, filed " +
+      "in a space or under a page",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/knowledge/Pages.tsx": {
+    why:
+      "a space's Create at the end of an open level: a folder named in place is a " +
+      "write_page with an empty body, and a document opens the composer",
+    suite: "routes/knowledge/Pages.test.tsx",
+  },
+  "routes/knowledge/page/Watch.tsx": {
+    why: "a page's eye, a save_page carrying only the person's own watch",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
   "routes/work/NewTask.tsx": {

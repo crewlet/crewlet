@@ -67,6 +67,7 @@ const EventScreen = lazyScreen("live", (m) => m.EventScreen);
 const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
 const Pages = lazyScreen("knowledge", (m) => m.Pages);
 const PageView = lazyScreen("knowledge", (m) => m.PageView);
+const Composer = lazyScreen("knowledge", (m) => m.Composer);
 const Skills = lazyScreen("knowledge", (m) => m.Skills);
 const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
@@ -142,6 +143,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Pages key={route.key} container={route.key} />;
     case "page":
       return <PageView key={route.id} id={route.id} />;
+    case "new-page":
+      return <Composer />;
     case "skills":
       return <Skills />;
     case "diaries":

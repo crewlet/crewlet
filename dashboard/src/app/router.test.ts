@@ -349,6 +349,9 @@ describe("the resolver", () => {
       handle: "skills",
     });
     expect(resolve(["knowledge", "diaries", "swe", "x"]).resolved).toBe(false);
+    // `new` is the composer, which carries where it files in the query.
+    expect(resolve(["knowledge", "new"])).toMatchObject({ screen: "new-page" });
+    expect(resolve(["knowledge", "new", "ENG"]).resolved).toBe(false);
     for (const word of ["diary", "eng", "Eng"]) {
       expect(resolve(["knowledge", word]).resolved, word).toBe(false);
     }
@@ -375,6 +378,7 @@ describe("the breadcrumb", () => {
       ["agents", "seats", "ada"],
       ["agents", "teams", "Platform"],
       ["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
+      ["knowledge", "new"],
       ["live", "turns", "t-1"],
       ["settings", "config", "revisions", "r-1"],
       ["settings", "backups", "tracker"],

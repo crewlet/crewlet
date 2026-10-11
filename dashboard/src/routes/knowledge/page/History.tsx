@@ -4,12 +4,11 @@
  *
  * # A version is read in the page's own column
  *
- * The rail lists the revisions and the History button opens the newest; either
- * sets `version=`, and the article then draws THAT version — what it changed
- * against the one saved before it, or the whole of it — in place of the
- * current body, with the way back beside it. A list of version numbers is not
- * a history: the detail carries summaries, and reading one back is the
- * `page_revision` question, which this asks.
+ * History opens the newest revision and the revision list beside the page
+ * opens any other; either sets `version=`, and the page then draws THAT
+ * version, what it changed against the one saved before it or the whole of
+ * it, in place of the current body, with the way back beside it. Reading one
+ * back is the `page_revision` question, which this asks.
  *
  * # An old version is an ordinary absence
  *
@@ -18,21 +17,16 @@
  */
 
 import { useMemo } from "react";
-import { Button, cx, EmptyState, Tag } from "@crewlethq/ui";
-import {
-  ChevronLeftGlyph,
-  ChartNoAxesGanttGlyph,
-  CheckGlyph,
-  ClockGlyph,
-} from "@crewlethq/icons/glyphs";
+import { Button, cx, Document, EmptyState, SegmentedControl } from "@crewlethq/ui";
+import { CheckGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import type { PageRevision } from "~/protocol/index.ts";
+import { Face, changeWords, drawnBy, type Who } from "../parts.tsx";
 
 /**
  * A line diff, rendered as the document it is.
@@ -93,7 +87,7 @@ export function BodyDiff({
   const diff = useMemo(() => collapse(diffLines(before, after)), [before, after]);
   const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
   if (stat.identical) {
-    // IDENTICAL IS ITS OWN ANSWER. A save that changed only the title leaves
+    // IDENTICAL IS ITS OWN ANSWER: a save that changed only the title leaves
     // the body untouched, and a pane of unmarked lines reads as one that
     // failed to load.
     return (
@@ -101,13 +95,13 @@ export function BodyDiff({
         size="compact"
         icon={<CheckGlyph size="xl" />}
         title="The body did not change"
-        description="A page's title, its labels and its place in the tree are saved beside its body — the prose is the same as before."
+        description="A page's title, its labels and its place in the tree are saved beside its body. The prose is the same as before."
       />
     );
   }
   return (
     <>
-      <p className="t-caption">
+      <p className="knowledge-note">
         <span className="diff-add-ink">+{stat.added}</span>{" "}
         <span className="diff-del-ink">−{stat.removed}</span> against {against}
       </p>
@@ -117,17 +111,17 @@ export function BodyDiff({
 }
 
 /**
- * One saved version, read in the article in place of the current body.
+ * One saved version, read in the page in place of the current body.
  *
  * The PREVIOUS version is the one below it in the history, not `version - 1`:
- * a page keeps a bounded number of revisions, so off a trimmed page
+ * a page keeps a bounded number of revisions, so on a trimmed page
  * `version - 1` is a read that comes back not found.
  */
 export function VersionView({
   pageID,
   version,
   history,
-  seatName,
+  who,
   now,
   onClose,
 }: {
@@ -135,7 +129,7 @@ export function VersionView({
   version: number;
   /** Newest first, as the `page` answer orders it. */
   history: PageRevision[];
-  seatName: (handle: string) => string;
+  who: Who;
   now: number;
   onClose: () => void;
 }) {
@@ -151,51 +145,52 @@ export function VersionView({
     { enabled: previous > 0 && lens === "diff" },
   );
   const rev = history.find((r) => r.version === version);
+  const by = rev ? drawnBy(rev.author, rev.author_seat) : "";
 
   return (
-    <section className="kpage-version" aria-label={`Revision ${version}`}>
-      <div className="kpage-version-head">
-        <Button
-          size="small"
-          variant="ghost"
-          leadingIcon={<ChevronLeftGlyph size="sm" />}
-          onClick={onClose}
-        >
-          The page as it is now
-        </Button>
+    <section className="knowledge-version" aria-label={`Revision ${version}`}>
+      <div className="knowledge-version-head">
+        {by && <Face handle={by} who={who} />}
+        <span className="knowledge-version-what">
+          Revision {version}
+          {rev && (
+            <>
+              {" · "}
+              <b>{by ? who(by).name : "the engine"}</b>
+              {" · "}
+              <time dateTime={rev.created_at} title={fmtDateTime(rev.created_at)}>
+                {relTime(rev.created_at, now)}
+              </time>
+              {rev.message && <> · &ldquo;{rev.message}&rdquo;</>}
+            </>
+          )}
+        </span>
         <span className="spacer" />
-        {/* THE FIRST VERSION HAS NOTHING TO COMPARE WITH, which is a fact
-            about the page rather than a lens the reader failed to pick — so
-            the control is absent rather than offering a diff that can only
-            say "everything". */}
+        {/* THE FIRST VERSION HAS NOTHING TO COMPARE WITH, which is a fact about
+            the page rather than a lens the reader failed to pick, so the
+            control is absent rather than offering a diff that says
+            "everything". */}
         {previous > 0 && (
-          <Segmented
-            ariaLabel="What to show"
-            value={lens}
-            onChange={setLens}
+          <SegmentedControl
+            semantics="radio"
+            activate="manual"
+            size="sm"
+            label="What to show of this revision"
+            value={lens === "full" ? "full" : "diff"}
+            onValueChange={setLens}
             options={[
-              { value: "diff", label: `Changes from rev ${previous}` },
-              { value: "full", label: "The whole revision" },
+              { value: "diff", label: "Changes", title: `What changed from rev ${previous}` },
+              { value: "full", label: "Full text" },
             ]}
           />
         )}
+        <Button size="small" variant="ghost" onClick={onClose}>
+          Back to the page
+        </Button>
       </div>
-      <h2 className="kpage-version-title">
-        Revision {version}
-        {rev && (
-          <span className="kpage-version-by">
-            {" "}
-            · {rev.author ? seatName(rev.author) : "the engine"} ·{" "}
-            <time dateTime={rev.created_at} title={fmtDateTime(rev.created_at)}>
-              {relTime(rev.created_at, now)}
-            </time>
-          </span>
-        )}
-      </h2>
-      {rev?.message && <p className="kpage-version-message">{rev.message}</p>}
       <QueryState error={body.error} loading={body.loading}>
         {body.data ? (
-          lens === "diff" && previous > 0 ? (
+          lens !== "full" && previous > 0 ? (
             <QueryState error={prior.error} loading={prior.loading}>
               {prior.data && (
                 <BodyDiff
@@ -205,14 +200,10 @@ export function VersionView({
                 />
               )}
             </QueryState>
+          ) : body.data.body ? (
+            <Document>{renderMarkdown(body.data.body)}</Document>
           ) : (
-            <div className="prose md kpage-prose">
-              {body.data.body ? (
-                renderMarkdown(body.data.body)
-              ) : (
-                <span className="muted">This revision had no body.</span>
-              )}
-            </div>
+            <p className="knowledge-note">This revision had no body.</p>
           )
         ) : (
           // NOT FOUND IS NOT A FAILURE: a page keeps a bounded number of
@@ -234,28 +225,21 @@ export function VersionView({
 /**
  * Everything that happened to this page, which is not the same as its saves.
  *
- * `pages_history` has one row per change — a save, a comment, a rename, a
- * move, a label — who made it, whether it announced anything, and the TURN
- * that made it, which is what a wiki cannot have: "why did this page change"
- * is one click rather than a search of the event log.
+ * `pages_history` has one row per change (a save, a comment, a rename, a
+ * move, a label), who made it, whether it announced anything, and the TURN
+ * that made it, which a wiki cannot have: "why did this page change" is one
+ * press rather than a search of the event log.
  */
-export function PageChanges({
-  pageID,
-  seatName,
-  now,
-}: {
-  pageID: string;
-  seatName: (handle: string) => string;
-  now: number;
-}) {
+export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; now: number }) {
   const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
   const changes = feed.data?.changes ?? [];
+  const headingID = `${pageID}-changes`;
   return (
-    <section className="kpage-section" aria-labelledby={`${pageID}-activity`}>
-      <h2 className="kpage-section-title" id={`${pageID}-activity`}>
-        <ChartNoAxesGanttGlyph size="sm" />
-        Activity
-        <span className="kpage-count">{changes.length}</span>
+    <section className="knowledge-changes" aria-labelledby={headingID}>
+      <h2 className="knowledge-section-title" id={headingID}>
+        <ClockGlyph size="sm" />
+        Changes
+        <span className="knowledge-count">{changes.length}</span>
       </h2>
       <QueryState
         error={feed.error}
@@ -265,40 +249,50 @@ export function PageChanges({
             ? undefined
             : {
                 title: "Nothing has happened to this page",
-                hint: "Every change writes an entry — a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
+                hint: "Every change writes an entry: a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
               }
         }
       >
-        <ol className="kpage-changes">
-          {changes.map((change) => (
-            <li key={change.id} className="kpage-change">
-              <span className="row gap-2">
-                <Tag appearance="outline" size="xs">
-                  {change.kind}
-                </Tag>
-                <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
-                {change.quiet && (
-                  <span className="t-caption" title="this change announced nothing">
-                    quiet
-                  </span>
+        <ol className="knowledge-change-list">
+          {changes.map((change) => {
+            const by = drawnBy(change.actor, change.actor_seat);
+            return (
+              <li key={change.id} className="knowledge-change">
+                {by ? (
+                  <Face handle={by} who={who} />
+                ) : (
+                  <span className="knowledge-revision-engine" />
                 )}
-                <span className="spacer" />
+                <span className="knowledge-change-what">
+                  <b>{by ? who(by).name : "The engine"}</b> {changeWords(change.kind).phrase}
+                  {change.quiet && (
+                    <span className="knowledge-note" title="This change announced nothing">
+                      {" "}
+                      (quiet)
+                    </span>
+                  )}
+                  {change.excerpt && (
+                    <span className="knowledge-change-note">{plainText(change.excerpt)}</span>
+                  )}
+                </span>
                 {change.turn_id && (
-                  <a className="t-link t-caption" href={href(["live", "turns", change.turn_id])}>
-                    turn →
+                  <a
+                    className="t-link knowledge-note"
+                    href={href(["live", "turns", change.turn_id])}
+                  >
+                    The turn
                   </a>
                 )}
                 <time
-                  className="muted t-caption"
+                  className="knowledge-note"
                   dateTime={change.at}
                   title={fmtDateTime(change.at)}
                 >
                   {relTime(change.at, now)}
                 </time>
-              </span>
-              {change.excerpt && <p className="t-caption">{plainText(change.excerpt)}</p>}
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       </QueryState>
     </section>

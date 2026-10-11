@@ -628,9 +628,6 @@ button.t-link {
   display: grid;
   gap: var(--spacing-4);
 }
-.grid-auto {
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-}
 /* THE FLOOR IS A FOUR-COLUMN LEASE TABLE'S (Settings › Nodes: seat, held by,
    since, lease), and it is set so the panels STACK rather than cut the seat.
    The seat is the table's one flexible track; the other three size to their

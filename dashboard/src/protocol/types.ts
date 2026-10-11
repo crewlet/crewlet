@@ -3115,6 +3115,17 @@ export interface PageSummary {
    *  show (its status and skill narrowing applied), so a tree draws an
    *  expander only where one opens onto something. Absent means none. */
   children?: number;
+  /** A page with nothing written in it: its body is empty. Derived by the
+   *  engine on every read and never stored, so it cannot disagree with the
+   *  page. */
+  folder?: boolean;
+  /** The person behind `author` when the author is an operator's token. */
+  author_seat?: string;
+  /** The last change to what the page SAYS (its create, a save or a rename),
+   *  which `updated_at` is not: a label, a watch or a move moves that. */
+  saved_by?: string;
+  saved_by_seat?: string;
+  saved_at?: string;
 }
 
 export interface PagesAnswer {
@@ -3171,6 +3182,9 @@ export interface PageComment {
 export interface PageRevision {
   version: number;
   author?: string;
+  /** The person behind an operator's token, from the history row the same
+   *  record wrote. */
+  author_seat?: string;
   message?: string;
   created_at: string;
 }
@@ -3178,7 +3192,12 @@ export interface PageRevision {
 export interface Page extends PageSummary {
   body?: string;
   watchers?: string[];
+  /** Who stopped following the page. A watch is a seat in `watchers` that is
+   *  not here: an unwatch keeps the seat in `watchers` and mutes it, so a
+   *  later mention does not re-subscribe them silently. */
+  muted?: string[];
   created_at?: string;
+  trashed_at?: string;
 }
 
 /** One change to a page, from the wiki's own history table. */
@@ -3194,6 +3213,9 @@ export interface PageChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
+  /** The person an operator token was bound to when it wrote this: who a row
+   *  DRAWS, while `actor` stays the token, which is the audit trail. */
+  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   /** The turn that made this change — what a wiki cannot have, and what makes
@@ -3233,6 +3255,12 @@ export interface PageDetail {
    *  wrote. */
   skill: boolean;
   onboarding: boolean;
+  /** The page's body is empty: a folder, a page that only groups pages. */
+  folder?: boolean;
+  /** The person behind the page's author when that is an operator's token. */
+  author_seat?: string;
+  /** The person behind each comment an operator's token wrote, by comment id. */
+  comment_seats?: Record<string, string>;
   /** For a tool-skill page: the seats it reached as a skill over thirty
    *  company days, most recent first. Absent on any other page. */
   skill_loaded_by?: SkillLoad[];

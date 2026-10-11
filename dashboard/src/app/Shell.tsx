@@ -52,7 +52,7 @@ import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./palette/Palette.tsx";
-import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
+import { LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
@@ -552,18 +552,12 @@ function Frame({ children }: { children: ReactNode }) {
               className="section-frame"
               style={{ "--section-column": `${column}px` } as CSSProperties}
             >
-              {row.renderer === "tree" ? (
-                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
-                  <KnowledgeTree />
-                </ColumnBoundary>
-              ) : (
-                <SectionColumn
-                  row={row}
-                  path={route.path}
-                  operator={viewer.operator}
-                  figures={figures}
-                />
-              )}
+              <SectionColumn
+                row={row}
+                path={route.path}
+                operator={viewer.operator}
+                figures={figures}
+              />
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -607,13 +601,6 @@ function Frame({ children }: { children: ReactNode }) {
     </NewTaskOpener.Provider>
   );
 }
-
-/**
- * Knowledge's tree, out of the Knowledge chunk: the one `tree` renderer, and
- * it is the workspace's own code — it reads spaces and pages — so the frame
- * loads it the way it loads a screen rather than carrying it in the entry.
- */
-const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);

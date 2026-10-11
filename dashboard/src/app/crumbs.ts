@@ -314,6 +314,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         named(labels, where.id),
       ];
     }
+    case "new-page":
+      // WHERE THE PAGE WILL BE FILED is the composer's own first row, where
+      // the writer can change it, so the trail names only what this is.
+      return [root(row, true), { label: "New page" }];
     case "skills":
       return sectionPage("skills");
     case "diaries":

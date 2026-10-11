@@ -23,10 +23,10 @@
  *   - A SIDEBAR ROW is a workspace, or a live shortcut to a pinned view, a
  *     starred page or a running turn. A project is not one: it is a scope of
  *     Work, switched where the trail names it.
- *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer —
+ *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer:
  *     `tabs` in the page header, `lenses` beside Work's scope in the trail,
- *     `column` for Settings, or `tree` for Knowledge, whose column also holds
- *     its spaces and pages.
+ *     `column` for Settings, or `none` where the workspace's own screens lead
+ *     to it (Knowledge's landing).
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1–9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -50,16 +50,16 @@ export type Workspace =
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
- * of them beside the screen (Settings), or a `tree` — Knowledge, whose column
- * is its spaces and pages as well as its sections, drawn by the workspace's
- * own chunk (`routes/knowledge/KnowledgeTree.tsx`).
+ * of them beside the screen (Settings), or `none`, where the workspace's own
+ * screens lead to its sections (Home, Inbox, and Knowledge, whose landing
+ * links its two sections under "For the agents").
  *
  * `lenses` is Work's. Its sections are the lenses of the scope the trail
  * names, All projects, drawn beside the trail's switcher the way a project
  * draws its own lenses, so the bar reads one way in either scope and Work
  * keeps no row of tabs of its own.
  */
-export type SectionRenderer = "tabs" | "lenses" | "column" | "tree" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
 
 /** Where a workspace's row sits in the sidebar. */
 export type SidebarPlace = "you" | "workspace" | "foot";
@@ -400,10 +400,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     hint: "The company's own pages, searched the way an agent searches them",
     chord: "k",
     place: "workspace",
-    // A TREE, the approved Knowledge layout: the search, its mode and every
-    // space's pages in a column beside whatever is open, so a reader moving
-    // from a hit to its neighbours never loses their place in the tree.
-    renderer: "tree",
+    // NO COLUMN, the approved Knowledge Home: the spaces are a row at the top
+    // of every Knowledge screen and the search sits in the page bar, so a
+    // page is read at the full width of the screen. The sections are reached
+    // from the landing, the palette and the trail.
+    renderer: "none",
     sections: [
       {
         key: "search",

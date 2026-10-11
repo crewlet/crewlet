@@ -650,17 +650,17 @@ Two properties differ from the vendor path and both are visible:
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
-  missing from `GET /containers` and from the Knowledge tree. That is what a
-  space nobody declared looks like.
-- **THE DASHBOARD BROWSES IT AS A TREE**, one level at a time: a space's top
-  (`pages{container, roots: true}`) and one page's children
-  (`pages{parent}`), each read in windows of 500 with the listing's `total`
-  and an `after` cursor, and each page saying how many `children` the same
-  listing would show under it — so an expander never opens onto a folder
-  whose pages are all in the trash. A search there reads THIS NODE'S OWN COPY
-  (the rows, the lexical index and the replicated vectors), and the screen
-  says so: it is as current as this node's place on the pages log. See
-  [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-a-tree-and-search-with-real-modes).
+  missing from `GET /containers` and from the dashboard's row of spaces. That
+  is what a space nobody declared looks like.
+- **THE DASHBOARD BROWSES A SPACE AS AN OUTLINE**, one level at a time: a
+  space's top (`pages{container, roots: true}`) and one page's children
+  (`pages{parent}`), each read when its row opens, in windows of 500 with the
+  listing's `total` and an `after` cursor, and each page saying how many
+  `children` the same listing would show under it, so an expander never opens
+  onto a level whose pages are all in the trash. A search there reads THIS
+  NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
+  the screen says so: it is as current as this node's place on the pages log.
+  See [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-the-spaces-a-landing-and-search-with-real-modes).
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it

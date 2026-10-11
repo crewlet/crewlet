@@ -13,7 +13,6 @@ import {
   PHONE_BREAKPOINT,
   SCROLLBAR_GUTTER,
   SHELL_BREAKPOINT,
-  TREE_COLUMN,
   columnWidth,
   densityScale,
   listReserve,
@@ -324,15 +323,14 @@ describe("the frame's layout", () => {
       /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
     );
     expect(columnWidth("column")).toBe(Number.parseFloat(size.shell.rail));
-    expect(columnWidth("tree")).toBe(TREE_COLUMN);
     expect(columnWidth("tabs")).toBe(0);
+    expect(columnWidth("none")).toBe(0);
 
     // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
-    // 236 more beside Settings' column and 256 beside Knowledge's tree.
+    // and 236 more beside Settings' column.
     const normal = densityScale("normal");
     expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
     expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
-    expect(peekColumnMin({ column: columnWidth("tree"), scale: normal })).toBe(1416);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
     // walked term by term here rather than through `listReserve`, so a term
@@ -340,7 +338,7 @@ describe("the frame's layout", () => {
     // least the floor, and one pixel narrower it would not be.
     for (const choice of Object.keys(density) as (keyof typeof density)[]) {
       const scale = densityScale(choice);
-      for (const column of [0, columnWidth("column"), columnWidth("tree")]) {
+      for (const column of [0, columnWidth("column")]) {
         const at = peekColumnMin({ column, scale });
         const list = (window: number) =>
           window -

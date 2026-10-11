@@ -2615,508 +2615,780 @@ a.prof-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Knowledge ---------------------------------------------------------- */
+/* ---- Knowledge ----------------------------------------------------------
 
-/* A LIST THAT IS A LIST FOR A SCREEN READER and draws none of its own marks:
-   the Knowledge home's spaces (on the shared `.grid-auto` recipe) and a
-   search's ranked hits, whose rank is their order. */
-.k-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+   THE APPROVED KNOWLEDGE HOME (routes/knowledge/): the spaces in one row at
+   the top of every Knowledge screen, the search in the page bar, and the
+   screen's own content at the full width of the sheet, with no column of
+   navigation beside it. Every size here is a token; the widths a layout
+   needs and no token states are rem, named where they are declared. */
+
+/* THE SEARCH IN THE PAGE BAR: the field, and the ranking mode beside it. */
+.knowledge-search {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-search > form {
+  min-width: 0;
 }
 
-.k-space {
+/* A screen's column: the landing, a space, the results. */
+.knowledge-home {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
-  height: 100%;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  text-decoration: none;
+  gap: var(--spacing-6);
+  width: 100%;
+  max-width: var(--size-content-max);
+  min-width: 0;
 }
 
-.k-space:hover {
-  border-color: var(--color-border-hover);
-}
-
-.k-space:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-/* THE TREE COLUMN (routes/knowledge/KnowledgeTree.tsx), the approved
-   artboard's: the search and its mode on top, then every space's pages, each
-   level one 14px step in. It is `.section-column`'s frame — sticky, full
-   height, hairline — and scrolls on its own when a space runs longer than the
-   window, so the pane beside it never moves with it. */
-.ktree {
+/* THE SPACES ROW: its label, then each space as a link with its key. */
+.knowledge-spaces {
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-2) var(--spacing-5);
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
 }
-
-.ktree-search {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  padding: 0 var(--spacing-1);
-}
-
-.ktree-search > form {
-  align-self: stretch;
-}
-
-.ktree-reason,
-.ktree-note {
-  margin: 0;
+.knowledge-spaces-label {
   font-size: var(--font-size-xs);
-  line-height: var(--font-line-height-normal);
   color: var(--color-text-tertiary);
 }
 
-.ktree-note {
-  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
-    calc(
-      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
-    );
+/* THE LANDING: what is worth returning to, in two columns. */
+.knowledge-home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--spacing-5);
+  align-items: start;
 }
-
-.ktree-spaces {
+.knowledge-home-column {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
+  gap: var(--spacing-6);
+  min-width: 0;
 }
-
-.ktree-heading {
+.knowledge-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.knowledge-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
   margin: 0;
-  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.knowledge-section-title > svg {
+  align-self: center;
+  color: var(--color-text-tertiary);
+}
+.knowledge-section-hint {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
-
-/* THE PHONE'S DISCLOSURE (the spaces folded under the search): the heading's
-   own register, at the target floor, spanning the column so the whole row is
-   the control. */
-.ktree-fold {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
+.knowledge-count {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+/* A QUIET LINE: what a list is for when it is empty, a note under a list. */
+.knowledge-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
-.ktree-fold:hover {
-  color: var(--color-text-primary);
-}
-
-.ktree-fold:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-.ktree-fold-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.ktree-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+/* PINNED: three cards to a row, the page's place above its title. */
+.knowledge-pins {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-
-/* ONE ROW: the expander (or its room), the link, and a space's key. The
-   indent is the row's own padding, so the current row's lift spans the whole
-   width at every depth, as the artboard draws it. */
-.ktree-row {
+.knowledge-pin {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-height: var(--size-nav-row);
-  padding: 0 var(--spacing-2) 0 calc(var(--spacing-1) + var(--ktree-depth, 0) * 14px);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
+  flex-direction: column;
+  gap: var(--spacing-3);
+  height: 100%;
 }
-
-.ktree-row:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-
-/* WHERE THE READER IS: the rail's own mark — raised, a hairline drawn as an
-   outline so forced-colours mode keeps it, the primary ink. */
-.ktree-row.is-current {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-  color: var(--color-text-primary);
-}
-
-.ktree-expander {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  /* THE TARGET FLOOR, though the chevron in it is 12px: a smaller box is a
-     control a pointer reaches by missing it. */
-  width: var(--size-target-min);
-  height: var(--size-target-min);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.ktree-expander:hover {
-  color: var(--color-text-primary);
-}
-
-.ktree-expander:focus-visible,
-.ktree-link:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-.ktree-spacer {
-  flex: none;
-  width: var(--size-target-min);
-}
-
-.ktree-link {
+.knowledge-pin-head {
   display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: var(--size-target-min);
-  border-radius: var(--radius-sm);
-  color: inherit;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  text-decoration: none;
-}
-
-.ktree-mark {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-
-.ktree-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ktree-draft {
-  flex: none;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-
-/* A SPACE'S KEY, the artboard's small mono chip at the row's end. */
-.ktree-key {
-  flex: none;
-  padding: 1px 5px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 5px;
-  background: var(--color-surface-elevated);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-
-/* THE TRACKER PROJECT a space's units work in, where the key does not already
-   name it: the same chip with a dashed edge, so it reads as a second, related
-   key rather than as the space's own. */
-.ktree-proj {
-  border-style: dashed;
-  background: transparent;
-}
-
-.ktree-more {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
-    calc(
-      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
-    );
-}
-
-/* THE TREE'S SECTIONS under the spaces (Agent skills), a hairline above them
-   as the artboard draws, and the section's count at the row's end. */
-.ktree-sections {
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-}
-
-.ktree-count {
-  flex: none;
-  margin-left: auto;
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
-
-/* ---- A knowledge page (routes/knowledge/page/) -----------------------------
-
-   THE APPROVED KNOWLEDGE ARTBOARD: the document in a reading column, and a
-   280px rail beside it, each its own scroller, flush with the sheet — the
-   frame the task page takes, for its reason: the rail is read while the
-   document is scrolled. The section frame's padding is handed back to the two
-   columns, and the frame takes the window's height the screen asked for. */
-.section-frame:has(.kpage) {
-  height: 100%;
-}
-.section-body:has(> .kpage) {
-  min-height: 0;
-  padding: 0;
-  gap: 0;
-}
-/* THE CONTAINER AND THE GRID ARE TWO ELEMENTS, because a container query
-   styles what is INSIDE its container and never the container itself — one
-   element that was both kept its two columns at 390px. */
-.kpage {
-  container: kpage / inline-size;
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
-}
-.kpage-grid {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  min-width: 0;
-  min-height: 0;
-}
-.kpage-main {
-  display: flex;
-  flex-direction: column;
-  gap: 36px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 40px 56px 48px;
-}
-/* THE READING MEASURE, 700px — the artboard's, which keeps a paragraph of
-   14.5px prose near seventy characters a line. */
-.kpage-doc,
-.kpage-section {
-  width: 100%;
-  max-width: 700px;
-  min-width: 0;
-}
-.kpage-head {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-.kpage-title {
-  margin: 0;
-  font-size: 32px;
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.025em;
-  line-height: 1.15;
-  overflow-wrap: anywhere;
-}
-.kpage-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
+.knowledge-pin-title {
   font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.knowledge-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-top: auto;
+  min-width: 0;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
-.kpage-meta b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.kpage-prose {
-  font-size: 14.5px;
-  line-height: 1.7;
-  color: var(--color-text-secondary);
-}
-/* THE DOCUMENT'S OWN RHYTHM over the shared markdown one (`.prose.md`), at
-   that rule's weight plus this class so the two cannot tie. The renderer
-   draws a body's `#` as an h2 and its `##` — the level a page's sections are
-   written at — as an h3, so both are section headings here. */
-.prose.md.kpage-prose > * + * {
-  margin-top: 14px;
-}
-.prose.md.kpage-prose h2 {
-  font-size: 20px;
-  letter-spacing: -0.01em;
-}
-.prose.md.kpage-prose h3 {
-  font-size: 18px;
-  letter-spacing: -0.01em;
-}
-.prose.md.kpage-prose h4 {
-  font-size: 15px;
-  color: var(--color-text-primary);
-}
-.prose.md.kpage-prose > * + :is(h2, h3, h4, h5, h6) {
-  margin-top: 26px;
-}
-/* A HEADING THE OUTLINE SCROLLED TO takes focus so a keyboard continues from
-   it. A pointer press draws no ring (`:focus-visible` does not match one); a
-   keyboard's is drawn off the text, since the heading is not a control. */
-.kpage-prose :is(h2, h3, h4, h5, h6):focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 4px;
-  border-radius: var(--radius-xs);
-}
-.kpage-readonly {
-  margin-top: var(--spacing-3);
-}
-
-/* The page bar's "read by n agents today". */
-.kpage-today {
+.knowledge-row-trail {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
-  margin-right: 6px;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
-/* The thread and the activity under the document. */
-.kpage-section {
+/* RECENTLY WRITTEN: the company's day, then who did what to which page. */
+.knowledge-day {
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.knowledge-written-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-written-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+  align-items: start;
+  padding: var(--spacing-2) var(--spacing-4);
+}
+.knowledge-written-text {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-written-text b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-written-note {
+  display: block;
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-written-row > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* ---- A space ------------------------------------------------------------ */
+
+.knowledge-space-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-space-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+}
+.knowledge-space-facts b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-space-facts li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE OUTLINE: the kit's tree grid, three columns that say what they are.
+   No minimum width to scroll for: the title takes the room and cuts, and the
+   face and the date keep a width every row shares. */
+.knowledge-outline {
+  --crewlet-tree-grid-min-width: 0;
+  /* The date column: "Sep 18" or "2h ago" at the compact size, with room. */
+  --knowledge-outline-when: 5.5rem;
+}
+.knowledge-outline-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-outline-title > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.knowledge-outline-title:hover > .truncate {
+  text-decoration: underline;
+}
+.knowledge-outline-count {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.knowledge-outline-face {
+  display: inline-flex;
+  align-items: center;
+}
+.knowledge-outline-when {
+  margin-inline-start: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-outline-more,
+.knowledge-folder-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-folder-field > svg {
+  color: var(--color-text-tertiary);
+}
+
+/* ---- The results -------------------------------------------------------- */
+
+.knowledge-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: 100%;
+  min-width: 0;
+}
+/* THE LIST AND ITS PREVIEW SIDE BY SIDE, one column when the screen is
+   narrow (`@container page`, the screen's width rather than the window's). */
+.knowledge-results-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--spacing-5);
+  align-items: start;
+}
+@container page (width < 760px) {
+  .knowledge-results-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-results-list,
+.knowledge-results-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.knowledge-results-head,
+.knowledge-results-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.knowledge-results-for {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-results-space {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.knowledge-results-space b {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.knowledge-results-foot {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-results-preview {
+  position: sticky;
+  top: var(--sticky-top);
+  min-width: 0;
+}
+/* A VENDOR HIT is the wiki's own link, drawn as the row it is. */
+.knowledge-hit-link {
+  display: flex;
+  min-width: 0;
+  color: inherit;
+}
+.knowledge-hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-hit-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-hit-rank {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-hit-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-hit-when,
+.knowledge-hit-path {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-hit-snippet {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.knowledge-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+.knowledge-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3) var(--spacing-5);
+  margin: 0;
+}
+.knowledge-facts dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-facts dd {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+
+/* ---- A page ------------------------------------------------------------- */
+
+/* THE OUTLINE TO THE LEFT AND THE PAGE BESIDE IT: the outline stays in view
+   while the page scrolls, so where a reader is in a long page is always on
+   screen. On a phone the page is one column and the outline is not drawn. */
+.knowledge-read {
+  display: grid;
+  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
+  gap: var(--spacing-6);
+  align-items: start;
+  min-width: 0;
+}
+/* THE WHOLE COLUMN FITS IN THE VIEW: the scroller's own height (`100cqb`)
+   less the band above it and the screen's padding below, so a long outline
+   scrolls inside it rather than past the fold. */
+.knowledge-read-side {
+  position: sticky;
+  top: var(--sticky-top);
+  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
+  overflow-y: auto;
+  min-width: 0;
+}
+@container page (width < 760px) {
+  .knowledge-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .knowledge-read-side {
+    display: none;
+  }
+}
+.knowledge-read-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  max-width: var(--size-measure);
+}
+/* THE PROPERTIES ARE A SHORT LIST, kept to the narrow measure so a value
+   stays beside its term rather than across the page. */
+.knowledge-props {
+  max-width: var(--size-measure-narrow);
+}
+.knowledge-props-place,
+.knowledge-props-step,
+.knowledge-props-person {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-props-link {
+  color: var(--color-text-primary);
+}
+.knowledge-props-link:hover {
+  text-decoration: underline;
+}
+.knowledge-folder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-revisions {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.knowledge-side-title {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+/* THE WATCH: the eye and the count that opens who is told. */
+.knowledge-watch {
+  display: inline-flex;
+  align-items: center;
+}
+.knowledge-watchers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 15rem;
+  padding: var(--spacing-2);
+}
+.knowledge-watchers-head {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.knowledge-watchers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-watchers-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+
+/* COMMENTS, then a remark of one's own. */
+.knowledge-comments,
+.knowledge-changes,
+.knowledge-connections {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   padding-top: var(--spacing-5);
   border-top: 1px solid var(--color-border-default);
 }
-.kpage-section-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-.kpage-count {
-  font-weight: var(--font-weight-regular);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.kpage-comments,
-.kpage-changes {
+.knowledge-comment-list,
+.knowledge-change-list {
   display: flex;
   flex-direction: column;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.kpage-comment,
-.kpage-change {
+.knowledge-comment {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
+  gap: var(--spacing-2);
   padding: var(--spacing-3) 0;
   border-bottom: 1px solid var(--color-border-default);
 }
-.kpage-comment:last-child,
-.kpage-change:last-child {
-  border-bottom: none;
+.knowledge-comment-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
 }
-.kpage-compose {
+.knowledge-compose {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
 }
-.kpage-replying {
-  display: inline-flex;
+.knowledge-compose-foot,
+.knowledge-replying {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1);
+  gap: var(--spacing-2);
+}
+.knowledge-replying {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
-/* Editing. */
-.kpage-editor {
+/* THE PAGE'S CHANGES, in History. */
+.knowledge-change {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--spacing-3);
+  align-items: start;
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.knowledge-change-what {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-change-what b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-change-note {
+  display: block;
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* CONNECTIONS: three cards side by side where there is room. */
+.knowledge-connections-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
+}
+@container page (width < 760px) {
+  .knowledge-connections-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-connection {
+  min-width: 0;
+}
+.knowledge-links,
+.knowledge-readers,
+.knowledge-revision-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-link {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-1) 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+.knowledge-link:hover .knowledge-link-title {
+  text-decoration: underline;
+}
+.knowledge-link > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.knowledge-link-key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-link-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-reader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-2);
+  align-items: start;
+  padding: var(--spacing-1) 0;
+}
+.knowledge-reader-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.knowledge-reader-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-reader-name {
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-reader-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+/* THE WAY IT WAS READ IS CUT with an ellipsis and whole in its title, so the
+   age at its end never wraps onto a line of its own. */
+.knowledge-reader-via {
+  display: flex;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-reader-how {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+.knowledge-reader-when {
+  flex: none;
+  white-space: pre;
+}
+.knowledge-reader-name:hover,
+a.knowledge-reader-how:hover {
+  text-decoration: underline;
+}
+
+/* THE REVISIONS, in History's left column: a press reads that one. */
+.knowledge-revision {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-compact);
+  text-align: start;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.knowledge-revision:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.knowledge-revision[aria-pressed="true"] {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.knowledge-revision:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+.knowledge-revision-when {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+/* A revision the engine wrote has no seat to draw: the face's room, empty. */
+.knowledge-revision-engine {
+  display: inline-block;
+  width: var(--size-control-sm);
+}
+
+/* ONE REVISION, read in the page's place. */
+.knowledge-version {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
 }
-.kpage-editor-bar,
-.kpage-editor-foot {
+.knowledge-version-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+.knowledge-version-what {
+  min-width: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-version-what b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+/* ---- Editing ------------------------------------------------------------ */
+
+.knowledge-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.knowledge-editor-foot,
+.knowledge-callout-actions,
+.knowledge-resolve-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
 }
-/* MARKDOWN IS EDITED AS MARKDOWN: the source face, so a table's pipes and a
-   list's indent line up the way the renderer reads them. */
-.kpage-editor-body textarea,
-textarea.kpage-editor-body {
-  min-height: 420px;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-compact);
-  line-height: 1.6;
-}
-.kpage-preview {
-  min-height: 200px;
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-/* THE CALLOUT'S ACTIONS UNDER ITS SENTENCE, not at its trailing edge: two
-   buttons there took ~290px of a 580px document and folded the explanation
-   into a five-line column ending under them. */
-.kpage-callout-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2);
+/* THE CALLOUT'S ACTIONS UNDER ITS SENTENCE, not at its trailing edge. */
+.knowledge-callout-actions {
   margin-top: var(--spacing-2);
 }
-.kpage-merged {
-  margin: 0;
+.knowledge-theirs {
+  min-width: 0;
 }
-.kpage-resolve {
+.knowledge-resolve {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
+  padding: var(--spacing-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
 }
-.kpage-resolve-title {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-.kpage-resolve-list {
+.knowledge-resolve-list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
@@ -3124,389 +3396,96 @@ textarea.kpage-editor-body {
   padding: 0;
   list-style: none;
 }
-.kpage-resolve-item {
+.knowledge-resolve-item {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
 }
-.kpage-resolve-sides {
+.knowledge-resolve-sides {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-  gap: var(--spacing-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3);
 }
-.kpage-resolve-side {
-  margin: 0;
-  min-width: 0;
+.knowledge-resolve-side {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+  min-width: 0;
+  margin: 0;
 }
-.kpage-resolve-side figcaption {
+.knowledge-resolve-side figcaption {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
-.kpage-resolve-side pre {
+.knowledge-resolve-side pre {
   margin: 0;
   padding: var(--spacing-2);
-  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   background: var(--color-surface-inset);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
-.kpage-theirs {
+.knowledge-picker {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-}
-.kpage-picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-.kpage-picker-hits {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.kpage-picker-hit {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 0 var(--spacing-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.kpage-picker-hit:hover {
-  background: var(--color-surface-hover);
-}
-.kpage-picker-hit:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
+  width: 22rem;
+  max-width: 100%;
+  padding: var(--spacing-2);
 }
 
-/* One revision, read in the document's place. */
-.kpage-version {
+/* ---- The composer ------------------------------------------------------- */
+
+.knowledge-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  gap: var(--spacing-6);
+  align-items: start;
+  width: 100%;
+  max-width: var(--size-content-max);
+}
+@container page (width < 760px) {
+  .knowledge-composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-composer-main,
+.knowledge-composer-side {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-4);
+  min-width: 0;
 }
-.kpage-version-head {
+.knowledge-composer-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-composer-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
 }
-.kpage-version-title {
-  margin: 0;
-  font-size: var(--font-size-md);
+.knowledge-composer-label {
+  min-width: 5rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* THE TITLE IS SET AS THE PAGE WILL WEAR IT. */
+.knowledge-composer-title input {
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
 }
-.kpage-version-by {
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.kpage-version-message {
-  margin: 0;
-  color: var(--color-text-secondary);
-}
-
-/* THE RAIL: small labels over short lists, the artboard's 22px between. */
-.kpage-rail {
+.knowledge-composer-count {
   display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px 20px 32px;
-  border-left: 1px solid var(--color-border-default);
-}
-.kpage-rail-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.kpage-rail-label {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.kpage-rail-note {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.kpage-rail-window {
-  color: var(--color-text-tertiary);
-}
-/* FLUSH WITH THE LIST it grows: the small ghost button's padding and border
-   (8px + 1px) set its label nine pixels right of the avatar column above. The
-   hover fill still extends left of the column, as the rail's links do. */
-.kpage-rail-more {
-  align-self: flex-start;
-  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
-}
-.kpage-toc,
-.kpage-readers,
-.kpage-links,
-.kpage-revisions,
-.kpage-watchers {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.kpage-toc-link {
-  display: block;
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 2px 0;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.kpage-toc-link.is-nested {
-  padding-left: var(--spacing-3);
-}
-.kpage-toc-link:hover,
-.kpage-toc-link[aria-current] {
-  color: var(--color-text-primary);
-}
-.kpage-toc-link[aria-current] {
-  font-weight: var(--font-weight-medium);
-}
-.kpage-toc-link:focus-visible,
-.kpage-revision:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-  border-radius: var(--radius-xs);
-}
-.kpage-readers {
-  gap: var(--spacing-3);
-}
-.kpage-reader {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-.kpage-reader-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.kpage-reader-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.kpage-reader-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-.kpage-reader-count {
-  flex: none;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-.kpage-reader-via {
-  display: flex;
-  min-width: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.kpage-reader-how {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* THE WAY IT WAS READ IS A MUTED LINE, as the artboard draws it — a turn's
-   link underlines only under the pointer or the keyboard, like the name. */
-.kpage-reader-via-link {
-  color: inherit;
-  text-decoration: none;
-}
-.kpage-reader-when {
-  flex: none;
-  white-space: pre;
-}
-.kpage-reader-name:hover,
-.kpage-reader-name:focus-visible,
-.kpage-reader-via-link:hover,
-.kpage-reader-via-link:focus-visible {
-  text-decoration: underline;
-}
-.kpage-link {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: 28px;
-  margin: 0 -6px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  text-decoration: none;
-}
-.kpage-link:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-.kpage-link > svg {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-.kpage-link-key {
-  flex: none;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-.kpage-link-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.kpage-revision {
-  display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
   gap: var(--spacing-2);
   width: 100%;
-  min-height: var(--size-target-min);
-  margin: 0 -6px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  text-align: left;
-  cursor: pointer;
-  box-sizing: content-box;
-}
-.kpage-revision:hover {
-  background: var(--color-surface-hover);
-}
-.kpage-revision[aria-pressed="true"] {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-}
-.kpage-revision-what {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.kpage-revision-when {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-/* A revision the engine wrote has no seat to draw — the badge's room, empty,
-   so the column of names stays aligned. */
-.kpage-revision-engine {
-  flex: none;
-  width: 18px;
-}
-
-/* BELOW 760px OF ITS OWN WIDTH THE RAIL FOLLOWS THE DOCUMENT in one scroller
-   — a document narrower than its measure beside a 280px rail reads as two
-   cramped columns rather than one page. Between that and 980 the insets
-   tighten to 32px, where the artboard's 56 starts costing the measure. */
-@container kpage (max-width: 980px) {
-  .kpage-main {
-    padding: 32px 32px 40px;
-  }
-}
-@container kpage (max-width: 760px) {
-  .kpage-grid {
-    display: block;
-    overflow-y: auto;
-  }
-  .kpage-main,
-  .kpage-rail {
-    overflow: visible;
-  }
-  .kpage-main {
-    padding: var(--spacing-5) var(--spacing-4);
-  }
-  .kpage-rail {
-    padding: var(--spacing-5) var(--spacing-4) var(--spacing-8);
-    border-top: 1px solid var(--color-border-default);
-    border-left: none;
-  }
-  .kpage-title {
-    font-size: 26px;
-  }
-}
-/* A PHONE SCROLLS THE PAGE, as any other: the fill is withdrawn there. */
-@media (width < 640px) {
-  .section-frame:has(.kpage) {
-    height: auto;
-  }
-  .kpage {
-    height: auto;
-  }
-  .kpage-grid {
-    overflow: visible;
-  }
-}
-
-.hit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3);
-  border-bottom: 1px solid var(--color-border-default);
-  min-width: 0;
-}
-.hit:last-child {
-  border-bottom: none;
-}
-.hit-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-brand-accent-ink);
-}
-.hit-snippet {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
 }
 
 /* ---- Config ------------------------------------------------------------- */

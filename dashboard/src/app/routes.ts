@@ -100,6 +100,7 @@ export type Screen =
   | { screen: "knowledge" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
+  | { screen: "new-page" }
   | { screen: "skills" }
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
@@ -320,6 +321,9 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
     }
     return screen({ screen: "page", id });
   }
+  // A NEW PAGE, written in the composer. Where it is filed rides the query
+  // (`?space=…&parent=…`), because the composer lets the writer change it.
+  if (first === "new" && tail.length === 0) return screen({ screen: "new-page" });
   // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
   if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
   // EVERY AGENT'S DIARY, and one agent's, by its handle — which lives here as
