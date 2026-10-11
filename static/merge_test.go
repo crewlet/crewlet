@@ -37,11 +37,11 @@ import (
 // THROUGH gittest's CLIENT, never the developer's own git — the one way a test
 // drives git (gitproc's TestOnlyGitprocExecsGit) — and here for this gate's own
 // reason too: the attribute stack includes the global attributes file
-// (core.attributesFile, ~/.config/git/attributes by default), and a
-// developer's `* merge=union` there answers for every path below, turning the
-// "unspecified" side red on one machine and green on the next. The client has
-// a HOME of its own, so what it reads is the checkout's — what every clone
-// gets.
+// (core.attributesFile, ~/.config/git/attributes by default) and the host's
+// /etc/gitattributes, and a `* merge=union` in either answers for every path
+// below, turning the "unspecified" side red on one machine and green on the
+// next. The client has a HOME of its own and reads no system attributes, so
+// what it reads is the checkout's — what every clone gets.
 //
 // IF YOU RE-MUTATE THIS GATE, deleting `.gitattributes` from the working tree
 // is not the mutation it looks like: `check-attr` FALLS BACK TO THE INDEX, so
