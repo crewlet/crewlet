@@ -1,0 +1,17 @@
+{
+  "name": "@crewlet/mermaid-check",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Parses every Mermaid diagram in this repository's markdown with Mermaid's own parser.",
+  "license": "MIT",
+  "scripts": {
+    "check": "node check.mjs",
+    "test": "node --test diagrams.test.mjs"
+  },
+  "dependencies": {
+    "jsdom": "30.1.2",
+    "markdown-it": "15.0.2",
+    "mermaid": "11.17.2"
+  }
+}

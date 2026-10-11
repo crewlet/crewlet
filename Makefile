@@ -221,7 +221,7 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
+        check fmt-check tidy-check signoff-check signoff-test mermaid-check mermaid-test vet lint test test-norace test-cross test-solo \
         require-npm \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
@@ -259,7 +259,7 @@ tidy: ## tidy go.mod / go.sum
 clean: ## remove the build output (./crewlet, dist/ and build/)
 	rm -f $(BIN)
 	rm -rf dist build
-	rm -rf $(UI)/node_modules
+	rm -rf $(UI)/node_modules $(MERMAID)/node_modules
 
 ##@ Dashboard
 
@@ -365,7 +365,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # TestAFleetOfThree/EveryNodeMintsIntoOneKeySpace (then a test of its own)
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test mermaid-test mermaid-check ## every gate CI runs on a PR
 	@$(MAKE) test
 	@$(MAKE) test-solo
 	@echo
@@ -422,6 +422,29 @@ signoff-check: ## fail if a commit on this branch is not signed off (ci: sign-of
 # why the suite exists and why it mutation-tests its own assertions.
 signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 	@scripts/check-signoff_test.sh
+
+# THE MERMAID GATE. Every ```mermaid block in the tree's markdown is parsed by
+# Mermaid's own parser, at the major the documentation site renders with,
+# because a diagram that does not parse is drawn by GitHub as an error and
+# blanks its page on the site — and nothing else here reads a diagram's
+# grammar. scripts/mermaid/diagrams.mjs says which files it reads;
+# CONTRIBUTING.md, "Diagrams are parsed", says why it is a package of its own
+# and why Mermaid is held at 11.
+MERMAID := scripts/mermaid
+
+# npm ci for the dashboard's reason above: the lockfile is the pin.
+$(MERMAID)/node_modules: $(MERMAID)/package-lock.json | require-npm
+	cd $(MERMAID) && npm ci
+	@touch $(MERMAID)/node_modules
+
+mermaid-check: $(MERMAID)/node_modules ## fail if a Mermaid diagram in the markdown does not parse (ci: mermaid diagrams)
+	cd $(MERMAID) && npm run check
+
+# The gate's OWN suite, for signoff-test's reason: a checker that stopped
+# finding diagrams, or started reading a nested checkout, passes the tree for
+# the wrong reason, and only its suite can tell.
+mermaid-test: $(MERMAID)/node_modules ## run the Mermaid gate's own suite (ci: mermaid diagrams)
+	cd $(MERMAID) && npm test
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
@@ -573,12 +596,13 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 # run with no node has left the client's half of the wire protocol unchecked.
 # ci.yml installs node rather than tolerating that; here, saying so is the best
 # we can do.
-require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
+require-npm: ## fail unless npm is on PATH (every dashboard and mermaid target needs it)
 	@command -v npm >/dev/null 2>&1 || { \
-	  echo "npm is not on PATH, and the dashboard is built with it."; \
+	  echo "npm is not on PATH, and the dashboard and the Mermaid gate need it."; \
 	  echo "  static/dashboard is COMMITTED, so building the engine needs"; \
-	  echo "  neither node nor npm — but changing dashboard/ does. Install a"; \
-	  echo "  current node (npm ships with it) and re-run."; \
+	  echo "  neither node nor npm — but changing dashboard/ does, and"; \
+	  echo "  make check runs both. Install a current node (npm ships with"; \
+	  echo "  it) and re-run."; \
 	  exit 1; \
 	} >&2
 

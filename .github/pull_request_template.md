@@ -5,8 +5,9 @@
 ## Checklist
 
 - [ ] `make check` passes — gofmt, `go mod tidy -diff`, the DCO sign-off,
-      `go vet`, golangci-lint, the build, the full suite under `-race`, and
-      a cross-compile of every release target
+      `go vet`, golangci-lint, the build, the full suite under `-race`, a
+      cross-compile of every release target, and every Mermaid diagram
+      parsing
 - [ ] A suite that *skipped* is not a suite that passed (see CONTRIBUTING.md,
       "A skip is not a pass") — and neither is one `make check` never runs:
       it names those on the way out

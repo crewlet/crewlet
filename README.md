@@ -328,7 +328,8 @@ dev setup, conventions, and the checks CI runs:
 make build    # go build ./...
 make check    # every gate CI runs: gofmt, go mod tidy -diff, the DCO
               #   sign-off, vet, golangci-lint, build, the race suite,
-              #   and a cross-compile of every release target
+              #   a cross-compile of every release target, the
+              #   dashboard's gates, and every Mermaid diagram parsing
 make help     # everything else
 ```
 

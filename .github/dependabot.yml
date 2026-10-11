@@ -3,6 +3,9 @@
 #   .github/workflows/*.yml   the actions CI and releases run on
 #   go.mod                    the engine's own Go dependencies
 #   dashboard/package.json    the dashboard's build and runtime dependencies
+#   scripts/mermaid/package.json
+#                             the Mermaid gate: Mermaid's parser, its DOM, and
+#                             the markdown parser that finds the diagrams
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
@@ -14,15 +17,17 @@
 # switched on in the repository settings rather than here, and are not held
 # back by this schedule.
 #
-# Beyond the schedule there are two knobs here, and each is written down where
-# it is set. Every entry pins its own `commit-message.prefix`; one entry — npm —
-# also carries two `groups:` rules, because two families there are broken unless
-# their packages move in one pull request. A group raises the members that have
-# an update TOGETHER, in one pull request titled for the group rather than for
-# any package in it — so it costs a less precise subject on every bump, and it
-# puts one member's bad release in front of the rest. Pay that only where the
-# split is genuinely broken; everything matching no group still gets its own
-# pull request, so grouping narrows nothing.
+# Beyond the schedule there are three knobs here, and each is written down where
+# it is set. Every entry pins its own `commit-message.prefix`; the dashboard's
+# npm entry also carries three `groups:` rules, because three families there
+# are broken unless their packages move in one pull request; and the Mermaid
+# gate's entry carries one `ignore:`, a held major, whose reason is written
+# here because a package.json cannot carry a comment. A group raises the
+# members that have an update TOGETHER, in one pull request titled for the
+# group rather than for any package in it — so it costs a less precise subject
+# on every bump, and it puts one member's bad release in front of the rest.
+# Pay that only where the split is genuinely broken; everything matching no
+# group still gets its own pull request, so grouping narrows nothing.
 #
 # The prefix earns its place because these pull requests
 # auto-merge (.github/workflows/dependabot-merge.yml): the title Dependabot
@@ -181,6 +186,32 @@ updates:
       crewlethq:
         patterns:
           - "@crewlethq/*"
+
+  # The Mermaid gate (scripts/mermaid, `make mermaid-check`): Mermaid's own
+  # parser, jsdom (the DOM it needs to parse at all) and markdown-it (the
+  # CommonMark parser that finds the diagrams). Its own package rather than
+  # three more dashboard dependencies, so none ever rides the dashboard's
+  # bundle machinery above or moves what the engine embeds — and a separate
+  # package.json is a separate surface, which is why it has this entry.
+  #
+  # NO GROUP, for the dashboard entry's own rule: no peer edge joins any two
+  # of the three, so a split bump of them is never broken.
+  - package-ecosystem: npm
+    directory: "/scripts/mermaid"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+    ignore:
+      # MERMAID IS HELD AT 11, ON PURPOSE. The documentation site
+      # (docs.crewlet.ai) renders every diagram with Mermaid 11, and the gate
+      # is only worth anything while it judges with the grammar that renders:
+      # a newer major accepting a diagram that 11 refuses would pass a page
+      # the site cannot draw. Minors and patches within 11 still arrive. When
+      # the site moves to a newer major, delete this rule and take the bump in
+      # the same change.
+      - dependency-name: "mermaid"
+        update-types: ["version-update:semver-major"]
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither

@@ -80,6 +80,9 @@ cd dashboard && npm run build                                 # dashboard-check:
 git diff --exit-code -- static/dashboard                      #   no tracked file moved
 test -z "$(git ls-files --others -- static/dashboard)"        #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
+# and the Mermaid gate, its own suite first (after npm ci in scripts/mermaid):
+cd scripts/mermaid && npm test                                # mermaid-test
+cd scripts/mermaid && npm run check                           # mermaid-check
 ```
 
 The formatting line captures the list BEFORE handing it to gofmt, and that
@@ -511,7 +514,8 @@ states with their reasons:
   go in ` ```mermaid ` fences, not ASCII box art. GitHub renders them inline,
   and the docs site renders them in the Crewlet design system. Directory
   trees and file listings stay plain code fences — they are literal output,
-  not diagrams.
+  not diagrams. Every diagram has to parse, and `make mermaid-check` is what
+  says so: see [Diagrams are parsed](#diagrams-are-parsed).
 
 ## A build that compiles is not a backend that works
 
@@ -541,6 +545,7 @@ pull request when any of them has a newer release:
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
+| `scripts/mermaid/package.json` | `npm` | the Mermaid gate: Mermaid's parser, the DOM it parses in, and the markdown parser that finds the diagrams |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
@@ -551,13 +556,15 @@ from memory, and write it as a literal version (`4.2.4`), never a floating tag:
 `latest` and `@main` leave Dependabot nothing to bump, and a floating tag turns
 a green run into a claim about a build nobody can name afterwards.
 Holding a version back is still fine where there is a reason — put the reason in
-a comment at the pin, as the Compose stack's Postgres image already does.
+a comment at the pin, as the Compose stack's Postgres image already does. A
+`package.json` cannot carry a comment, so a hold there carries its reason on
+the Dependabot rule that keeps it, as Mermaid's does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
-bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Nine things are
-worth knowing:
+bumps carry, plus three grouping rules on the dashboard's npm entry and one
+`ignore:` rule on the Mermaid gate's. CI runs on each pull request, and — as
+below — CI is what decides whether it lands. Ten things are worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
   `@types/react-dom` arrive in a single pull request, because **react-dom checks at runtime that `react` and `react-dom`
@@ -604,7 +611,22 @@ worth knowing:
   members have an update together, under a title naming the group rather than
   any package in it — so it costs a vaguer subject on every bump, and it puts
   one member's bad release in front of the rest. Pay that where a split bump is
-  genuinely broken — not for neatness, and not to batch unrelated noise.
+  genuinely broken — not for neatness, and not to batch unrelated noise. The
+  Mermaid gate's three packages are not grouped either: `mermaid` and
+  `markdown-it` declare no peer at all, and jsdom's one (`canvas`) is
+  optional.
+- **Mermaid is held at major 11.** `scripts/mermaid` pins the newest 11.x
+  exactly, and its Dependabot entry ignores Mermaid's major updates, because
+  the documentation site renders diagrams with Mermaid 11 and the gate is
+  worth something only while it judges with the grammar that renders: a newer
+  major that accepts what 11 refuses would pass a page the site cannot draw.
+  Minors and patches still arrive. When the site moves to a newer major, the
+  `ignore:` rule goes and the bump lands in the same change. The hold also
+  rules out `npm audit fix --force` there: for an advisory in a package
+  Mermaid itself depends on, it offers whichever older Mermaid avoids the
+  vulnerable range, a downgrade below the grammar the site renders with. Such
+  an advisory is fixed by a Mermaid release that moves its own range. See
+  [Diagrams are parsed](#diagrams-are-parsed).
 - **A dashboard bump that changes the emitted bytes needs a rebuilt bundle, and
   gets one.** `static/dashboard` is committed and the `dashboard` job rebuilds
   and diffs it, but Dependabot edits only `package.json` and the lockfile — it
@@ -671,12 +693,14 @@ that failure is loud, a red check on the bump, which is the right way for it to
 fail.
 
 The checks to require are the jobs of `ci.yml` a pull request runs: `build +
-vet`, `sign-off`, `dashboard`, `test (race)`, `end-to-end gates`,
-`golangci-lint` and the four `cross-compile the release targets` legs. A rule
-matches a check by its exact name, and a matrix leg's name carries its matrix
-values — `cross-compile the release targets (linux, amd64)` — so each leg is
-required by that full name; a check the rule names that never reports blocks
-every pull request, and renaming a job is therefore a change to the rule too.
+vet`, `sign-off`, `dashboard`, `mermaid diagrams`, `test (race)`, `end-to-end
+gates`, `golangci-lint` and the four `cross-compile the release targets` legs.
+A rule matches a check by its exact name, and a matrix leg's name carries its
+matrix values — `cross-compile the release targets (linux, amd64)` — so each
+leg is required by that full name; a check the rule names that never reports
+blocks every pull request, and renaming a job is therefore a change to the
+rule too. A job added to `ci.yml` is likewise a change to the rule: until the
+rule names it, it blocks nothing, a bump's auto-merge included.
 
 The job runs only when Dependabot is both the pull request's author *and* the
 actor that triggered the run. That second condition is what stops the workflow
@@ -965,6 +989,57 @@ the code does has not earned its line.
 None of it binds. If a rationale no longer matches the engine, change the code
 and rewrite the comment in the same commit — a doc comment describing a design
 the tree no longer has is worse than none.
+
+### Diagrams are parsed
+
+A diagram is source in a grammar nothing else here reads, and a broken one
+looks fine in review. Two reached `main` that way — a `;` in a sequence
+message, which ends a statement in a sequence diagram, and a `.` in a dotted
+flowchart edge's label — and each blanked its whole page on the documentation
+site, which renders diagrams ahead of time with Mermaid 11, while GitHub drew
+a parse error where the diagram should have been.
+
+So every ` ```mermaid ` block in the tree's markdown is handed to Mermaid's
+own parser, at that major:
+
+```bash
+make mermaid-check   # every diagram parses; needs node and npm
+make mermaid-test    # the gate's own suite
+```
+
+Both are part of `make check`, and CI's `mermaid diagrams` job runs the same
+two commands. A failure names the file and the line of the diagram's opening
+fence, followed by the parser's own message, which says where inside the
+diagram it stopped. Fix the diagram, not the gate: reword the label, or quote
+it (`A -. "integrations.slack" .-> B`, or `A -.->|integrations.slack| B`),
+and write a `;` a sequence message needs as `#59;`.
+
+It reads every `.md` on disk in this tree, the same pages `internal/docsgate`
+reads: never VCS metadata, a `node_modules` or a nested checkout (a directory
+holding a `.git` entry of its own, such as a worktree under
+`.claude/worktrees/`), and not build output, the committed dashboard bundle or
+the dashboard's markdown rendering fixtures. Every other dot-directory is read,
+so the pull request and issue templates are held to it too. Each page is
+parsed as CommonMark, which is how GitHub finds the blocks it draws, so a
+diagram inside a list item or a block quote is judged like any other, and a
+` ```mermaid ` line that is text is not: one inside another fence (a diagram
+shown as an example), an indented code block or an HTML comment. A run that
+finds no diagram at all fails rather than passing on nothing.
+
+`scripts/mermaid` is an npm package of its own — Mermaid; jsdom, because
+Mermaid sanitises labels during the parse with a library that needs a DOM
+(without one, every labelled flowchart and every state diagram is refused, 46
+of the tree's 60 diagrams when the gate was written); and markdown-it, the
+CommonMark parser that finds the diagrams, because whether a fence is one
+depends on the blocks around it and a scan of lines gets that wrong both
+ways. It is not three more dashboard dependencies on purpose: those are what
+the engine embeds, every bump of them goes through the bundle rebuild
+described in [A dashboard bump brings its own
+bundle](#a-dashboard-bump-brings-its-own-bundle), and the dashboard job would
+install Mermaid's dependency tree (d3, cytoscape, KaTeX and the rest) for
+nothing. A separate `package.json` is a separate surface, so it has its own
+Dependabot entry, and that entry is where Mermaid's hold at 11 is kept (see
+[Dependency updates](#dependency-updates)).
 
 ### Architecture decision records
 

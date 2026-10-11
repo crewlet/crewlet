@@ -15,7 +15,7 @@ permissions:
 
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
 # REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
-# commit, so its run only holds runners — ten jobs of them — that the new
+# commit, so its run only holds runners — eleven jobs of them — that the new
 # commit's run is queueing for.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
@@ -333,6 +333,40 @@ jobs:
             echo "  make dashboard && git add -A -- static/dashboard"
             exit 1
           fi
+
+  # THE MERMAID GATE: every ```mermaid block in the tree's markdown is parsed
+  # by Mermaid's own parser, at the major the documentation site renders with
+  # (Mermaid 11; the hold is in dependabot.yml). Two diagrams reached main
+  # broken before it existed — a `;` in a sequence message, a `.` in a dotted
+  # edge's label — and each blanked its page on the site while GitHub drew a
+  # parse error in its place: nothing else here reads a diagram's grammar.
+  # The same two commands as `make mermaid-test mermaid-check`.
+  #
+  # scripts/mermaid is its own npm package rather than a dashboard dependency,
+  # so this job installs only Mermaid, jsdom and markdown-it, and a bump of
+  # any of them is never a bump of what the engine embeds; CONTRIBUTING.md,
+  # "Diagrams are parsed", has the rest. `latest` for the reason the
+  # `dashboard` job states.
+  mermaid:
+    name: mermaid diagrams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: npm
+          cache-dependency-path: scripts/mermaid/package-lock.json
+      - run: npm ci
+        working-directory: scripts/mermaid
+      # The gate's own suite first: a checker that stopped finding diagrams,
+      # or started reading a nested checkout, passes the tree for the wrong
+      # reason, and only its suite can say so.
+      - run: npm test
+        working-directory: scripts/mermaid
+      - name: every mermaid diagram parses
+        run: npm run check
+        working-directory: scripts/mermaid
 
   # ONE RUNNER PER HALF, and the two halves (below) are not split further.
   # They were, for one pull request: each half cut into two shards by measured
