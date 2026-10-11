@@ -91,20 +91,13 @@ import {
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
-import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Skeleton, type AvatarStatus } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  activityOf,
-  indexOrg,
-  liveOnItems,
-  ringOf,
-  seatResolvers,
-  type SeatRing,
-} from "~/lib/seats.ts";
+import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
@@ -541,16 +534,16 @@ export function ItemsView({
   usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state ring, and — for a bound reader — the coding runs parked
+  // its holder's state, and — for a bound reader — the coding runs parked
   // on a question put to THEM. All the engine's words: `activity` from the
   // push, the item the turn is charged to, and `decisions`' own reading of
   // which runs wait on this person.
   const live = useMemo(() => liveOnItems(agents), [agents]);
-  const rings = useMemo(() => {
-    const out = new Map<string, SeatRing>();
+  const statuses = useMemo(() => {
+    const out = new Map<string, AvatarStatus>();
     for (const a of agents) {
-      const ring = ringOf(activityOf(a));
-      if (a.handle && ring) out.set(a.handle, ring);
+      const status = statusOf(activityOf(a));
+      if (a.handle && status) out.set(a.handle, status);
     }
     return out;
   }, [agents]);
@@ -567,8 +560,8 @@ export function ItemsView({
     return out;
   }, [decisions.data]);
   const facts = useMemo(
-    () => ({ live, waiting, ring: (handle: string) => rings.get(handle) }),
-    [live, waiting, rings],
+    () => ({ live, waiting, status: (handle: string) => statuses.get(handle) }),
+    [live, waiting, statuses],
   );
 
   // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED — the

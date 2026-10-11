@@ -49,7 +49,7 @@ import {
   authorKinds,
   indexOrg,
   kindWithAuthors,
-  ringOf,
+  statusOf,
   activityOf,
   seatResolvers,
 } from "~/lib/seats.ts";
@@ -225,9 +225,9 @@ export function WorkItem({ id }: { id: string }) {
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   useFillScreen(!phone);
   const live = item ? liveOn(agents, item) : null;
-  const ringFor = useMemo(() => {
+  const statusFor = useMemo(() => {
     const byHandle = new Map(agents.map((row) => [row.handle ?? "", row]));
-    return (handle: string) => ringOf(activityOf(byHandle.get(handle)));
+    return (handle: string) => statusOf(activityOf(byHandle.get(handle)));
   }, [agents]);
 
   // THE TRAIL IS THE PAGE BAR'S, keyed on the key rather than the uuid the
@@ -316,7 +316,7 @@ export function WorkItem({ id }: { id: string }) {
                     error={children.error}
                     chrome={chrome}
                     parent={item.removed ? undefined : item}
-                    ringOf={ringFor}
+                    statusOf={statusFor}
                     peek={(row: WorkSummary) => openPeek({ kind: "item", id: row.key })}
                   />
                   <Activity item={item} chrome={chrome} index={index} now={now} live={live} />

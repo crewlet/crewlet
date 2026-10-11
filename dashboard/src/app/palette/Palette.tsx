@@ -15,7 +15,7 @@
  *    apart (too short, searching, refused, nothing matched) and a row to the
  *    full search screen;
  *  - PAGES — `knowledge`, the company's one knowledge backend;
- *  - AGENTS — the org chart with each seat's ring from the agents push, the
+ *  - AGENTS — the org chart with each seat's status from the agents push, the
  *    engine's own name tiers (`colleague`) first;
  *  - ACTIONS — the per-browser commands, and the three writes.
  *
@@ -87,7 +87,7 @@ import {
   indexOrg,
   labelOf,
   nameOfIn,
-  ringOf,
+  statusOf,
   stateLine,
   workingLongestFirst,
   type Seat,
@@ -342,7 +342,7 @@ export function CommandPalette({
           kind={seat.kind}
           avatar={seat.avatar}
           size="xs"
-          ring={seat.kind === "agent" ? ringOf(state) : undefined}
+          status={seat.kind === "agent" ? statusOf(state) : undefined}
           decorative
         />
       ),
@@ -555,7 +555,7 @@ export function CommandPalette({
             kind="agent"
             avatar={seat?.avatar}
             size="xs"
-            ring={ringOf(activityOf(row))}
+            status={statusOf(activityOf(row))}
             decorative
           />
         ),

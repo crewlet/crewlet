@@ -396,6 +396,12 @@ describe("the decisions", () => {
     expect(card.textContent).toContain("you are the approver");
     expect(card.textContent).toContain("CTO reports to you");
     expect(card.textContent).toContain("recommends Hold release");
+    // THE ROW'S STATE TWICE: a question glyph on the asker's badge, never a
+    // ring round it, and the same state as the first words under the title.
+    const row = card.querySelector(".decision-row") as HTMLElement;
+    expect(row.querySelector(".crewlet-avatar__status--needs")).not.toBeNull();
+    expect(row.innerHTML).not.toContain("ring-");
+    expect(row.querySelector(".decision-sub")?.textContent?.startsWith("Needs you · ")).toBe(true);
     await act(async () => {
       fireEvent.click(within(card).getByRole("button", { name: "Hold release" }));
     });
@@ -500,7 +506,12 @@ describe("the decisions", () => {
       ],
     });
     await settle();
-    expect(screen.getByText("DevRel stopped — daily token budget exhausted")).toBeTruthy();
+    expect(screen.getByText("DevRel stopped: daily token budget exhausted")).toBeTruthy();
+    const row = screen
+      .getByText("DevRel stopped: daily token budget exhausted")
+      .closest(".decision-row") as HTMLElement;
+    expect(row.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
+    expect(row.querySelector(".decision-state")?.textContent).toBe("Stopped");
     expect(tile("Waiting on your decision").textContent).toContain("1");
     // RAISED IN PLACE: the button opens the seat's own ceilings — its day is
     // the window refusing — rather than sending the reader to find it.

@@ -368,7 +368,12 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const RING = { warning: "warning", danger: "danger", neutral: undefined } as const;
+/**
+ * The status badge a row's seat wears: the row's own state, which its pill
+ * says in words beside it. A warning row waits on a person and a danger row
+ * is a seat that has stopped; a neutral one draws none.
+ */
+const STATUS = { warning: "needs", danger: "stopped", neutral: undefined } as const;
 
 function Row({
   row,
@@ -387,7 +392,7 @@ function Row({
   const key = rowKey(row);
   const pill = rowPill(row);
   const unread = rowUnread(row);
-  const ring = row.kind === "notice" ? undefined : RING[pill.tone];
+  const status = row.kind === "notice" ? undefined : STATUS[pill.tone];
   const snoozedUntil = row.kind === "notice" && row.notice.snoozed ? row.notice.snoozed_until : "";
   const where = key ? `on ${key}` : row.kind === "notice" ? "" : "engine";
   return (
@@ -405,7 +410,7 @@ function Row({
             kind={who.kind}
             avatar={who.avatar}
             size={30}
-            ring={ring}
+            status={status}
             decorative
           />
         ) : row.kind === "condition" ? (

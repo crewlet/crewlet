@@ -30,10 +30,10 @@ import {
   stoppedLine,
   llmChain,
   mcpEnvOf,
-  ringOf,
   seatPath,
   seatSettings,
   stateLine,
+  statusOf,
   staleness,
   toneOf,
   turnItemKey,
@@ -45,7 +45,9 @@ import {
   unitTally,
   UNIT_TOTAL_HINT,
   workingLongestFirst,
+  type SeatState,
 } from "./seats.ts";
+import { AVATAR_STATUSES } from "@crewlethq/ui";
 import type {
   AgentRow,
   CompanyDocument,
@@ -421,21 +423,31 @@ describe("what a seat is doing", () => {
     expect(activityOf({ id: "a", role: "Dev A" })).toBe("offline");
   });
 
-  test("colour is STATE and an idle seat gets none", () => {
+  test("an avatar's status is the engine's word, and an idle seat gets none", () => {
     // An idle seat drawn as a green pill read as activity. The fix for that
-    // is not a duller hue, it is none.
-    expect(ringOf("idle")).toBeUndefined();
-    expect(ringOf("offline")).toBeUndefined();
+    // is not a duller mark, it is none.
+    expect(statusOf("idle")).toBeUndefined();
+    expect(statusOf("offline")).toBeUndefined();
+    expect(statusOf(undefined)).toBeUndefined();
+    expect(statusOf("working")).toBe("working");
+    expect(statusOf("needs")).toBe("needs");
+    expect(statusOf("stopped")).toBe("stopped");
     expect(toneOf("idle")).toBe("neutral");
-    expect(ringOf("working")).toBe("info");
     expect(toneOf("working")).toBe("info");
+  });
+
+  test("the kit draws a status for every word the engine says a seat is doing", () => {
+    // THE KIT'S STATUSES ARE THE ENGINE'S WORDS. A word the engine adds that
+    // the kit cannot draw is a seat whose state vanishes from its badge.
+    const words: SeatState[] = ["working", "needs", "stopped", "idle"];
+    expect(words.map(statusOf).filter(Boolean)).toEqual([...AVATAR_STATUSES]);
   });
 
   test("waiting on a person and being stopped are DIFFERENT tones", () => {
     // Both have stopped, and only one is a failure of the seat. Red is
     // reserved for a stop, amber for the one state that asks for a person.
-    expect(ringOf("needs")).toBe("warning");
-    expect(ringOf("stopped")).toBe("danger");
+    expect(toneOf("needs")).toBe("warning");
+    expect(toneOf("stopped")).toBe("danger");
     expect(activityWord("needs")).toBe("needs you");
   });
 

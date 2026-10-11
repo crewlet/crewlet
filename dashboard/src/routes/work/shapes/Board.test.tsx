@@ -236,7 +236,7 @@ describe("the card", () => {
             ],
           ]),
           waiting: new Map([["ENG-3", { since: "2031-04-16T11:22:00Z" }]]),
-          ring: () => undefined,
+          status: () => undefined,
         },
       },
     });

@@ -79,20 +79,21 @@ seat that chose nothing is the original Crewlet in purple, never a look the
 dashboard picked for it. Only an agent wears one: a person is drawn as
 themself and a unit is neutral. It is drawn as the agent's own badge
 (`SeatAvatar`) and its node on the two charts, and nothing reads state from
-it, so the ring and the dot beside it still say what the seat is doing. The
+it, so the status glyph on its corner and the word beside it still say what
+the seat is doing. The
 org builder's Add dialog suggests a character no agent in the draft wears yet
 and the next colour round the six, so a company growing one agent at a time is
 told apart before anybody has chosen; the suggestion is written into the new
 seat, where its author can change it.
 
-A seat's chrome takes one of three **rings**, or none, from what it is DOING —
+A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
 `stopped_reason` (`paused`, `unplaced`, `budget` or `provider`), computed once
 by the live projection from the seat's turn, its coding runs' durable record,
 its pause, its placement across the fleet and its budget windows (see
 [Agent States](../concepts/agent-runtime.md#agent-states)). `lib/seats.ts`
-maps the word to a ring, a label and a state line and folds nothing in: the
+maps the word to a status, a pill's tone, a label and a state line and folds nothing in: the
 dashboard used to derive a seat's state three ways on three screens, and a run
 parked on a question past the old twelve-hour age-out dropped out of every one
 of them. A source gate in `seats.test.ts` refuses any other module turning a
@@ -100,11 +101,28 @@ live call's or a run's fields into one of the state words. The two words are
 the contract's `SeatActivity` and `StoppedReason`, held to the engine's by a
 gate.
 
-| Ring (kit tone) | `activity` | Label |
+**The status is a glyph on the badge's corner and a word in the row, never a
+line round the badge.** The kit's `status` (`lib/seats.ts`' `statusOf`, which
+passes the engine's own word through and drops idle) draws a small round
+badge on the lower-right corner: the state's fill carrying a play for
+working, a question mark for needs you and a square for stopped, so the
+shape says it to a reader who cannot tell the fills apart. A ring in the
+state's hue round a plate in the agent's own hue put two colours on one
+small mark and framed what the agent was doing louder than who it is, so it
+is gone, and so is the coloured edge a roster card drew down its side. Where
+the row has room it says the state in words as well: a decision row opens
+its second line with "Needs you" or "Stopped" in the state's ink, an Inbox
+row carries its pill, a roster card its state pill, a profile its state in
+the engine's word. A badge drawn alone (a sidebar row, a work card's holder,
+a spend row) carries the glyph and, where it names itself, the state in its
+accessible name. A stack of badges carries none: each overlaps the one
+before it, and the sentence beside it says what they are doing.
+
+| Status (pill tone) | `activity` | Label |
 |---|---|---|
-| `info` | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
-| `warning` | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
-| `danger` | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
+| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
+| `needs` (`warning`) | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
+| `stopped` (`danger`) | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
 
 A handle is written `@pm`, and a seat with none — a builder seat the engine
@@ -582,7 +600,7 @@ task filtered on its own, as every surface that runs a view asks for it, never
 in the grammar's tree mode, where an open epic's finished subtasks rode along),
 **Starred** (drawn only when there is one), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
-state ring, its name, the key of the item its turn is charged to as the lead,
+status glyph, its name, the key of the item its turn is charged to as the lead,
 and a link that WATCHES the turn (its Transcript, the phase it is on open, or
 a parked turn's coding run live above its phases; see
 [the turn trace](#the-turn-trace-four-tabs-one-clock)). It is the way to a
@@ -1900,7 +1918,7 @@ told the person they were asked rides on the decision it is about rather than
 being listed again under Today, and Done and Snooze on the decision mark it.
 
 **Every row has the same three lines.** Who — the seat behind it, drawn with
-its avatar and state ring; a token's change is drawn as the person
+its avatar and its status glyph; a token's change is drawn as the person
 (`actor_seat`), never as the token id, and one bound to nobody as "An
 operator" — what (the question, the stop, the excerpt), and why (a pill). An
 excerpt the engine COMPOSED names its author by name as the row's head does:
@@ -2229,7 +2247,7 @@ is about is revealed (the least pan that
 shows it), and a reader stepping in the peek keeps their focus. **On a phone the chart is rows**: a chart of
 nodes has no size a phone can read it at, so below the phone breakpoint the
 reporting tree is the design system's tree grid, every seat a row indented
-under its manager, with the badge, ring, name, kind, place and state line a card
+under its manager, with the badge and its status glyph, name, kind, place and state line a card
 carries — headed by the legend; a row's name or Enter opens the seat. The page
 bar carries **Find a seat** (name, handle or unit; the found seat is focused on
 the canvas and opened — its list grows past the field so a seat's name is never
@@ -2283,7 +2301,7 @@ A unit's own page is `#/agents/teams/{unit}`.
 
 `#/agents/seats/{handle}` is the approved Agent artboard: a head flush with the
 sheet — the seat's badge (an agent's own character on its squircle, a person's initials in a circle) with
-its state ring, the name, an **Agent** or **Person** pill and, for an agent, the
+its status glyph, the name, an **Agent** or **Person** pill and, for an agent, the
 state in the engine's word ("Working", "Needs you", "Paused", "Stopped ·
 budget", "Not placed", "Idle"); under it the line that places the seat
 (handle · unit path · reports to its manager) — and the tab strip on the
@@ -2617,7 +2635,7 @@ fit that shape, so each is a tab under the field:
 | **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; when nothing is typed, recents, then **Running now** — a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
-| **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's ring from the agents push, then people and teams | `@` |
+| **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands — theme, density, dates, time zone, copy link, set token, clear recents, the key legend — and the three changes; the legend names who they are made as | `>` |
 
 `Tab` and `Shift+Tab` walk the tabs from the field, and a sigil typed at the
@@ -3657,8 +3675,8 @@ of which is what makes them worth having at all:
 
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from its
-ring rather than only by finding a badge. The ring is the WORKING hue — info,
-the ring a working seat's avatar wears — because running is a state; it was
+rail rather than only by finding a badge. The rail is the WORKING hue, info,
+the fill a working seat's status glyph stands on, because running is a state; it was
 the accent once, which says what to do, and a second rule drawing it silently
 replaced the info rail the card was meant to carry.
 
@@ -4879,7 +4897,7 @@ is one of the rules on this page applied to a tracker.
   a board of tasks carries no mark and a bug or a milestone is what the eye
   finds across a lane — the key, the size and — at its end, as the approved
   board draws it — the holder, a squircle for an agent and a circle for a
-  person with the seat's STATE as the ring round it; the dashed "nobody" square
+  person with the seat's STATE as the glyph on its corner; the dashed "nobody" square
   sits there when nobody holds the task, so an unclaimed card says so on every
   card rather than floating alone in a foot. Then the title, clamped to two
   lines. Then the facts: priority, blocked, the labels, the due date, "blocks N"
@@ -6917,7 +6935,10 @@ to.
    ring round the neutral badge, meaning *selected* — is for the one badge that
    IS the reader, in the sidebar's own account row, and for nothing else in
    the dashboard (the kit's `CharacterPicker` wears it on the chosen
-   character, which is the same word: selected).
+   character, which is the same word: selected). What a seat is DOING is its
+   `status` (`statusOf`), the kit's corner glyph, never a ring and never a
+   coloured edge on the card it stands in; a row that draws it says the state
+   in words too where it has room.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
