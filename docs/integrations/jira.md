@@ -11,7 +11,7 @@ Crewlet integrates with Jira in two directions: agents control Jira via MCP tool
 > deliberately no migration between the two — see
 > [The Tracker](../concepts/task-engine.md).
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks are registered the same way on both deployments (see [Webhooks](#webhooks-jira-pushes-to-agents)); the [Crewlet Forge app](https://github.com/crewlet/forge) is an optional alternative on Cloud.
+> **Prerequisites — the Atlassian site is yours; the agents' accounts depend on the deployment.** On **Cloud** the engine creates each agent's service account and mints its API token from an unscoped organization API key (see [Setting it up from the dashboard](#setting-it-up-from-the-dashboard)), and an agent whose token you made yourself is left to you. **Data Center** has no service accounts and no API for creating users, so there the operator creates each agent's account and token by hand and wires the tokens into `mcp_env` as shown below. Webhooks are registered the same way on both deployments (see [Webhooks](#webhooks-jira-pushes-to-agents)); the [Crewlet Forge app](https://github.com/crewlet/forge) is an optional alternative on Cloud.
 
 ---
 

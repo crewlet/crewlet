@@ -15,14 +15,16 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 > Exactly one backend per company — a config naming both is refused. See
 > [Knowledge System](../concepts/knowledge-system.md).
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
+> **Prerequisites — the Atlassian site is yours; the agents' accounts depend on the deployment.** On **Cloud** the engine creates each agent's service account and mints its API token from an unscoped organization API key (see [Jira's setup](jira.md#setting-it-up-from-the-dashboard) — one Atlassian account serves both products), and an agent whose token you made yourself is left to you. **Data Center** has no service accounts and no API for creating users, so there the operator creates each agent's account and token by hand and wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
 
 ---
 
 ## Setting it up from the dashboard
 
 **Connect** on the Atlassian tile in Settings › Integrations collects the
-site address, the account email and the API token and generates whichever
+account email and the API token the integration's own calls authenticate
+with — plus, on Data Center, the site address, which on Cloud is discovered
+from the organization instead and never typed — and generates whichever
 webhook credential your deployment needs (a signing secret for Data Center, a
 shared token for Cloud); the reconcile loop then registers the hooks on its
 next tick, running the same pass `crewlet confluence provision` runs. It
