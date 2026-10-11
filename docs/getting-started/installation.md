@@ -32,7 +32,8 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 
 Or take a signed release binary — every tag publishes archives for linux and
 macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
-[Sigstore](https://www.sigstore.dev/) signature beside it:
+[Sigstore](https://www.sigstore.dev/) signature beside it
+(`checksums.txt.sigstore.json`, which [cosign](https://docs.sigstore.dev/cosign/) 3 verifies):
 
 > **There is no Windows build**, and no musl build. The store driver ships its
 > database engine as a native library that upstream embeds for windows/amd64
@@ -47,8 +48,8 @@ macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
 tar xzf crewlet_<version>_<os>_<arch>.tar.gz
 
 cosign verify-blob checksums.txt \
-  --certificate checksums.txt.pem --signature checksums.txt.sig \
-  --certificate-identity-regexp '^https://github\.com/crewlet/crewlet/' \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/release.yml@refs/tags/v<version>' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c checksums.txt --ignore-missing
 ```
@@ -64,10 +65,53 @@ with Feather's MIT text for the glyphs derived from it). The container image car
 
 Or run the container image, `ghcr.io/crewlet/crewlet` — a Debian userland
 rather than a distroless one, because the engine spawns process trees (stdio
-MCP servers, and the local sandbox's coding agent).
+MCP servers, and the local sandbox's coding agent). Each release pushes it as
+`ghcr.io/crewlet/crewlet:<tag>` (`v0.2.0`, the tag itself) for linux/amd64 and
+linux/arm64, and a stable release also moves `latest`. The image is signed by
+digest with the same keyless identity as the checksums, which names the release
+workflow at that exact tag (cosign 3, or cosign 2 with `--new-bundle-format`):
 
-A binary from `go install` reports its module version and one from a release
-reports its tag; neither ever claims to be something it is not.
+```bash
+cosign verify ghcr.io/crewlet/crewlet:<tag> \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/release.yml@refs/tags/<tag>' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`main` is published too, **unreleased**, as one tag,
+`ghcr.io/crewlet/crewlet:main`, for linux/amd64 and linux/arm64. It is rebuilt
+on every push to `main` and moves to that build, and nothing else is published
+from `main` — no tag per commit, and never `latest`. When pushes land close together only the newest
+is built, and a commit that reaches `main` without starting a build — the
+dependency bumps Dependabot merges with GitHub's workflow token start none —
+is never built: `main` stays on the last pushed commit's image until the next
+push. Its binary reports `main-` and the first twelve hex digits of the commit
+it was built from, then the whole commit:
+
+```console
+$ docker run --rm ghcr.io/crewlet/crewlet:main version
+crewlet main-4e45c6b992a2 (4e45c6b992a2133639abebeec271236969b4ead4)
+```
+
+It is not a release and is promised nothing: compatibility is promised only
+between tags. The tag moves on every push to `main` and the image it moved from
+is deleted within the hour, so a deployment that must keep running one build
+runs a release rather than `main`. It is signed by digest like a release's image, by a different
+workflow, so it verifies under a different identity (cosign 3, or cosign 2
+with `--new-bundle-format`):
+
+```bash
+cosign verify ghcr.io/crewlet/crewlet:main \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/main-image.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Add `--certificate-github-workflow-sha` with a commit's **full** hash to check
+that the image was built from that commit rather than from any commit on
+`main`.
+
+A binary from `go install` reports its module version, one from a release
+reports its tag and one from the image of `main` reports `main-<commit>`, and
+none ever claims to be something it is not.
 
 ## Install from source
 
