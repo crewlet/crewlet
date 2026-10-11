@@ -8,17 +8,23 @@
 //
 // It checks no signature and keeps no versions; it exists so the S3 backend
 // runs the object store's conformance suite on a test machine with no network
-// and no credentials, against the wire format the SDK actually speaks.
+// and no credentials, against the wire format the SDK actually speaks. A get
+// and a head answer the object's ETag, and a get carrying If-Match is refused
+// 412 PreconditionFailed once the object no longer carries that tag, as S3
+// refuses it — so a reader that holds the later ranges of one read to the
+// first one's tag is tested against a bucket that holds it to the tag.
 //
 // It does its OWN WORK AT MEMORY SPEED — a body read into one buffer of its
-// declared length, an entity tag computed once per part by a
+// declared length, an entity tag computed once per object or part by a
 // hardware-accelerated checksum, an assembly sized before it is copied into, a
 // listing paged from a sorted index rather than by sorting every key a page —
 // so a benchmark run through it measures the node's side of a bucket rather
 // than the fake's arithmetic. And it can be made as FAR AWAY as a provider
-// ([Server.Latency]): loopback answers in microseconds, and what bounds a
-// node's requests to a real bucket is the round trip, which a measurement of
-// the node's side alone never shows.
+// ([Server.Latency]) and as NARROW as one ([Server.ConnBytesPerSecond]):
+// loopback answers in microseconds and at gigabytes a second, and what bounds
+// a node's requests to a real bucket is the round trip and what one
+// connection carries, neither of which a measurement of the node's side alone
+// ever shows.
 //
 // # It routes on the query before the method
 //
@@ -41,6 +47,7 @@
 package s3fake
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/xml"
@@ -84,13 +91,49 @@ type Server struct {
 	// first byte — and nothing a link's throughput would.
 	Latency time.Duration
 
+	// ConnBytesPerSecond is the most bytes a second the bucket sends an
+	// object's bytes at — the body of every GetObject — once
+	// [Server.Latency] is waited out: a provider's ceiling on what one
+	// connection carries, about 80–90 MB/s from S3. Zero or less sends at
+	// loopback's rate. Set it before the first request.
+	//
+	// THE TERM [Server.Latency] DOES NOT MODEL: a round trip is paid once a
+	// request whatever its size, and a connection's ceiling by every byte
+	// of it — which is what decides whether a large read is faster in
+	// several ranges at once than in one stream, and a fake answering at
+	// loopback's rate could never show.
+	//
+	// AN OBJECT'S BYTES ONLY, never the few hundred bytes of XML another
+	// verb answers, which cross any real link in microseconds at any
+	// ceiling: paced at the slow rates a case sets to hold a range in
+	// flight, a multipart completion's answer took tens of milliseconds to
+	// arrive, and that is long enough for the SDK's early close of the
+	// request body to fail the transport's last read of it, which closes
+	// the connection under the answer — a race no provider a network round
+	// trip away leaves room for.
+	ConnBytesPerSecond int64
+
+	// GetHook, where set, is called with the key and the first byte of
+	// every GetObject — zero for one with no range — once the bucket has it
+	// in hand and before it reads the object to answer it, so a test can
+	// hold a range back, or change the object under it, at a moment it
+	// chooses. It is called without the bucket's lock, so it may send the
+	// bucket requests of its own. Set it before the first request.
+	GetHook func(key string, start int64)
+
+	// Untagged answers every GetObject and HeadObject with no ETag, as no
+	// S3 does — for a case to see what a reader makes of a bucket that
+	// gives it nothing to hold an object to. Set it before the first
+	// request.
+	Untagged bool
+
 	// requests is every request the bucket has been sent ([Server.Requests]).
 	requests atomic.Int64
 
-	// partsNow is the part uploads in hand — sent and not yet answered —
-	// and mostParts the most there have been at once
-	// ([Server.MostPartsAtOnce]).
-	partsNow, mostParts atomic.Int64
+	// parts is the part uploads the bucket has in hand
+	// ([Server.MostPartsAtOnce]), and gets its object gets
+	// ([Server.GetsInHand], [Server.MostGetsAtOnce]).
+	parts, gets inHand
 
 	mu sync.Mutex
 	// asked is how many requests of each kind the bucket has answered
@@ -138,6 +181,10 @@ type object struct {
 	data        []byte
 	modified    time.Time
 	contentType string
+	// etag is the entity tag the object was stored with — what a get or a
+	// head answers and an If-Match is compared with — kept rather than
+	// worked out again from the bytes at every get.
+	etag string
 	// parts is how many parts the object was assembled from, zero for one
 	// stored by a single put.
 	parts int
@@ -196,16 +243,29 @@ func (s *Server) Requests() int64 { return s.requests.Load() }
 // MostPartsAtOnce is the most part uploads the bucket has had in hand at once
 // — sent and not yet answered — since it started: how many parts of an upload
 // a client keeps in flight, which only the bucket's side of the wire can see.
-func (s *Server) MostPartsAtOnce() int64 { return s.mostParts.Load() }
+func (s *Server) MostPartsAtOnce() int64 { return s.parts.most.Load() }
 
-// partArrived counts a part upload in hand, answering the call that counts it
+// GetsInHand is how many object gets the bucket has in hand now: sent, and
+// neither answered to their last byte nor given up on by their client.
+func (s *Server) GetsInHand() int64 { return s.gets.now.Load() }
+
+// MostGetsAtOnce is the most object gets the bucket has had in hand at once
+// since it started: how many ranges of a read a client keeps in flight, which
+// only the bucket's side of the wire can see.
+func (s *Server) MostGetsAtOnce() int64 { return s.gets.most.Load() }
+
+// inHand counts the requests of one kind the bucket holds — arrived, and not
+// yet answered — and the most it has held at once.
+type inHand struct{ now, most atomic.Int64 }
+
+// arrive counts a request in hand, answering the call that counts it
 // answered.
-func (s *Server) partArrived() func() {
-	now := s.partsNow.Add(1)
-	for most := s.mostParts.Load(); now > most && !s.mostParts.CompareAndSwap(most, now); {
-		most = s.mostParts.Load()
+func (h *inHand) arrive() func() {
+	now := h.now.Add(1)
+	for most := h.most.Load(); now > most && !h.most.CompareAndSwap(most, now); {
+		most = h.most.Load()
 	}
-	return func() { s.partsNow.Add(-1) }
+	return func() { h.now.Add(-1) }
 }
 
 // RequestsOf is how many requests of one kind the bucket has answered — the
@@ -326,20 +386,29 @@ func (s *Server) HoldPart(n int32) <-chan struct{} {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.requests.Add(1)
-	if r.Method == http.MethodPut && r.URL.Query().Has("uploadId") {
-		defer s.partArrived()()
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	bucket, key, _ := strings.Cut(path, "/")
+	q := r.URL.Query()
+	op := operation(r.Method, key, q)
+	// IN HAND FROM ITS ARRIVAL TO THE LAST BYTE OF ITS ANSWER, the latency
+	// included: what a client keeps in flight is what the bucket holds.
+	switch op {
+	case "UploadPart":
+		defer s.parts.arrive()()
+	case "GetObject":
+		defer s.gets.arrive()()
 	}
 	if !s.wait(r) {
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	bucket, key, _ := strings.Cut(path, "/")
+	if op == "GetObject" && s.ConnBytesPerSecond > 0 {
+		w = &pacedWriter{ResponseWriter: w, ctx: r.Context(), rate: s.ConnBytesPerSecond}
+	}
 	if bucket != s.bucket {
 		s.fail(w, r, http.StatusNotFound, "NoSuchBucket")
 		return
 	}
-	q := r.URL.Query()
-	s.count(operation(r.Method, key, q))
+	s.count(op)
 	switch {
 	case key == "" && r.Method == http.MethodHead:
 		w.WriteHeader(http.StatusOK)
@@ -368,12 +437,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
 			return
 		}
+		tag := etag(data)
 		s.mu.Lock()
 		s.objects[key] = object{data: data, modified: now(),
-			contentType: r.Header.Get("Content-Type")}
+			contentType: r.Header.Get("Content-Type"), etag: tag}
 		s.sorted = nil
 		s.mu.Unlock()
-		w.Header().Set("ETag", etag(data))
+		w.Header().Set("ETag", tag)
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		s.get(w, r, key)
@@ -405,6 +475,52 @@ func (s *Server) wait(r *http.Request) bool {
 	}
 }
 
+// pacedWriter writes a get's body no faster than rate bytes a second,
+// measured from its first byte ([Server.ConnBytesPerSecond]), and stops
+// writing once its client has given up on it.
+type pacedWriter struct {
+	http.ResponseWriter
+	ctx   context.Context
+	rate  int64
+	start time.Time
+	sent  int64
+}
+
+func (p *pacedWriter) Write(b []byte) (int, error) {
+	if p.start.IsZero() {
+		p.start = time.Now()
+	}
+	// FIVE MILLISECONDS' WORTH AT A TIME, so the pace is even at whatever
+	// rate a case sets — a kibibyte at the least, so a slow rate is not a
+	// write of a few bytes, and a quarter of a mebibyte at the most — and
+	// each flushed, so the pace is the wire's rather than a buffer's.
+	piece := int(min(max(p.rate/200, 1<<10), 256<<10))
+	written := 0
+	for len(b) > 0 {
+		n, err := p.ResponseWriter.Write(b[:min(len(b), piece)])
+		written += n
+		p.sent += int64(n)
+		b = b[n:]
+		if err != nil {
+			return written, err
+		}
+		if f, ok := p.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
+		due := p.start.Add(time.Duration(float64(p.sent) / float64(p.rate) * float64(time.Second)))
+		if wait := time.Until(due); wait > 0 {
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-p.ctx.Done():
+				t.Stop()
+				return written, p.ctx.Err()
+			}
+		}
+	}
+	return written, nil
+}
+
 // operation names a request as the API does, reading the query first for the
 // same reason [Server.serve] routes on it.
 func operation(method, key string, q map[string][]string) string {
@@ -433,14 +549,26 @@ func operation(method, key string, q map[string][]string) string {
 
 // get answers an object, or the range of it a Range header asks for — and
 // refuses ANY range that begins at or past the end, an empty object's every
-// range included, as S3 does.
+// range included, as S3 does. An If-Match naming another tag than the
+// object's is refused before the range is read, as S3 judges a precondition
+// before a range.
 func (s *Server) get(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method == http.MethodGet && s.GetHook != nil {
+		s.GetHook(key, rangeStart(r.Header.Get("Range")))
+	}
 	s.mu.Lock()
 	obj, ok := s.objects[key]
 	s.mu.Unlock()
 	if !ok {
 		s.fail(w, r, http.StatusNotFound, "NoSuchKey")
 		return
+	}
+	if match := r.Header.Get("If-Match"); match != "" && match != "*" && match != obj.etag {
+		s.fail(w, r, http.StatusPreconditionFailed, "PreconditionFailed")
+		return
+	}
+	if !s.Untagged {
+		w.Header().Set("ETag", obj.etag)
 	}
 	body, status := obj.data, http.StatusOK
 	if spec := r.Header.Get("Range"); spec != "" {
@@ -463,6 +591,17 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request, key string) {
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(body)
 	}
+}
+
+// rangeStart is the first byte a Range header asks for: zero for no header, or
+// for one that does not parse, which the get then refuses on its own.
+func rangeStart(spec string) int64 {
+	from, _, _ := strings.Cut(strings.TrimPrefix(spec, "bytes="), "-")
+	start, err := strconv.ParseInt(from, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return start
 }
 
 // parseRange reads `bytes=a-b` or `bytes=a-` against an object of size bytes,
@@ -595,12 +734,13 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request, key, id 
 	for _, p := range req.Parts {
 		data = append(data, u.parts[p.PartNumber].data...)
 	}
+	tag := etag(data)
 	s.objects[key] = object{data: data, modified: u.started,
-		contentType: u.contentType, parts: len(req.Parts)}
+		contentType: u.contentType, parts: len(req.Parts), etag: tag}
 	s.sorted = nil
 	delete(s.uploads, id)
 	s.mu.Unlock()
-	s.writeXML(w, completeResult{Bucket: s.bucket, Key: key, ETag: etag(data)})
+	s.writeXML(w, completeResult{Bucket: s.bucket, Key: key, ETag: tag})
 }
 
 // maxDeleteKeys is the most keys one DeleteObjects takes.

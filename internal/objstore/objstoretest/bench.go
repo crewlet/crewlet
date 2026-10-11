@@ -105,16 +105,7 @@ func Bench(b *testing.B, newBackend BenchFactory) {
 	for _, s := range benchSizes {
 		b.Run("put/size="+s.name, func(b *testing.B) { benchPut(b, newBackend(b), s.n) })
 	}
-	for _, s := range benchSizes {
-		b.Run("get/size="+s.name, func(b *testing.B) { benchRead(b, newBackend(b), s.n, false) })
-	}
-	for _, s := range benchSizes {
-		b.Run("open/size="+s.name, func(b *testing.B) { benchRead(b, newBackend(b), s.n, true) })
-	}
-	b.Run("ranged/size=64KiB/of=128MiB", func(b *testing.B) { benchRanged(b, newBackend(b)) })
-	b.Run(fmt.Sprintf("parallel/streams=%d/size=16MiB", parallelReads), func(b *testing.B) {
-		benchParallel(b, newBackend(b))
-	})
+	BenchReads(b, newBackend)
 	// THE BACKEND AND ITS OBJECTS LIVE IN THE PARENT. The stat children
 	// count b.N themselves (see benchStat), and a benchmark that does is run
 	// again for every step of the ramp to its final b.N — so a backend built
@@ -158,6 +149,26 @@ func Bench(b *testing.B, newBackend BenchFactory) {
 			held = n
 			b.Run(fmt.Sprintf("objects=%d", n), func(b *testing.B) { benchList(b, backend, n) })
 		}
+	})
+}
+
+// BenchReads runs [Bench]'s read cases alone — get, open, ranged and parallel,
+// under the same names — for an arm whose difference from another touches
+// only what a read moves: a bucket whose every connection carries at most a
+// provider's rate, read one range at a time and then several. A put, a stat
+// and a listing move no body that difference reaches, and the populations
+// behind the stat and list cases are minutes of setup an arm like that would
+// measure nothing new with.
+func BenchReads(b *testing.B, newBackend BenchFactory) {
+	for _, s := range benchSizes {
+		b.Run("get/size="+s.name, func(b *testing.B) { benchRead(b, newBackend(b), s.n, false) })
+	}
+	for _, s := range benchSizes {
+		b.Run("open/size="+s.name, func(b *testing.B) { benchRead(b, newBackend(b), s.n, true) })
+	}
+	b.Run("ranged/size=64KiB/of=128MiB", func(b *testing.B) { benchRanged(b, newBackend(b)) })
+	b.Run(fmt.Sprintf("parallel/streams=%d/size=16MiB", parallelReads), func(b *testing.B) {
+		benchParallel(b, newBackend(b))
 	})
 }
 

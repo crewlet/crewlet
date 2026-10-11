@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,5 +251,172 @@ func TestAListingFollowsEveryWriteSinceTheLast(t *testing.T) {
 	do(http.MethodPut, "/files/p/d", "d")
 	if got, want := list(), []string{"p/a", "p/c", "p/d"}; !slices.Equal(got, want) {
 		t.Fatalf("the listing after a delete and a put = %q, want %q", got, want)
+	}
+}
+
+// A GET ANSWERS THE OBJECT'S TAG, AND AN If-Match IS HELD TO IT — the tag a
+// put or a completed upload was answered with, a range included — so a reader
+// that holds its later ranges to its first one's tag is refused, 412
+// PreconditionFailed, once the object under the name is another, rather than
+// handed the other's bytes. The precondition is judged before the range, as
+// S3 judges it: a range a shorter replacement could not satisfy is still a
+// precondition that failed. An untagged bucket answers no tag at all.
+func TestAGetAnswersItsTagAndHoldsAnIfMatchToIt(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	do := func(method, target, body string, header http.Header) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+target, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, target, err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	put := do(http.MethodPut, "/files/k", "the first object", nil)
+	tag := put.Header.Get("ETag")
+	if tag == "" {
+		t.Fatal("a put answered no tag")
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if got := do(method, "/files/k", "", nil).Header.Get("ETag"); got != tag {
+			t.Fatalf("a %s answered the tag %q, want the put's %q", method, got, tag)
+		}
+	}
+	held := http.Header{"If-Match": {tag}, "Range": {"bytes=4-8"}}
+	if resp := do(http.MethodGet, "/files/k", "", held); resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("a range held to the object's own tag answered %d, want 206", resp.StatusCode)
+	}
+
+	do(http.MethodPut, "/files/k", "x", nil)
+	stale := do(http.MethodGet, "/files/k", "", held)
+	refusal, _ := io.ReadAll(stale.Body)
+	if stale.StatusCode != http.StatusPreconditionFailed || !strings.Contains(string(refusal), "PreconditionFailed") {
+		t.Fatalf("a range held to the replaced object's tag answered %d: %s; want 412 PreconditionFailed",
+			stale.StatusCode, refusal)
+	}
+
+	started := do(http.MethodPost, "/files/parts?uploads", "", nil)
+	var initiated struct {
+		UploadID string `xml:"UploadId"`
+	}
+	if err := xml.NewDecoder(started.Body).Decode(&initiated); err != nil {
+		t.Fatal(err)
+	}
+	part := do(http.MethodPut, "/files/parts?partNumber=1&uploadId="+initiated.UploadID, "a part", nil)
+	completed := do(http.MethodPost, "/files/parts?uploadId="+initiated.UploadID,
+		"<CompleteMultipartUpload><Part><ETag>"+part.Header.Get("ETag")+"</ETag>"+
+			"<PartNumber>1</PartNumber></Part></CompleteMultipartUpload>", nil)
+	var result struct {
+		ETag string `xml:"ETag"`
+	}
+	if err := xml.NewDecoder(completed.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if got := do(http.MethodGet, "/files/parts", "", nil).Header.Get("ETag"); got == "" || got != result.ETag {
+		t.Fatalf("an object put in parts is got with the tag %q, and its completion answered %q",
+			got, result.ETag)
+	}
+
+	untagged := s3fake.Start(t, "files")
+	untagged.Untagged = true
+	srv = untagged
+	do(http.MethodPut, "/files/k", "untagged", nil)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if got := do(method, "/files/k", "", nil).Header.Get("ETag"); got != "" {
+			t.Fatalf("an untagged bucket's %s answered the tag %q", method, got)
+		}
+	}
+}
+
+// A BODY CROSSES AT NO MORE THAN THE CONNECTION'S CEILING, AND A GET IS IN HAND
+// UNTIL ITS LAST BYTE: an object's bytes are paced to
+// [s3fake.Server.ConnBytesPerSecond] from the first, the get counted in hand
+// for all of it — and no longer once its client gives up, so a reader that
+// stops its ranges is seen to. The hook is called with each get's first byte
+// before the get is answered.
+func TestABodyCrossesAtTheConnectionsCeiling(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	const rate = 256 << 10
+	srv.ConnBytesPerSecond = rate
+	var starts []int64
+	var mu sync.Mutex
+	srv.GetHook = func(key string, start int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if key == "k" {
+			starts = append(starts, start)
+		}
+	}
+	body := make([]byte, rate/2)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/files/k", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	get := func(ctx context.Context, rng string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/files/k", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rng != "" {
+			req.Header.Set("Range", rng)
+		}
+		return srv.Client().Do(req)
+	}
+	began := time.Now()
+	whole, err := get(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(whole.Body)
+	_ = whole.Body.Close()
+	if err != nil || len(got) != len(body) {
+		t.Fatalf("the paced get read %d bytes, %v; want %d", len(got), err, len(body))
+	}
+	if took, least := time.Since(began), 450*time.Millisecond; took < least {
+		t.Fatalf("%d bytes at %d a second crossed in %v, sooner than %v", len(body), rate, took, least)
+	}
+
+	ctx, giveUp := context.WithCancel(t.Context())
+	defer giveUp()
+	ranged, err := get(ctx, "bytes=1024-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ranged.Body.Close()
+	if _, err := io.ReadFull(ranged.Body, make([]byte, 1024)); err != nil {
+		t.Fatal(err)
+	}
+	if n := srv.GetsInHand(); n != 1 {
+		t.Fatalf("a get part of the way through its body is %d in hand, want 1", n)
+	}
+	giveUp()
+	for deadline := time.Now().Add(10 * time.Second); srv.GetsInHand() != 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the fake still holds a get its client gave up on")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if most := srv.MostGetsAtOnce(); most != 1 {
+		t.Fatalf("two gets one after the other were %d in hand at once, want 1", most)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(starts, []int64{0, 1024}) {
+		t.Fatalf("the hook heard the gets begin at %v, want [0 1024]", starts)
 	}
 }
