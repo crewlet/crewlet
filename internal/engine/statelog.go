@@ -2168,7 +2168,7 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		// no other delivery to hang the resync off. The nudge is safe to
 		// take before the native runtime exists: it is a non-blocking
 		// send that returns when there is nothing to send to.
-		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+		return pages.NewApplier(s.skills, s.nudgeSkills), nil
 	case usage.Domain{}.Name():
 		return usage.NewApplier(), nil
 	}

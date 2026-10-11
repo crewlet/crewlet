@@ -30,7 +30,7 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// writes skill = 0 where a build with one writes 1, and
 			// the identity claim must still hold. A suite run with a
 			// detector would prove the easy half.
-			Applier: pages.NewApplier("suite-node", nil, nil),
+			Applier: pages.NewApplier(nil, nil),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migration, so a fresh store already has
 			// them. A domain that created its tables from test code
@@ -206,7 +206,7 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  pages.Domain{},
-				Applier: pages.NewApplier("suite-node", nil, nil),
+				Applier: pages.NewApplier(nil, nil),
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
