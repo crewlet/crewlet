@@ -13,7 +13,8 @@ import (
 // does not. What differs on this host is that a run CREATES things: a service
 // account per seat, a token on each, a webhook. So the interesting states are
 // not "what is missing" but "what did this run leave in a state a person has
-// to look at", and there are only two of those.
+// to look at" — or, for the group and the keyring, what stopped it creating
+// anything at all.
 //
 // A seat this run KEPT is not a finding. Keeping is the successful outcome of
 // a re-run, and reporting it as anything would make every converged company
@@ -51,6 +52,46 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "this node has no keyring, so a token minted for a seat " +
 				"could not be sealed and no account was created — set " +
 				"secrets.keys in the bootstrap configuration",
+		})
+	}
+
+	// THE GROUP EVERYTHING HANGS OFF IS NOT THERE TO THIS CREDENTIAL, so
+	// the run stopped before it created anything and this is the whole of
+	// what it observed.
+	//
+	// AN INGRESS BLOCK, owed by GitLab's admin, which is the call
+	// jira.Result.Findings makes about a project key and for the same
+	// reason: the path is the company document's, and GitLab's one 404
+	// cannot say whether it is wrong. It answers 404 for a group that was
+	// renamed, mistyped or never created AND for one the presenting
+	// credential cannot see (it never answers 403 for a private group), and
+	// half of those are fixed at GitLab — create the group, or make the
+	// token's account an Owner of it. Only the vendor's cadence serves both
+	// halves: a path corrected in the document applies a revision, which
+	// reconciles at once whatever the cadence, while a group created at
+	// GitLab is seen only by asking again soon, which the flat hour of a
+	// config fault would not.
+	//
+	// The ingress block's own definition already names a project or a
+	// repository the credential may not see; the group is the container
+	// above both, and the level the group hook is registered on. SUBJECT
+	// IS THE GROUP, never `integrations.gitlab.provisioning.group`: a
+	// subject naming this deployment's configuration claims the company
+	// admin can fix it alone, which is the half this finding cannot promise.
+	if missing := r.GroupNotFound; missing.Path != "" {
+		return append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: missing.Path,
+			Detail: fmt.Sprintf("GitLab answered 404 for the group %s, which "+
+				"every agent's service account joins and the webhook is "+
+				"registered on, so no agent was provisioned and nothing reaches "+
+				"this engine. GitLab answers 404 both for a group that does not "+
+				"exist and for one the credential's account cannot see",
+				missing.Path),
+			Remedy: "check the path in integrations.gitlab.provisioning.group, " +
+				"and that the account owning integrations.gitlab.provisioning." +
+				"admin_token is an Owner of that group",
+			ActionURL: missing.GroupsURL,
 		})
 	}
 
