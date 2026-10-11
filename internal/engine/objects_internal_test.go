@@ -62,7 +62,7 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) Required(statelog.Position) []collect.Walk { return nil }
+func (*namedNothing) Required(statelog.Position) []objstore.Walk { return nil }
 
 // collectorNode is an engine holding just enough to run the collector's duty
 // by hand: an in-memory store and fleet, and a collector over source.
@@ -264,8 +264,8 @@ func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
 	return out, true, nil
 }
 
-func (s *namedObject) Required(statelog.Position) []collect.Walk {
-	return []collect.Walk{&onePage{page: []collect.Reference{{
+func (s *namedObject) Required(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&onePage{page: []objstore.Reference{{
 		Object:  objstore.Object{Key: s.k, Hash: objstore.HashOf(nil), Size: 0},
 		NamedBy: "ENG/lost.md",
 	}}}}
@@ -273,11 +273,11 @@ func (s *namedObject) Required(statelog.Position) []collect.Walk {
 
 // onePage is a walk of one page, and then none.
 type onePage struct {
-	page []collect.Reference
+	page []objstore.Reference
 	read bool
 }
 
-func (w *onePage) Next(context.Context) ([]collect.Reference, bool, error) {
+func (w *onePage) Next(context.Context) ([]objstore.Reference, bool, error) {
 	if w.read {
 		return nil, true, nil
 	}
