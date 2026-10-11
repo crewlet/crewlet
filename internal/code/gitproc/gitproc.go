@@ -114,14 +114,16 @@
 // never more than half the cores the node's reads and transfers share. Any
 // other wait longer than [SlotWait] is [ErrBusy].
 //
-// One transfer may use more than one core: a receive-pack is LENT up to
-// [MaxLentCores] of the read lane's free cores, less the one its own thread
-// runs on, as threads for the index-pack a person waits on — sized when it
-// starts, so a loaded node lends nothing; never holding the read slots it
-// was sized by, so no read waits for a loan and the push's own hook never
-// queues behind its own receive-pack; and repaid as soon as the call site
-// says the index-pack is done ([Cmd.Indexed]), so a push's hook, upload and
-// record wait hold no loan (lane.go says why each matters).
+// One transfer may use more than one core: a push's receive-pack — the one that
+// receives a pack, never the push's advertisement (--advertise-refs), which
+// runs no index-pack — is LENT up to [MaxLentCores] of the read lane's free
+// cores, less the one its own thread runs on, as threads for the index-pack a
+// person waits on — sized when it starts, so a loaded node lends nothing; never
+// holding the read slots it was sized by, so no read waits for a loan and the
+// push's own hook never queues behind its own receive-pack; and repaid as soon
+// as the call site says the index-pack is done ([Cmd.Indexed], without which a
+// push's receive-pack is refused), so a push's hook, upload and record wait
+// hold no loan (lane.go says why each matters).
 //
 // # Every process ends, and so does everything it started
 //
@@ -231,8 +233,8 @@ type Options struct {
 	// Metrics is where the pool records crewlet.code.git.wait (how long
 	// each admission waited for its lane), crewlet.code.git.processes (the
 	// processes running in each class) and crewlet.code.git.lent_cores
-	// (the read lane's cores lent to receive-packs right now); nil records
-	// nothing.
+	// (the read lane's cores lent to pushes' receive-packs right now); nil
+	// records nothing.
 	Metrics *metrics.Recorder
 }
 

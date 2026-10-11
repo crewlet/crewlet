@@ -626,12 +626,27 @@ func TestAnEnvironmentNameOutsideTheTwoIsRefused(t *testing.T) {
 
 // A MALFORMED COMMAND IS REFUSED before any process: nothing a Cmd says can
 // make git something other than a subcommand in a repository the engine made.
+// Every case is put to a pool of the machine's cores and to a pool of ONE,
+// whose read lane has nothing to lend: a rule about loans that held only where
+// a loan is made — the Indexed a push's receive-pack must carry above all —
+// would pass a call site's tests on a one-core runner and fail it everywhere
+// else.
 func TestAMalformedCommandIsRefused(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
-	p := newPool(t, gitproc.Options{Path: recorder})
+	pools := map[string]*gitproc.Pool{
+		"the machine's cores": newPool(t, gitproc.Options{Path: recorder}),
+		"one core":            newPool(t, gitproc.Options{Path: recorder, MaxProcesses: 1}),
+	}
 	before := len(calls())
 	ok := gitproc.Cmd{Args: []string{"version"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline}
+	// receivePack spoils a command into a receive-pack in the transfer lane
+	// given args after its subcommand and indexed as its Cmd.Indexed.
+	receivePack := func(indexed <-chan struct{}, args ...string) func(*gitproc.Cmd) {
+		return func(c *gitproc.Cmd) {
+			c.Args, c.Class, c.Indexed = append([]string{"receive-pack"}, args...), gitproc.ClassTransfer, indexed
+		}
+	}
 	for name, spoil := range map[string]func(*gitproc.Cmd){
 		"an unknown class":  func(c *gitproc.Cmd) { c.Class = "install" },
 		"no args":           func(c *gitproc.Cmd) { c.Args = nil },
@@ -650,11 +665,37 @@ func TestAMalformedCommandIsRefused(t *testing.T) {
 		"Indexed on an upload-pack": func(c *gitproc.Cmd) {
 			c.Args, c.Class, c.Indexed = []string{"upload-pack"}, gitproc.ClassTransfer, make(chan struct{})
 		},
+		// A push's receive-pack, as the host runs it, without the Indexed
+		// that repays its loan once its pack is indexed: its loan would be
+		// held through the hook, the upload and the wait for its record.
+		"a push's receive-pack without Indexed":     receivePack(nil, "--stateless-rpc", "/r"),
+		"a receive-pack with no options or Indexed": receivePack(nil, "/r"),
+		// A push's ADVERTISEMENT — by either full name of the option, and
+		// wherever it stands, as git reads it — starts no index-pack and
+		// reaches no hook, so nothing would ever close one.
+		"Indexed on an advertisement":                     receivePack(make(chan struct{}), "--stateless-rpc", "--advertise-refs", "/r"),
+		"Indexed on an advertisement by its other name":   receivePack(make(chan struct{}), "--stateless-rpc", "--http-backend-info-refs", "/r"),
+		"Indexed on an advertisement after its directory": receivePack(make(chan struct{}), "/r", "--advertise-refs"),
+		// The pool tells an advertisement from a push by its options, so it
+		// admits only the spellings it reads exactly as git does: git also
+		// reads an abbreviation, a negation and "--", and each would be
+		// judged a push — or a push judged an advertisement — by a rule
+		// that guessed.
+		"an abbreviated option": receivePack(make(chan struct{}), "--stateless-rpc", "--adv", "/r"),
+		"a negated option":      receivePack(nil, "--stateless-rpc", "--advertise-refs", "--no-advertise-refs", "/r"),
+		"a short option":        receivePack(make(chan struct{}), "-q", "/r"),
+		"an end of options":     receivePack(make(chan struct{}), "--stateless-rpc", "--", "/r"),
+		"an option's value":     receivePack(make(chan struct{}), "--stateless-rpc=1", "/r"),
+		"a receive-pack option in another lane": func(c *gitproc.Cmd) {
+			c.Args = []string{"receive-pack", "--adv", "/r"}
+		},
 	} {
-		c := ok
-		spoil(&c)
-		if _, err := p.Run(t.Context(), c); !errors.Is(err, gitproc.ErrInvalid) {
-			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		for pool, p := range pools {
+			c := ok
+			spoil(&c)
+			if _, err := p.Run(t.Context(), c); !errors.Is(err, gitproc.ErrInvalid) {
+				t.Errorf("%s, on %s: %v, want ErrInvalid", name, pool, err)
+			}
 		}
 	}
 	if got := len(calls()); got != before {
