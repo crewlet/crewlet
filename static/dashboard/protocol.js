@@ -418,8 +418,13 @@ var Store = class {
 var TOKEN_KEY = {
 	/** The API token this browser presents (`protocol/authToken.ts`). */
 	apiToken: "crewlet_api_token",
-	/** Light, dark or the system's (`lib/prefs.ts`). */
+	/** The mode: light, dark or the system's (`lib/prefs.ts`). */
 	theme: "crewlet_theme",
+	/**
+	* The theme, one of `themeRegistry`'s ids (`lib/prefs.ts`); anything else
+	* reads as no choice, which is the default theme.
+	*/
+	palette: "crewlet_palette",
 	/** Compact, normal or comfortable (`lib/prefs.ts`). */
 	density: "crewlet_density",
 	/** Objects this reader opened, for the palette (`lib/recents.ts`). */
@@ -429,9 +434,7 @@ var TOKEN_KEY = {
 	/** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
 	peekWidth: "crewlet.peek.width",
 	/** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
-	orgDraft: "crewlet_org_draft",
-	/** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
-	knowledgeOpen: "crewlet.knowledge.open"
+	orgDraft: "crewlet_org_draft"
 }.apiToken;
 /** The stored token, or "". Never throws. */
 function apiToken() {
@@ -1657,7 +1660,9 @@ var ACTIONS = {
 			"title",
 			"body",
 			"container",
-			"parent"
+			"parent",
+			"labels",
+			"status"
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],
@@ -1668,7 +1673,8 @@ var ACTIONS = {
 			"page",
 			"base_version",
 			"body",
-			"message"
+			"message",
+			"watch"
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],
