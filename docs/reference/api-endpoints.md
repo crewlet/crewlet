@@ -3522,12 +3522,15 @@ origin.
 | `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
 | `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now |
 
-The byte routes are served only where the tracker is native, the node hands out
-its writer **and** it runs the object store; anywhere else they answer
-`404 no_route`, like any path the node does not serve. A company on Jira has no
-project files to serve. Whether the node serves them is asked at every request
-rather than once when the API starts, so a node that booted with no company
-serves a project's files from its first revision on the native tracker, with no
+A download is served wherever the tracker is native **and** the node runs the
+object store; the upload and the removal also need the node to hand out the
+tracker's writer, which a node in a
+[maintenance mode](../guides/retention.md#the-three-modes) does not — there they
+answer `404 no_route`, like any path the node does not serve, while a download
+is a read and is served like every other. A company on Jira has no project
+files to serve. Whether the node serves them is asked at every request rather
+than once when the API starts, so a node that booted with no company serves a
+project's files from its first revision on the native tracker, with no
 restart.
 
 ### `GET /work/retention` — what the log is holding

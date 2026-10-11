@@ -3,11 +3,17 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -161,6 +167,82 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Errorf("the data node holds %q", got)
+	}
+}
+
+// A NODE THAT HOLDS NO DATA, IN A MAINTENANCE MODE, SERVES A FILE'S BYTES AND
+// TAKES NONE. The mode is the node's promise that it starts nothing that
+// writes, and a write it routes to a data node is one it starts — so its
+// upload and removal routes and its purge are absent, as on a data node in the
+// mode, while a download is a read and is served as on any node.
+//
+// Such a node used to be handed the router's writer all the same, the data
+// node's mode taken to be that node's to answer for. In a capacity window, with
+// every data node in the mode too, its upload streamed up to a gibibyte into
+// the object store before a data node refused the row, as `unavailable` a
+// client retries; beside a data node in normal mode, as here, it simply
+// landed.
+func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
+	t.Parallel()
+	logs.attribute(t)
+	model := newScriptedModel(t)
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	if err != nil {
+		t.Fatalf("company config: %v", err)
+	}
+	data, dataBoot := bootDataMember(t, cfg, model, nil)
+
+	// A FILE THE FLEET HOLDS, written on the data node through the adapter
+	// `crewlet run` serves the upload route with.
+	const content = "region,quarter,revenue\nemea,q3,1200\n"
+	writes, ok := api.EngineNative(data.engine).FileWrites()
+	if !ok {
+		t.Fatal("the premise: the data node takes no upload")
+	}
+	object, err := writes.Put(t.Context(), strings.NewReader(content), tracker.MaxFileBytes,
+		objstore.PutMeta{ContentType: "text/csv"})
+	if err != nil {
+		t.Fatalf("store the file's bytes: %v", err)
+	}
+	if _, err := writes.PutFileAs(t.Context(), e2eOperatorID,
+		statelog.NewOpID(time.Now(), "file-ENG"), tracker.FilePut{
+			Project: "ENG", Path: "reports/q3.csv", ContentType: "text/csv",
+			Object: object, IfMatch: tracker.NoIfMatch,
+		}); err != nil {
+		t.Fatalf("write the file's row: %v", err)
+	}
+
+	agentBoot := statelessBootstrap(t.TempDir(), dataBoot)
+	agentBoot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	agent := bootNodeWith(t, engine.Options{
+		Bootstrap: &agentBoot, Company: cfg, ActivatedAt: harnessActivation,
+		Mode: statelog.ModeMaintenance, Environment: nodeEnvironment(nil),
+	}, model)
+	agent.app, agent.server = serveAPI(t, agent.engine, &agentBoot, nil)
+
+	routes := api.EngineNative(agent.engine)
+	if _, ok := routes.FileReads(); !ok {
+		t.Error("a stateless node in a maintenance mode does not serve a file's bytes")
+	}
+	if _, ok := routes.FileWrites(); ok {
+		t.Error("a stateless node in a maintenance mode serves a file's upload, a write")
+	}
+	if _, ok := routes.Purger(); ok {
+		t.Error("a stateless node in a maintenance mode serves the purge, a write")
+	}
+
+	waitFor(t, "the stateless node to serve the file", func() bool {
+		status, got := download(t, agent, "ENG", "reports/q3.csv")
+		return status == http.StatusOK && string(got) == content
+	})
+	status, answer := upload(t, agent, "ENG", "reports/q4.csv", []byte(content))
+	if status != http.StatusNotFound || answer["error"] != "no_route" {
+		t.Errorf("an upload to a stateless node in a maintenance mode answered %d %v, "+
+			"want the mux's own 404 no_route", status, answer)
+	}
+	if _, err := data.engine.Tracker().File(t.Context(), "ENG", "reports/q4.csv",
+		statelog.Freshness{Level: statelog.ReadStale}); !errors.Is(err, tracker.ErrNoFile) {
+		t.Errorf("the data node holds the refused upload's row (%v)", err)
 	}
 }
 

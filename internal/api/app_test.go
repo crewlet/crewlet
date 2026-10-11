@@ -123,14 +123,20 @@ func (noRoutes) Routes(httpjson.Router) {}
 // is set — so the zero value is an engine running no native backend, which
 // serves none of them.
 type fixedNative struct {
-	files  api.ProjectFiles
+	reads  api.FileReads
+	writes api.FileWrites
 	purger api.TaskPurger
 	nodes  api.NodeGate
 }
 
-func (f fixedNative) Files() (api.ProjectFiles, bool) { return f.files, f.files != nil }
-func (f fixedNative) Purger() (api.TaskPurger, bool)  { return f.purger, f.purger != nil }
-func (f fixedNative) Nodes() (api.NodeGate, bool)     { return f.nodes, f.nodes != nil }
+func (f fixedNative) FileReads() (api.FileReads, bool)   { return f.reads, f.reads != nil }
+func (f fixedNative) FileWrites() (api.FileWrites, bool) { return f.writes, f.writes != nil }
+func (f fixedNative) Purger() (api.TaskPurger, bool)     { return f.purger, f.purger != nil }
+func (f fixedNative) Nodes() (api.NodeGate, bool)        { return f.nodes, f.nodes != nil }
+
+// filesNative is a node serving fake's files whole: their reads and their
+// writes.
+func filesNative(fake *fakeFiles) fixedNative { return fixedNative{reads: fake, writes: fake} }
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}

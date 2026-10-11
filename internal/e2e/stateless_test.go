@@ -71,18 +71,25 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	}
 	data, dataBoot := bootDataMember(t, cfg, model, env)
 	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
-	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
-	agentBoot := config.DefaultBootstrap()
-	agentBoot.Node.ID = "agent-1"
-	agentBoot.Node.Roles = []string{"seats"}
-	agentBoot.Store.Path = filepath.Join(agentDir, "crewlet.db")
-	agentBoot.Store.Scratch = true
-	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
-	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
+	agentBoot := statelessBootstrap(agentDir, dataBoot)
 	agent := bootNode(t, &agentBoot, cfg, model, env)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
+}
+
+// statelessBootstrap is the pair's stateless node, `agent-1`: the seats role
+// alone, a scratch store in dir, and a leaf link to the data member data
+// boots.
+func statelessBootstrap(dir string, data *config.Bootstrap) config.Bootstrap {
+	boot := config.DefaultBootstrap()
+	boot.Node.ID = "agent-1"
+	boot.Node.Roles = []string{"seats"}
+	boot.Store.Path = filepath.Join(dir, "crewlet.db")
+	boot.Store.Scratch = true
+	boot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", data.Stream.Leaf.Port)}
+	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	return boot
 }
 
 // dataMemberBootstrap is the pair's data member: a node holding the data, with

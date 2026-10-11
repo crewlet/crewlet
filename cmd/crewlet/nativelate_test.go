@@ -52,6 +52,9 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	}{
 		// The tracker answered: there is no such project.
 		{http.MethodGet, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
+		// And the upload, the write half on its own, through the same
+		// tracker read — before a byte of the body is stored.
+		{http.MethodPut, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
 		// The purge's own refusal, before anything is judged.
 		{http.MethodPost, "/work/no-such/purge?confirm=X", http.StatusBadRequest,
 			"project_required"},

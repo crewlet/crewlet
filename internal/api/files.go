@@ -34,21 +34,35 @@ import (
 // A write is attributed to the OPERATOR on the request, for the purge's
 // reason: a person's upload names that person in the file's history, never the
 // process that relayed it.
+//
+// # Two seams, because a download is a read
+//
+// A node serves its reads wherever it runs the tracker, and its writes only
+// where it also hands out the tracker's writer — never in a maintenance mode,
+// which hands no writer to any surface. One seam over both halves was served
+// only where both were, so a node in a maintenance window listed a project's
+// files (`work_files`, a read) and answered every download of them as a route
+// it does not serve.
 
-// ProjectFiles is the file surface's reach into the engine.
-type ProjectFiles interface {
+// FileReads is what a download reaches the engine for: the row, and the bytes
+// it names.
+type FileReads interface {
 	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
 
+	// Open streams an object back, checked against the row naming it
+	// ([objstore.Store.Open]).
+	Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error)
+}
+
+// FileWrites is what an upload and a removal reach the engine for.
+type FileWrites interface {
 	// AcceptsFiles refuses an upload into project before its body is
 	// read: [tracker.ErrNoProject] for a project there is none of, and
 	// [tracker.AcceptFiles]'s refusal for an archived one — the project
 	// read at fresh, which the surface resolves.
 	AcceptsFiles(ctx context.Context, project string, fresh statelog.Freshness) error
 
-	// Open streams an object back, checked against the row naming it
-	// ([objstore.Store.Open]); Put streams r into a new object
-	// ([objstore.Store.Put]).
-	Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error)
+	// Put streams r into a new object ([objstore.Store.Put]).
 	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
 
 	PutFileAs(ctx context.Context, operator, opID string, put tracker.FilePut) (tracker.WriteResult, error)
@@ -57,28 +71,28 @@ type ProjectFiles interface {
 }
 
 // mountFiles registers the byte routes on every API, each asking the engine on
-// every request whether it serves files NOW — see [NativeRoutes].
+// every request whether it serves its half NOW — see [NativeRoutes].
 func (a *App) mountFiles(mux httpjson.Router) {
-	mux.Handle("GET /work/files/{project}/{path...}", a.withFiles(a.serveFileDownload))
-	mux.Handle("PUT /work/files/{project}/{path...}", a.withFiles(a.serveFileUpload))
-	mux.Handle("DELETE /work/files/{project}/{path...}", a.withFiles(a.serveFileRemove))
+	mux.Handle("GET /work/files/{project}/{path...}", servedBy(a.native.FileReads, a.serveFileDownload))
+	mux.Handle("PUT /work/files/{project}/{path...}", servedBy(a.native.FileWrites, a.serveFileUpload))
+	mux.Handle("DELETE /work/files/{project}/{path...}", servedBy(a.native.FileWrites, a.serveFileRemove))
 }
 
-// withFiles resolves the file surface for one request and hands it to serve,
-// or answers the mux's own 404 where this node serves no files now — byte for
-// byte what the route answered when it was left unmounted, because a route
-// this node does not serve is absent rather than refused.
+// servedBy resolves a route's seam for one request and hands it to serve, or
+// answers the mux's own 404 where this node serves none now — byte for byte
+// what the route answered when it was left unmounted, because a route this
+// node does not serve is absent rather than refused.
 //
 // ONE RESOLUTION PER REQUEST, at its top, so a request is served by one view
 // of the runtime from its first read to its last.
-func (a *App) withFiles(serve func(http.ResponseWriter, *http.Request, ProjectFiles)) http.Handler {
+func servedBy[S any](seam func() (S, bool), serve func(http.ResponseWriter, *http.Request, S)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		files, ok := a.native.Files()
+		s, ok := seam()
 		if !ok {
 			httpjson.NoRoute(w, r)
 			return
 		}
-		serve(w, r, files)
+		serve(w, r, s)
 	})
 }
 
@@ -223,7 +237,7 @@ const downloadHead = 32 << 10
 
 // serveFileDownload answers GET /work/files/{project}/{path...}: the file's
 // bytes, streamed.
-func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
+func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request, files FileReads) {
 	fresh, err := tracker.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_params", "detail": err.Error()})
@@ -375,7 +389,7 @@ func writeAnswer(result tracker.WriteResult, extra map[string]any) map[string]an
 
 // serveFileUpload answers PUT /work/files/{project}/{path...}: the body is the
 // file, streamed into one new object and then recorded.
-func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
+func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request, files FileWrites) {
 	operator, ok := operatorFor(w, r)
 	if !ok {
 		return
@@ -442,7 +456,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request, files Proj
 }
 
 // serveFileRemove answers DELETE /work/files/{project}/{path...}.
-func (a *App) serveFileRemove(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
+func (a *App) serveFileRemove(w http.ResponseWriter, r *http.Request, files FileWrites) {
 	operator, ok := operatorFor(w, r)
 	if !ok {
 		return
