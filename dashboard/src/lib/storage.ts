@@ -36,10 +36,6 @@ export const STORAGE_KEYS = {
   theme: "crewlet_theme",
   /** Compact, normal or comfortable (`lib/prefs.ts`). */
   density: "crewlet_density",
-  /** The zone timestamps are drawn in; empty is the browser's (`lib/prefs.ts`). */
-  timezone: "crewlet_timezone",
-  /** How a date is written (`lib/prefs.ts`). */
-  dateFormat: "crewlet_date_format",
   /** Objects this reader opened, for the palette (`lib/recents.ts`). */
   recents: "crewlet_recents",
   /** Pages this reader starred, for the sidebar (`lib/starred.ts`). */

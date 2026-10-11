@@ -15,8 +15,8 @@
  *
  * # Preferences are per-browser, and they are here
  *
- * Theme, density, the zone timestamps are drawn in, how a date is written,
- * and the token: none of them is the company's, none has a page of its own,
+ * Theme, density and the token: none of them is the company's, none has a
+ * page of its own,
  * and all of them are about the person at this browser — so they sit behind
  * the one control beside that person's name. The theme also has a one-press
  * flip beside it, the kit's `ThemeToggle`, because it is the preference a
@@ -28,28 +28,24 @@
  * theme is on — the command palette sets it too.
  */
 
-import { useMemo } from "react";
 import {
   Button,
   DensitySwitcher,
-  FormField,
   IconButton,
   Popover,
-  Select,
   ThemeSwitcher,
   ThemeToggle,
-  type SelectOption,
 } from "@crewlethq/ui";
 import { KeyGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { browserZone, useViewerPrefs, type DateFormat } from "~/lib/prefs.ts";
+import { useViewerPrefs } from "~/lib/prefs.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 
 /** What the block says about who this browser is. */
 export function whoLine(viewer: ViewerState, seatName: string): { name: string; detail: string } {
   if (viewer.loading) return { name: "Checking who you are", detail: "Asking the engine" };
-  if (viewer.anonymous) return { name: "Anonymous", detail: "No API token — reading only" };
+  if (viewer.anonymous) return { name: "Anonymous", detail: "No API token, reading only" };
   if (viewer.unbound) {
     return { name: `Token ${viewer.operatorID}`, detail: "Not bound to a seat" };
   }
@@ -133,12 +129,6 @@ export function UserBlock({
   );
 }
 
-const DATE_LABELS: Record<DateFormat, string> = {
-  auto: "This browser's own",
-  iso: "2026-09-22",
-  long: "September 22, 2026",
-};
-
 /**
  * The per-browser preferences. Exported for its suite, which drives each
  * control and reads `lib/prefs.ts` back.
@@ -151,15 +141,6 @@ export function Preferences({
   tokenPresented: boolean;
 }) {
   const prefs = useViewerPrefs();
-  const zones = useMemo<SelectOption[]>(() => {
-    const own = browserZone();
-    return [
-      // EMPTY IS "THE BROWSER'S", which is a real choice rather than an
-      // absent one: a reader who travels wants the zone to follow them.
-      { value: "", label: `This browser's (${own})` },
-      ...supportedZones().map((z) => ({ value: z, label: z.replace(/_/g, " ") })),
-    ];
-  }, []);
   return (
     <div className="preferences">
       {/* THE TWO SWITCHERS NAME THEMSELVES: each is a radio group carrying
@@ -181,38 +162,6 @@ export function Preferences({
           size="sm"
         />
       </div>
-      <FormField
-        label="Time zone"
-        helper="Every timestamp is drawn in it. A day is still the company's."
-      >
-        {(field) => (
-          <Select
-            id={field.id}
-            value={prefs.timezoneChosen ? prefs.timezone : ""}
-            onChange={(value) => prefs.setTimezone(String(value))}
-            options={zones}
-            searchable
-            searchPlaceholder="Find a zone"
-            size="sm"
-            width="full"
-          />
-        )}
-      </FormField>
-      <FormField label="Dates">
-        {(field) => (
-          <Select
-            id={field.id}
-            value={prefs.dateFormat}
-            onChange={(value) => prefs.setDateFormat(value as DateFormat)}
-            options={(Object.keys(DATE_LABELS) as DateFormat[]).map((f) => ({
-              value: f,
-              label: DATE_LABELS[f],
-            }))}
-            size="sm"
-            width="full"
-          />
-        )}
-      </FormField>
       <Button
         size="small"
         variant="secondary"
@@ -223,29 +172,4 @@ export function Preferences({
       </Button>
     </div>
   );
-}
-
-/**
- * Every IANA zone this runtime can format in.
- *
- * `Intl.supportedValuesOf` is the runtime's own list, so every entry offered
- * is one `setZone` will accept. A runtime without it (an older browser or
- * webview, a test environment) offers the browser's own zone and UTC, which
- * is every zone it can promise.
- *
- * UTC IS ADDED, NOT ASSUMED. The runtime's list is its CANONICAL zones, and
- * V8's does not name `UTC` among them — it lists `Etc/…` and the cities — so
- * the one zone an operator reading logs most often wants was the one a reader
- * could not find. It formats everywhere, so offering it costs nothing.
- */
-export function supportedZones(): string[] {
-  const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
-  try {
-    const all = intl.supportedValuesOf?.("timeZone");
-    if (all && all.length > 0) return all.includes("UTC") ? all : ["UTC", ...all];
-  } catch {
-    // fall through to the two zones every runtime has
-  }
-  const own = browserZone();
-  return own === "UTC" ? ["UTC"] : [own, "UTC"];
 }

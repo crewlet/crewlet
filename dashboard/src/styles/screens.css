@@ -7863,10 +7863,6 @@ a.work-cal-chip {
   gap: 6px;
   min-width: 0;
 }
-.home-date {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
 .home-greeting {
   margin: 0;
   font-size: var(--font-size-2xl);
@@ -7968,10 +7964,6 @@ a.work-cal-chip {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
-.home-card-foot > svg {
-  flex: none;
-  margin-top: 1px;
-}
 .home-card-more {
   display: block;
   padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
@@ -8059,6 +8051,88 @@ a.work-cal-chip {
   gap: 6px;
   max-width: 50%;
 }
+/* THE ASKS ONE PERSON PUT, under one head: their badge, their name, and what
+   every ask shares (the item, the role, how long ago). The questions sit under
+   it, indented to the name, each with its answer in place. */
+.decision-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+}
+.decision-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  min-width: 0;
+}
+.decision-group-who {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.decision-questions {
+  margin: 0;
+  padding: 0 0 0 calc(32px + var(--spacing-3));
+  list-style: none;
+}
+.decision-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) 0;
+}
+.decision-question + .decision-question {
+  border-top: 1px solid var(--color-border-default);
+}
+/* AT REST, ONE LINE: the recommendation, then Accept and Change at its end. */
+.decision-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+.decision-answer.is-open {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.decision-rec {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.decision-rec strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.decision-answer-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.decision-answered {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-feedback-success-ink);
+  overflow-wrap: anywhere;
+}
+.decision-answered > svg {
+  flex: none;
+}
+.decision-answered strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.decision-answered-rec {
+  color: var(--color-text-tertiary);
+}
+
 /* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one
@@ -8103,6 +8177,9 @@ a.work-cal-chip {
     max-width: none;
     justify-content: flex-start;
     padding-inline-start: calc(32px + var(--spacing-3));
+  }
+  .decision-questions {
+    padding-inline-start: 0;
   }
 }
 

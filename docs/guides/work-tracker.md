@@ -1368,8 +1368,8 @@ screens rather than one:
   who won it; a checklist tick and following are gestures applied to the task
   as it is when they land, so they never lose a race that was not one. A reader
   who cannot act sees every control, disabled with the sentence that says why.
-- **New task** — on the sidebar's head, beside the Projects heading, at the
-  end of every work screen's bar and on a board lane — opens one sheet that
+- **New task** — beside the sidebar's Projects heading, at the end of every
+  work screen's bar and on a board lane — opens one sheet that
   files a whole task in one `create_work_item`: its project, title and
   description, type, the status it starts in, who holds it, its priority, due
   date and labels. A lane's **+** files into that lane: it presets the lane's
@@ -1940,10 +1940,12 @@ with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
 **Asked of me is answered where it stands.** Each question put to the person
-is the same row the landing screen's "Needs your decision" draws — who asked,
-the role they are asked in, what the asker recommends — with its options as
-buttons that send the choice (`comment_on_work_item{answers, choice}`), or a
-Reply for a question with no options. **Asked by me** is the other end: the
+is drawn as the landing screen's "Needs your decision" draws it: grouped
+under who asked, with the role they are asked in and one line naming what the
+asker recommends. **Accept** sends that option; **Change** opens every option
+with its detail, plus **Something else** for a reply in your own words, and
+**Submit** sends what is chosen (`comment_on_work_item{answers, choice}` or
+`{answers, body}`). A question with no options offers **Reply**. **Asked by me** is the other end: the
 work this person asked a question on that is still waiting for its answer
 (`asked_by=`, every task status, since an open question on finished work is
 still one somebody is waiting on). It asks under both of the person's names —

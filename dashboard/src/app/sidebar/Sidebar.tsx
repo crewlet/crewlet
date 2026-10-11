@@ -43,7 +43,6 @@ import { useMemo, type ReactNode } from "react";
 import {
   AppShell,
   BrandLockup,
-  IconButton,
   Kbd,
   SearchTrigger,
   SidebarNav,
@@ -98,7 +97,6 @@ export function Sidebar({
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
   const org = useOrg();
   const agents = useAgents();
-  const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
   const { connected, authRejected } = useConnection();
   const inbox = useInboxCounts();
@@ -197,20 +195,6 @@ export function Sidebar({
             // server serves itself — written out so `protocol/proxy.test.ts`
             // can read it and hold it against the proxy table.
             mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
-          />
-          {/* THE ONE CREATE THE CHROME CARRIES, beside the company's name as
-              the approved design draws it: filing work is the thing a person
-              does from anywhere, so its door is on every screen. It files
-              into the project on screen when there is one — the sheet says
-              where before anything is sent. NOT GATED HERE: the sheet's own
-              Create is the write control, and it says why a reader who
-              cannot file cannot. */}
-          <IconButton
-            size="sm"
-            variant="ghost"
-            label="New task"
-            icon={<PlusGlyph size="sm" />}
-            onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
           />
         </div>
       }

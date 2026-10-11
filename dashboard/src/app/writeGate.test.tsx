@@ -137,22 +137,22 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
   EditProjectButton: { props: { project: "ENG", target: "2026-12-18" }, name: /^Edit project$/ },
   PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
-  AnswerAskButtons: {
+  AnswerAsk: {
     props: {
       item: "LEAD-12",
       comment: "c-1",
+      asker: "CEO",
       options: [{ id: "hold", label: "Hold release" }],
       recommended: "hold",
+      open: false,
+      onOpenChange: () => {},
+      onAnswered: () => {},
     },
-    name: /^Hold release$/,
+    name: /^Accept$/,
   },
   AnswerRunButton: {
     props: { turnId: "run-1", seat: "Frontend SWE", question: "Drop the fallback?" },
     name: /^Answer$/,
-  },
-  ReplyAskButton: {
-    props: { item: "LEAD-12", comment: "c-2", asker: "CEO", question: "Which vendor?" },
-    name: /^Reply$/,
   },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
@@ -176,9 +176,8 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   RestoreButton: "restore_work_item",
   EditProjectButton: "write_project",
   PinButton: "set_pins",
-  AnswerAskButtons: "comment_on_work_item",
+  AnswerAsk: "comment_on_work_item",
   AnswerRunButton: "answer_run",
-  ReplyAskButton: "comment_on_work_item",
   SaveViewButton: "save_work_view",
   MessageSeatButton: "create_work_item",
   AssignToSeatButton: "update_work_item",

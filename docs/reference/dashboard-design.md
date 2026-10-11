@@ -622,17 +622,17 @@ nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
 these rows say which. At the foot, Settings, the
-**health card** and the **user block**. The head carries the company's lockup
-and, at the end of the same line, the chrome's one create: `+` New task.
+**health card** and the **user block**. The head carries the company's lockup,
+alone on its line.
 
-**Every "New task" is one sheet.** The sidebar's head `+`, the Projects group's
-`+`, a work screen's page-bar New task (Home, Work, a project) and a board
-lane's `+` all open the frame's single New task sheet
-(`dashboard/src/routes/work/NewTask.tsx`, mounted by the shell out of the Work
-chunk), each door telling it only what it knows. The two sidebar doors file into
-the project the route is in — its page, or the project a task key names —
-asked of the route's own resolver, so `#/work/views` and a task opened by its
-uuid are in no project and their `+` reads "New task in a project". A board
+**Every "New task" is one sheet.** The Projects group's `+`, a work screen's
+page-bar New task (Home, Work, a project) and a board lane's `+` all open the
+frame's single New task sheet (`dashboard/src/routes/work/NewTask.tsx`, mounted
+by the shell out of the Work chunk), each door telling it only what it knows.
+The sidebar's door files into the project the route is in (its page, or the
+project a task key names), asked of the route's own resolver, so `#/work/views`
+and a task opened by its uuid are in no project and its `+` reads "New task in
+a project". A board
 lane's `+` files INTO its lane (`app/newTask.ts`'s `presetForLane`): it
 presets exactly the value that puts a task there — the lane's status, type,
 priority, project, holder or label, and a status-group lane the group's first
@@ -753,15 +753,15 @@ the alarm line. Everything comes off the one health push; nothing polls.
 **The user block** is who this browser is — a person (bound: their name and
 seat, linking to it), a token no seat claims (unbound: the token's id, and what
 would bind it), or nobody (anonymous) — beside the theme flip and the
-**preferences**: theme (light, dark, match the system), density, the zone
-timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the runtime's
-canonical list omits, or the browser's own), how a date is written, and the
+**preferences**: theme (light, dark, match the system), density, and the
 token. All of them are per browser and none is the company's: every key the
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
 retired and removed at boot, so a stale value does not sit in a reader's
-profile for ever. The zone is the one every timestamp is drawn in AND the one a day is
-filed in — a calendar cell and a timeline column are the chosen zone's date, so
+profile for ever. There is no zone or date preference: every timestamp is drawn
+in the browser's own zone and its locale's own date spelling, and that zone is
+also the one a day is filed in. A calendar cell and a timeline column are that
+zone's date, so
 a task stamped "Sep 23" is never in the cell for the 22nd — while a day's
 arithmetic (the grid, the span between two dates) is civil and moves with no
 zone. There is no company switcher: one engine runs one company.
@@ -1331,7 +1331,7 @@ narrowest layout holds at the axis's size — positioned over the bucket each on
 names rather than laid out in flow, since a label is wider than the bar it points
 at. A day bucket is a date with the year dropped in the reader's own year, the
 form every column of dates in this product takes; anything shorter is a wall
-clock in the reader's chosen zone, because five repetitions of today's date under
+clock in the browser's zone, because five repetitions of today's date under
 a chart of minutes is the noise the compact form exists to remove. They are
 **ink**, tabular and at the caption size: the chart's one accent is spent on the
 bars.
@@ -1468,7 +1468,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1645,9 +1645,7 @@ must not also open the grid row behind the field.
 The bar holds the trail, who is working now (on Home's bar only, as the Main
 artboard draws it — the sidebar's Live row carries the same count on every
 other page, and a chip in every bar sat between a task's trail and its actions
-and pushed a profile's controls past a phone's edge), the star and Copy link — which is what the
-approved artboards label **Share**: sharing a page here IS its address, since
-anyone the link reaches reads it under their own token — and LAST
+and pushed a profile's controls past a phone's edge), the star, and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
 primary action ("New task") ends the row where the approved designs put it.
 An OBJECT page's lenses (a project's Items, About and History) are portalled
@@ -1658,11 +1656,11 @@ group that takes the line's slack — the trail sizes to its content, capped at
 them onto a line of their own.
 On a phone the bar keeps ONE action in view — the screen's primary one, which
 leads the line — and folds the rest into **More** (⋯) at the line's end: the
-frame's star and Copy link, and whatever a screen marks as secondary and
+frame's star, and whatever a screen marks as secondary and
 publishes to the frame with `usePageMenu` (a project's **Edit project**, which
 opens the same dialog its inline button does). The menu is drawn only at that
 width, so no action is ever in two places a reader can see at once, and what a
-press did (copied, refused, at the star cap) is said in a toast, because the
+press did (the star cap, a refusal) is said in a toast, because the
 menu closes on it. A task's own "More for ENG-42" folds into it too, rather
 than standing as a second ellipsis beside the frame's. What is left of the
 controls shares a line with the trail or the lenses when it fits: laid out
@@ -1702,7 +1700,7 @@ show its ancestry beside the controls takes a line of its own.
 - **The control group may not shrink at all.** It wraps, so a shrink does not
   shave a label off a button, it drops the last control onto a row of its own —
   and a flex container distributes shrinkage proportionally in one pass, so any
-  factor above zero pushes "Copy link" onto a second row by a fraction of a
+  factor above zero pushes the star onto a second row by a fraction of a
   pixel. A `max-width` is the valve that keeps a group wider than the whole bar
   wrapping rather than running past the edge.
 - **On a phone's width the controls are one line that scrolls** — sharing the
@@ -1805,8 +1803,7 @@ a blank page, and a reader cannot tell that from a dashboard that is broken.
 **So the first fold is the company, then what needs the reader, then what the
 company did.** Top to bottom:
 
-- **The greeting.** The company's day (on `org.timezone`, the one clock every
-  due date and budget window is cut on), the reader's morning, and one sentence
+- **The greeting.** The reader's morning and one sentence
   of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
   you, 1 condition needs a look, and 4 agents are working right now." The
   decisions figure is weighted; an engine condition — a refused token, a lost
@@ -1844,21 +1841,32 @@ company did.** Top to bottom:
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
-  PLACE. A structured ask draws each option as a button that sends the choice
-  as the answer (`comment_on_work_item{answers, choice}`), the recommended one
-  primary, with who asked (the person behind a token, never the token), the
-  role the reader is asked in, "reports to you" where the chart says so, and
-  the line saying what the answer sets off — "CTO is woken with your answer and
-  posts it to #releases" when the ask promised a channel, "CTO continues from
-  your answer" when it did not. A coding run parked on a question is answered
+  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head names the
+  asker (the person behind a token, never the token) with their badge, and
+  what every one of their asks shares (the item, the role the reader is asked
+  in, how long ago); what differs between two asks is said on the ask, and so
+  is the channel an ask promised to post its answer to ("answer posted to
+  #releases"). Under each question one line reads "Recommended: Hold release"
+  with **Accept**, which sends that option, and **Change**, which opens every
+  option as a choice with its detail line and the recommended one tagged
+  (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
+  `Composer`, up to 2,000 characters, Command+Enter to send) sends a reply
+  instead of a choice; **Submit** sends what is chosen. While the options are
+  open the recommendation line is hidden, and only one ask's options are open
+  at a time. An ask with no recommendation offers **Answer** in place of
+  Accept and Change. A choice is `comment_on_work_item{answers, choice}` and a
+  reply `{answers, body}`; the engine wakes the asker with either. An answered
+  ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
+  anyway" or "Answered “the reply”", until the card is drawn afresh; there is
+  no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
   by its turn (`answer_run`), with how long its box is still held. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
   window focused (see [Spend › Budgets](#spend--budgets-raised-in-place)) —
   and **Reassign** of the item it was on. An ask with no options is
-  answered in words on its row: **Reply** opens the same dialog a parked run's
-  **Answer** does and sends `comment_on_work_item{answers, body}`. Every
+  answered in words in place: **Reply** opens the field under the question
+  and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. **Open inbox** and **Review** both land on
   `#/inbox?reason=decisions`, which draws every one of them.
@@ -2070,10 +2078,9 @@ list does not step sideways and back. A person's seat page counts the same
 list as **Priorities** in its "Their day" card, never as their Queue: the
 Queue is the open work assigned to them, everywhere it is named.
 
-**Asked of me is the decision row Home draws** (`DecisionRow`): who asked,
-the role, what they recommend, and the options as buttons that send the
-choice. It is shared rather than restated, so the rule for which option is
-primary is one rule.
+**Asked of me is the decision list Home draws** (`DecisionList`): asks
+grouped under who asked, each with its recommendation, Accept and Change. It
+is shared rather than restated, so how an ask is answered is one rule.
 
 The whose-day picker in the page bar lists yours, then your line, then
 anybody, each person on two lines (the name, then the handle and how much is
@@ -2636,7 +2643,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
-| **Actions** | the per-browser commands — theme, density, dates, time zone, copy link, set token, clear recents, the key legend — and the three changes; the legend names who they are made as | `>` |
+| **Actions** | the per-browser commands — theme, density, copy link (the one place a page's address is copied from; a refusal is said in a toast), set token, clear recents, the key legend — and the three changes; the legend names who they are made as | `>` |
 
 `Tab` and `Shift+Tab` walk the tabs from the field, and a sigil typed at the
 start selects its tab and leaves the box, so the tab row — not a character the
@@ -2778,8 +2785,8 @@ carries the raw segment — a uuid for a turn — and the second carries the nam
 downgrades a named row to its id. A place nothing has EVER named still stores
 its id, because an object with no name has that and nothing else.
 
-A command that would change nothing is not offered: the list omits the theme,
-the density and the date format already in use, because a control that says
+A command that would change nothing is not offered: the list omits the theme
+and the density already in use, because a control that says
 "switch to dark" while the page is already dark does not know what it is
 looking at.
 
@@ -2934,7 +2941,7 @@ a tool arrives in it with the control that sends it. The controls
 | Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
 | A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
-| Create task (the New task sheet) | The sidebar's head `+`, the Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
+| Create task (the New task sheet) | The Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
@@ -2946,7 +2953,7 @@ a tool arrives in it with the control that sends it. The controls
 | Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
 | Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
 | Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
-| An option · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
+| Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 
 A change to the **company document** — a seat, a budget ceiling, an MCP
@@ -5273,8 +5280,7 @@ that can.
   (with *Also stop the current turn*), *Open task* its item, and one menu
   (*More on this turn*) holds the other attempts, the traces, and the turn as
   JSON — *Copy turn as JSON* and *Download turn as JSON*, each saying what it
-  did in a toast. A bare *Copy* beside the frame's *Copy link* was a second
-  copy meaning something else. On a phone Steer stays in view and everything
+  did in a toast. On a phone Steer stays in view and everything
   else folds into the frame's *More*.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each

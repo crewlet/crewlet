@@ -451,10 +451,8 @@
   padding: 0;
 }
 
-/* THE RAIL'S HEAD: the company's lockup, and the one create the chrome
-   carries at the far end of the same line, as the approved design draws it.
-   The lockup takes what is left, so a long company name truncates rather than
-   pushing the `+` off the rail. */
+/* THE RAIL'S HEAD: the company's lockup, alone on its line. It takes the
+   whole width, so a long company name truncates rather than wrapping. */
 .side-head {
   display: flex;
   align-items: center;
