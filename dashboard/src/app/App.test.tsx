@@ -758,9 +758,10 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
 });
 
 // ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, and "More" holds the rest: the
-// frame's star, and what the screen folds — a project's Edit
-// project, which opens the same dialog its inline button does. Laid out inline
-// at 390px a project's bar stood three rows tall. (What is SHOWN at which
+// frame's star where the page has one, and what the screen folds, such as a
+// project's Edit project, which opens the same dialog its inline button does.
+// Laid out inline at 390px a project's bar stood three rows tall. A project is
+// one of Work's scopes, whose bar carries no star. (What is SHOWN at which
 // width is the stylesheet's container query, which this DOM does not
 // evaluate; what the menu HOLDS, and that its entries act, is asserted here.)
 test("the page bar's More holds the star and what the screen folded, and no Copy link", async () => {
@@ -805,7 +806,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
-  expect(names).toEqual(["Edit project", "Keep in Starred"]);
+  expect(names).toEqual(["Edit project"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Edit project" }));
   expect(await screen.findByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
   cleanup();

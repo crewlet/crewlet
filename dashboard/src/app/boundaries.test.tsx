@@ -171,27 +171,36 @@ describe("a peek that throws", () => {
 });
 
 describe("a sidebar section that throws", () => {
-  // A project whose name arrived as an object is a React child React refuses —
-  // the same shape of failure as the per-phase model mapping.
+  // A pinned view whose name arrived as an object is a React child React
+  // refuses: the same shape of failure as the per-phase model mapping.
   test("costs its own list and never the navigation above it", async () => {
-    // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: Home draws a
-    // projects card from the same answer, and its own boundary is the
-    // screen's, which is the case below this one.
     location.hash = "#/live";
     await mount({
-      work_projects: {
-        projects: [
+      viewer: {
+        operator_id: "",
+        operator: false,
+        handle: "ada",
+        name: "Ada",
+        kind: "human",
+        acts: [],
+      },
+      work_saved_views: {
+        complete: true,
+        views: [
           {
-            key: "ENG",
-            name: { en: "Engineering" },
-            task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
+            id: "v-1",
+            key: "blocked",
+            name: { en: "Blocked" },
+            type: "list",
+            container: { kind: "workspace", id: "" },
+            builtin: false,
+            pinned: true,
           },
         ],
-        complete: true,
       },
     });
     const failed = await screen.findByText("Could not be drawn.");
-    expect(failed.closest('[role="group"]')?.textContent).toContain("Projects");
+    expect(failed.closest('[role="group"]')?.textContent).toContain("Pinned");
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(nav.querySelector('a[href="#/inbox"]')).not.toBeNull();
     // And the screen is untouched.

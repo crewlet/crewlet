@@ -1264,7 +1264,9 @@ export function viewRun(view: Pick<WorkView, "key" | "container">): {
   query: Record<string, string>;
 } {
   const path =
-    view.container.kind === "project" && view.container.id ? ["work", view.container.id] : ["work"];
+    view.container.kind === "project" && view.container.id
+      ? ["work", view.container.id]
+      : ["work", "tasks"];
   return { path, query: { view: view.key } };
 }
 

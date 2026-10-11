@@ -28,9 +28,11 @@ import {
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
+import { keyRow, sequenceWords } from "./keymap.ts";
 import {
   avatarLabel,
   crumbsFor,
+  projectArchivedKey,
   seatAvatarKey,
   seatKindKey,
   titleOf,
@@ -38,6 +40,7 @@ import {
   turnSeatKey,
 } from "./crumbs.ts";
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
+import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 
 describe("parsing", () => {
@@ -241,7 +244,7 @@ describe("the resolver", () => {
     // A WORD IS NOT AN ITEM. Every one of these was an item id once, so each
     // drew the tracker's refusal under a trail rather than Not Found — the
     // sections the plan gives other workspaces, and any other word.
-    for (const word of ["tasks", "people", "skills", "models", "diaries", "eng-42", "t1"]) {
+    for (const word of ["projects", "people", "skills", "models", "diaries", "eng-42", "t1"]) {
       expect(resolve(["work", word]).resolved, word).toBe(false);
     }
   });
@@ -514,6 +517,22 @@ describe("the breadcrumb", () => {
     );
     expect(titleOf(crumbsFor(["live", "turns"]))).toBe("Turns");
   });
+
+  // ON WORK'S SCOPE PAGES THE LENS COMES FIRST, so a project's board and its
+  // history open in two tabs read apart.
+  test("on Work's scope pages the tab title reads the lens, then the scope", () => {
+    const title = (path: string[], query = "", labels = {}) =>
+      titleOf(crumbsFor(path, labels), scopeAt(path, new URLSearchParams(query)));
+    expect(title(["work"])).toBe("Projects · All projects");
+    expect(title(["work", "tasks"])).toBe("Tasks · All projects");
+    expect(title(["work", "history"])).toBe("History · All projects");
+    expect(title(["work", "ENG"], "", { ENG: "Core platform" })).toBe("Tasks · Core platform");
+    expect(title(["work", "ENG"], "lens=about", { ENG: "Core platform" })).toBe(
+      "About · Core platform",
+    );
+    // A task and a saved view are not scopes: their own names title them.
+    expect(title(["work", "views"])).toBe("Saved views");
+  });
 });
 
 // EVERY FIXED DESTINATION NAMES ITSELF IN THE TRAIL, from the one table — a
@@ -528,6 +547,20 @@ test("every fixed destination names itself rather than reading as a key", () => 
     const crumbs = crumbsFor(dest.path);
     const last = crumbs[crumbs.length - 1];
     const row = workspaceRow(dest.workspace)!;
+    // A SCOPE'S LENS ENDS IN ITS SCOPE: Work's trail names All projects, the
+    // switcher's button, and the lens is what the tab title leads with.
+    const lens =
+      row.renderer === "lenses"
+        ? row.sections.find((s) => s.tab !== false && samePath(s.path, dest.path))
+        : undefined;
+    if (lens) {
+      expect(last?.label, `#/${dest.path.join("/")}`).toBe(ALL_PROJECTS);
+      expect(last?.switch, `#/${dest.path.join("/")}`).toBe("project");
+      expect(titleOf(crumbs, scopeAt(dest.path, new URLSearchParams()))).toBe(
+        `${lens.label} · ${ALL_PROJECTS}`,
+      );
+      continue;
+    }
     const landing =
       row.renderer === "column" && samePath(dest.path, row.path)
         ? row.sections.find((s) => samePath(s.path, row.path))
@@ -667,5 +700,66 @@ describe("the information architecture", () => {
         true,
       );
     }
+  });
+});
+
+// WORK OPENS ON ITS PROJECTS, its task list is the lens beside them, and the
+// trail names the scope those lenses are of, as the button that switches it.
+describe("Work's scope", () => {
+  test("#/work is Projects, #/work/tasks the company's tasks, and #/work/projects is retired", () => {
+    expect(resolve(["work"])).toMatchObject({ screen: "work-projects" });
+    expect(resolve(["work", "tasks"])).toMatchObject({ screen: "work-tasks" });
+    expect(resolve(["work", "projects"]).resolved).toBe(false);
+    expect(RESERVED_SEGMENTS).toContain("tasks");
+    expect(RESERVED_SEGMENTS).not.toContain("projects");
+  });
+
+  test("Work draws its sections as lenses, and saved views and search are addresses, not lenses", () => {
+    const work = workspaceRow("work")!;
+    expect(work.renderer).toBe("lenses");
+    expect(work.sections.map((s) => [s.key, s.label, s.tab !== false])).toEqual([
+      ["projects", "Projects", true],
+      ["tasks", "Tasks", true],
+      ["history", "History", true],
+      ["views", "Saved views", false],
+      ["search", "Search", false],
+    ]);
+  });
+
+  test("Work's trail ends in its scope, and Work is plain words on its landing", () => {
+    expect(crumbsFor(["work"])).toEqual([
+      { label: "Work", icon: "square-kanban" },
+      { label: "All projects", switch: "project" },
+    ]);
+    expect(crumbsFor(["work", "history"])).toEqual([
+      { label: "Work", path: ["work"], icon: "square-kanban" },
+      { label: "All projects", switch: "project" },
+    ]);
+    expect(crumbsFor(["work", "ENG"], { ENG: "Core platform" }).at(-1)).toEqual({
+      label: "Core platform",
+      tag: "ENG",
+      switch: "project",
+    });
+    // A TASK AND A SAVED VIEW ARE NOT SCOPES: their trails switch nothing.
+    expect(crumbsFor(["work", "ENG-42"]).some((c) => c.switch)).toBe(false);
+    expect(crumbsFor(["work", "views"]).some((c) => c.switch)).toBe(false);
+  });
+
+  test("an archived project says so in its crumb, once its page has said", () => {
+    expect(
+      crumbsFor(["work", "OLD"], {
+        OLD: "Legacy importer",
+        [projectArchivedKey("OLD")]: "archived",
+      }).at(-1),
+    ).toMatchObject({ label: "Legacy importer", tag: "OLD", archived: true });
+    expect(crumbsFor(["work", "OLD"], { OLD: "Legacy importer" }).at(-1)?.archived).toBeUndefined();
+  });
+
+  test("G then P switches project, from anywhere", () => {
+    const row = keyRow("project");
+    expect(row.scope).toBe("frame");
+    expect(row.presses).toEqual([{ after: "g", key: "p" }]);
+    expect(row.does).toBe("Switch project");
+    expect(sequenceWords("project")).toBe("G then P");
   });
 });

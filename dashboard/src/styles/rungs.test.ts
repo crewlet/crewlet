@@ -137,10 +137,6 @@ describe("the faint rung is decoration", () => {
         'which carries `title="falls back to"` for the meaning.',
     },
     {
-      selector: ".crumb-sep",
-      why: "The `/` between breadcrumb parts. A separator draws a boundary the layout already has.",
-    },
-    {
       selector: ".cell-status.neutral .cell-glyph",
       why:
         "`cells.tsx` renders this glyph `aria-hidden` beside the visible label " +
@@ -193,7 +189,7 @@ describe("the faint rung is decoration", () => {
 
   test("and the scan found the rung at all", () => {
     expect(faint.length).toBe(MARKS.length);
-    expect(faint.length).toBeGreaterThan(5);
+    expect(faint.length).toBeGreaterThan(4);
   });
 });
 

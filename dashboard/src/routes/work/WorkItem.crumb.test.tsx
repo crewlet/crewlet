@@ -70,7 +70,9 @@ function mount(answers: Record<string, unknown>) {
 
 const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
 const parts = () =>
-  [...trail().querySelectorAll(".crumb-part")].map((p) => p.textContent?.trim() ?? "");
+  [...trail().querySelectorAll(".crewlet-breadcrumb__part")].map(
+    (p) => p.textContent?.trim() ?? "",
+  );
 
 const item = {
   task: { id: "t-1", key: "ENG-1", project: "ENG", title: "Fix the login race", version: 1 },
@@ -91,11 +93,11 @@ test("a task's trail names its project as the project's page does", async () => 
 
   // THE NAME WITH ITS KEY AS A CHIP, the way every row and rail draws a
   // project ("ENG Core platform" in the artboard's bar).
-  expect(parts()).toEqual(["Work", "ENGCore", "ENG-1"]);
+  expect(parts()).toEqual(["Work", "ENG Core", "ENG-1"]);
   // Still the way to it: the crumb links to the project's page.
   const link = trail().querySelector<HTMLAnchorElement>("a[href='#/work/ENG']");
-  expect(link?.querySelector(".crumb-tag")?.textContent).toBe("ENG");
-  expect(link?.querySelector(".crumb-text")?.textContent).toBe("Core");
+  expect(link?.querySelector(".crewlet-key-chip")?.textContent).toBe("ENG");
+  expect(link?.querySelector(".crewlet-breadcrumb__text")?.textContent).toBe("Core");
 });
 
 test("the key is the crumb until the project has answered", async () => {

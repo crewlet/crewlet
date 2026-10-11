@@ -45,7 +45,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { AppShell } from "@crewlethq/ui";
+import { Announcer, AppShell } from "@crewlethq/ui";
 import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
@@ -59,6 +59,8 @@ import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
 import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
 import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
+import { ProjectSwitcherProvider } from "./header/ProjectSwitcher.tsx";
+import { scopeAt } from "./scope.ts";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
@@ -315,7 +317,11 @@ export function FrameReadings({ children }: { children: ReactNode }) {
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <FrameReadings>
-      <Frame>{children}</Frame>
+      {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
+          Work's pages, and the same panel centred for G then P anywhere. */}
+      <ProjectSwitcherProvider>
+        <Frame>{children}</Frame>
+      </ProjectSwitcherProvider>
     </FrameReadings>
   );
 }
@@ -346,9 +352,9 @@ function Frame({ children }: { children: ReactNode }) {
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
   const [tokenOpen, setTokenOpen] = useState(false);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
-  // holds it for the reason it holds the palette: four doors — the sidebar's
-  // head, the Projects group, a screen's page bar, a board lane — open ONE
-  // sheet, and a route change does not close it (the reader may have followed
+  // holds it for the reason it holds the palette: three doors (the sidebar's
+  // head, a screen's page bar, a board lane) open ONE sheet, and a route
+  // change does not close it (the reader may have followed
   // a link to check a name while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
@@ -421,11 +427,12 @@ function Frame({ children }: { children: ReactNode }) {
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
-  // them apart.
+  // them apart: on Work's scope pages, the lens and then the scope.
   const where = titleOf(crumbs);
+  const tab = titleOf(crumbs, scopeAt(route.path, route.query));
   useEffect(() => {
-    document.title = where === "Crewlet" ? "Crewlet" : `${where} · Crewlet`;
-  }, [where]);
+    document.title = tab === "Crewlet" ? "Crewlet" : `${tab} · Crewlet`;
+  }, [tab]);
 
   // AND THE PALETTE REMEMBERS THE OBJECTS, so an empty palette has something
   // to offer before the reader types. OBJECTS ONLY — a fixed destination is in
@@ -574,6 +581,9 @@ function Frame({ children }: { children: ReactNode }) {
             }}
           />
         )}
+        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
+            without moving focus (the switcher's "3 projects"). */}
+        <Announcer />
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );

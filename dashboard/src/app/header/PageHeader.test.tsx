@@ -4,18 +4,14 @@
  * page" is the one place a page's address is copied from (`lib/pageLink.ts`).
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppShell } from "@crewlethq/ui";
 
-import {
-  Breadcrumb,
-  PageHeader,
-  SectionTabs,
-  StarPage,
-  WorkingNow,
-  noteFits,
-} from "./PageHeader.tsx";
+import { PageHeader, SectionTabs, StarPage, Trail, WorkingNow, noteFits } from "./PageHeader.tsx";
+import { ProjectSwitcherProvider } from "./ProjectSwitcher.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
@@ -35,7 +31,7 @@ describe("the star", () => {
   // The store drops a kept path that does not resolve, so a star pressed on
   // Not Found filled and then vanished on the next read, with nothing said.
   test("is not offered on an address that is no page", () => {
-    render(<StarPage path={["work", "tasks"]} label="Not found" workspace="work" />);
+    render(<StarPage path={["work", "projects"]} label="Not found" workspace="work" />);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -53,132 +49,128 @@ describe("the star", () => {
   });
 });
 
-// THE TRAIL IS A TAB STOP ONLY WHILE IT HAS SOMEWHERE TO SCROLL. It was one
-// on every page, and a trail that fits (nearly every trail) took a Tab press
-// that did nothing.
-describe("the breadcrumb", () => {
-  const crumbs = [
-    { label: "Live", path: ["live"] },
-    { label: "Turns", path: ["live", "turns"] },
-    { label: "Replied in the thread about the observability pipeline." },
-  ];
-  const had = {
-    scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
-    client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
-  };
-  function widths(scroll: number, client: number): void {
-    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
-      configurable: true,
-      get: () => scroll,
-    });
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get: () => client,
-    });
-  }
-  afterEach(() => {
-    for (const [key, d] of [
-      ["scrollWidth", had.scroll],
-      ["clientWidth", had.client],
-    ] as const) {
-      if (d) Object.defineProperty(HTMLElement.prototype, key, d);
-      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
-    }
-  });
+// THE TRAIL IS THE KIT'S BREADCRUMB (its floor and its tab stop are held by
+// the kit's own suite), built from the route table's crumbs, and Work's last
+// crumb is the switcher's button.
+describe("the trail", () => {
   const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
 
-  test("a trail that fits takes no tab stop", () => {
-    widths(400, 400);
-    render(<Breadcrumb crumbs={crumbs} />);
-    expect(trail().hasAttribute("tabindex")).toBe(false);
+  function frame(children: ReactNode) {
+    const store = new Store();
+    return (
+      <Router>
+        <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+          <ViewerProvider>
+            <ProjectSwitcherProvider>{children}</ProjectSwitcherProvider>
+          </ViewerProvider>
+        </ClientContext.Provider>
+      </Router>
+    );
+  }
+
+  afterEach(() => {
+    location.hash = "#/";
   });
 
-  test("a trail wider than its box is a tab stop, so the keyboard can scroll it", () => {
-    widths(697, 494);
-    render(<Breadcrumb crumbs={crumbs} />);
-    expect(trail().getAttribute("tabindex")).toBe("0");
+  test("ancestors lead back out and the page's own name is its heading", () => {
+    render(
+      <Router>
+        <Trail
+          crumbs={[
+            { label: "Live", path: ["live"], icon: "activity" },
+            { label: "Turns", path: ["live", "turns"] },
+            { label: "Replied in the thread about the observability pipeline." },
+          ]}
+        />
+      </Router>,
+    );
+    expect(
+      within(trail())
+        .getAllByRole("link")
+        .map((a) => [a.textContent, a.getAttribute("href")]),
+    ).toEqual([
+      ["Live", "#/live"],
+      ["Turns", "#/live/turns"],
+    ]);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      "Replied in the thread about the observability pipeline.",
+    );
   });
 
-  // THE FLOOR IS THE WAY BACK OUT: where the last crumb starts, so a trail that
-  // cannot show its ancestry beside the controls breaks the bar's line rather
-  // than sharing it at 20ch and cutting "Engineering · Co" mid-letter.
-  test("the trail's floor is where its last crumb starts, measured from its own start", async () => {
-    widths(400, 400);
-    const rect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      const left = this.classList.contains("crumbs")
-        ? 12
-        : this.classList.contains("crumb-here")
-          ? 262
-          : 0;
-      return {
-        width: 0,
-        height: 20,
-        top: 0,
-        left,
-        right: left,
-        bottom: 20,
-        x: left,
-        y: 0,
-      } as DOMRect;
-    };
-    try {
-      render(<Breadcrumb crumbs={crumbs} />);
-      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("250px"));
-    } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
-    }
+  test("a project's crumb carries its key as the kit's chip, and a raw key is mono", () => {
+    render(
+      <Router>
+        <Trail
+          crumbs={[
+            { label: "Work", path: ["work"], icon: "square-kanban" },
+            { label: "Core platform", path: ["work", "ENG"], tag: "ENG" },
+            { label: "ENG-42", mono: true },
+          ]}
+        />
+      </Router>,
+    );
+    const project = within(trail()).getByRole("link", { name: "ENG Core platform" });
+    expect(project.querySelector(".crewlet-key-chip")?.textContent).toBe("ENG");
+    expect(screen.getByRole("heading", { level: 1 }).classList.contains("is-mono")).toBe(true);
   });
 
-  // BUT NEVER WIDER THAN THE ROOM BESIDE THE DRAWER TOGGLE: a floor past it put
-  // the trail on a line under the toggle, and the bar stood three lines tall.
-  test("the floor is capped at the room the drawer toggle leaves on the bar's line", async () => {
-    widths(366, 366);
-    const rect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      const left = this.classList.contains("crumbs")
-        ? 12
-        : this.classList.contains("crumb-here")
-          ? 362
-          : 0;
-      const width = this.classList.contains("toggle") ? 30 : 0;
-      return {
-        width,
-        height: 20,
-        top: 0,
-        left,
-        right: left + width,
-        bottom: 20,
-        x: left,
-        y: 0,
-      } as DOMRect;
-    };
-    try {
-      render(
-        <div className="bar">
-          <button type="button" className="toggle">
-            menu
-          </button>
-          <Breadcrumb crumbs={crumbs} />
-        </div>,
-      );
-      // 350 wanted; 366 of bar less the 30 toggle leaves 336.
-      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("336px"));
-    } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
-    }
+  // THE HEADING IS THE CONTROL: a reader landing on the page's name by
+  // heading is on the button that changes it.
+  test("Work's scope crumb is the switcher's button, as the page's heading", () => {
+    location.hash = "#/work/ENG";
+    render(
+      frame(
+        <Trail
+          crumbs={[
+            { label: "Work", path: ["work"], icon: "square-kanban" },
+            { label: "Core platform", tag: "ENG", switch: "project", archived: true },
+          ]}
+        />,
+      ),
+    );
+    const heading = screen.getByRole("heading", { level: 1 });
+    const button = within(heading).getByRole("button", { name: "ENG Core platform Archived" });
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button.getAttribute("title")).toBe("Switch project (G then P)");
   });
 
-  // EACH LABEL IS ITS OWN BOX, the one `.crumb-text` ellipsises: text straight
-  // inside the flex part is an anonymous flex item no ellipsis reaches.
-  test("every crumb's words sit in the box that ellipsises, the page's h1 included", () => {
-    widths(400, 400);
-    render(<Breadcrumb crumbs={crumbs} />);
-    const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1.querySelector(":scope > .crumb-text")?.textContent).toBe(crumbs[2]!.label);
-    for (const link of trail().querySelectorAll("a.crumb-link")) {
-      expect(link.querySelector(":scope > .crumb-text")).not.toBeNull();
-    }
+  test("All projects draws its lenses beside the trail, as links, with no star", () => {
+    location.hash = "#/work/tasks";
+    const work = WORKSPACES.find((w) => w.key === "work")!;
+    render(
+      frame(
+        <AppShell
+          topbar={
+            <PageHeader
+              crumbs={[
+                { label: "Work", path: ["work"], icon: "square-kanban" },
+                { label: "All projects", switch: "project" },
+              ]}
+              row={work}
+              counts={{}}
+              title="All projects"
+              workspace="work"
+            />
+          }
+        />,
+      ),
+    );
+    const lenses = screen.getByRole("navigation", { name: "Lens" });
+    expect(
+      within(lenses)
+        .getAllByRole("link")
+        .map((a) => [a.textContent?.replace(/\d+/g, "").trim(), a.getAttribute("href")]),
+    ).toEqual([
+      ["Projects", "#/work"],
+      ["Tasks", "#/work/tasks"],
+      ["History", "#/work/history"],
+    ]);
+    expect(within(lenses).getByRole("link", { name: /Tasks/ }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    // NO SECOND ROW: Work's sections are these lenses, not tabs under the bar.
+    expect(document.querySelector(".section-tabs")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Keep in Starred" })).toBeNull();
   });
 });
 

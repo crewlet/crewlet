@@ -23,6 +23,7 @@
 
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Count } from "@crewlethq/ui";
 
 /** The id the page bar's own slot carries. */
 export const PAGE_ACTIONS_SLOT = "page-actions";
@@ -44,23 +45,45 @@ export function PageActions({ children }: { children: ReactNode }) {
 /**
  * An object page's LENSES, rendered into the page bar beside its name.
  *
- * A lens is a different question about the one object the trail ends on — a
- * project's Items, About and History — so it belongs WITH the name it is a
- * lens on: `Work › ENG Core · Items | About | History`. Drawn as a row of its
+ * A lens is a different question about the one scope the trail ends on (a
+ * project's Tasks, About, History and Files, or All projects' Projects, Tasks
+ * and History), so it belongs WITH the name it is a lens on:
+ * `Work › ENG Core · Tasks | About | History | Files`. Drawn as a row of its
  * own under the bar it cost the first screenful a line (46px, measured
  * against the approved Board, whose lanes start straight under two toolbar
  * rows) and read as a third toolbar over the work.
  *
- * Not the workspace's SECTION tabs, which are addresses of their own under
- * the bar ([SectionTabs]): a lens is a key on this object's address
- * (`lens=`), and the bar never draws both — sections belong to a section's
- * own page, lenses to an object's.
+ * All projects' lenses are Work's SECTIONS, addresses of their own, which the
+ * header draws here as the same chips (`renderer: "lenses"` in `nav.ts`); a
+ * project's are keys on its address (`lens=`). Every other workspace's
+ * sections are tabs under the bar ([SectionTabs]), and the bar never draws
+ * both.
  */
 export function PageLenses({ children }: { children: ReactNode }) {
   return (
     <PageSlot id={PAGE_LENSES_SLOT} fallback="page-lenses">
       {children}
     </PageSlot>
+  );
+}
+
+/**
+ * A lens's words, with the figure it carries: the count in the quiet ink after
+ * the label, its noun read to a screen reader and shown to a pointer ("17
+ * open"). ONE HELPER FOR BOTH SCOPES, so a project's Tasks lens and All
+ * projects' say their figure the same way. Without a count it is the label.
+ */
+export function lensLabel(
+  label: string,
+  count: number | string | undefined,
+  noun: string,
+): ReactNode {
+  if (count === undefined) return label;
+  return (
+    <span className="lens-count" title={`${count} ${noun}`}>
+      {label}
+      <Count value={count} label={noun} />
+    </span>
   );
 }
 

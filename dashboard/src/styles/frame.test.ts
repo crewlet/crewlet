@@ -1215,35 +1215,13 @@ describe("the frame's layout", () => {
       "a fixed height clips the second line the bar creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // IT WRAPS BY WHAT IT HOLDS. A flex container assigns items to lines by
-    // their UNSHRUNK size, so a trail at its content width broke the line as
-    // soon as a long title and the controls exceeded the bar, with free space
-    // left on the first line — and a width threshold measured on the busiest
-    // bar forced the controls down on every screen under it, a sparse one
-    // included. A basis of 0 is what makes the break depend on the trail's
-    // FLOOR beside the controls; the grow factor hands the trail the rest.
-    const crumbs = block(base, ".crumbs");
-    expect(crumbs).toMatch(/flex:\s*1 100 0(?![.\d])/);
-    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: at the MEASURED floor
-    // (`--crumb-floor`, the ancestors and the last crumb's stub, written by
-    // `Breadcrumb`), never under 20ch — what the narrowest line can give,
-    // measured at 178.8px on a 310px viewport — and never past the whole bar,
-    // where a trail whose ancestry alone is wider has to scroll. A fixed 20ch
-    // let a seat's trail share a phone's line with its button and cut its
-    // unit crumb mid-letter.
-    expect(crumbs).toMatch(
-      /min-width:\s*min\(100%,\s*max\(20ch,\s*var\(--crumb-floor,\s*0px\)\)\)/,
-    );
-    // PAST ITS FLOOR IT SCROLLS rather than clipping as a box, on the inline
-    // axis only — `overflow-x: auto` alone computes the block axis to `auto`
-    // too, which puts a vertical scrollport on a one-line box.
-    expect(crumbs, "the trail clips its overflow again").not.toMatch(/(^|[;\s])overflow:\s*hidden/);
-    expect(crumbs).toMatch(/overflow-x:\s*auto/);
-    expect(crumbs).toMatch(/overflow-y:\s*hidden/);
-    expect(crumbs).toMatch(/overscroll-behavior-x:\s*contain/);
-    expect(crumbs).toMatch(/scrollbar-width:\s*none/);
-    expect(base, "the trail's scrollbar is hidden in one engine and drawn in the other").toMatch(
-      /\.crumbs::-webkit-scrollbar\s*\{[^}]*display:\s*none/,
+    // IT WRAPS BY WHAT IT HOLDS, and the trail is what makes it: the kit's
+    // `Breadcrumb`, whose own stylesheet holds its basis of 0, its measured
+    // floor and its scroll past it (held by the kit's Breadcrumb suite). The
+    // frame names it `.page-trail` only to cap it beside the lenses, and draws
+    // no trail rules of its own that would fight the kit's.
+    expect(base, "the frame restyles the trail the kit draws").not.toMatch(
+      /\.(crumbs|crumb-[a-z]+)\b/,
     );
 
     // THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION: it wraps, so
@@ -1281,10 +1259,17 @@ describe("the frame's layout", () => {
     expect(Number(order![1]), "order 0 is where document order already put them").toBeGreaterThan(
       0,
     );
+    // THE ONE OTHER ORDER IS THE LENSES', and it is past the controls': on a
+    // phone they take a row of their own under the line the controls share.
     const others = [...atBreak.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
-      (m) => /(^|[\s;])order\s*:/.test(m[2]!) && !/\.page-controls/.test(m[1]!),
+      (m) =>
+        /(^|[\s;])order\s*:/.test(m[2]!) &&
+        !/\.page-controls/.test(m[1]!) &&
+        m[1]!.trim() !== ".page-lenses:not(:empty)",
     );
     expect(others.map((m) => m[1]!.trim())).toEqual([]);
+    const lensOrder = /order:\s*(-?\d+)/.exec(block(atBreak, ".page-lenses:not(:empty)"));
+    expect(Number(lensOrder?.[1])).toBeGreaterThan(Number(order![1]));
     // AND A LINE OF CONTROLS WIDER THAN A PHONE SCROLLS rather than stacking
     // rows that push the screen a third of the way down.
     expect(broken).toMatch(/overflow-x:\s*auto/);
@@ -1444,42 +1429,12 @@ test("a grid row with more than one content-sized track declares a gap", () => {
   ).toEqual([]);
 });
 
-// ONE GAP BETWEEN EVERY CRUMB. The 5ch floor that keeps the object's own
-// crumb an ellipsised stub rather than nothing was on `.crumb-here`, which
-// also draws an ancestor with no page of its own — "Item", "seats" — and a
-// floor on a part that never shrinks only pads a short word: "Work / Item   /
-// items". Scoped to the last part, which is the only one that gives way.
-// THE ELLIPSIS NEEDS A BOX OF ITS OWN. `.crumb-link` and `.crumb-here` are flex
-// containers, and text directly inside one is an anonymous flex item that
-// `text-overflow` never reaches: the page's h1 was cut mid-word at the bar's
-// edge. `PageHeader.test.tsx` holds that every label is inside `.crumb-text`;
-// this holds that `.crumb-text` is the box that cuts with an ellipsis.
-test("a crumb's words are the box that ellipsises", () => {
-  const css = sheet("frame.css");
-  const text = block(css, ".crumb-text");
-  expect(text).toMatch(/min-width:\s*0\b/);
-  expect(text).toMatch(/overflow:\s*hidden/);
-  expect(text).toMatch(/white-space:\s*nowrap/);
-  expect(text).toMatch(/text-overflow:\s*ellipsis/);
-  expect(text, "a flex or grid box here would be the anonymous item again").not.toMatch(
-    /display:\s*(inline-)?(flex|grid)/,
-  );
-});
-
 // A LINK INSIDE A CLAMPED FACT WRAPS. `.t-link` is `nowrap`, and inside the
 // fact's two-line clamp a linked unit chain was one line cut at the track's
 // edge with no ellipsis.
 test("a linked fact wraps with its clamp", () => {
   const css = sheet("frame.css");
   expect(block(css, ".fact-value .t-link")).toMatch(/white-space:\s*normal/);
-});
-
-test("the crumb floor is the last part's alone", () => {
-  const css = sheet("frame.css");
-  // `min-width: 0` is not a floor — it is what lets the ellipsis happen — so
-  // the rule forbids any OTHER value.
-  expect(block(css, ".crumb-here")).not.toMatch(/min-width:\s*(?!0\b)[^;\s]/);
-  expect(block(css, ".crumb-part:last-child > .crumb-here")).toMatch(/min-width:\s*5ch/);
 });
 
 // A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
@@ -1569,9 +1524,22 @@ test("the lens slot vanishes when empty and takes the slack beside the trail whe
   const css = sheet("frame.css");
   expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
   expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
-  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .crumbs");
+  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail");
   expect(trail).toMatch(/flex:\s*0 100 auto/);
-  expect(trail).toMatch(/max-width:\s*60%/);
+  expect(trail).toMatch(/max-width:\s*62%/);
+});
+
+// ON A PHONE THE LENSES TAKE A ROW OF THEIR OWN, under the line the drawer
+// toggle, the trail and the one action share, and scroll sideways if they
+// must: four chips beside a scope's name cut it to a stub.
+test("on a phone's width the lenses are a row of their own that scrolls", () => {
+  const phone = atRuleBody(sheet("frame.css"), `@container page (width < ${PHONE_BREAKPOINT}px)`);
+  const row = block(phone, ".page-lenses:not(:empty)");
+  expect(row).toMatch(/flex:\s*1 0 100%/);
+  expect(row).toMatch(/overflow-x:\s*auto/);
+  expect(block(phone, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail")).toMatch(
+    /max-width:\s*none/,
+  );
 });
 
 // AN OBJECT'S TAB STRIP IS AS WIDE AS WHAT HOLDS IT. `ObjectTabs` folds the

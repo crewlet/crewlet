@@ -76,8 +76,8 @@ export type Screen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
-  | { screen: "work" }
   | { screen: "work-projects" }
+  | { screen: "work-tasks" }
   | { screen: "work-views"; id?: string }
   | { screen: "work-history" }
   | { screen: "work-search" }
@@ -207,7 +207,9 @@ type Under = (label: string) => string;
 
 function work(rest: string[], screen: Make, under: Under): Route {
   const [first, second] = rest;
-  if (first === undefined) return screen({ screen: "work" });
+  // WORK OPENS ON ITS PROJECTS: the landing is All projects' first lens, and
+  // the company's task list is the lens beside it.
+  if (first === undefined) return screen({ screen: "work-projects" });
   if (first === "views") {
     if (rest.length > 2) return missing("work", under("Work"));
     return screen(second ? { screen: "work-views", id: second } : { screen: "work-views" });
@@ -215,15 +217,11 @@ function work(rest: string[], screen: Make, under: Under): Route {
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
   // its own route, and a change is a record on the item it changed.
-  if (first === "projects" || first === "history" || first === "search") {
+  if (first === "tasks" || first === "history" || first === "search") {
     if (rest.length > 1) return missing("work", under("Work"));
     return screen({
       screen:
-        first === "projects"
-          ? "work-projects"
-          : first === "history"
-            ? "work-history"
-            : "work-search",
+        first === "tasks" ? "work-tasks" : first === "history" ? "work-history" : "work-search",
     });
   }
   if (rest.length > 1) return missing("work", under("Work"));

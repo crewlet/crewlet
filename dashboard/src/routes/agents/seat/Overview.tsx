@@ -508,7 +508,7 @@ function AssignedWork({
       <Card.Header
         actions={
           total > 0 ? (
-            <a className="t-link" href={href(["work"], { assignee: seat.handle })}>
+            <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
               All {total.toLocaleString()}
               {work.data?.total_capped ? "+" : ""}
             </a>

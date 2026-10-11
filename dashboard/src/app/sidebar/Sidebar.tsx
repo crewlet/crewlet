@@ -5,12 +5,14 @@
  *
  * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
  * (Home, Inbox, My work), then the company's five, and Settings at the foot.
- * Then four LIVE SHORTCUTS, each a real object with its own path: the
- * company's projects, the views this reader pinned, the pages they starred,
- * and the turns running now. Nothing else. A workspace's own sections are tabs
- * in its page header and its objects are rows on the section that lists them;
- * a sidebar that carried either becomes a tree with a different shape on every
- * screen, which is the two-column navigation this replaced.
+ * Then three LIVE SHORTCUTS, each a real object with its own path: the views
+ * this reader pinned, the pages they starred, and the turns running now.
+ * Nothing else. A workspace's own sections are tabs in its page header and its
+ * objects are rows on the section that lists them; a sidebar that carried
+ * either becomes a tree with a different shape on every screen, which is the
+ * two-column navigation this replaced. The company's projects are no group
+ * here for that reason: a project is a scope of Work, switched where Work's
+ * trail names it (`header/ProjectSwitcher.tsx`).
  *
  * # Running is the way to a turn from anywhere
  *
@@ -29,7 +31,7 @@
  * two kinds of figure are two props: a BADGE is how many things are waiting
  * on the reader (the Inbox's unread primary notices, the one accent fill in
  * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a project's open tasks, a pinned view's total). A
+ * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
  * # Settings is never hidden
@@ -49,7 +51,7 @@ import {
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { ActivityGlyph, KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import { WORKSPACES, workspaceOf, type WorkspaceRow } from "~/app/nav.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
@@ -61,9 +63,7 @@ import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
 import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
-import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
-import { routeProject } from "../palette/hits.ts";
-import { useOpenNewTask } from "../newTask.ts";
+import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
@@ -72,9 +72,6 @@ import { HealthCard, healthReading } from "./HealthCard.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
-
-/** How many projects the sidebar asks for: the engine's own page of them. */
-const PROJECTS_PAGE = 200;
 
 export function Sidebar({
   onSearch,
@@ -256,9 +253,6 @@ export function Sidebar({
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        <RailBoundary label="Projects" resetKey={at}>
-          <ProjectsSection path={route.path} />
-        </RailBoundary>
         <RailBoundary label="Pinned" resetKey={at}>
           <PinnedSection
             path={route.path}
@@ -317,55 +311,6 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
         <a className={className} {...link} onPointerEnter={warm} onFocus={warm} />
       )}
     />
-  );
-}
-
-/**
- * The company's projects, each as its key and name, with its open work.
- *
- * THE ENGINE'S MAINTAINED CENSUS, not a count over a page: the project row
- * carries `task_counts`, so the sidebar sums what is still to do — waiting and
- * started — with no aggregation of its own. A project the answer carries no
- * census for draws no figure rather than a zero.
- */
-function ProjectsSection({ path }: { path: string[] }) {
-  const projects = useQuery("work_projects", { limit: PROJECTS_PAGE }, { pollMs: 120_000 });
-  const openNewTask = useOpenNewTask();
-  const rows = projects.data?.projects ?? [];
-  if (rows.length === 0) return null;
-  // THE PROJECT A READER IS INSIDE is the one marked — its page, or an item
-  // filed in it, whose key names the project — and the one this group's `+`
-  // files into. THE ROUTE'S OWN RESOLVER, the one the sidebar's head `+` asks:
-  // the path's second segment with a number stripped read every other Work
-  // page as a project, so on `#/work/views` this `+` offered "New task in
-  // views" and opened the sheet on a project called `views`, and on a task
-  // opened by its uuid it named the uuid.
-  const inside = routeProject(path);
-  return (
-    <SidebarNav.Group
-      label="Projects"
-      // A TASK IN A PROJECT — the one the reader is inside, preselected, or
-      // the sheet's own choice when they are in none. Not "New project": a
-      // project is minted by the company configuration, never by hand.
-      action={{
-        label: inside ? `New task in ${inside}` : "New task in a project",
-        icon: <PlusGlyph size="sm" />,
-        onClick: () => openNewTask(inside ? { project: inside } : {}),
-      }}
-    >
-      {rows.map((p) => (
-        <NavRow
-          key={p.key}
-          label={p.name || p.key}
-          lead={p.key}
-          path={["work", p.key]}
-          current={inside === p.key}
-          count={
-            p.task_counts == null ? undefined : { value: unfinished(p.task_counts), label: "open" }
-          }
-        />
-      ))}
-    </SidebarNav.Group>
   );
 }
 

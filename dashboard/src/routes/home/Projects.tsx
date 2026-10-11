@@ -64,7 +64,7 @@ export function Projects() {
           read.data && rows.length === 0
             ? {
                 title: "No projects yet",
-                hint: "Add one under Work › Projects to file work into it.",
+                hint: "Add one with New project, in Work, to file work into it.",
               }
             : undefined
         }
@@ -84,7 +84,7 @@ export function Projects() {
           ))}
         </ul>
         {rows.length > PROJECT_ROWS && (
-          <a className="home-card-more t-link" href={href(["work", "projects"])}>
+          <a className="home-card-more t-link" href={href(["work"])}>
             {`All ${plural(rows.length, "project")}`}
           </a>
         )}

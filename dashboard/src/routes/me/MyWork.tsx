@@ -53,8 +53,8 @@
  *
  * # Two sections are the work list, narrowed to one person
  *
- * The Queue and Asked by me are `routes/work/ItemsView.tsx` — the same
- * component `#/work` and a project's Items lens are — held here by an
+ * The Queue and Asked by me are `routes/work/ItemsView.tsx`, the same
+ * component `#/work/tasks` and a project's Tasks lens are, held here by an
  * [ItemsHost] that fixes the one thing the section IS (who holds the work; who
  * is waiting on an answer about it) and what it opens on, and leaves the shape,
  * the grouping, the order, the columns and every other filter to the reader,
@@ -329,7 +329,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // two links the bar draws inline everywhere wider.
   usePageMenu([
     { key: "inbox", label: "Inbox", onSelect: () => nav.to(["inbox"]) },
-    { key: "all-work", label: "All work", onSelect: () => nav.to(["work"]) },
+    { key: "all-work", label: "All work", onSelect: () => nav.to(["work", "tasks"]) },
   ]);
   const setBy = person.data?.priorities_set_by;
   const setByName = setBy ? (chrome.seatName?.(setBy) ?? setBy) : "";
@@ -397,7 +397,7 @@ export function MyWork({ section }: { section: MeSection }) {
           <a className="t-link" href={href(["inbox"])}>
             Inbox →
           </a>
-          <a className="t-link" href={href(["work"])}>
+          <a className="t-link" href={href(["work", "tasks"])}>
             All work →
           </a>
         </span>

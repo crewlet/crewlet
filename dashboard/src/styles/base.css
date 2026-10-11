@@ -78,7 +78,7 @@ p {
    is the shape a default takes when it is wrong: the exceptions outnumber it.
 
    So the frame's own hover vocabulary carries it instead. The sidebar's rows,
-   `.section-tab` and `.crumb-link` already answer a pointer by moving to
+   `.section-tab` and the trail's crumbs already answer a pointer by moving to
    `--color-text-primary`, and a link does the same: in dark the accent ink
    (#a9b0ff) brightens toward near-white, in light the violet (#4f51bd) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
@@ -119,7 +119,7 @@ a:hover {
    forced colours is the one mode where that currency does not exist: the UA
    forces `color` to LinkText in BOTH states, so the step is unobservable, and
    it composites the 4–5% row wash onto its own Canvas as nothing. Measured in
-   Chromium with `forced-colors: active`: after the reset, `.crumb-link`,
+   Chromium with `forced-colors: active`: after the reset, a crumb,
    `.t-link`, `.cell-seat`, `.work-col-foot a` and every prose register render
    pixel-identical hovered and unhovered. Only a row that paints a wash on
    hover still answers, and only because its wash happens to survive.
@@ -372,7 +372,6 @@ img {
 
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
-.crumb-link,
 .section-tab,
 .health-card,
 .user-block-who,

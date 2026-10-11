@@ -120,7 +120,7 @@ test("a revision is named by its summary, and the crumb leaves the mono face", a
   await settle();
 
   expect(here()?.textContent).toBe("connect datadog");
-  expect(here()?.classList.contains("mono"), "prose drawn in the mono face").toBe(false);
+  expect(here()?.classList.contains("is-mono"), "prose drawn in the mono face").toBe(false);
   expect(trail().textContent, "the trail still carries the id").not.toContain("01JCFGAAAA");
   expect(document.title).toBe("connect datadog · Crewlet");
   expect(recents()).toEqual(["connect datadog"]);
@@ -133,7 +133,7 @@ test("a revision with no summary keeps its id, in the mono face", async () => {
   await settle();
 
   expect(here()?.textContent).toBe(UNNAMED);
-  expect(here()?.classList.contains("mono")).toBe(true);
+  expect(here()?.classList.contains("is-mono")).toBe(true);
   expect(recents(), "the header's placeholder reached the palette").not.toContain(
     "No summary was written",
   );

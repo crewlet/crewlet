@@ -727,7 +727,7 @@ test("the engine's own empty-company answer draws the no-work panel", async () =
 // read both as the first: a company with four archived projects holding every
 // item it ever filed was told "nothing can be filed until a unit declares a
 // `project` key, and this company has none", which is false twice over and is
-// the opposite of what `#/work/projects` said beside it. The census is what
+// the opposite of what `#/work` said beside it. The census is what
 // tells them apart, which is why the answer carries both counts whatever the
 // limit.
 test("a company whose every project is archived is not told it has none", async () => {
@@ -749,7 +749,7 @@ test("a company whose every project is archived is not told it has none", async 
   // AND IT GOES TO THEM. The reader's next move is the projects rather than
   // the scope switch, so the sentence carries the way there.
   const link = screen.getByRole("link", { name: /See them under Archived/ });
-  expect(link.getAttribute("href")).toBe("#/work/projects?shown=archived");
+  expect(link.getAttribute("href")).toBe("#/work?shown=archived");
 });
 
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
@@ -1576,7 +1576,7 @@ test("the strip holds what somebody saved, never the five shapes", async () => {
     within(strip)
       .getAllByRole("button")
       .map((el) => el.textContent),
-  ).toEqual(["All work", "Overdue, by owner"]);
+  ).toEqual(["All tasks", "Overdue, by owner"]);
 });
 
 // AND THE SHAPE IS ITS OWN KEY, so switching a saved view to another drawing
@@ -1710,7 +1710,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   serving({ work_items: { items: [], groups: [], complete: true } });
   mountWork();
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "All work", pressed: true })).toBeTruthy(),
+    expect(screen.getByRole("button", { name: "All tasks", pressed: true })).toBeTruthy(),
   );
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
   const more = screen.getByRole("link", { name: "All saved views" });
@@ -1719,7 +1719,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
   // rather than over the container, so a number here would read as the
   // container's size and be the size of whatever is narrowed.
-  expect(screen.getByRole("button", { name: "All work" }).textContent).toBe("All work");
+  expect(screen.getByRole("button", { name: "All tasks" }).textContent).toBe("All tasks");
 });
 
 // (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,

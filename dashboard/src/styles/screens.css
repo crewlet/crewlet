@@ -8749,8 +8749,9 @@ a.live-row:focus-visible {
   text-wrap: pretty;
 }
 
-/* A PROJECT'S ITEMS LENS, with its open count: the kit's Count, carrying "open"
-   for a screen reader, set beside the word the way the tab's own count is. */
+/* A LENS WITH ITS FIGURE (`lensLabel` in PageActions.tsx): the kit's Count,
+   carrying its noun for a screen reader, set beside the word the way a tab's
+   own count is. */
 .lens-count {
   display: inline-flex;
   align-items: center;

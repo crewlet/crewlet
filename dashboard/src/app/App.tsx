@@ -94,10 +94,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Inbox />;
     case "me":
       return <MyWork section={route.section} />;
-    case "work":
-      return <Work />;
     case "work-projects":
       return <Projects />;
+    case "work-tasks":
+      return <Work />;
     case "work-views":
       return route.id ? <SavedViews key={route.id} id={route.id} /> : <SavedViews />;
     case "work-history":

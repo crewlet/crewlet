@@ -20,11 +20,13 @@
  *
  * # The three nouns, stated once and asserted in router.test.ts
  *
- *   - A SIDEBAR ROW is a workspace, or a live shortcut to a project, a pinned
- *     view, a starred page or a running turn.
+ *   - A SIDEBAR ROW is a workspace, or a live shortcut to a pinned view, a
+ *     starred page or a running turn. A project is not one: it is a scope of
+ *     Work, switched where the trail names it.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer —
- *     `tabs` in the page header, `column` for Settings, or `tree` for
- *     Knowledge, whose column also holds its spaces and pages.
+ *     `tabs` in the page header, `lenses` beside Work's scope in the trail,
+ *     `column` for Settings, or `tree` for Knowledge, whose column also holds
+ *     its spaces and pages.
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1–9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -51,8 +53,13 @@ export type Workspace =
  * of them beside the screen (Settings), or a `tree` — Knowledge, whose column
  * is its spaces and pages as well as its sections, drawn by the workspace's
  * own chunk (`routes/knowledge/KnowledgeTree.tsx`).
+ *
+ * `lenses` is Work's. Its sections are the lenses of the scope the trail
+ * names, All projects, drawn beside the trail's switcher the way a project
+ * draws its own lenses, so the bar reads one way in either scope and Work
+ * keeps no row of tabs of its own.
  */
-export type SectionRenderer = "tabs" | "column" | "tree" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "tree" | "none";
 
 /** Where a workspace's row sits in the sidebar. */
 export type SidebarPlace = "you" | "workspace" | "foot";
@@ -231,38 +238,45 @@ export const WORKSPACES: WorkspaceRow[] = [
     hint: "Projects and tasks, with agents as first-class assignees",
     chord: "w",
     place: "workspace",
-    renderer: "tabs",
+    // THE SCOPE'S LENSES, beside the switcher in the trail: All projects'
+    // lenses are these three sections, a project's are its own `lens=` tabs,
+    // and both draw alike (see [SectionRenderer]).
+    renderer: "lenses",
     sections: [
+      {
+        // WORK OPENS ON ITS PROJECTS: the first question about the company's
+        // work is where it is filed, and every project is one row away from
+        // its own board here.
+        key: "projects",
+        label: "Projects",
+        icon: "columns-3",
+        path: ["work"],
+        hint: "Every project, who leads it, and how far along it is",
+      },
       {
         key: "tasks",
         label: "Tasks",
         icon: "list",
-        path: ["work"],
+        path: ["work", "tasks"],
         hint: "Every task in the company, as a list, a board, a timeline, a calendar or a table",
       },
       {
-        // THE CONTAINERS, AS A PLACE OF THEIR OWN. An overview of the projects
-        // is a different question from "what is there", and a different
-        // question is a different page.
-        key: "projects",
-        label: "Projects",
-        icon: "columns-3",
-        path: ["work", "projects"],
-        hint: "Every project, who leads it, and how far along it is",
+        key: "history",
+        label: "History",
+        icon: "chart-no-axes-gantt",
+        path: ["work", "history"],
+        hint: "Every change to the company's work, over a window you choose",
       },
+      // ADDRESSES, NOT LENSES: a saved view is reached from the view strip,
+      // Pinned and ⌘K, and ranked search from ⌘K, so neither is a lens of a
+      // scope.
       {
         key: "views",
         label: "Saved views",
         icon: "layout-dashboard",
         path: ["work", "views"],
         hint: "Every saved view, who owns it and which are pinned",
-      },
-      {
-        key: "history",
-        label: "Every change",
-        icon: "chart-no-axes-gantt",
-        path: ["work", "history"],
-        hint: "Every change to the company's work, over a window you choose",
+        tab: false,
       },
       {
         key: "search",
@@ -270,6 +284,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "search",
         path: ["work", "search"],
         hint: "Rank the company's work against a phrase, the way an agent does",
+        tab: false,
       },
     ],
   },
@@ -619,7 +634,7 @@ export function workspaceOf(path: string[]): Workspace | "" {
  * addressed by its NAME — its `id:` is a guarded config field.)
  */
 export const RESERVED_SEGMENTS: string[] = [
-  "projects",
+  "tasks",
   "views",
   "history",
   "search",
@@ -703,8 +718,8 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
  * The section a path is in: the section whose path is the LONGEST prefix of
  * it. `#/live/turns/abc` is in Turns, `#/live` is in Now running, and a path
  * under no section (a project, an item) is in the workspace's landing section
- * only where that section's path is a prefix of it — `#/work/ENG` is in Tasks,
- * which is where the reader reached it from.
+ * only where that section's path is a prefix of it: `#/work/ENG` is in
+ * Projects, which is where the reader reached it from.
  */
 export function sectionOf(path: string[]): Section | undefined {
   const row = workspaceRow(workspaceOf(path));
