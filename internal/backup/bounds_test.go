@@ -115,16 +115,19 @@ func takeAsync(t *testing.T, svc *backup.Service, dir string) <-chan error {
 	return done
 }
 
-// A BACKUP READS UP TO ITS BOUND OF OBJECTS AT ONCE, AND NEVER MORE. Four at a
-// time, a first copy of a terabyte of objects is hours on a link that carries
-// it in minutes sixteen wide — and the trim hold covers the whole copy; with no
-// bound it would flood the prefix the company's own downloads share.
+// A BACKUP READS UP TO ITS BOUND OF OBJECTS AT ONCE, AND NEVER MORE. A first
+// copy is bound by each GET's first byte, so too few out leaves the link idle
+// for hours of a copy the trim hold spans — sixteen at a 100 ms first byte
+// took the large model's first copy to about five hours where thirty-two took
+// about three (BenchmarkCarry) — and with no bound it would flood the prefix
+// the company's own downloads share.
 func TestABackupReadsAtMostItsBoundAtOnce(t *testing.T) {
 	t.Parallel()
-	// SIXTEEN, the value backupFetchConcurrency's doc derives: a change to it
-	// is a decision this test makes somebody restate.
-	if backup.FetchConcurrency != 16 {
-		t.Fatalf("the backup reads %d objects at once; its doc derives sixteen", backup.FetchConcurrency)
+	// THIRTY-TWO, the value backupFetchConcurrency's doc derives and
+	// BenchmarkCarry measures: a change to it is a decision this test makes
+	// somebody restate.
+	if backup.FetchConcurrency != 32 {
+		t.Fatalf("the backup reads %d objects at once; its doc derives thirty-two", backup.FetchConcurrency)
 	}
 	db := openStore(t)
 	files, _ := filesStore(t)
