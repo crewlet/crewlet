@@ -79,6 +79,12 @@
 // key that makes the second of those safe. It also abandons, past the same
 // grace, the uploads a backend began and never finished ([Backend.Pending]),
 // which no listing of the objects shows.
+//
+// A REQUIRED DECLARATION ALSO NAMES ITS LOG, and how one record of it names
+// objects ([ReferenceTable.Records], the domain's own decoder): a backup
+// restores a copy of the rows and replays the log from the copy's position, so
+// what it owes is what the copy names AND what every record it replays names
+// (internal/backup). The collector reads rows alone and never the log.
 package objstore
 
 import (
@@ -359,7 +365,73 @@ type ReferenceTable struct {
 	// collection ([Retired]). Stated by every declaration — see [Standing]
 	// for why there is no default.
 	Standing Standing
+
+	// Log is the stream of the state log whose applier writes the table —
+	// Domain's log, by its stream name — and Deferred the table where that
+	// domain's applier keeps the records of it this node could not apply
+	// yet (statelog's DeferredTable).
+	//
+	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup): a
+	// restore brings the copy back and replays that log from the copy's
+	// position — and a build that can read a deferred record applies it —
+	// so the objects the restored rows name include every object a record
+	// of either names. A Required table states both
+	// ([ReferenceTable.ValidateLog]); a retired one may leave them empty,
+	// since no backup carries a retired reference (ADR-0033).
+	Log      string
+	Deferred string
+
+	// Records reads ONE record of Log, the bytes the broker stores, and
+	// answers every row of THIS table the record writes: the row
+	// ([RecordReference.NamedBy], spelled with [JoinOwner] as
+	// [ReferenceTable.ScanReferences] spells it) and the object it names
+	// once the record applies — or none, for a record leaving the row
+	// naming nothing. Nil and no error for a record that writes no row of
+	// the table; [ErrRecordUnreadable] (wrapped) for one this build cannot
+	// read that may write one.
+	//
+	// THE DECLARING DOMAIN'S OWN DECODE of its records, never a second
+	// reading of them: the domain's applier and this function share one
+	// decoder, and the domain's own test holds what one says a record
+	// writes to what the other wrote. For a record this build cannot read —
+	// a newer version, or a kind it has never heard of — WHETHER IT MAY
+	// write the table is answered from what every build reads of it (the
+	// tracker's: its kind and the scope its writer stated), never from what
+	// this build's applier does with a kind, which says nothing about what
+	// a newer build's does.
+	Records func(payload []byte) ([]RecordReference, error)
 }
+
+// RecordReference is what one record of a declared table's log writes into
+// one row of the table.
+type RecordReference struct {
+	// NamedBy is the row, as [ReferenceTable.ScanReferences] spells it:
+	// [JoinOwner] over the declaration's owner values.
+	NamedBy string
+
+	// Object is what the row names once the record applies, where Names.
+	Object Object
+
+	// Names is false for a record that leaves the row naming no object — a
+	// removal.
+	Names bool
+}
+
+// ErrRecordUnreadable is a record of a declared table's log that this build
+// cannot read and that may write the table — a newer build's, or one of a kind
+// this build has never heard of. A backup refuses rather than guesses, since
+// the record may name an object the restore needs (internal/backup).
+var ErrRecordUnreadable = errors.New("objstore: a log record this build cannot read may name an object")
+
+// JoinOwner is how a row's owner values read as one name — "/" between them, in
+// the order a declaration's Owner columns list them: a project and a path.
+//
+// THE ONE JOIN: [ReferenceTable.ScanReferences] spells a row's name with it
+// and a domain's [ReferenceTable.Records] spells a record's with it, so the
+// two can never be spelled two ways. A function rather than a method on the
+// declaration because a domain's Records is a value IN its declaration, and
+// reaching the declaration from inside it would be an initialisation cycle.
+func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 
 // Standing is what a declared table's rows are to the company: references it
 // is owed, or retired ones that keep their objects only for a grace — ADR-0033,
@@ -423,6 +495,67 @@ func (t ReferenceTable) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateLog refuses a Required declaration that does not say which log
+// writes it, where its domain keeps the records of it it could not apply, or
+// how one record of that log names its objects; a Retired one needs none of
+// them, since no backup carries it.
+//
+// APART FROM [ReferenceTable.Validate], which every reader of a declaration
+// asks: the collector reads rows alone, never a log, and a table its suite
+// declares to exercise the collection needs no reader of a log nobody writes.
+// The backup asks both, and the one list's gate holds every declaration it
+// carries to both (internal/objstore/references).
+func (t ReferenceTable) ValidateLog() error {
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	if t.Standing != Required {
+		return nil
+	}
+	var missing []string
+	if strings.TrimSpace(t.Log) == "" {
+		missing = append(missing, "Log (its domain's stream)")
+	}
+	if !identifier.MatchString(t.Deferred) {
+		missing = append(missing, "Deferred (its domain's deferred-record table)")
+	}
+	if t.Records == nil {
+		missing = append(missing, "Records (its domain's reader of one record)")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("objstore: %s is Required and does not say how its log names "+
+			"objects: set %s — a backup carries what the log a restore replays names, "+
+			"and cannot read a log it is not told about", t.Table, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// DeferredRecordsAfter is the statement answering the next n records of the
+// log the declaring domain's applier deferred, in log order, its one argument
+// the packed position the page before ended at (0 for the first): each one's
+// position and its bytes, as the framework keeps them (statelog's
+// deferred-record table, whose columns every domain's shares).
+//
+// A PAGE, NEVER THE TABLE: the deferred records of a node that sat out a long
+// rolling upgrade are every record of a newer version and every later one
+// whose scope met one, each as large as a record may be, and the framework
+// walks that backlog in pages itself rather than loading it whole. The
+// position is the table's INTEGER PRIMARY KEY, so each page is a seek.
+func (t ReferenceTable) DeferredRecordsAfter(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("objstore: a page of %d deferred records", n)
+	}
+	if err := t.ValidateLog(); err != nil {
+		return "", err
+	}
+	if t.Standing != Required {
+		return "", fmt.Errorf("objstore: %s is declared %s, and no backup reads the "+
+			"records its log deferred", t.Table, t.Standing)
+	}
+	return `SELECT position, payload FROM ` + t.Deferred +
+		` WHERE position > ? ORDER BY position LIMIT ` + fmt.Sprint(n), nil
 }
 
 // ObjectsAmong is the statement answering which of n given keys the table
@@ -514,8 +647,9 @@ func (t ReferenceTable) ScanObjectsAmong(rows Rows, visit func(Key) error) error
 
 // ScanReferences hands visit every row rows answers to [ReferenceTable.ReferencesAfter]'s
 // statement over t: the [Object] the row names, and namedBy — the row's owner
-// columns joined by "/", the file a person would look the object up as. The
-// caller closes rows; see [ReferenceTable.ScanObjectsAmong] for why the decoder is here.
+// columns joined by [JoinOwner], the file a person would look the object up as.
+// The caller closes rows; see [ReferenceTable.ScanObjectsAmong] for why the
+// decoder is here.
 func (t ReferenceTable) ScanReferences(rows Rows, visit func(obj Object, namedBy string) error) error {
 	var (
 		key, hash string
@@ -542,7 +676,7 @@ func (t ReferenceTable) ScanReferences(rows Rows, visit func(obj Object, namedBy
 		for i, o := range owner {
 			parts[i] = o.String
 		}
-		if err := visit(Object{Key: k, Hash: h, Size: size}, strings.Join(parts, "/")); err != nil {
+		if err := visit(Object{Key: k, Hash: h, Size: size}, JoinOwner(parts...)); err != nil {
 			return err
 		}
 	}
