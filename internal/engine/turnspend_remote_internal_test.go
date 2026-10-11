@@ -179,7 +179,10 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	if err != nil {
 		t.Fatalf("phase.NewRegistry: %v", err)
 	}
-	e := &Engine{backends: &Backends{Queue: q}, router: router}
+	// IN NORMAL MODE, as [New] starts a node unless told otherwise: the mode
+	// is what decides whether this node hands out a writer at all, a routed
+	// one included ([Engine.writers]), and the charge is a write.
+	e := &Engine{backends: &Backends{Queue: q}, router: router, mode: statelog.ModeNormal}
 	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),

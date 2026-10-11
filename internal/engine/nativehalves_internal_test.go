@@ -31,30 +31,8 @@ import (
 // with each half, a node without `data` with each half — and asks each reader.
 func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 	t.Parallel()
-	q := memory.NewBroker().Client()
-	if err := q.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Session: estate.NewSession(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A DATA NODE'S RUNTIME AS ITS BUILD MAKES IT: the reader, the writer
-	// and the half's search are built together or not at all
-	// ([Engine.startNative]), and the item search under either half.
-	own := func(runTracker, wiki bool) *native {
-		n := &native{itemSearch: &tracker.Searcher{}}
-		if runTracker {
-			n.trackerReader, n.writer = &tracker.Reader{}, &tracker.Writer{}
-		}
-		if wiki {
-			n.pageReader, n.pages, n.searcher = &pages.Reader{}, &pages.Store{}, &pages.Searcher{}
-		}
-		return n
-	}
+	router := halvesRouter(t)
+	own := ownRuntime
 	company := &Company{Config: &config.Company{
 		Knowledge: config.Knowledge{Backend: config.KnowledgeNative},
 	}}
@@ -145,4 +123,111 @@ func walkName(walk any) string {
 		return "nothing"
 	}
 	return runtime.FuncForPC(reflect.ValueOf(walk).Pointer()).Name()
+}
+
+// halvesRouter is an estate router over an in-memory queue, for a case that
+// asks which seams a node hands out rather than what they answer.
+func halvesRouter(t *testing.T) *estate.Router {
+	t.Helper()
+	q := memory.NewBroker().Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	router, err := estate.NewRouter(estate.RouterOptions{
+		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Session: estate.NewSession(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return router
+}
+
+// ownRuntime is a data node's runtime as its build makes it: the reader, the
+// writer and the half's search are built together or not at all
+// ([Engine.startNative]), and the item search under either half.
+func ownRuntime(runTracker, wiki bool) *native {
+	n := &native{itemSearch: &tracker.Searcher{}}
+	if runTracker {
+		n.trackerReader, n.writer = &tracker.Reader{}, &tracker.Writer{}
+	}
+	if wiki {
+		n.pageReader, n.pages, n.searcher = &pages.Reader{}, &pages.Store{}, &pages.Searcher{}
+	}
+	return n
+}
+
+// A NODE IN A MODE THAT PUBLISHES NOTHING HANDS OUT NO WRITER, WHATEVER IT
+// HOLDS — and goes on serving its reads.
+//
+// The mode is this node's promise that it starts nothing that writes
+// ([statelog.MaintenanceMode.Publishes]), and a write it routes to a data node
+// is one it starts. A node without `data` used to be exempt, on the reading
+// that the data node's mode was that node's to answer for: restarted into the
+// mode for a capacity window, which puts every data node in it too, it handed
+// its operator surfaces the router's writer, so a file's upload streamed up to
+// a gibibyte into the object store before a data node refused its row — as
+// `unavailable`, which a client retries — and left an object the collector,
+// which stands down in the mode, could not free until the window closed. Every
+// writer surface is handed its writer through the two seams asked here
+// ([Engine.trackerHalves], [Engine.pageHalves]) or the two operator accessors
+// over them, so each is asked of both kinds of node in every mode — normal
+// included, the control in which both hand their writers out.
+//
+// And a data node hands out only the writers its own write side holds, in any
+// mode: a half is counted by its reader, so a runtime holding a half's reader
+// and not its writer runs the half and writes none of it.
+func TestANodeInAMaintenanceModeHandsOutNoWriterWhateverItHolds(t *testing.T) {
+	t.Parallel()
+	router := halvesRouter(t)
+	readersAlone := &native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}}
+	for _, mode := range statelog.MaintenanceModes {
+		for _, shape := range []struct {
+			name   string
+			own    *native
+			remote *remoteNative
+			// writable is whether the node hands out writers in a mode
+			// that publishes.
+			writable bool
+		}{
+			{name: "a data node", own: ownRuntime(true, true), writable: true},
+			{name: "a data node holding readers alone", own: readersAlone},
+			{name: "a node without data", remote: &remoteNative{tracker: true, wiki: true},
+				writable: true},
+		} {
+			t.Run(string(mode)+"/"+shape.name, func(t *testing.T) {
+				t.Parallel()
+				e := &Engine{router: router, mode: mode}
+				if shape.own != nil {
+					e.native.Store(shape.own)
+				}
+				if shape.remote != nil {
+					e.remote.Store(shape.remote)
+				}
+				writes := mode.Publishes() && shape.writable
+
+				// THE READS ARE SERVED IN EVERY MODE — and the premise that
+				// this node runs both halves at all.
+				if reads := OperatorNative(e); !reads.Tracker || !reads.Wiki {
+					t.Fatalf("the operator is handed tracker=%v wiki=%v reads, want "+
+						"both in every mode", reads.Tracker, reads.Wiki)
+				}
+				if _, ok := e.trackerHalves(); ok != writes {
+					t.Errorf("the seats are handed tracker tools = %v, want %v", ok, writes)
+				}
+				if _, _, _, ok := e.pageHalves(); ok != writes {
+					t.Errorf("the seats are handed knowledge-base tools = %v, want %v",
+						ok, writes)
+				}
+				if _, ok := OperatorWorkWriter(e); ok != writes {
+					t.Errorf("the operator's surfaces are handed the tracker's writer "+
+						"= %v, want %v", ok, writes)
+				}
+				if _, ok := OperatorPageWriter(e); ok != writes {
+					t.Errorf("the operator's surfaces are handed the knowledge base's "+
+						"writer = %v, want %v", ok, writes)
+				}
+			})
+		}
+	}
 }
