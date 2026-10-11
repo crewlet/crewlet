@@ -1,9 +1,12 @@
 package engine_test
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -11,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -44,6 +48,75 @@ func TestAnEngineReadsTheEnvironmentItIsHanded(t *testing.T) {
 	}
 	if e.OtelReceiver() == nil {
 		t.Error("no telemetry receiver, though the handed environment names its URL")
+	}
+}
+
+// AN ENGINE SIGNS ITS PER-RUN TOKENS UNDER ITS WHOLE TIER A KEYRING.
+//
+// The telemetry receiver and the tool bridge are built from the keyring the
+// bootstrap carries — the active key mints and every key verifies — so a peer
+// part-way through a rolling rotation, holding the same keys with the other
+// one active, verifies what this engine mints and is verified by it, in both
+// directions. Built from the active key alone, or from no keyring, one
+// direction or the other fails, and nothing in the configuration looks wrong.
+func TestAnEngineSignsItsRunTokensUnderItsWholeKeyring(t *testing.T) {
+	t.Parallel()
+	material := func(fill byte) []byte { return bytes.Repeat([]byte{fill}, 32) }
+	env := config.MapSource{
+		mcpbridge.BaseURLVar:       "https://bridge.example.com",
+		sandbox.OtelReceiverURLVar: "https://otel.example.com",
+	}
+	e := newEngine(t, engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			b.Secrets = config.Secrets{ActiveKeyID: "k1", Keys: []config.SecretKey{
+				{ID: "k1", Material: secrets.EncodeKey(material(1))},
+				{ID: "k2", Material: secrets.EncodeKey(material(2))},
+			}}
+		}),
+		Environment: env,
+	})
+	flipped := secrets.Keyring{ActiveID: "k2", Keys: map[string][]byte{"k1": material(1), "k2": material(2)}}
+	lookup := func(name string) string { return env[name] }
+
+	// THE TELEMETRY RECEIVER, which any node of the fleet verifies for.
+	peerOtel, err := sandbox.BuildOtelReceiver(lookup, flipped)
+	if err != nil || peerOtel == nil {
+		t.Fatalf("the peer's receiver = %v, %v", peerOtel, err)
+	}
+	token := func(r *sandbox.OtelReceiver) string {
+		endpoint := r.EndpointFor("trace-abc", time.Hour)
+		return endpoint[strings.LastIndex(endpoint, "/otlp/")+len("/otlp/"):]
+	}
+	if got := peerOtel.Validate(token(e.OtelReceiver())); got != "trace-abc" {
+		t.Errorf("a peer that flipped refused the engine's OTLP token: %q", got)
+	}
+	if got := e.OtelReceiver().Validate(token(peerOtel)); got != "trace-abc" {
+		t.Errorf("the engine refused an OTLP token a flipped peer minted: %q", got)
+	}
+
+	// THE TOOL BRIDGE, whose peer verifies to tell a misrouted call from a
+	// forged one.
+	peerBridge, err := mcpbridge.Build(lookup, flipped)
+	if err != nil || peerBridge == nil {
+		t.Fatalf("the peer's bridge = %v, %v", peerBridge, err)
+	}
+	open := func(b *mcpbridge.Bridge) string {
+		t.Helper()
+		_ = b.Handler()
+		endpoint := b.Open(&mcpbridge.Session{RunID: "run-1", Handle: "ceo",
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)})
+		if endpoint == "" {
+			t.Fatal("a mounted bridge opened no endpoint")
+		}
+		t.Cleanup(func() { b.Close("run-1") })
+		return endpoint[strings.LastIndex(endpoint, "/")+1:]
+	}
+	if runID, reason := peerBridge.Miss(open(e.Bridge())); runID != "run-1" {
+		t.Errorf("a peer that flipped read the engine's bridge token as forged: %s", reason)
+	}
+	if runID, reason := e.Bridge().Miss(open(peerBridge)); runID != "run-1" {
+		t.Errorf("the engine read a flipped peer's bridge token as forged: %s", reason)
 	}
 }
 

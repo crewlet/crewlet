@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // What these tests protect.
@@ -20,51 +23,119 @@ import (
 // somewhere it should not be — or the token check is loose and anybody who
 // can reach the endpoint writes into the company's telemetry.
 
-// A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER.
+// otelTokens builds a minter, failing the test on a keyring it refuses.
+func otelTokens(t *testing.T, opts sandbox.OtelTokenOptions) *sandbox.OtelTokens {
+	t.Helper()
+	tokens, err := sandbox.NewOtelTokens(opts)
+	if err != nil {
+		t.Fatalf("NewOtelTokens: %v", err)
+	}
+	return tokens
+}
+
+// keyring builds a Tier A keyring from fixed material, so two calls with the
+// same fill are two nodes holding the same key.
+func keyring(active string, keys map[string]byte) secrets.Keyring {
+	out := secrets.Keyring{ActiveID: active, Keys: map[string][]byte{}}
+	for id, fill := range keys {
+		out.Keys[id] = bytes.Repeat([]byte{fill}, 32)
+	}
+	return out
+}
+
+// A TOKEN MINTED ON ONE NODE VERIFIES ON ANOTHER — THROUGH A KEYRING
+// ROTATION TOO.
 //
 // This is the property the whole design turns on. Minting and verifying
 // happen on different nodes of a fleet, since a box exports to whichever node
 // it can reach, and an in-memory store makes them the same process by
 // assumption: every trace that reached another node would be answered 401,
 // visible only as exporter retry noise inside a sandbox nobody watches.
-func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
+//
+// And a keyring rotates one restart at a time, so the receiver has to be built
+// from the WHOLE ring rather than its active key: here the node that has added
+// the new key mints under the old one, which the node still holding only the
+// old one verifies; and once the new key is active, a box launched before the
+// flip still exports to a node that flipped.
+func TestAnOtelTokenVerifiesOnAnotherNodeThroughARotation(t *testing.T) {
 	t.Parallel()
-	key := sandbox.OtelSigningKey([]string{"k1:material-one", "k2:material-two"})
+	env := func(name string) string {
+		if name == sandbox.OtelReceiverURLVar {
+			return "https://engine.internal"
+		}
+		return ""
+	}
+	build := func(keys secrets.Keyring) *sandbox.OtelReceiver {
+		t.Helper()
+		receiver, err := sandbox.BuildOtelReceiver(env, keys)
+		if err != nil || receiver == nil {
+			t.Fatalf("BuildOtelReceiver = %v, %v", receiver, err)
+		}
+		return receiver
+	}
+	token := func(r *sandbox.OtelReceiver, trace string) string {
+		return strings.TrimPrefix(r.EndpointFor(trace, time.Hour), "https://engine.internal/otlp/")
+	}
+	before := build(keyring("k1", map[string]byte{"k1": 1}))
+	added := build(keyring("k1", map[string]byte{"k1": 1, "k2": 2}))
+	flipped := build(keyring("k2", map[string]byte{"k1": 1, "k2": 2}))
 
-	minter := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: key})
-	verifier := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: key})
-
-	token := minter.Mint("trace-abc", time.Hour)
-	if got := verifier.Validate(token); got != "trace-abc" {
-		t.Fatalf("a token minted elsewhere validated to %q", got)
+	if got := before.Validate(token(added, "trace-abc")); got != "trace-abc" {
+		t.Errorf("a node that has not added the new key refused a token minted beside it: %q", got)
+	}
+	if got := added.Validate(token(before, "trace-abc")); got != "trace-abc" {
+		t.Errorf("a node that added the new key refused a token minted before it did: %q", got)
+	}
+	if got := flipped.Validate(token(added, "trace-abc")); got != "trace-abc" {
+		t.Errorf("a node that activated the new key refused a box launched before it: %q", got)
+	}
+	if got := added.Validate(token(flipped, "trace-abc")); got != "trace-abc" {
+		t.Errorf("a node that has not activated the new key refused a token minted under it: %q", got)
 	}
 
-	// THE KEY IS ORDER-INDEPENDENT, because two processes read the same
-	// keyring and nothing promises the same order — a map iteration or a
-	// re-ordered document would otherwise split a fleet in two.
-	reordered := sandbox.OtelSigningKey([]string{"k2:material-two", "k1:material-one"})
-	if sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: reordered}).
-		Validate(token) != "trace-abc" {
-		t.Error("the signing key depends on the keyring's order")
-	}
-
-	// AND A DIFFERENT KEYRING DOES NOT VERIFY, or the derivation would be
+	// AND A DIFFERENT KEYRING DOES NOT VERIFY, or the keyring would be
 	// decoration.
-	other := sandbox.OtelSigningKey([]string{"k1:someone-elses"})
-	if sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: other}).Validate(token) != "" {
-		t.Error("a token verified under an unrelated keyring")
+	other := build(keyring("k1", map[string]byte{"k1": 9}))
+	if got := other.Validate(token(before, "trace-abc")); got != "" {
+		t.Errorf("a token verified under an unrelated keyring as %q", got)
+	}
+}
+
+// AN OTLP TOKEN IS THE RECEIVER'S ALONE. Under one keyring, a token signed for
+// any other endpoint — the tool bridge's above all — is refused here, and one
+// signed in this receiver's own domain is not: the domain is a constant of
+// this receiver, never something a caller passes and could get wrong.
+func TestAnOtelTokenIsKeyedToTheReceiversDomain(t *testing.T) {
+	t.Parallel()
+	keys := keyring("k1", map[string]byte{"k1": 1})
+	tokens := otelTokens(t, sandbox.OtelTokenOptions{Keys: keys})
+	mint := func(domain string) string {
+		t.Helper()
+		signer, err := runtoken.New(runtoken.Options{Domain: domain, Keys: keys})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signer.Mint("trace-abc", time.Hour)
+	}
+	if got := tokens.Validate(mint("another-endpoint")); got != "" {
+		t.Errorf("a token signed for another endpoint validated as %q", got)
+	}
+	if got := tokens.Validate(mint(sandbox.OtelKeyDomain)); got != "trace-abc" {
+		t.Errorf("a token signed in the receiver's own domain validated as %q", got)
 	}
 }
 
 // A FORGED, MALFORMED OR EXPIRED TOKEN IS REFUSED — and the caller cannot
-// tell which, because telling it tells an attacker the same.
+// tell which, because telling it tells an attacker the same. The format's own
+// cases are runtoken's; these are the receiver's clock and keyring reaching
+// the signer.
 func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	clock := at
-	tokens := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-		Key: []byte("a-shared-signing-key"),
-		Now: func() time.Time { return clock },
+	tokens := otelTokens(t, sandbox.OtelTokenOptions{
+		Keys: keyring("k1", map[string]byte{"k1": 1}),
+		Now:  func() time.Time { return clock },
 	})
 	good := tokens.Mint("trace-abc", 10*time.Minute)
 	if tokens.Validate(good) != "trace-abc" {
@@ -74,11 +145,8 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 	for _, tc := range []struct{ name, token string }{
 		{"empty", ""},
 		{"not a token at all", "hello"},
-		{"too few parts", "v1.trace-abc.999"},
-		{"an unknown version", "v2" + good[2:]},
-		{"a tampered trace", strings.Replace(good, "trace-abc", "trace-xyz", 1)},
-		{"a tampered expiry", strings.Replace(good, ".", ".9", 1)},
 		{"a truncated signature", good[:len(good)-4]},
+		{"a per-process key's token", otelTokens(t, sandbox.OtelTokenOptions{}).Mint("trace-abc", time.Hour)},
 	} {
 		if got := tokens.Validate(tc.token); got != "" {
 			t.Errorf("%s validated to %q", tc.name, got)
@@ -96,7 +164,7 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 // A TOKEN IS SCOPED TO ONE TRACE, so one run's endpoint is not another's.
 func TestOtelTokensAreScopedToTheirRun(t *testing.T) {
 	t.Parallel()
-	tokens := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")})
+	tokens := otelTokens(t, sandbox.OtelTokenOptions{})
 	first := tokens.Mint("trace-one", time.Hour)
 	second := tokens.Mint("trace-two", time.Hour)
 	if first == second {
@@ -157,7 +225,7 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:           otelTokens(t, sandbox.OtelTokenOptions{}),
 		UpstreamEndpoint: server.URL,
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
 	})
@@ -192,7 +260,7 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +285,7 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:           otelTokens(t, sandbox.OtelTokenOptions{}),
 		UpstreamEndpoint: server.URL,
 	})
 	if err != nil {
@@ -238,7 +306,7 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal/",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{}),
 		// A real upstream, whose credential must NOT appear below.
 		UpstreamEndpoint: "https://collector.example",
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
@@ -290,7 +358,7 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +374,7 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 func TestAReceiverNeedsAnAddressTheBoxCanReach(t *testing.T) {
 	t.Parallel()
 	if _, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		Tokens: sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens: otelTokens(t, sandbox.OtelTokenOptions{}),
 	}); err == nil {
 		t.Fatal("a receiver with no base URL was built")
 	}
@@ -361,7 +429,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env := map[string]string{}
 	lookup := func(name string) string { return env[name] }
 
-	got, err := sandbox.BuildOtelReceiver(lookup, nil)
+	got, err := sandbox.BuildOtelReceiver(lookup, secrets.Keyring{})
 	if err != nil || got != nil {
 		t.Fatalf("an unset receiver URL built %v (%v)", got, err)
 	}
@@ -369,7 +437,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env[sandbox.OtelReceiverURLVar] = "https://engine.internal"
 	env[sandbox.OtelUpstreamEndpointVar] = "https://collector.example"
 	env[sandbox.OtelUpstreamHeadersVar] = "api-key=abc"
-	got, err = sandbox.BuildOtelReceiver(lookup, []string{"k1:material"})
+	got, err = sandbox.BuildOtelReceiver(lookup, keyring("k1", map[string]byte{"k1": 1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +446,13 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	}
 	if !got.Forwards() {
 		t.Error("a configured upstream reports no forwarding")
+	}
+
+	// A KEYRING THAT CANNOT SAY WHICH KEY MINTS IS REFUSED, rather than
+	// built into a receiver whose every endpoint nothing can verify.
+	broken := keyring("k9", map[string]byte{"k1": 1})
+	if got, err = sandbox.BuildOtelReceiver(lookup, broken); err == nil {
+		t.Errorf("a keyring with no usable active key built %v", got)
 	}
 }
 
@@ -392,7 +467,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{}),
 	})
 	if err != nil {
 		t.Fatal(err)

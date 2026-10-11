@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,13 +27,24 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
+		Tokens:           otelTokens(t),
 		UpstreamEndpoint: upstream,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return receiver
+}
+
+// otelTokens is a minter under a key of this process alone, which is all a
+// route case needs: the receiver that mints is the one that verifies.
+func otelTokens(t *testing.T) *sandbox.OtelTokens {
+	t.Helper()
+	tokens, err := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tokens
 }
 
 // tokenFor mints one run's token by reading it back out of its endpoint,
@@ -92,16 +104,23 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 	good := tokenFor(t, receiver, "trace-abc")
+	// The token spells its trace as a URL-safe field, so a tamper re-spells
+	// it the same way; a replace that found nothing would hand the route
+	// the good token and prove nothing.
+	field := base64.RawURLEncoding.EncodeToString
+	tampered := strings.Replace(good, field([]byte("trace-abc")), field([]byte("trace-xyz")), 1)
+	if tampered == good {
+		t.Fatalf("the token %q does not carry its trace where the case looks for it", good)
+	}
 
 	for _, tc := range []struct{ name, token string }{
 		{"no token at all", "not-a-token"},
-		{"a tampered trace", strings.Replace(good, "trace-abc", "trace-xyz", 1)},
+		{"a tampered trace", tampered},
 		{"a truncated signature", good[:len(good)-4]},
 		// A token minted with somebody else's key. This is the case that
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
-		{"another key's token", sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-			Key: []byte("attacker-key")}).Mint("trace-abc", time.Hour)},
+		{"another key's token", otelTokens(t).Mint("trace-abc", time.Hour)},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
 		if res.StatusCode != http.StatusUnauthorized {

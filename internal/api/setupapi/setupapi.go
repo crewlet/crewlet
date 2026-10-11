@@ -141,15 +141,18 @@ type Options struct {
 	// says where the seat's credential lives, which is what it can prove.
 	SlackApps func() map[string]string
 
-	// StateKeys is the Tier A keyring material the GitHub App state signer
-	// is keyed from, and it MUST be the same on every node that mints or
-	// validates a state: a fleet where the begin and the callback land on
-	// different nodes would otherwise refuse every completion.
+	// StateKeys is the Tier A keyring the GitHub App state is signed under,
+	// and it MUST be the fleet's own: a fleet where the begin and the
+	// callback land on different nodes would otherwise refuse every
+	// completion. The WHOLE ring — the active key signs and every key
+	// verifies — so a creation begun before one node of a rolling keyring
+	// rotation restarted still finishes on a node that did.
 	//
-	// Empty takes a per-process key, which is correct for one node and
-	// cannot work across two. That is a real deployment (a node with no
-	// secrets.keys), so it is not refused; the caller logs what it costs.
-	StateKeys []string
+	// The zero keyring takes a per-process key, which is correct for one
+	// node and cannot work across two. That is a real deployment (a node
+	// with no secrets.keys), so it is not refused; the caller logs what it
+	// costs. A keyring with no usable active key is refused.
+	StateKeys secrets.Keyring
 
 	// StateClaims is where a spent callback state is recorded, so no state
 	// is accepted twice. It has the same fleet requirement as StateKeys for
@@ -235,7 +238,11 @@ func New(opts Options) (*Service, error) {
 	// callback reaches the writer and the secret store through it), and one
 	// constructor for both halves leaves no window in which the begin route
 	// has a service with no flow to validate the state it would mint.
-	s.appFlow = newAppFlow(s, opts.StateKeys, opts.StateClaims)
+	flow, err := newAppFlow(s, opts.StateKeys, opts.StateClaims)
+	if err != nil {
+		return nil, err
+	}
+	s.appFlow = flow
 	return s, nil
 }
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
-	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // managedSetup is a node whose Tier A names `operator` as the company
@@ -140,10 +139,8 @@ func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 	); res.Code != http.StatusCreated {
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"test-material"}),
-		Now: func() time.Time { return pinned },
-	}).Mint(setupapi.StateSubject("sre-lead", "alice"), 15*time.Minute)
+	state := stateSigner(t, setupapi.StateDomain, stateKeys, func() time.Time { return pinned }).
+		Mint(setupapi.StateSubject("sre-lead", "alice"), 15*time.Minute)
 	_, err := s.setup.AppFlow().Complete(t.Context(), "one-time-code", state)
 	var managed *configapi.ManagedError
 	if !errors.As(err, &managed) {

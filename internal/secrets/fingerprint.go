@@ -24,10 +24,10 @@ package secrets
 // name different active keys, and one can hold a key the other has not received
 // yet or has already dropped. A fingerprint under the active key alone would
 // differ between them although the value is the same; one under a single key
-// derived from the whole ring — the run-token idiom, which hashes every key
-// together — would differ the moment one node added the new key. Taken under
-// every key, two nodes compare under the keys they share, and the rotation the
-// keyring exists to make zero-downtime never leaves a pair with none in common.
+// derived from the whole ring would differ the moment one node added the new
+// key. Taken under every key, two nodes compare under the keys they share, and
+// the rotation the keyring exists to make zero-downtime never leaves a pair
+// with none in common.
 //
 // # A CHECK beside each digest
 //

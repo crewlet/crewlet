@@ -60,7 +60,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
-	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("test-key"), BaseURL: server.URL})
+	bridge := testBridge(t, server.URL)
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
