@@ -27,7 +27,9 @@ function draw(source: string): HTMLElement {
 
 describe("a href", () => {
   it("allows the schemes a page legitimately links with", () => {
-    expect(safeHref("https://docs.crewlet.ai/x")).toBe("https://docs.crewlet.ai/x");
+    expect(safeHref("https://docs.crewlet.ai/engine/latest/")).toBe(
+      "https://docs.crewlet.ai/engine/latest/",
+    );
     expect(safeHref("http://example.com")).toBe("http://example.com");
     expect(safeHref("mailto:ops@example.com")).toBe("mailto:ops@example.com");
     expect(safeHref("#/work/ENG-1")).toBe("#/work/ENG-1");
@@ -70,10 +72,10 @@ describe("a href", () => {
     // form can reach different destinations, so a function that checked one
     // and handed back the other would be vouching for a string nobody
     // navigates to.
-    const noisy = "https://docs.crewlet.ai/\u0009guide";
+    const noisy = "https://docs.crewlet.ai/engine/latest/\u0009guides/deployment/";
     const got = safeHref(noisy);
     expect(got).not.toBe(noisy);
-    expect(got).toBe("https://docs.crewlet.ai/guide");
+    expect(got).toBe("https://docs.crewlet.ai/engine/latest/guides/deployment/");
     // And whatever comes back passes the check a second time, unchanged.
     expect(safeHref(got ?? "")).toBe(got);
   });
@@ -458,8 +460,12 @@ describe("plain text", () => {
     expect(plainText("- [ ] ship it\n- [x] merged")).toBe("[ ] ship it [x] merged");
     expect(plainText("use `**not bold**` here")).toBe("use **not bold** here");
     expect(plainText("![a diagram](x.png)")).toBe("a diagram");
-    expect(plainText("read [the guide](https://docs.crewlet.ai/x)")).toBe("read the guide");
-    expect(plainText("<https://docs.crewlet.ai/x>")).toBe("https://docs.crewlet.ai/x");
+    expect(plainText("read [the guide](https://docs.crewlet.ai/engine/latest/)")).toBe(
+      "read the guide",
+    );
+    expect(plainText("<https://docs.crewlet.ai/engine/latest/>")).toBe(
+      "https://docs.crewlet.ai/engine/latest/",
+    );
     expect(plainText("a\n\n---\n\nb")).toBe("a b");
     expect(plainText("| h |\n| --- |\n| c |")).toBe("h c");
   });

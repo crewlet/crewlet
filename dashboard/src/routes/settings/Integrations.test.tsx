@@ -9,6 +9,8 @@
  * answer is worth pinning.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import {
@@ -19,6 +21,7 @@ import {
   Reconcile,
   byConfiguredThenName,
   disconnectOrder,
+  docHref,
   entryState,
   phaseTone,
 } from "./Integrations.tsx";
@@ -28,6 +31,7 @@ import {
   type IntegrationTool,
   type IntegrationToolState,
 } from "~/contract/integrations.ts";
+import { repoRoot } from "~/test/engineFiles.ts";
 
 afterEach(cleanup);
 
@@ -348,6 +352,20 @@ test("every card is one engine tool with its surfaces", () => {
     expect(entry.surfaces.map((s) => s.key)).toEqual([
       ...INTEGRATION_TOOLS[entry.key as keyof typeof INTEGRATION_TOOLS],
     ]);
+  }
+});
+
+// LEARN MORE OPENS A PAGE THE SITE BUILDS. The address is composed from the
+// entry's `doc`, so no grep for a URL can see it: a tool whose page is named
+// wrongly, or a page renamed under the catalogue, is a 404 the reader meets
+// and nothing else would. The site publishes `docs/<path>.md` at
+// `/engine/<version>/<path>/`, every page a directory, so the slashless
+// spelling is a redirect on every click.
+test("every Learn more names an engine page, spelled as the site serves it", () => {
+  for (const entry of CATALOG) {
+    const page = join(repoRoot(), "docs", "integrations", `${entry.doc}.md`);
+    expect(existsSync(page), `${entry.key}: ${page}`).toBe(true);
+    expect(docHref(entry)).toBe(`https://docs.crewlet.ai/engine/latest/integrations/${entry.doc}/`);
   }
 });
 
