@@ -180,8 +180,12 @@ func answerable(deps OperatorDeps) bool {
 		a.Models != nil && a.Budget != nil && a.Actor != nil
 }
 
-// newAnswerKnowledge builds the answer tool with its ONE cache: the catalogue
-// is built once per surface, so this is one cache per node.
+// newAnswerKnowledge builds the answer tool with its ONE cache: one per
+// catalogue, and a node builds its catalogue again only when what it is built
+// from changes (a native half or a knowledge backend arriving), so this is one
+// cache per node for as long as the node serves the same company's halves —
+// and a catalogue built over another knowledge backend starts with none of the
+// last one's answers, which are not answers from this one.
 func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
 	return &answerKnowledge{
 		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,

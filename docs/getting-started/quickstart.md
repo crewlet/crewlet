@@ -490,8 +490,10 @@ The first revision brings up everything the company needs, the engine's own
 tracker and knowledge base included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — and the API that was already serving answers the board's
-and the pages' questions, and takes and serves a project's files, from that
-revision on, with no restart:
+and the pages' questions, takes and serves a project's files, and offers the
+tracker's and the knowledge base's tools to the dashboard's buttons and to
+your own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+from that revision on, with no restart:
 
 ```bash
 curl -X PUT http://localhost:8000/config \

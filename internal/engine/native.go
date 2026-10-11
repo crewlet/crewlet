@@ -2159,11 +2159,12 @@ func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
 func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
 
 // LiveDefaultProject is [ProjectOfSeat] over the engine's CURRENT chart, read
-// per call, for the surfaces built once and never rebuilt by an apply — the
-// operator surface, whose `create_work_item` files a PERSON's work, and the
-// dashboard's `viewer`, which says where that work lands. "" before any epoch
-// is running, and for a seat whose team and every team above it own no
-// project: the tool then refuses rather than guessing.
+// per call, for the surfaces an apply does not rebuild for a new chart — the
+// operator surface, whose `create_work_item` files a PERSON's work (built
+// again only when what it serves changes), and the dashboard's `viewer`, which
+// says where that work lands. "" before any epoch is running, and for a seat
+// whose team and every team above it own no project: the tool then refuses
+// rather than guessing.
 //
 // ONE DERIVATION FOR BOTH, because the viewer promising one project while the
 // create files into another is the exact disagreement this seam exists to
@@ -2183,11 +2184,11 @@ func LiveDefaultProject(e *Engine) func(handle string) string {
 // Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
 // before any epoch is running.
 //
-// For the surfaces that OUTLIVE an epoch — the scheduler's loop and the
-// operator's MCP surface, each built once and never rebuilt by an apply — so
-// that an apply moving the clock moves them with it on their next read. A
-// seat's own tools take the clock of the epoch their turn pinned instead; see
-// [Engine.workDeps].
+// For the surfaces that OUTLIVE an epoch — the scheduler's loop, built once,
+// and the operator's surface, built again only when what it serves changes and
+// never for a new clock — so that an apply moving the clock moves them with it
+// on their next read. A seat's own tools take the clock of the epoch their turn
+// pinned instead; see [Engine.workDeps].
 func (e *Engine) Zone() *time.Location {
 	c := e.Company()
 	if c == nil {
@@ -2200,11 +2201,12 @@ func (e *Engine) Zone() *time.Location {
 // is written, rather than the one that built the caller.
 //
 // The seat path captures its org deliberately — a seat's tools are cloned into
-// its lease and rebuilt on an apply — but a surface built once at startup has
-// no such rebuild, so it reads the engine per call. It is exported because the
-// OPERATOR MCP needs the same rule and there must not be a second copy of it:
-// built without one, that surface wrote comments whose @-mentions resolved to
-// nothing and woke nobody, while its own tool description promised otherwise.
+// its lease and rebuilt on an apply — but the operator surface is not rebuilt
+// for a new chart (only when what it serves changes), so it reads the engine
+// per call. It is exported because the OPERATOR MCP needs the same rule and
+// there must not be a second copy of it: built without one, that surface wrote
+// comments whose @-mentions resolved to nothing and woke nobody, while its own
+// tool description promised otherwise.
 func LiveMentions(e *Engine) builtin.MentionResolver {
 	return liveMentions{engine: e}
 }

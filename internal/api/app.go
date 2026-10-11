@@ -173,15 +173,37 @@ type NativeRoutes interface {
 	Nodes() (NodeGate, bool)
 }
 
+// OperatorSurface is the operator catalogue — the one tool set both of its
+// transports serve, MCP for an operator's own assistant and the act transport
+// for a person at the dashboard — ASKED ON EVERY REQUEST, for [NativeRoutes]'
+// reason: the catalogue is built from the native tracker and knowledge base
+// this node runs and from whether the company has a knowledge backend, and on
+// a node that booted with no company the first of those arrives with its first
+// apply, after the app was assembled. A catalogue captured at assembly offered
+// such a node's people the fleet's own gestures (answering a parked run,
+// pausing a seat, steering a turn) and nothing of the tracker or the knowledge
+// base for the life of the process, so the person a live bootstrap binds could
+// not file a task from the dashboard until somebody restarted the node.
+//
+// Both transports' routes are mounted on every app, and each request serves
+// the server this answers at that moment, whole: a request is served by one
+// catalogue, never by half of two. False — nothing to serve — answers the
+// mux's own 404, as a route this node does not serve answers. With an engine
+// beside the app it is never false, since the fleet's own gestures are served
+// whatever the company runs.
+type OperatorSurface interface {
+	Operator() (*operator.Server, bool)
+}
+
 // Options configure the app.
 //
 // # What is required, and why a nil is refused rather than served around
 //
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, Sources.Coord,
 // Sources.Native, Sources.Retention, the Inbound edge's Publisher, Claims,
-// Secrets and AppFlow, Config, Secrets, Setup, Retention, Native, Capacity,
-// FleetBroker, Backup and Audit are REQUIRED, and [New] refuses a missing one
-// by name.
+// Secrets and AppFlow, Config, Secrets, Setup, Operator, Retention, Native,
+// Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New] refuses a
+// missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -190,18 +212,19 @@ type NativeRoutes interface {
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
 //
-// That holds for the native tracker and knowledge base too, and for the state
-// log's retention answer and the routes over them: what a real node can lack
-// there is the BACKEND (a company on Jira, a node whose first company has not
-// been applied yet), which [queries.Sources.Native],
-// [queries.Sources.Retention] and [NativeRoutes] answer per request — never the
-// seam that asks. Left nil, every native question answered `unknown_query` and
-// every native route was absent for the life of the process, the very symptom
+// That holds for the native tracker and knowledge base too, for the state
+// log's retention answer, the routes over them and the operator catalogue:
+// what a real node can lack there is the BACKEND (a company on Jira, a node
+// whose first company has not been applied yet), which
+// [queries.Sources.Native], [queries.Sources.Retention], [NativeRoutes] and
+// [OperatorSurface] answer per request — never the seam that asks. Left nil,
+// every native question answered `unknown_query` and every native route and
+// operator transport was absent for the life of the process, the very symptom
 // of a runtime read once at assembly, and nothing said it was the wiring.
 //
-// What stays optional is what a real node can lack outright: an operator MCP
-// surface, a telemetry receiver or a tool bridge (an unset environment
-// variable), and the defaults a test injects.
+// What stays optional is what a real node can lack outright: a telemetry
+// receiver or a tool bridge (an unset environment variable), and the defaults
+// a test injects.
 type Options struct {
 	// Bootstrap supplies the auth posture, and whether the public routes
 	// have a listener of their own (api.public — see [App.Public]). Nil is
@@ -304,14 +327,13 @@ type Options struct {
 	// catalogue, served to the people who run it — over MCP for an
 	// operator's own AI assistant, and over the act transport for a person
 	// at the dashboard, who must hold a token bound to their seat
-	// (ADR-0024). Nil serves none and both routes are ABSENT,
-	// which is the honest shape for a company on Jira and Confluence: there
-	// is nothing here it could manage.
+	// (ADR-0024) — asked of the engine on every request: see
+	// [OperatorSurface].
 	//
 	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
 	// company, and the credential's own name is what lands on each record
 	// as the author.
-	Operator *operator.Server
+	Operator OperatorSurface
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
@@ -649,6 +671,7 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
+		{"Operator", o.Operator == nil},
 		{"Retention", o.Retention == nil},
 		{"Native", o.Native == nil},
 		{"Capacity", o.Capacity == nil},

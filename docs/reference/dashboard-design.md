@@ -6177,8 +6177,8 @@ all of it, so a red run says which side stopped.
 
 The capture ends with a **write**. The founder's seat binds a bearer token, and
 the test pins a project through `POST /operator/act/set_pins` — served by the
-node's own operator surface, the one `crewlet run` builds
-(`api.NewEngineOperator`), so the harness wires no second catalogue. The Go
+node's own operator surface, the per-request one `crewlet run` builds
+(`api.NewEngineOperators`), so the harness wires no second catalogue. The Go
 half holds the answer to the read it promises: its `position` is in the grammar
 a read accepts back, and `GET /work/people/{handle}` at
 `read_level=session&min_position=<position>` is served at `session` and already

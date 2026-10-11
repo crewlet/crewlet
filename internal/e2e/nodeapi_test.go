@@ -59,9 +59,10 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// THE OPERATOR SURFACE IS THE NODE'S OWN, from [api.NewEngineOperator] — the
-// constructor `crewlet run` calls — so `/operator/act` here is the route a
-// person's dashboard writes through, and the viewer names the same verbs.
+// THE OPERATOR SURFACE IS THE NODE'S OWN, from [api.NewEngineOperators] — the
+// constructor `crewlet run` calls, asked per request — so `/operator/act` here
+// is the route a person's dashboard writes through, and the viewer names the
+// same verbs.
 // AND THE NATIVE TRACKER'S READS, so a read that names the floor an act
 // answered with is asked of the route the dashboard asks. The file byte routes
 // are IN too, because a file's bytes crossing between members is something
@@ -128,7 +129,7 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	operators, err := api.NewEngineOperator(e)
+	operators, err := api.NewEngineOperators(e)
 	if err != nil {
 		return fail("operator surface", err)
 	}

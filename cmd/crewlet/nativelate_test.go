@@ -3,7 +3,11 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/operator"
 )
 
 // A COMPANY APPLIED AFTER BOOT IS SERVED WHOLE: every native surface the API
@@ -72,5 +76,38 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 				"applied after boot", route.method, route.path, status, body,
 				route.status, route.code)
 		}
+	}
+
+	// THE OPERATOR'S TOOLS: the one catalogue the dashboard's act transport
+	// and an assistant's MCP both serve, built from the halves the runtime
+	// runs. Built at assembly, it was built from a runtime that did not
+	// exist yet — the fleet's own gestures and nothing of the tracker or the
+	// knowledge base — and served that for the life of the process, so the
+	// person the company binds could not file a task from the dashboard.
+	status, body := n.get(t, "/query/viewer")
+	var viewer struct {
+		Handle string   `json:"handle"`
+		Acts   []string `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(body), &viewer); err != nil || status != http.StatusOK {
+		t.Fatalf("GET /query/viewer = %d %s (%v)", status, body, err)
+	}
+	if viewer.Handle == "" || !slices.Contains(viewer.Acts, builtin.CreateWorkItemTool) {
+		t.Errorf("the person the company applied after boot binds (%q) may do %v, "+
+			"want %s among it", viewer.Handle, viewer.Acts, builtin.CreateWorkItemTool)
+	}
+	// And the act transport serves it: a press reaches the tool and is
+	// refused for its body, which writes nothing — where the catalogue built
+	// at assembly answered that it serves no such tool.
+	status, body = n.send(t, http.MethodPost, "/operator/act/"+builtin.CreateWorkItemTool)
+	var act struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(body), &act)
+	if status != http.StatusUnsupportedMediaType ||
+		act.Error != string(operator.CodeUnsupportedMediaType) {
+		t.Errorf("POST /operator/act/%s = %d %s, want %d %s from the tool's own "+
+			"transport for the company applied after boot", builtin.CreateWorkItemTool,
+			status, body, http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType)
 	}
 }
