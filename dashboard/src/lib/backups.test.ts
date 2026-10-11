@@ -95,6 +95,15 @@ describe("why a backup was not taken", () => {
     expect(refusal.message).toMatch(/may still finish/);
   });
 
+  // A BACKUP ALREADY RUNNING IS NOT A FAILURE: nothing was written and the
+  // engine's log has nothing wrong in it, so it is not sent there.
+  test("a backup already running is said, and not as a failed copy", () => {
+    const refusal = backupRefusal(new RestError(409, { error: "backup_running" }));
+    expect(refusal.field).toBe(false);
+    expect(refusal.message).toMatch(/already running/);
+    expect(refusal.message).not.toMatch(/api_backup_failed/);
+  });
+
   test("a refused credential says what to set", () => {
     expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
       /operator token/,

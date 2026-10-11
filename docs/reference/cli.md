@@ -666,6 +666,9 @@ not the copy: the engine finishes what it started, so a wait that expires
 leaves a good backup this command has already called a failure. It is set far
 past any plausible duration for that reason.
 
+One backup runs at a time on a node: asked for while another runs there, the
+node answers `409 backup_running` and writes nothing, and the command says so.
+
 See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
 

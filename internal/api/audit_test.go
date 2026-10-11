@@ -237,6 +237,16 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		},
 		status: http.StatusBadRequest,
 	}, {
+		// A BACKUP REFUSED WHILE ANOTHER RUNS wrote nothing either, so it is
+		// no backup anybody's history should count as failed.
+		name:  "a backup asked for while one runs",
+		taker: &fakeBackup{err: backup.ErrBackupRunning},
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := post(t, a, "/backup?dir=/var/backups/three", "founder-secret")
+			return status
+		},
+		status: http.StatusConflict,
+	}, {
 		name: "a backup that names no destination",
 		run: func(t *testing.T, a *api.App) int {
 			status, _ := post(t, a, "/backup", "founder-secret")

@@ -207,6 +207,12 @@ What is worth knowing about it:
   company's files. The manifest's `objects` records
   `dir` or `stream`, `objects`, `bytes`, `replayed`, `reused`, `reused_from`
   and `lost`; a backup owing no file has none.
+- **One backup at a time per node.** A backup asked for while another runs on
+  the same node is refused (`POST /backup` answers `409 backup_running`) and
+  writes nothing, its directory included: the trim hold a backup takes is
+  keyed on the node, so two at once would share one pin, and the first to
+  finish would release the pin the other's replay still needs. Schedule them
+  so one finishes before the next starts.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.

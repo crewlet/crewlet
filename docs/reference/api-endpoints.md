@@ -4677,11 +4677,16 @@ being copied. The work is safe to be cut off, since the store copy is renamed
 into place only after it verifies and the manifest is written last, so a
 client that gives up leaves an unfinished directory rather than a false one.
 
-Four refusals, each pointing somewhere different:
+Five refusals, each pointing somewhere different:
 
 - **401 without a token.** `allow_anonymous_read` is on by default and opens
   the read surface; this writes every credential the company holds to a path
   the caller chooses, so it is never eligible.
+- **409 `backup_running`** — a backup is already running on this node. One
+  runs at a time: the trim hold a backup takes is keyed on the node, so two at
+  once would share one pin and the first to finish would release the other's.
+  Nothing is written — not even the directory — and the request can be made
+  again once the running one finishes.
 - **400 for a destination this node cannot use** — relative, already occupied,
   one this host cannot create, read or make private (a path through a regular
   file, a parent that does not exist or is not writable, a read-only mount), or
@@ -4724,8 +4729,9 @@ Four refusals, each pointing somewhere different:
 Every backup that began copying leaves a `backup_requested` event naming the
 caller, the node, the directory and whether it finished — a failed one
 included, since it may have left files there. A destination refused with a
-`400` wrote nothing and leaves no event — a `400` is only ever answered before
-a byte is copied; a refusal that arrives with part of the copy already in the
+`400`, and a backup refused with a `409` while another runs, wrote nothing and
+leave no event — each is only ever answered before a byte is copied; a refusal
+that arrives with part of the copy already in the
 directory is a failed backup and is recorded as one: see
 [the runtime audit](#the-runtime-audit-sourceoperator).
 

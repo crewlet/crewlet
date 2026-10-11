@@ -164,6 +164,16 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
         "The engine did not answer in time. The copy may still finish — the history on this page records it when it does.",
     };
   }
+  // ANOTHER BACKUP IS RUNNING on this node: nothing failed and nothing was
+  // written, so the copy-failed sentence below would send the reader to a log
+  // with nothing wrong in it.
+  if (err.code === "backup_running") {
+    return {
+      field: false,
+      message:
+        "A backup is already running on this node, and two at once would share its one trim hold. Nothing was written; take this one once it finishes — the history on this page records it.",
+    };
+  }
   return {
     field: false,
     message:

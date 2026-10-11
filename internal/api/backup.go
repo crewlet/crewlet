@@ -76,8 +76,10 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	// an estate already in the directory is returned without it (see its
 	// doc), so it is audited as the failed backup it is.
 	// Recorded, a mistyped path read as a failed backup in the history and
-	// in the failures a person counts, beside the field that said why.
-	if !errors.Is(err, backup.ErrBadDestination) {
+	// in the failures a person counts, beside the field that said why. A
+	// backup refused because another is running is the same: refused before
+	// anything was written (backup.ErrBackupRunning), and no failed backup.
+	if !errors.Is(err, backup.ErrBadDestination) && !errors.Is(err, backup.ErrBackupRunning) {
 		a.auditBackup(r, operator, dir, manifest, err)
 	}
 	if err != nil {
@@ -98,6 +100,10 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		switch status {
 		case http.StatusBadRequest:
 			answer["detail"] = err.Error()
+		case http.StatusConflict:
+			answer["error"] = "backup_running"
+			answer["hint"] = "a backup is already running on this node; take this " +
+				"one when it finishes"
 		case http.StatusServiceUnavailable:
 			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
 			// fixed hint, never the list of objects, which is the log's.
@@ -124,12 +130,18 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 //
 // A copy naming objects the object store did not answer for is a 503: this
 // node is sound and so is the command, and what fails is the store holding the
-// company's files — which clears when it answers again, so it is the one
-// failure here that trying again later can fix.
+// company's files — which clears when it answers again, so it is one failure
+// here that trying again later can fix.
+//
+// A backup asked for while another runs on this node is a 409: the node is
+// busy with exactly what was asked for, and the request can be made again once
+// that one finishes.
 func backupStatus(err error) int {
 	switch {
 	case errors.Is(err, backup.ErrBadDestination):
 		return http.StatusBadRequest
+	case errors.Is(err, backup.ErrBackupRunning):
+		return http.StatusConflict
 	case errors.Is(err, backup.ErrObjectsUnreachable):
 		return http.StatusServiceUnavailable
 	}
