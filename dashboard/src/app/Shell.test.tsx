@@ -13,8 +13,9 @@
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
+import { loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
@@ -70,6 +71,15 @@ const INCOMPLETE: CoverageFacts = {
     scope: [],
   },
 };
+
+// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
+// chunk's, loaded on first open, and what these cases assert is that the
+// frame opens it, not how long a cold `import()` of that chunk takes under a
+// test transformer, which a `waitFor` would otherwise be measuring (the same
+// reason `App.test.tsx` loads every chunk first).
+beforeAll(async () => {
+  await loadChunk("work");
+});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
