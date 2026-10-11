@@ -299,10 +299,19 @@ store straight away — and that audit is the check that every file's object
 came across.
 
 Deleting the record reaches the broker from outside the engine, and so does
-the copy when either store is `nats`, so a move needs a broker that listens:
-an external NATS cluster (`stream.type: nats`). The embedded broker
-listens on no socket and the engine has no command that deletes the record, so
-a company on the embedded topology cannot move its object store.
+the copy when either store is `nats`, so a move in place needs a broker that
+listens: an external NATS cluster (`stream.type: nats`). The embedded broker
+listens on no socket and the engine has no command that deletes the record —
+but a restore is the one moment the record need not be put back at all. So on
+the embedded topology the one way to move is a restore: take a backup, then
+restore it into the new store as
+[Backups](../guides/backup.md#restoring-into-a-new-bucket) describes, leaving
+the record out. That moves a company from one S3 store to another — another
+endpoint, bucket or prefix — and no further: a backup carries the objects as
+files only from `s3` (on `nats` they ride the `OBJ_crewlet_files` snapshot),
+and nothing but a broker that listens puts files into a `nats` store. And like
+every restore it brings the company back as it stood when the backup was
+taken: what the fleet did after it is not moved.
 
 ---
 
