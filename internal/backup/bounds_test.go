@@ -198,11 +198,14 @@ func TestABackupAsksTheStreamStoreAtMostItsBoundAtOnce(t *testing.T) {
 	}
 }
 
-// THE FIRST OBJECT THE STORE DOES NOT ANSWER FOR STOPS THE BACKUP, with nothing
-// left in flight. It is refused for that object whatever the rest does — the
-// object may be intact in a store that did not answer — so reading on is a
-// terabyte sent for a refusal, and asking on is a store that stopped answering
-// asked about every object it holds.
+// THE FIRST OBJECT THE STORE DOES NOT ANSWER FOR STOPS THE BACKUP, once it has
+// been asked about it as often as a backup asks, with nothing left in flight.
+// It is refused for that object whatever the rest does — the object may be
+// intact in a store that did not answer — so reading on is a terabyte sent for
+// a refusal, and asking on is a store that stopped answering asked about every
+// object it holds. The others wait at a gate that opens a second after the
+// last failure: a backup that stopped there has ended them by then, and one
+// that carried on past it would reach every object.
 func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 	t.Parallel()
 	const files = 200
@@ -217,6 +220,40 @@ func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 		}
 		return k
 	}
+	// refused answers the unanswered object's every question with refuse,
+	// opening the gate a second after the last one a backup asks — NOT AT
+	// ONCE, which raced the pass's own ending: the waiting questions went
+	// on, and freed slots for more, before the failure had cancelled them.
+	refused := func(g *gate, asked *atomic.Int32) error {
+		if asked.Add(1) == backup.FetchAttempts {
+			time.AfterFunc(time.Second, g.release)
+		}
+		return refuse
+	}
+	// stopped checks a backup refused for unanswered, which it asked about as
+	// often as a backup asks and no more, having asked about fewer than two
+	// bounds' worth of objects in all.
+	stopped := func(t *testing.T, err error, unanswered objstore.Key, asked, calls int32,
+		bound int, g *gate, dir string) {
+		t.Helper()
+		if !errors.Is(err, backup.ErrObjectsUnreachable) || !strings.Contains(err.Error(), unanswered.String()) {
+			t.Fatalf("Take = %v; want ErrObjectsUnreachable naming %s", err, unanswered)
+		}
+		if asked != backup.FetchAttempts {
+			t.Errorf("the store was asked about the unanswered object %d times, want %d",
+				asked, backup.FetchAttempts)
+		}
+		if calls >= int32(2*bound) {
+			t.Errorf("the store was asked about %d objects; a backup that stops at the first it "+
+				"does not answer for asks fewer than %d", calls, 2*bound)
+		}
+		if heldNow, _ := g.counts(); heldNow != 0 {
+			t.Errorf("%d questions were still out when Take returned", heldNow)
+		}
+		if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
+			t.Fatal("a backup refused for an object wrote its manifest")
+		}
+	}
 
 	t.Run("copied", func(t *testing.T) {
 		t.Parallel()
@@ -226,16 +263,12 @@ func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 		unanswered := first(held)
 		g := newGate()
 		defer g.release()
-		var calls atomic.Int32
+		var calls, asked atomic.Int32
 		svc := boundedService(t, db, &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
-			calls.Add(1)
 			if o.Key == unanswered {
-				// THE GATE OPENS ONCE THE FAILURE IS ANSWERED, so a
-				// backup that carries on reaches every object rather
-				// than waiting on the gate for ever.
-				defer g.release()
-				return nil, refuse
+				return nil, refused(g, &asked)
 			}
+			calls.Add(1)
 			if err := g.pass(ctx); err != nil {
 				return nil, err
 			}
@@ -243,19 +276,7 @@ func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 		}})
 		dir := filepath.Join(t.TempDir(), "unanswered")
 		_, err := svc.Take(t.Context(), dir)
-		if !errors.Is(err, backup.ErrObjectsUnreachable) || !strings.Contains(err.Error(), unanswered.String()) {
-			t.Fatalf("Take = %v; want ErrObjectsUnreachable naming %s", err, unanswered)
-		}
-		if n := calls.Load(); n >= 2*backup.FetchConcurrency {
-			t.Errorf("the store was asked for %d objects; a backup that stops at the first it does "+
-				"not answer for asks fewer than %d", n, 2*backup.FetchConcurrency)
-		}
-		if heldNow, _ := g.counts(); heldNow != 0 {
-			t.Errorf("%d reads were still out when Take returned", heldNow)
-		}
-		if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
-			t.Fatal("a backup refused for an object wrote its manifest")
-		}
+		stopped(t, err, unanswered, asked.Load(), calls.Load(), backup.FetchConcurrency, g, dir)
 	})
 
 	t.Run("in a stream", func(t *testing.T) {
@@ -266,14 +287,13 @@ func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 		unanswered := first(held)
 		g := newGate()
 		defer g.release()
-		var calls atomic.Int32
+		var calls, asked atomic.Int32
 		svc := boundedService(t, db, &backup.Objects{Stream: "OBJ_crewlet_files",
 			Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
-				calls.Add(1)
 				if k == unanswered {
-					defer g.release()
-					return objstore.Info{}, refuse
+					return objstore.Info{}, refused(g, &asked)
 				}
+				calls.Add(1)
 				if err := g.pass(ctx); err != nil {
 					return objstore.Info{}, err
 				}
@@ -284,19 +304,117 @@ func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
 			}})
 		dir := filepath.Join(t.TempDir(), "unanswered-stream")
 		_, err := svc.Take(t.Context(), dir)
-		if !errors.Is(err, backup.ErrObjectsUnreachable) || !strings.Contains(err.Error(), unanswered.String()) {
-			t.Fatalf("Take = %v; want ErrObjectsUnreachable naming %s", err, unanswered)
+		stopped(t, err, unanswered, asked.Load(), calls.Load(), backup.StreamCheckConcurrency, g, dir)
+	})
+}
+
+// AN OBJECT THE STORE FAILS ONCE IS ASKED ABOUT AGAIN, and the backup carries
+// it. A first copy is millions of reads over hours, and a reset part way
+// through one body — which nothing below the backup retries — used to refuse
+// the whole of it, with every object read again by the next attempt. And a
+// DEFINITE answer is never asked again: an object the store says it does not
+// hold is asked about once, and recorded lost.
+func TestABackupAsksAgainAboutAnObjectTheStoreFailedOnce(t *testing.T) {
+	t.Parallel()
+	const files, lost = 40, 3
+	// flaky fails the first question about every fifth object it holds and
+	// counts the questions about each. WHICH ones fail is chosen by place in
+	// the upload, never by a character of the key: a key's last digits are
+	// crypto/rand's, and a draw that picked none failed the case about one
+	// run in two thousand over nothing the backup did.
+	type flaky struct {
+		mu     sync.Mutex
+		asked  map[objstore.Key]int
+		lost   objstore.Key
+		failed map[objstore.Key]bool // fails its first question
+	}
+	newFlaky := func(held []stored) *flaky {
+		f := &flaky{asked: map[objstore.Key]int{}, lost: held[lost].object.Key,
+			failed: map[objstore.Key]bool{}}
+		for i := 0; i < len(held); i += 5 {
+			if i != lost {
+				f.failed[held[i].object.Key] = true
+			}
 		}
-		if n := calls.Load(); n >= 2*backup.StreamCheckConcurrency {
-			t.Errorf("the store was asked about %d objects; a backup that stops at the first it "+
-				"does not answer for asks fewer than %d", n, 2*backup.StreamCheckConcurrency)
+		return f
+	}
+	answer := func(f *flaky, k objstore.Key) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.asked[k]++
+		switch {
+		case k == f.lost:
+			return fmt.Errorf("gone: %w", objstore.ErrNotFound)
+		case f.asked[k] == 1 && f.failed[k]:
+			return io.ErrUnexpectedEOF
 		}
-		if heldNow, _ := g.counts(); heldNow != 0 {
-			t.Errorf("%d questions were still out when Take returned", heldNow)
+		return nil
+	}
+	check := func(t *testing.T, f *flaky, held []stored, m backup.Manifest, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("Take: %v", err)
 		}
-		if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
-			t.Fatal("a backup refused for an object wrote its manifest")
+		if len(f.failed) == 0 {
+			t.Fatal("no object fails its first question; the case tests nothing")
 		}
+		for _, o := range held {
+			want := 1
+			if f.failed[o.object.Key] {
+				want = 2
+			}
+			if n := f.asked[o.object.Key]; n != want {
+				t.Errorf("object %s (lost %v, failed once %v) was asked about %d times, want %d",
+					o.object.Key, o.object.Key == f.lost, f.failed[o.object.Key], n, want)
+			}
+		}
+		if o := m.Objects; o == nil || o.Objects != files-1 || len(o.Lost) != 1 {
+			t.Fatalf("manifest objects = %+v, want every object but the lost one carried", o)
+		}
+	}
+
+	t.Run("copied", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		bucket, _ := filesStore(t)
+		held := manyFiles(t, db, bucket, files)
+		f := newFlaky(held)
+		svc := boundedService(t, db, &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
+			if err := answer(f, o.Key); err != nil {
+				return nil, err
+			}
+			return bucket.Open(ctx, o)
+		}})
+		dir := filepath.Join(t.TempDir(), "retried")
+		m, err := svc.Take(t.Context(), dir)
+		check(t, f, held, m, err)
+		var kept []stored
+		for _, o := range held {
+			if o.object.Key != f.lost {
+				kept = append(kept, o)
+			}
+		}
+		restoresWhole(t, filepath.Join(dir, "objects"), kept)
+	})
+
+	t.Run("in a stream", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		bucket, _ := filesStore(t)
+		held := manyFiles(t, db, bucket, files)
+		f := newFlaky(held)
+		svc := boundedService(t, db, &backup.Objects{Stream: "OBJ_crewlet_files",
+			Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+				if err := answer(f, k); err != nil {
+					return objstore.Info{}, err
+				}
+				return bucket.Stat(ctx, k)
+			},
+			Open: func(context.Context, objstore.Object) (io.ReadCloser, error) {
+				return nil, errors.New("not expected")
+			}})
+		m, err := svc.Take(t.Context(), filepath.Join(t.TempDir(), "retried-stream"))
+		check(t, f, held, m, err)
 	})
 }
 

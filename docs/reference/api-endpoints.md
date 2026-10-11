@@ -4698,9 +4698,9 @@ Five refusals, each pointing somewhere different:
   company's files that the object store did not answer for. Nothing is wrong
   with this node or the command: check that it reaches the store and take the
   backup again. A backup without those objects is refused rather than written,
-  because they may well be intact there — and the first object the store does
-  not answer for stops the copy, since the backup is refused for it whatever
-  the rest do. An object the store *answered* it does
+  because they may well be intact there — and the first object the store still
+  does not answer for once it has been asked four times stops the copy, since
+  the backup is refused for it whatever the rest do. An object the store *answered* it does
   not hold, or holds as bytes other than the ones the file records, is
   different — it is lost whatever the backup does — and is listed in the
   manifest's `objects.lost` (each with the file that named it, as

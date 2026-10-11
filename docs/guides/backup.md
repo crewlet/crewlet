@@ -199,12 +199,16 @@ What is worth knowing about it:
   copy replaced or removed — and whose old object the collector has since
   deleted — is owed by nothing the restore brings back, so it is not listed
   (`backup_objects_removed_since_copy` counts them). An
-  object the store did not *answer* about may be intact there, so it **fails
-  the backup** (`POST /backup` answers 503 `objects_unreachable`), naming it:
-  take it again once the store answers. The **first** such object stops the
-  backup, with nothing left in flight — it is refused for that one whatever the
-  rest do, and a store that has stopped answering is not sent the rest of the
-  company's files. The manifest's `objects` records
+  object the store did not *answer* about is **asked again** — up to four
+  times, a second, two and four apart, within the time one read of it is given
+  — since a reset or a stall part way through one of millions of reads is no
+  reason to refuse hours of copying (`backup_objects_retried` counts the ones
+  that needed it). One the store still does not answer for may be intact there,
+  so it **fails the backup** (`POST /backup` answers 503
+  `objects_unreachable`), naming it: take it again once the store answers. The
+  **first** such object stops the backup, with nothing left in flight — it is
+  refused for that one whatever the rest do, and a store that has stopped
+  answering is not sent the rest of the company's files. The manifest's `objects` records
   `dir` or `stream`, `objects`, `bytes`, `replayed`, `reused`, `reused_from`
   and `lost`; a backup owing no file has none.
 - **One backup at a time per node.** A backup asked for while another runs on
