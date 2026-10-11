@@ -79,6 +79,56 @@
 //
 // A backup that cannot assert it writes NO manifest, which is exactly how a
 // reader tells debris from a backup.
+//
+// # The objects follow the log
+//
+// ADR-0034. A restore brings the copy back at position P on each declaring log
+// and replays the log to the last sequence L its snapshot captured — the
+// snapshot is point-in-time at the state its answer states, however much is
+// appended while it transfers — and a build that can read a record the copy's
+// applier deferred applies that too. So, for each declaring log,
+//
+//	carried ⊇ named_required(copy at P) ∪ { o : a record r, deferred or with
+//	          P < seq(r) ≤ L, has Records(r) naming o }
+//
+// and the right-hand side holds every object the restored rows name: a row
+// naming o after the replay either was touched by no record the restore applied
+// (then it named o at P, in the copy) or the last applied record touching it
+// set it to o (then that record names o). Every record is read, applied or not,
+// so whichever records a restore's applier drops — an evicted writer's, a
+// redelivery its guard skips — the union still holds what the restore names; a
+// dropped record only adds an object nobody restores. No gate is repeated here,
+// which is the point: the backup never decides which records apply.
+//
+// THE COPY'S OBJECTS ARE READ BEFORE THE STREAMS ARE SNAPSHOTTED (`s3`), which
+// is what makes the loss rule exact. The collector deletes an object only once
+// a complete read of its estate finds no declared table naming it — and past a
+// grace measured from the object's UPLOAD, never from when it stopped being
+// named, so a weeks-old object goes within the hour of the record that
+// un-names it. An object the copy names that the store no longer holds was
+// therefore un-named by a record the collector's estate had applied before the
+// deletion, and so a record already on the log; the deletion came before this
+// backup read the object, which came before the snapshot began, so the record
+// lies in (P, L] — the window holds it, and it says whether the restore still
+// names the object. THE WINDOW'S OBJECTS ARE READ
+// AFTER, once L is fixed; they are young, and an upload precedes the record
+// naming it, so the store holds them. On `nats` the bucket is a stream the
+// backup snapshots AFTER every log, so every object a captured record names was
+// in the bucket before the bucket's snapshot began, and a stat after the
+// snapshots says whether the snapshot holds it.
+//
+// THE OBVIOUS ALTERNATIVE — wait for this node's applier to reach L and read
+// the live rows — lands at some R ≥ L the applier's runs cannot pin, so a file
+// written during the copy and rewritten before R is named by the restore and by
+// neither read; and it needs an applier, which a node in maintenance or seal
+// mode does not run. A node that dialled an external cluster takes no snapshot
+// and has no L, so it carries what its copy names alone (docs/guides/backup.md).
+//
+// One residual is stated rather than hidden: a record a restore's applier reads
+// past that rewrote a file is read here as having rewritten it, so an object
+// the store lost whose file such a record touched is counted as replaced rather
+// than lost. It needs an eviction and a store loss on one file inside one
+// backup; the collector's daily audit reports the object either way.
 package backup
 
 import (
@@ -180,8 +230,8 @@ type Manifest struct {
 	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
 
-	// Objects describes the objects the store copy's required tables
-	// name, carried beside it — absent when they name none.
+	// Objects describes the objects the backup owes — the store copy's
+	// required tables' and the replayed records' — absent when it owes none.
 	Objects *ObjectArtifact `json:"objects,omitempty"`
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
@@ -297,9 +347,9 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
-	// Objects is how the objects the copy's required tables name are
-	// reached. Nil is a node that runs no object store, which is refused
-	// only when they name an object — see [ErrObjectsUnreachable].
+	// Objects is how the objects the backup owes are reached. Nil is a node
+	// that runs no object store, which is refused only when it owes an
+	// object — see [ErrObjectsUnreachable].
 	Objects *Objects
 
 	// Metrics is where the copy's duration is recorded. Nil records
@@ -359,6 +409,10 @@ type Service struct {
 	// in a test (export_test.go), which counts the reads to see that the
 	// copy is walked a page at a time rather than gathered first.
 	pageRead func()
+	// deferredRead is called after each read of the records a copy
+	// deferred, with how many the read answered — nil but in a test, which
+	// sees that the table is walked a page at a time.
+	deferredRead func(rows int)
 }
 
 // HoldPurpose names this subsystem in the trim-hold register, so an operator
@@ -499,12 +553,14 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// throughout the copy, so the live cursor names where this node was
 	// when the copy started.
 	var (
-		pass *objectPass
-		path string
+		pass    *objectPass
+		path    string
+		cursors map[string]statelog.FileCursor
 	)
 	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
 		path = filepath.Join(dir, replicated)
-		cursors, err := statelog.CursorsInFile(ctx, path)
+		var err error
+		cursors, err = statelog.CursorsInFile(ctx, path)
 		if err != nil {
 			return Manifest{}, fmt.Errorf("backup: read the copy's own "+
 				"checkpoints: %w", err)
@@ -531,7 +587,13 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	}
 
 	if s.conn != nil {
-		streams, err := snapshotStreams(ctx, s.conn, s.api, dir)
+		// THE OBJECT STREAM LAST (`nats`), after every log: see
+		// [snapshotStreams].
+		var objectStream string
+		if s.objects != nil {
+			objectStream = s.objects.Stream
+		}
+		streams, err := snapshotStreams(ctx, s.conn, s.api, dir, objectStream)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -547,12 +609,25 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		}
 	}
 	if pass != nil {
+		// THE OBJECTS THE LOG A RESTORE REPLAYS NAMES, read once the
+		// snapshots fix where that replay ends — see "The objects follow
+		// the log" in the package doc.
+		if err := pass.readWindow(ctx, s.conn, s.api, manifest, cursors); err != nil {
+			return Manifest{}, err
+		}
 		// THE OBJECTS A STREAM CARRIES are asked about once its snapshot
-		// is taken — see [objectPass.finish] for why after and not
-		// before.
+		// is taken, and the window's are carried — see [objectPass.finish]
+		// for why after and not before.
 		var err error
 		if manifest.Objects, err = pass.finish(ctx); err != nil {
 			return Manifest{}, err
+		}
+		if pass.removed > 0 {
+			log.InfoContext(ctx, "backup_objects_removed_since_copy",
+				"dir", dir, "removed", pass.removed,
+				"detail", "the copy names files a record after it replaced or removed, whose "+
+					"objects the store no longer holds; a restore replays those records and "+
+					"names none of them")
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
@@ -588,8 +663,8 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
 		log.WarnContext(ctx, "backup_objects_lost",
 			"dir", dir, "lost", len(lost.Lost), "objects", lost.Objects+len(lost.Lost),
-			"detail", "the copy names files whose objects the store does not hold, "+
-				"or holds as other bytes; the backup carries everything else and "+
+			"detail", "a restore of this backup names files whose objects the store does "+
+				"not hold, or holds as other bytes; the backup carries everything else and "+
 				"lists them in its manifest, and the objects_missing alarm counts them")
 	}
 
@@ -613,9 +688,10 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// not exist. See [Service.announce] for why a failure here does not
 	// fail the backup.
 	s.announce(ctx, dir, manifest)
-	var objects, reused int
+	var objects, reused, replayed int
 	if manifest.Objects != nil {
-		objects, reused = manifest.Objects.Objects, manifest.Objects.Reused
+		objects, reused, replayed = manifest.Objects.Objects, manifest.Objects.Reused,
+			manifest.Objects.Replayed
 	}
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
@@ -624,6 +700,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		"stream_bytes", snapshotSize(manifest.Streams),
 		"objects", objects,
 		"objects_reused", reused,
+		"objects_replayed", replayed,
 		"object_bytes", objectBytes(manifest),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
@@ -945,19 +1022,11 @@ func assertReplayable(m Manifest) error {
 			// position on it.
 			continue
 		}
-		var state struct {
-			FirstSeq uint64 `json:"first_seq"`
+		first, _, err := capturedBounds(artifact)
+		if err != nil {
+			return err
 		}
-		if len(artifact.State) == 0 {
-			return fmt.Errorf("backup: the snapshot of %s carries no state, so "+
-				"whether the copy at position %d is still replayable cannot be "+
-				"established", artifact.Name, at.Seq)
-		}
-		if err := json.Unmarshal(artifact.State, &state); err != nil {
-			return fmt.Errorf("backup: read %s's captured stream state: %w",
-				artifact.Name, err)
-		}
-		if !statelog.Replayable(at.Seq, state.FirstSeq) {
+		if !statelog.Replayable(at.Seq, first) {
 			return fmt.Errorf("backup: the store copy stands at %s sequence %d "+
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
@@ -965,7 +1034,7 @@ func assertReplayable(m Manifest) error {
 				"not cover the copy; look for backup_hold_not_renewed in this "+
 				"node's log (a hold that misses its renewals is read as "+
 				"abandoned), then take the backup again",
-				artifact.Name, at.Seq, state.FirstSeq)
+				artifact.Name, at.Seq, first)
 		}
 	}
 	return nil

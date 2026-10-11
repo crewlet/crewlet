@@ -11,6 +11,13 @@ func SetReferenceTables(s *Service, tables []objstore.ReferenceTable) { s.tables
 // case can count how the copy is walked.
 func SetPageObserver(s *Service, fn func()) { s.pageRead = fn }
 
+// SetDeferredPageObserver has s call fn after each read of the records a
+// copy's appliers deferred, with how many records the read answered.
+func SetDeferredPageObserver(s *Service, fn func(rows int)) { s.deferredRead = fn }
+
+// DeferredPage is how many deferred records one read of a copy takes.
+const DeferredPage = deferredPage
+
 // The bounds the backup's reads of the store are held to, for the cases that
 // measure them.
 const (

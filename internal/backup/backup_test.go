@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -39,6 +40,9 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		Port:            -1,
 		DontListen:      true,
 		StoreDir:        t.TempDir(),
+		// THE TRANSPORT'S CEILING, as a real node's broker sets it, so a
+		// record at the ceiling is one a case can append.
+		MaxPayload: queue.MaxPayloadBytes,
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)

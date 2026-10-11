@@ -176,7 +176,12 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	// everything between was trimmed while the copy ran.
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 10)
 	nc := embeddedNATS(t)
-	seedStream(t, nc, "CREWLET_TRACKER_LOG", "crewlet.tracker.log.>", 60)
+	// RECORDS OF THE TRACKER'S OWN FORMAT — barriers, which write no row:
+	// a backup reads the log past its copy for the files it names, and
+	// bytes no build reads would refuse it for that rather than for the
+	// hole this case is about.
+	trackerLog(t, nc)
+	appendBarriers(t, nc, 60)
 	trimTo(t, nc, "CREWLET_TRACKER_LOG", 40)
 
 	dir := filepath.Join(t.TempDir(), "b")
@@ -295,15 +300,26 @@ func trimTo(t *testing.T, nc *nats.Conn, name string, seq uint64) {
 	}
 }
 
+// seedCursor writes a checkpoint naming no stream instance — the zero instant,
+// which a reader of the copy takes as a claim about nothing.
 func seedCursor(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64) {
+	t.Helper()
+	seedCursorCreated(t, db, stream, generation, seq, time.Time{})
+}
+
+// seedCursorCreated writes a checkpoint keyed to the instance of the stream
+// created at created.
+func seedCursorCreated(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64,
+	created time.Time) {
 	t.Helper()
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, 0, 0, 0)
+			VALUES (?, ?, ?, ?, 0, 0)
 			ON CONFLICT (stream) DO UPDATE SET generation = excluded.generation,
-			                                   seq = excluded.seq`,
-			stream, int64(generation), int64(seq))
+			                                   seq = excluded.seq,
+			                                   stream_created_at = excluded.stream_created_at`,
+			stream, int64(generation), int64(seq), store.EncodeTime(created))
 		return err
 	}); err != nil {
 		t.Fatalf("seed the cursor: %v", err)

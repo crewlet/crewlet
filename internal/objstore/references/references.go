@@ -59,7 +59,7 @@
 // list against the estates it hands them, so a table declared in a domain the
 // engine reads no estate of fails the build rather than the boot.
 //
-// # The log half
+// # The log half (ADR-0034)
 //
 // A backup reads more than rows: a restore brings its store copy back and
 // replays the declaring domain's log from the copy's position — and a newer

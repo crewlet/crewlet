@@ -93,8 +93,10 @@ why the manifest is written last.
 ├── store.db                               the node estate, self-contained
 ├── store-replicated.db                    the replicated estate, self-contained
 ├── objects/                               s3 only: every object a live row of that
-│   └── files/                               copy names, one file per object, under
-│       └── 0199a3c2-…                       its key — the bucket's layout under its prefix
+│   └── files/                               copy names, and every object a record a
+│       └── 0199a3c2-…                       restore replays from it names — one file
+│                                            per object, under its key: the bucket's
+│                                            layout under its prefix
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -151,6 +153,27 @@ What is worth knowing about it:
   [retired](../concepts/object-store.md#live-and-retired-references) row names
   is neither copied nor asked after: a restore brings the row back without it,
   and nothing is owed it.
+- **The files written while the backup ran come too.** A restore brings the
+  store copy back and replays each log from the copy's position to the last
+  record its snapshot captured — the snapshot is a copy of the stream as it
+  stood when it was asked for, however much is appended while it transfers — so
+  a file uploaded and named after the copy was taken is a file the restored
+  company has. Once the streams are snapshotted, the backup reads each log that
+  writes a table of files from the copy's position to that last record, and
+  the records the copy's applier had held back to apply later, and carries
+  every object those records name: on `s3` copied like the rest, sixteen at a
+  time; on `nats` asked after like the rest, since the `OBJ_crewlet_files`
+  stream is snapshotted **after every other stream** and so holds every object
+  a captured record names. `objects.replayed` counts the ones only those
+  records name. A record this build cannot read that may write a file — a
+  newer build's, during a rolling upgrade: a file record, one of a kind this
+  build has never heard of, or one whose writer said it may touch a whole
+  project — **refuses the backup**, since it may name a file the backup would
+  not carry: take it from a node running the newer build. So does a record
+  missing from the log between the copy and the snapshot, and a copy whose
+  position is on an earlier instance of a log that has since been recreated.
+  A newer record whose writer said it touches no file — a task's, say —
+  refuses nothing.
 - **A backup takes what its previous one holds** (`s3`). A key is minted for
   one upload and never names other bytes, so an object this node's previous
   backup already holds is the same object: when that backup's directory is
@@ -171,15 +194,19 @@ What is worth knowing about it:
   the file, `PROJECT/path` — logs `backup_objects_lost`, and is announced like
   any other. Refusing it would refuse every later backup too, and with them
   the trim of every log in the fleet, over one lost file. The
-  `objects_missing` alarm is what sends somebody to replace the file. An
+  `objects_missing` alarm is what sends somebody to replace the file. Only
+  what a restore names is lost: a file the copy names that a record after the
+  copy replaced or removed — and whose old object the collector has since
+  deleted — is owed by nothing the restore brings back, so it is not listed
+  (`backup_objects_removed_since_copy` counts them). An
   object the store did not *answer* about may be intact there, so it **fails
   the backup** (`POST /backup` answers 503 `objects_unreachable`), naming it:
   take it again once the store answers. The **first** such object stops the
   backup, with nothing left in flight — it is refused for that one whatever the
   rest do, and a store that has stopped answering is not sent the rest of the
   company's files. The manifest's `objects` records
-  `dir` or `stream`, `objects`, `bytes`, `reused`, `reused_from` and `lost`; a
-  copy naming no file has none.
+  `dir` or `stream`, `objects`, `bytes`, `replayed`, `reused`, `reused_from`
+  and `lost`; a backup owing no file has none.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -495,6 +522,10 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   one-directory, one-instant copy is the paved path. On an external NATS
   cluster, `nats stream backup` / `nats account backup` against the cluster
   are the equivalent, taken across the streams and KV buckets as one session.
+  A node on an external cluster snapshots no stream, so its backup has no last
+  record to read the logs to: it carries the objects its copy names and none
+  written after the copy — copy the bucket (`aws s3 sync`) at the moment the
+  cluster's backup is taken, as the cold path does.
 - **Config converges on its own.** The current revision's payload rides the
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any

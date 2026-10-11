@@ -10,9 +10,9 @@ import (
 //
 // ONE READING OF A FILE RECORD. The applier writes the row from it, and
 // [FileObjectReferences]' Records reads the object the row will name from it —
-// so what a backup carries past its store copy is what the applier writes,
-// and a record the applier would refuse is one the backup refuses too rather
-// than reads its own way.
+// so what a backup carries past its store copy is what the applier writes
+// (ADR-0034), and a record the applier would refuse is one the backup refuses
+// too rather than reads its own way.
 func decodeFile(mutation []byte, id string) (File, error) {
 	var file File
 	if err := decodePayload(mutation, &file); err != nil {

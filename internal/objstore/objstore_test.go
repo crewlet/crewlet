@@ -249,6 +249,24 @@ func TestOnlyARequiredTableIsWalked(t *testing.T) {
 		t.Fatalf("a retired table's walk = %d references, %v; want the refusal", len(page), werr)
 	}
 
+	// THE SAME FOR A QUESTION ABOUT GIVEN KEYS, which answers a walk's own
+	// columns so one decoder reads both.
+	if among, err := retired.ReferencesAmong(3); err == nil {
+		t.Fatalf("a retired table was asked which references it holds: %q", among)
+	}
+	if _, err := live.ReferencesAmong(0); err == nil {
+		t.Error("a question about no keys was asked")
+	}
+	among, err := live.ReferencesAmong(3)
+	if err != nil {
+		t.Fatalf("a required table cannot be asked which references it holds: %v", err)
+	}
+	walked, _ := live.ReferencesAfter(500)
+	columns := func(q string) string { return q[:strings.Index(q, " WHERE ")] }
+	if columns(among) != columns(walked) || !strings.HasSuffix(among, ` IN (?, ?, ?)`) {
+		t.Errorf("ReferencesAmong = %q; want the walk's columns, %q, over three keys", among, columns(walked))
+	}
+
 	shields, err := retired.ObjectsAmong(3)
 	if err != nil {
 		t.Fatalf("a retired table cannot be asked which objects it names: %v", err)
@@ -485,7 +503,7 @@ func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 	}
 }
 
-// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS: the stream, the
+// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0034): the stream, the
 // table its domain defers records into, and the domain's reader of one record
 // — each refused by name when missing, since a backup cannot carry what a
 // log it was not told about names. A retired table, which no backup carries,

@@ -88,11 +88,12 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
 		Objects *struct {
-			Dir     string `json:"dir"`
-			Stream  string `json:"stream"`
-			Objects int    `json:"objects"`
-			Bytes   int64  `json:"bytes"`
-			Lost    []struct {
+			Dir      string `json:"dir"`
+			Stream   string `json:"stream"`
+			Objects  int    `json:"objects"`
+			Replayed int    `json:"replayed"`
+			Bytes    int64  `json:"bytes"`
+			Lost     []struct {
 				Object  string `json:"object"`
 				NamedBy string `json:"named_by"`
 			} `json:"lost"`
@@ -118,17 +119,23 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
-	// THE OBJECTS ARE THE COMPANY'S: absent only where no live row of the
-	// copy names a file at all. On the broker's own bucket they ride that
-	// stream's snapshot, which is what the row names rather than a
+	// THE OBJECTS ARE THE COMPANY'S: absent only where no row a restore
+	// brings back names a file at all. On the broker's own bucket they ride
+	// that stream's snapshot, which is what the row names rather than a
 	// directory — and their bytes are that snapshot's, so they are not
-	// counted twice.
+	// counted twice. The ones only a replayed record names — files written
+	// while the backup ran — are said, since they are the ones a backup
+	// carrying only its copy's would have missed.
 	if o := manifest.Objects; o != nil {
+		count := fmt.Sprintf("%d objects", o.Objects)
+		if o.Replayed > 0 {
+			count += fmt.Sprintf(" (%d written during the copy)", o.Replayed)
+		}
 		switch {
 		case o.Stream != "":
-			fmt.Fprintf(w, "objects\tin %s\t—\t%d objects\n", o.Stream, o.Objects)
+			fmt.Fprintf(w, "objects\tin %s\t—\t%s\n", o.Stream, count)
 		default:
-			fmt.Fprintf(w, "objects\t%s/\t%s\t%d objects\n", o.Dir, humanBytes(o.Bytes), o.Objects)
+			fmt.Fprintf(w, "objects\t%s/\t%s\t%s\n", o.Dir, humanBytes(o.Bytes), count)
 		}
 	}
 	streams := manifest.Streams

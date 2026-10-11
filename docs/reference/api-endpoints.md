@@ -4627,8 +4627,8 @@ ceiling by that round: the Engineer above had 99 120 of 100 000 when a
 
 Copies this node's durable state — both of its store files, every JetStream
 stream and coordination bucket, and every object holding a company file that
-a live row of the store copy names — into `?dir=`, a directory **on the
-engine's host**.
+a live row of the store copy names, or that a record a restore replays from
+the copy names — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -4648,7 +4648,8 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],
-  "objects": {"dir": "objects", "objects": 40, "bytes": 41943040, "reused": 36,
+  "objects": {"dir": "objects", "objects": 40, "bytes": 41943040, "replayed": 2,
+              "reused": 36,
               "reused_from": "/var/backups/crewlet/2026-08-29T18-00/objects"},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
@@ -4700,13 +4701,19 @@ Four refusals, each pointing somewhere different:
   manifest's `objects.lost` (each with the file that named it, as
   `{"object", "named_by"}`) rather than refused, so one lost file never stops
   every later backup and, with them, the trim (see
-  [Backup](../guides/backup.md)). On an S3 bucket each object is copied into
-  `objects/` under the bucket's own layout and checked against its row as it
-  is written. On the default `nats` backend the objects are in a stream the
-  backup snapshots with every other (`objects.stream` names it, and no object
+  [Backup](../guides/backup.md)) — and only where the restored rows name it:
+  a file the copy names that a record after the copy replaced or removed is
+  owed by nothing a restore brings back. On an S3 bucket each object is copied
+  into `objects/` under the bucket's own layout and checked against its row as
+  it is written. On the default `nats` backend the objects are in a stream the
+  backup snapshots after every other (`objects.stream` names it, and no object
   is copied on its own); once the snapshot is taken the store is asked about
-  each object a live row of the copy names, so the same refusal and the same
-  `lost` list apply there too. An object only a
+  each object the backup owes, so the same refusal and the same `lost` list
+  apply there too. Either way the backup owes, besides the copy's own, every
+  object a record the restore replays from the copy names — a file written
+  while the backup ran — and `objects.replayed` counts those. A record this
+  build cannot read that may write a file refuses the backup with a `500`:
+  take it from a node running the build that wrote it. An object only a
   [retired](../concepts/object-store.md#live-and-retired-references) row names
   is neither copied, asked after nor listed.
 - **A copy without the stream estate.** A node that dialled an external NATS

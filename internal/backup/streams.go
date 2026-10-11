@@ -113,7 +113,9 @@ type StreamArtifact struct {
 	State  json.RawMessage `json:"state"`
 }
 
-// snapshotStreams captures every stream the broker holds under root.
+// snapshotStreams captures every stream the broker holds under root, the
+// stream named last — the object store's own bucket on `nats` — after every
+// other.
 //
 // EVERY STREAM, ENUMERATED RATHER THAN LISTED. The engine's own five are
 // known here, but a namespace stream is created on first publish to it
@@ -121,10 +123,20 @@ type StreamArtifact struct {
 // a configurable prefix — so a hardcoded list would silently omit whatever a
 // deployment actually has. What is backed up is what is there.
 //
+// THE OBJECT STREAM AFTER EVERY LOG, as a rule rather than an accident of
+// sorting (`CREWLET_` happens to sort before `OBJ_`). A restore replays each
+// log to the last sequence its snapshot captured, and an object is uploaded
+// before the record naming it is written, so every object a record of a log's
+// snapshot names was in the bucket before the object stream's snapshot began —
+// which is what lets the backup count an object the store holds after the
+// snapshots as one the object stream's snapshot carries ([objectPass.finish]).
+// Snapshotted first, the bucket would miss every file written while the logs'
+// snapshots ran.
+//
 // The snapshots land in a subdirectory of root, and each artifact's File is
 // relative to root rather than to that subdirectory, because that is the path
 // a restore reading the manifest has to join.
-func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root string) ([]StreamArtifact, error) {
+func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, last string) ([]StreamArtifact, error) {
 	js, err := api.Client(nc)
 	if err != nil {
 		return nil, fmt.Errorf("backup: reach the JetStream API: %w", err)
@@ -132,6 +144,9 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root str
 	names, err := streamNames(ctx, js)
 	if err != nil {
 		return nil, err
+	}
+	if i := slices.Index(names, last); last != "" && i >= 0 {
+		names = append(slices.Delete(names, i, i+1), last)
 	}
 	if err := os.MkdirAll(filepath.Join(root, streamDirName), 0o700); err != nil {
 		return nil, fmt.Errorf("backup: create %s: %w", filepath.Join(root, streamDirName), err)

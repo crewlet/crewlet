@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 
@@ -28,7 +29,7 @@ const objectsDirName = "objects"
 
 // Objects is how a backup reaches the company's files' bytes.
 //
-// # Why a backup carries every object a live row of the copy names
+// # Why a backup carries every object a restore's rows name
 //
 // A tracker restored without the bytes of its files names files nobody can
 // open, and the collector deletes a removed file's object at its next pass
@@ -36,7 +37,9 @@ const objectsDirName = "objects"
 // any file older than that — so a restore from a week-old backup brings back
 // rows whose objects a live store may no longer hold. The backup is a copy of
 // the COMPANY, so it carries every object a REQUIRED table of the store copy
-// names.
+// names — and every object a record the restore replays from the copy's
+// position names, since those records write rows too (the package doc's "The
+// objects follow the log").
 //
 // A RETIRED REFERENCE IS NOT CARRIED (ADR-0033). A retired row keeps a
 // replaced object from the collector for a grace and names nothing the
@@ -77,12 +80,18 @@ type ObjectArtifact struct {
 	Stream string `json:"stream,omitempty"`
 
 	// Objects and Bytes are how many and how large — every object the
-	// artefact holds, a reused one included, since shipping the directory
-	// ships it. On a stream, every object a required table of the copy
-	// names and the store was found holding once the snapshot was taken,
-	// whose bytes that stream's snapshot already counts.
+	// copy's Required rows or a replayed record names that the artefact
+	// holds, a reused one included, since shipping the directory ships it.
+	// On a stream, every such object the store was found holding once the
+	// snapshot was taken, whose bytes that stream's snapshot already
+	// counts.
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
+
+	// Replayed is how many of Objects no row of the copy names: each named
+	// by a record a restore replays from the copy's position — a file
+	// written while the backup ran, whose row the restored log writes.
+	Replayed int `json:"replayed,omitempty"`
 
 	// Reused is how many of them were taken from this node's previous
 	// backup on the same host (ReusedFrom) rather than read from the
@@ -94,10 +103,18 @@ type ObjectArtifact struct {
 	Reused     int    `json:"reused,omitempty"`
 	ReusedFrom string `json:"reused_from,omitempty"`
 
-	// Lost is every object a required table of the copy names that the
-	// object store answered it does not hold, or holds only as bytes that
-	// are not the ones the row records — each with the file that named it,
-	// which is what a person restores.
+	// Lost is every object the restored rows name that the object store
+	// answered it does not hold, or holds only as bytes that are not the
+	// ones the row records — each with the file that named it, which is what
+	// a person restores. ONLY WHERE THE RESTORED ROWS NAME IT: an object the
+	// copy names whose file a record past the copy replaced or removed — and
+	// the collector has since deleted — is owed by nothing a restore brings
+	// back, and is not listed. One residual: a record a restore's applier
+	// reads past (an evicted writer's) that rewrote a file is read here as
+	// having rewritten it, so an object the store lost whose file such a
+	// record touched reads as replaced rather than lost — it needs an
+	// eviction and a store loss on one file inside one backup, and the
+	// collector's daily audit reports it either way.
 	//
 	// RECORDED RATHER THAN REFUSED. Refusing would not bring the object
 	// back, and every later backup would be refused for the same one —
@@ -119,12 +136,12 @@ type LostObject struct {
 	NamedBy string       `json:"named_by"`
 }
 
-// ErrObjectsUnreachable is a copy that names objects this backup could not
-// read and whose absence is not definite — the object store did not answer
-// for them. The backup is refused rather than written without them: they may
-// well exist, a later attempt may reach them, and a restore missing them
-// would bring back files whose bytes the fleet still had.
-var ErrObjectsUnreachable = errors.New("backup: the copy names objects the backup could not read")
+// ErrObjectsUnreachable is a backup owing objects it could not read and whose
+// absence is not definite — the object store did not answer for them. The
+// backup is refused rather than written without them: they may well exist, a
+// later attempt may reach them, and a restore missing them would bring back
+// files whose bytes the fleet still had.
+var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could not read")
 
 // backupFetchConcurrency is how many objects a backup reads from the store at
 // once, on a store whose objects it copies (`s3`).
@@ -173,7 +190,8 @@ type reference = objstore.Reference
 
 // objectPass is one backup's objects: the ones the store copy's Required
 // tables name, read from the copy a page at a time and carried (`s3`) or asked
-// after (`nats`) as they are read — never gathered first.
+// after (`nats`) as they are read — never gathered first — and the ones the
+// records a restore replays past the copy name ([window]).
 //
 // WHY STREAMED. A company of two million objects is two million references,
 // and the backup used to hold every one twice — a map to de-duplicate them and
@@ -187,7 +205,7 @@ type objectPass struct {
 	objs     *Objects
 	required []objstore.ReferenceTable
 	// copyPath is the replicated copy the references are read from, opened
-	// for each walk and quiesced only once every walk is done.
+	// for each read and quiesced only once every read is done.
 	copyPath string
 	// root is <dir>/objects, where a copied object is written (`s3`), and
 	// prev the previous backup's objects directory on this host, or empty.
@@ -195,12 +213,29 @@ type objectPass struct {
 	// pageRead is called after each read of the copy — nil but in a test,
 	// which counts them to see that the copy is walked a page at a time.
 	pageRead func()
+	// deferredRead is called after each read of the records the copy
+	// deferred, with how many it answered — nil but in a test.
+	deferredRead func(rows int)
 
-	// mu guards art, written by up to a bound's visits at once.
+	// win is what the records past the copy name, read once the streams
+	// are snapshotted ([objectPass.readWindow]) and only then.
+	win window
+
+	// mu guards everything below, written by up to a bound's visits at
+	// once.
 	mu sync.Mutex
-	// art is the artefact, nil until the first object is owed — a copy
-	// naming none carries no objects section at all.
+	// art is the artefact, nil until the first object is owed — a backup
+	// owing none carries no objects section at all.
 	art *ObjectArtifact
+	// unheld is the copy's objects the store answered it does not hold
+	// (`s3`): read before the window is, so whether a restore names each is
+	// judged once it has been ([objectPass.finish]). As many as the store
+	// has lost — what the manifest lists anyway — never the inventory.
+	unheld map[objstore.Key]reference
+	// removed is how many objects the copy names that the store does not
+	// hold and no restored row names: a record past the copy replaced or
+	// removed the file.
+	removed int
 }
 
 // newObjectPass is dir's objects, read from the replicated copy at copyPath.
@@ -210,10 +245,13 @@ type objectPass struct {
 // though it were retired — a live table missing from the backup with nothing
 // failing, the default the standing exists to forbid. A RETIRED TABLE IS LEFT
 // OUT — see [Objects] — and its walk refuses to be read, so a pass that forgot
-// to leave it out fails rather than carrying it.
+// to leave it out fails rather than carrying it. And every Required one is
+// held to say how its log names objects ([objstore.ReferenceTable.ValidateLog])
+// before a byte is read, rather than once the copy has been carried.
 func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*objectPass, error) {
 	p := &objectPass{objs: s.objects, copyPath: copyPath,
-		root: filepath.Join(dir, objectsDirName), pageRead: s.pageRead}
+		root: filepath.Join(dir, objectsDirName), pageRead: s.pageRead,
+		deferredRead: s.deferredRead, win: newWindow(), unheld: map[objstore.Key]reference{}}
 	for _, t := range s.tables {
 		if err := t.Validate(); err != nil {
 			return nil, fmt.Errorf("backup: %w", err)
@@ -221,6 +259,11 @@ func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*obj
 		// AFTER Validate, which has refused a standing that is neither.
 		if t.Standing == objstore.Required {
 			p.required = append(p.required, t)
+		}
+	}
+	for _, t := range p.required {
+		if err := t.ValidateLog(); err != nil {
+			return nil, fmt.Errorf("backup: %w", err)
 		}
 	}
 	if len(p.required) > 0 && !p.inStream() {
@@ -249,6 +292,16 @@ func (p *objectPass) artifact() *ObjectArtifact {
 // [backupFetchConcurrency] at once, taking each from the previous backup on
 // this host where it is there and intact and reading the rest from the store.
 //
+// BEFORE THE STREAMS ARE SNAPSHOTTED, which is what makes an object the store
+// no longer holds judgeable: the collector deletes an object only once a
+// complete read of its estate finds no declared table naming it, so an object
+// of the copy it has deleted was un-named by a record its estate had applied
+// before the deletion — before this read, and so before the snapshot began. The
+// record lies in (P, L], which the window reads, and says whether a restore
+// names the object ([objectPass.finish]). Not because the object went unnamed
+// for any length of time: the collector's grace runs from the upload, so an
+// old object goes within the hour of the record that un-names it.
+//
 // Where the objects ride a stream the backup snapshots anyway it does nothing:
 // the snapshot is the copy, and [objectPass.finish] asks after each object
 // once it is taken.
@@ -257,55 +310,127 @@ func (p *objectPass) carryCopy(ctx context.Context) error {
 		return nil
 	}
 	return p.walkCopy(ctx, backupFetchConcurrency, func(ctx context.Context, ref reference) error {
-		if p.objs == nil || p.objs.Open == nil {
-			return fmt.Errorf("%w: the copy names objects — %s (%s) the first of them — and "+
-				"this node runs no object store", ErrObjectsUnreachable, ref.NamedBy, ref.Object.Key)
-		}
-		reused, err := placeObject(ctx, p.root, p.prev, ref.Object, p.objs)
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		art := p.artifact()
-		switch {
-		case err == nil:
-			art.Objects++
-			art.Bytes += ref.Object.Size
-			if reused {
-				art.Reused++
-			}
-			return nil
-		case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt):
-			art.Lost = append(art.Lost, LostObject{Object: ref.Object.Key, NamedBy: ref.NamedBy})
-			return nil
-		case errors.Is(err, errDestination):
-			// THE DESTINATION, not the store: every other object would
-			// fail the same way, so the backup stops here.
-			return err
-		}
-		return unanswered(ref, err)
+		return p.place(ctx, ref, false)
 	})
 }
 
-// finish completes the pass once the streams are snapshotted and answers its
-// artefact — nil when the copy names no object.
+// place carries one object into the backup (`s3`): counted when it lands —
+// as replayed where only a record past the copy names it — and, when the store
+// answers it does not hold it, set aside (an object of the copy, judged once
+// the window is read) or judged at once (an object of the window, which is
+// read by then).
+func (p *objectPass) place(ctx context.Context, ref reference, replayed bool) error {
+	if p.objs == nil || p.objs.Open == nil {
+		return fmt.Errorf("%w: the backup owes objects — %s (%s) the first of them — and "+
+			"this node runs no object store", ErrObjectsUnreachable, ref.NamedBy, ref.Object.Key)
+	}
+	reused, err := placeObject(ctx, p.root, p.prev, ref.Object, p.objs)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	art := p.artifact()
+	switch {
+	case err == nil:
+		art.Objects++
+		art.Bytes += ref.Object.Size
+		if reused {
+			art.Reused++
+		}
+		if replayed {
+			art.Replayed++
+		}
+		return nil
+	case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt):
+		if replayed {
+			p.judgeReplayedLocked(ref)
+		} else {
+			p.unheld[ref.Object.Key] = ref
+		}
+		return nil
+	case errors.Is(err, errDestination):
+		// THE DESTINATION, not the store: every other object would fail
+		// the same way, so the backup stops here.
+		return err
+	}
+	return unanswered(ref, err)
+}
+
+// judgeCopiedLocked records an object of the copy the store does not hold:
+// LOST where a restore names it, and otherwise removed — a record past the copy
+// replaced or removed its file, and nothing restored names it. The caller
+// holds mu.
 //
-// On a store whose objects ride a stream, it asks the store about every object
-// the copy names, up to [streamCheckConcurrency] at once, and records as lost
-// what the store answers it does not hold — or holds as other bytes than the
-// row records, by the size and the digest the backend keeps, or as no object
-// it can read at all ([objstore.ErrCorrupt]).
+// EXACT ON `s3`, where the copy's objects are read before the snapshot: one
+// the collector had deleted was un-named before the snapshot began, by a record
+// the window holds. On `nats` the question comes after the snapshot, so an
+// object the collector deleted between the object stream's snapshot and the
+// question is the one case judged lost although the snapshot holds it — the
+// conservative direction.
+func (p *objectPass) judgeCopiedLocked(ref reference) {
+	if p.win.owesCopied(ref) {
+		p.artifact().Lost = append(p.artifact().Lost, LostObject{Object: ref.Object.Key, NamedBy: ref.NamedBy})
+		return
+	}
+	p.removed++
+}
+
+// judgeReplayedLocked records an object only the window names that the store
+// does not hold: LOST where the row's last record leaves the restore naming it
+// — a young object, which the collector never takes, so a store fault — and
+// nothing where a later record replaced it again. The caller holds mu.
+func (p *objectPass) judgeReplayedLocked(ref reference) {
+	if p.win.owesReplayed(ref) {
+		p.artifact().Lost = append(p.artifact().Lost, LostObject{Object: ref.Object.Key, NamedBy: ref.NamedBy})
+	}
+}
+
+// finish completes the pass once the streams are snapshotted and the window
+// read, and answers its artefact — nil when the backup owes no object.
 //
-// AFTER THE SNAPSHOT, and that order is what makes a present answer mean the
-// snapshot holds it: the copy is taken before the streams, and the collector
-// may delete an object a removed row named in between — but a key is never
-// reused, so an object the store holds after the snapshot finished is one it
-// held throughout, snapshot included. Asked before, a deletion landing between
-// the question and the snapshot would be carried as present and restore as a
-// file with no bytes.
+// ON `s3` it judges the copy's objects the store did not hold, then carries
+// every object only the window names, up to [backupFetchConcurrency] at once.
+//
+// ON `nats` it asks the store about every object the copy names and then every
+// object only the window names, up to [streamCheckConcurrency] at once, and
+// counts what the store holds; what it answers it does not hold — or holds as
+// other bytes than the row records, by the size and the digest the backend
+// keeps, or as no object it can read at all ([objstore.ErrCorrupt]) — is judged
+// as on `s3`. AFTER THE SNAPSHOT, and that order is what makes a present answer
+// mean the snapshot holds it: a key is never reused, so an object the store
+// holds after the snapshot finished is one it held throughout, snapshot
+// included. Asked before, a deletion landing between the question and the
+// snapshot would be carried as present and restore as a file with no bytes.
+// And the object stream is snapshotted after every log ([snapshotStreams]), so
+// an object a record of a log's snapshot names was in the store — it was
+// uploaded before its record was written — before the object stream was
+// snapshotted.
 func (p *objectPass) finish(ctx context.Context) (*ObjectArtifact, error) {
-	if len(p.required) > 0 && p.inStream() {
-		if err := p.walkCopy(ctx, streamCheckConcurrency, p.askAfter); err != nil {
+	if len(p.required) == 0 {
+		return nil, nil
+	}
+	if p.inStream() {
+		if err := p.walkCopy(ctx, streamCheckConcurrency, p.askCopied); err != nil {
 			return nil, err
 		}
+	} else {
+		p.mu.Lock()
+		for _, k := range sortedKeys(p.unheld) {
+			p.judgeCopiedLocked(p.unheld[k])
+		}
+		p.mu.Unlock()
+	}
+	keys := p.windowKeys()
+	copied, err := p.copyNames(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	if p.inStream() {
+		err = bounded(ctx, streamCheckConcurrency, p.windowOnly(keys, copied), p.askReplayed)
+	} else {
+		err = bounded(ctx, backupFetchConcurrency, p.windowOnly(keys, copied),
+			func(ctx context.Context, ref reference) error { return p.place(ctx, ref, true) })
+	}
+	if err != nil {
+		return nil, err
 	}
 	if p.art != nil {
 		sortLost(p.art.Lost)
@@ -313,41 +438,160 @@ func (p *objectPass) finish(ctx context.Context) (*ObjectArtifact, error) {
 	return p.art, nil
 }
 
-// askAfter asks the store whether it holds one object of a stream backup —
-// see [objectPass.finish].
-func (p *objectPass) askAfter(ctx context.Context, ref reference) error {
-	if p.objs.Stat == nil {
-		return fmt.Errorf("%w: the copy names objects in %s — %s (%s) the first of "+
-			"them — and this node cannot ask the store about them",
-			ErrObjectsUnreachable, p.objs.Stream, ref.NamedBy, ref.Object.Key)
+// askCopied asks the store whether it holds one object the copy names, on a
+// stream backup — see [objectPass.finish].
+func (p *objectPass) askCopied(ctx context.Context, ref reference) error {
+	held, err := p.ask(ctx, ref)
+	if err != nil {
+		return err
 	}
-	info, err := p.objs.Stat(ctx, ref.Object.Key)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	art := p.artifact()
-	switch {
-	case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt),
-		err == nil && (info.Size != ref.Object.Size ||
-			(info.Digest != "" && info.Digest != ref.Object.Hash)):
-		art.Lost = append(art.Lost, LostObject{Object: ref.Object.Key, NamedBy: ref.NamedBy})
+	if !held {
+		p.judgeCopiedLocked(ref)
 		return nil
-	case err != nil:
-		return unanswered(ref, err)
 	}
+	art := p.artifact()
 	art.Objects++
 	art.Bytes += ref.Object.Size
 	return nil
 }
 
-// walkCopy hands every object the copy's Required tables name to visit, once
-// each, with up to limit visits running at once.
+// askReplayed asks the store whether it holds one object only the window
+// names, on a stream backup.
+func (p *objectPass) askReplayed(ctx context.Context, ref reference) error {
+	held, err := p.ask(ctx, ref)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !held {
+		p.judgeReplayedLocked(ref)
+		return nil
+	}
+	art := p.artifact()
+	art.Objects++
+	art.Bytes += ref.Object.Size
+	art.Replayed++
+	return nil
+}
+
+// ask is the store's answer about one object of a stream backup: held as the
+// row records it, or definitely not — or the refusal of a store that did not
+// answer.
+func (p *objectPass) ask(ctx context.Context, ref reference) (bool, error) {
+	if p.objs.Stat == nil {
+		return false, fmt.Errorf("%w: the backup owes objects in %s — %s (%s) the first of "+
+			"them — and this node cannot ask the store about them",
+			ErrObjectsUnreachable, p.objs.Stream, ref.NamedBy, ref.Object.Key)
+	}
+	info, err := p.objs.Stat(ctx, ref.Object.Key)
+	switch {
+	case errors.Is(err, objstore.ErrNotFound), errors.Is(err, objstore.ErrCorrupt):
+		return false, nil
+	case err != nil:
+		return false, unanswered(ref, err)
+	}
+	return info.Size == ref.Object.Size && (info.Digest == "" || info.Digest == ref.Object.Hash), nil
+}
+
+// windowKeys is every object the window names, in key order — the order a
+// store lists in and a refusal names the same object by every time.
+func (p *objectPass) windowKeys() []objstore.Key { return sortedKeys(p.win.objects) }
+
+// windowOnly yields the window's objects at keys the copy does not name, in
+// key order; copied is the ones it does ([objectPass.copyNames]), whose object
+// the copy's pass has carried or judged already — and a key the copy names as
+// another object than the window does is refused, as two rows disagreeing are.
 //
-// THE COPY IS READ ON THIS GOROUTINE ALONE, a page at a time, and a page is
-// read only once the visits have caught up with the one before: a hand-off
-// waits for a free slot. A VISIT THAT FAILS ENDS THE WALK — its context ends
-// the others' and the walk reads no further — and walkCopy returns only once
-// every visit it started has ended, answering the first failure: nothing a
-// visit started outlives the pass.
+// NO I/O, because [bounded] calls it on its one feeding goroutine: what the
+// copy names was looked up before the hand-off began, so a large object is
+// never re-read on the goroutine every slot waits on.
+func (p *objectPass) windowOnly(keys []objstore.Key,
+	copied map[objstore.Key]reference) func(context.Context) (reference, bool, error) {
+
+	next := 0
+	return func(context.Context) (reference, bool, error) {
+		for next < len(keys) {
+			ref := p.win.objects[keys[next]]
+			next++
+			if c, also := copied[ref.Object.Key]; also {
+				if c.Object != ref.Object {
+					return reference{}, false, contradiction(c, ref)
+				}
+				continue
+			}
+			return ref, true, nil
+		}
+		return reference{}, false, nil
+	}
+}
+
+// copyNames answers which of keys — the window's — the copy's Required tables
+// name, and as what: a batch of [objstore.WalkPage] keys a statement, each a
+// seek of the key column's index.
+//
+// ASKED OF THE COPY, never of the bytes the backup carried: whether a window
+// object is one the copy's pass already handled, and whether the two name its
+// key as one object, are both questions about the copy's ROWS. Answered by
+// re-reading the carried file instead, they cost a read and a digest of every
+// such object — a gibibyte apiece at the tracker's largest file — on the one
+// goroutine handing objects to the store's readers.
+//
+// BOUNDED BY THE WINDOW, which is bounded by how much was written while the
+// backup ran, never by the inventory.
+func (p *objectPass) copyNames(ctx context.Context, keys []objstore.Key) (map[objstore.Key]reference, error) {
+	copied := map[objstore.Key]reference{}
+	if len(keys) == 0 {
+		return copied, nil
+	}
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, p.copyPath, store.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("backup: open the copy to ask which objects it names: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, t := range p.required {
+		for from := 0; from < len(keys); from += objstore.WalkPage {
+			batch := keys[from:min(from+objstore.WalkPage, len(keys))]
+			query, err := t.ReferencesAmong(len(batch))
+			if err != nil {
+				return nil, fmt.Errorf("backup: %w", err)
+			}
+			args := make([]any, len(batch))
+			for i, k := range batch {
+				args[i] = k.String()
+			}
+			var found []reference
+			if err := db.Read(ctx, func(tx *sql.Tx) error {
+				// RESET ON EVERY RUN, for the reason the walk's pages are.
+				found = found[:0]
+				rows, qerr := tx.QueryContext(ctx, query, args...)
+				if qerr != nil {
+					return qerr
+				}
+				defer func() { _ = rows.Close() }()
+				return t.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
+					found = append(found, reference{Object: obj, NamedBy: namedBy, Table: t.Table})
+					return nil
+				})
+			}); err != nil {
+				return nil, fmt.Errorf("backup: ask the copy which of the objects past it %s "+
+					"names: %w", t.Table, err)
+			}
+			for _, ref := range found {
+				copied[ref.Object.Key] = ref
+			}
+		}
+	}
+	return copied, nil
+}
+
+// walkCopy hands every object the copy's Required tables name to visit, once
+// each, in key order, up to limit at once ([bounded]) — read a page at a time,
+// a key two rows name de-duplicated, and refused where they name it as two
+// objects. The copy is open for the walk and closed when it ends, however it
+// ends.
 func (p *objectPass) walkCopy(ctx context.Context, limit int,
 	visit func(context.Context, reference) error) error {
 
@@ -357,8 +601,8 @@ func (p *objectPass) walkCopy(ctx context.Context, limit int,
 	}
 	defer func() { _ = db.Close() }()
 	read := func(ctx context.Context, fn func(*sql.Tx) error) (bool, error) {
-		// COMPLETE, always: a copy is a file, and no record it could
-		// not apply is pending against it.
+		// COMPLETE, always: a copy is a file, and no record it could not
+		// apply is pending against it.
 		rerr := db.Read(ctx, fn)
 		if p.pageRead != nil {
 			p.pageRead()
@@ -370,47 +614,81 @@ func (p *objectPass) walkCopy(ctx context.Context, limit int,
 		walks = append(walks, objstore.NamedWalk{Name: t.Table, Walk: t.WalkOf(read)})
 	}
 	m := objstore.MergeWalks(walks...)
+	var (
+		prior reference
+		begun bool
+	)
+	return bounded(ctx, limit, func(ctx context.Context) (reference, bool, error) {
+		for {
+			ref, ok, err := m.Next(ctx)
+			switch {
+			case err != nil:
+				return reference{}, false, fmt.Errorf("backup: %w", err)
+			case !ok:
+				return reference{}, false, nil
+			}
+			// THE MERGE HANDS A KEY TWO ROWS NAME ON ADJACENT, so the
+			// one before is the only one it can repeat.
+			if begun && ref.Object.Key == prior.Object.Key {
+				if ref.Object != prior.Object {
+					return reference{}, false, contradiction(prior, ref)
+				}
+				continue
+			}
+			prior, begun = ref, true
+			return ref, true, nil
+		}
+	}, visit)
+}
+
+// bounded hands every reference next yields to visit, with up to limit visits
+// running at once.
+//
+// NEXT IS CALLED ON THIS GOROUTINE ALONE — for the copy, a page of it read at a
+// time — and only once a visit has a free slot: a hand-off waits for one. A
+// VISIT THAT FAILS ENDS THE PASS — its context ends the others' and nothing more
+// is handed on — and bounded returns only once every visit it started has
+// ended, answering the first failure: nothing a visit started outlives the
+// pass.
+func bounded(ctx context.Context, limit int, next func(context.Context) (reference, bool, error),
+	visit func(context.Context, reference) error) error {
 
 	visits, vctx := errgroup.WithContext(ctx)
 	visits.SetLimit(limit)
-	var (
-		walkErr error
-		prior   reference
-		begun   bool
-	)
+	var nextErr error
 	for vctx.Err() == nil {
-		ref, ok, nerr := m.Next(vctx)
-		if nerr != nil {
-			walkErr = fmt.Errorf("backup: %w", nerr)
+		ref, ok, err := next(vctx)
+		if err != nil {
+			nextErr = err
 			break
 		}
 		if !ok {
 			break
 		}
-		// THE MERGE HANDS A KEY TWO ROWS NAME ON ADJACENT, so the one
-		// before is the only one it can repeat.
-		if begun && ref.Object.Key == prior.Object.Key {
-			if ref.Object != prior.Object {
-				walkErr = contradiction(prior, ref)
-				break
-			}
-			continue
-		}
-		prior, begun = ref, true
 		visits.Go(func() error { return visit(vctx, ref) })
 	}
 	// ON EVERY PATH, so no visit outlives the pass. A visit that failed is
 	// the root of a walk that stopped for it, so it is the one reported —
 	// unless the backup itself was stopped, whose visits all fail for that
 	// reason and none of them for the store's.
-	err = visits.Wait()
+	err := visits.Wait()
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case err != nil:
 		return err
 	}
-	return walkErr
+	return nextErr
+}
+
+// sortedKeys is the keys of m in key order.
+func sortedKeys(m map[objstore.Key]reference) []objstore.Key {
+	out := make([]objstore.Key, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.SortFunc(out, objstore.Key.Compare)
+	return out
 }
 
 // contradiction refuses a key two references name as two different objects.
