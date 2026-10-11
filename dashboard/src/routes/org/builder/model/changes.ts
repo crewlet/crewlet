@@ -10,8 +10,8 @@
  * in the operation that caused it, so this module compares the BASE and the
  * DRAFT as the engine derived them (each side's `derived` block, placed on
  * nodes through that side's own path index) and reads the operation log only
- * for what no document can say afterwards: the fields a kind change removed,
- * and the references an operation cleared.
+ * for what no document can say afterwards: the references an operation
+ * cleared.
  *
  * Nodes are matched by key, which is the engine's identity (see `keys.ts`), so
  * "the same seat" here means what it means to the engine's memory and
@@ -39,7 +39,6 @@ import {
 import { getPath, isRecord, jsonEqual } from "./json.ts";
 import {
   fieldName,
-  isCredentialField,
   kindOf,
   type ApplyReport,
   type Operation,
@@ -73,7 +72,7 @@ export interface EntityRef {
 export type OnboardingCause = "company_rename" | "seat_rename" | "unit_rename" | "move";
 
 export type Acknowledgement =
-  "company_rename" | "handle_change" | "kind_change" | "credential_servers" | "mass_removal";
+  "company_rename" | "handle_change" | "credential_servers" | "mass_removal";
 
 export interface ChangeSet {
   readonly derivedKnown: boolean;
@@ -154,10 +153,6 @@ export interface ChangeSet {
     readonly ref: EntityRef;
     readonly gained: readonly string[];
     readonly lost: readonly string[];
-  }[];
-  readonly strippedFields: readonly {
-    readonly ref: EntityRef;
-    readonly fields: readonly { readonly name: string; readonly credential: boolean }[];
   }[];
   readonly clearedReferences: readonly {
     readonly kind: ReferenceEffect["kind"];
@@ -460,21 +455,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     : [];
 
   // What only the log can say -------------------------------------------------
-  const stripped = new Map<NodeKey, Map<string, boolean>>();
-  for (const op of inputs.ops) {
-    if (op.type !== "changeKind" || !next.refs.has(op.target)) continue;
-    const fields = stripped.get(op.target) ?? new Map<string, boolean>();
-    for (const field of op.stripped)
-      fields.set(fieldName(field.path), isCredentialField(field.path));
-    stripped.set(op.target, fields);
-  }
-  const strippedFields = [...stripped]
-    .filter(([, fields]) => fields.size > 0)
-    .map(([key, fields]) => ({
-      ref: ref(next, key),
-      fields: [...fields].map(([name, credential]) => ({ name, credential })),
-    }));
-
   const clearedReferences = inputs.reports.flatMap((report) =>
     report.cleared.map((effect) => ({
       kind: effect.kind,
@@ -527,20 +507,10 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       ? { removed: removedSeats, total: baseSeatCount }
       : null;
 
-  const kindChanged = [...nextSeats].some(([key, data]) => {
-    const before = baseSeats.get(key);
-    return before !== undefined && kindOf(before) !== kindOf(data);
-  });
   const acknowledgements: Acknowledgement[] = [];
   if (companyRename) acknowledgements.push("company_rename");
   if (handleChanges.length > 0) acknowledgements.push("handle_change");
-  if (kindChanged) acknowledgements.push("kind_change");
-  if (
-    credentialServers.length > 0 ||
-    strippedFields.some((s) => s.fields.some((f) => f.credential))
-  ) {
-    acknowledgements.push("credential_servers");
-  }
+  if (credentialServers.length > 0) acknowledgements.push("credential_servers");
   if (massRemoval) acknowledgements.push("mass_removal");
 
   return {
@@ -560,7 +530,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     channels,
     routing,
     credentialServers,
-    strippedFields,
     clearedReferences,
     datadogFallback,
     gitlabAccessLevels,

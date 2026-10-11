@@ -12,7 +12,6 @@
 import type { BuilderSurfaces } from "./Builder.tsx";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { CanvasView } from "./CanvasView.tsx";
-import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
@@ -25,5 +24,4 @@ export const builderSurfaces: BuilderSurfaces = {
   add: AddNodeDialog,
   move: MoveDialog,
   remove: DeleteDialog,
-  changeKind: ChangeKindDialog,
 };

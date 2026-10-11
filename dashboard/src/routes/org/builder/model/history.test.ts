@@ -76,7 +76,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
   const seat = pick(seats);
   const unitNode = pick(units);
   const field = pick(["goal", "backstory", "email"] as const)!;
-  switch (Math.floor(rand() * 11)) {
+  switch (Math.floor(rand() * 10)) {
     case 0: {
       const parent = pick(parents)!;
       return {
@@ -143,15 +143,6 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             manages: seats.filter(() => rand() < 0.3).map((s) => s.data.name),
           }
         : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
-    case 9:
-      return seat
-        ? {
-            type: "changeKind",
-            target: seat.key,
-            kind: seat.data.kind === "human" ? "agent" : "human",
-            contact: { slack_user_id: `U${label}` },
-          }
-        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
     default:
       return unitNode
         ? {

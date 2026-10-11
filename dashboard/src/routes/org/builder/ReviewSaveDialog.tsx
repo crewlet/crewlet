@@ -7,7 +7,7 @@
  * accounts behind. `model/changes.ts` derives all of it from the base and the
  * draft as the engine derived them, and this dialog states each one in a
  * sentence. The consequences that cannot be taken back (a company rename, a
- * handle change, a kind change, a change of tool credentials, removing most
+ * handle change, a change of tool credentials, removing most
  * of the company) each need an acknowledgement before Save enables.
  *
  * THE WARNINGS ARE THE ENGINE'S, for exactly the body the save will send: the
@@ -116,12 +116,6 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     if (s.lost.length > 0) {
       follow.push(`${s.ref.name} no longer receives tool credentials for ${s.lost.join(", ")}.`);
     }
-  }
-  for (const s of changes.strippedFields) {
-    const fields = s.fields
-      .map((f) => (f.credential ? `${f.name} (a credential, not recoverable)` : f.name))
-      .join(", ");
-    follow.push(`${s.ref.name} loses fields its new kind cannot hold: ${fields}.`);
   }
   for (const c of changes.clearedReferences) {
     const what =

@@ -28,7 +28,7 @@
  * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), AND EACH HAS ONE OWNER.
  * The console's row draws an add pill, a pencil and a trash, so those three
  * are the row's own controls here; the menu at the end of the row carries what
- * has no button of its own (Open seat, Edit reports, Change kind, Move to, and
+ * has no button of its own (Open seat, Edit reports, Move to, and
  * the two moves among the siblings), and a row whose menu would be empty draws
  * none. They were drawn BOTH ways once: on the company's row every entry of
  * the menu was already a button 32 pixels to its left. Read-only disables all

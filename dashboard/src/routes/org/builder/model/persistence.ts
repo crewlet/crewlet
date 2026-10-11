@@ -420,17 +420,6 @@ export function isOperation(v: unknown): v is Operation {
         (v.before === undefined || isStringList(v.before)) &&
         (v.after === undefined || isStringList(v.after))
       );
-    case "changeKind":
-      return (
-        exactKeys(v, ["type", "target", "after", "stripped"], ["before", "contact", "routeTo"]) &&
-        isNodeKey(v.target) &&
-        isOptionalString(v.before) &&
-        (v.after === "agent" || v.after === "human") &&
-        list(v.stripped, isFieldChange) &&
-        (v.contact === undefined ||
-          (isRecord(v.contact) && Object.values(v.contact).every((s) => typeof s === "string"))) &&
-        (v.routeTo === undefined || isRouteToChange(v.routeTo))
-      );
     case "setScheduleEnabled":
       return (
         exactKeys(v, ["type", "target", "schedule", "after"], ["before"]) &&

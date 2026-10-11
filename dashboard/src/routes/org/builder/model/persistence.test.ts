@@ -97,12 +97,6 @@ function everyOperation(): Operation[] {
     { type: "updateUnit", target: "unit:Platform", set: [{ path: ["purpose"], value: "Run it" }] },
     { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
     { type: "setManages", target: "seat:ceo", manages: ["Engineering"] },
-    {
-      type: "changeKind",
-      target: "seat:account-executive",
-      kind: "human",
-      contact: { slack_user_id: "U1" },
-    },
     { type: "setScheduleEnabled", target: "unit:Engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
     { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
@@ -152,7 +146,7 @@ describe("isOperation", () => {
   test("accepts every operation type this build records, after a trip through JSON", () => {
     const ops = [...everyOperation(), templateOperation()];
     const types = new Set(ops.map((op) => op.type));
-    expect(types.size).toBe(17);
+    expect(types.size).toBe(16);
     for (const op of ops) expect(isOperation(JSON.parse(JSON.stringify(op))), op.type).toBe(true);
   });
 

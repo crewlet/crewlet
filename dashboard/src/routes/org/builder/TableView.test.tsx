@@ -320,7 +320,6 @@ describe("acting on a row", () => {
     expect(actions("Dev").map(([label]) => label)).toEqual([
       "Open seat",
       "Edit reports",
-      "Change to human seat",
       "Move to",
       "Move up",
       "Move down",
@@ -473,7 +472,6 @@ describe("acting on a row", () => {
     expect(actions("Dev")).toEqual([
       ["Open seat", false],
       ["Edit reports", false],
-      ["Change to human seat", true],
       ["Move to", true],
       ["Move up", true],
       ["Move down", true],

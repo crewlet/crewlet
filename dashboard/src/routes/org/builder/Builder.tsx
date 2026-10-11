@@ -228,13 +228,12 @@ export interface BuilderSurfaces {
   add: ComponentType<AddDialogProps>;
   move: ComponentType<NodeDialogProps>;
   remove: ComponentType<NodeDialogProps>;
-  changeKind: ComponentType<NodeDialogProps>;
 }
 
 /** A dialog the builder is asked to open. */
 type DialogRequest =
   | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
-  | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
+  | { readonly type: "move" | "remove"; readonly key: NodeKey }
   | { readonly type: "add"; readonly parent: NodeKey | null; readonly kind?: AddKind }
   | { readonly type: "discard" };
 
@@ -1277,7 +1276,6 @@ function BuilderScreen({
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
-      openChangeKind: (key) => openIfWritable({ type: "changeKind", key }),
       announce,
       focusNode,
       readOnly,

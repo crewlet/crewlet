@@ -582,14 +582,7 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
     // The same actions, in the same order, as the seat's own card offers.
-    expect(labels(menu)).toEqual([
-      "Edit",
-      "Open seat",
-      "Edit reports",
-      "Change to human seat",
-      "Move to",
-      "Delete",
-    ]);
+    expect(labels(menu)).toEqual(["Edit", "Open seat", "Edit reports", "Move to", "Delete"]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
     // THE SEAT'S OWN PAGE, asked for the way every other link in this tree
     // asks: `seatPath` is the ONE place that knows where a seat lives, so
@@ -603,8 +596,8 @@ describe("the selection in the URL", () => {
 
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
-  // not have; its kind, like any seat's, can still be changed.
-  test("a seat added in the draft is offered no screen, and can change kind", async () => {
+  // not have; its reports, like any seat's, can still be edited.
+  test("a seat added in the draft is offered no screen, and its reports can be edited", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -619,8 +612,8 @@ describe("the selection in the URL", () => {
     };
     let menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
-    expect(kind.getAttribute("aria-disabled")).not.toBe("true");
+    const reports = within(menu).getByRole("menuitem", { name: "Edit reports" });
+    expect(reports.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // Then once a check has derived its handle: the URL names it, and there
@@ -630,7 +623,7 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(location.hash).toContain("seat=analyst"));
     menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: "Change to human seat" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Edit reports" })).toBeDefined();
   });
 });
 
