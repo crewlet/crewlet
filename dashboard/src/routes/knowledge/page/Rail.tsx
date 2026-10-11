@@ -4,14 +4,20 @@
  *
  * # Every list here is the engine's
  *
- * The readers are `page_reads` (every node's days, the company's today), the
- * backlinks the page answer's `linked_from` (this node's index), the revisions
- * its history. Nothing is counted in the browser: a section that could not be
- * read says so — `linked_from_status` names an index still on its first lap
- * or a read that failed — and one the engine does not serve here —
- * `page_reads` with no usage domain, `linked_from` with no index — is simply
- * not drawn, rather than drawn empty, because "nobody read it" and "this node
- * cannot say" send a curator in opposite directions.
+ * The readers are the page answer's `readers` (who read it and how lately,
+ * over the days the answering node's log keeps), the backlinks its
+ * `linked_from` (this node's index), the revisions its history. Nothing is
+ * counted in the browser: a section that could not be read says so —
+ * `linked_from_status` names an index still on its first lap or a read that
+ * failed — and one the engine does not serve here — `readers` from a node
+ * with no usage domain, `linked_from` with no index — is simply not drawn,
+ * rather than drawn empty, because "nobody read it" and "this node cannot
+ * say" send a curator in opposite directions.
+ *
+ * NEVER HOW A PAGE WAS READ: the turn a read was in and the words an agent
+ * searched for are what the machine processed, which only an admin is served
+ * (`page_reads`), and this is a person's page. The console's view of the
+ * same page draws them (`routes/admin/agents/PageReads.tsx`).
  */
 
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
@@ -21,19 +27,11 @@ import { href } from "~/app/router.tsx";
 import { StatusMark } from "~/components/work.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
-import { readCount, readVia } from "~/lib/pageReads.ts";
 import { shortAge } from "~/lib/seats.ts";
 import { REDUCED_MOTION } from "~/components/time/SpanBar.tsx";
 import type { Heading } from "~/lib/markdown.ts";
-import type { QueryErrorCode } from "~/contract/errors.ts";
-import type {
-  LinkedFromStatus,
-  PageBacklinks,
-  PageLink,
-  PageReadsAnswer,
-  TaskLink,
-} from "~/contract/pages.ts";
-import type { PageRevision, PageSummary } from "~/protocol/index.ts";
+import type { LinkedFromStatus, PageBacklinks, PageLink, TaskLink } from "~/contract/pages.ts";
+import type { PageReaders, PageRevision, PageSummary } from "~/protocol/index.ts";
 
 type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
 
@@ -178,24 +176,23 @@ export function OnThisPage({ headings }: { headings: Heading[] }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Who read the page: each seat and the way it read it, newest first — the
- * turn it read it in, or the search it was a hit for.
+ * Who read the page: each agent, how often and how lately, newest first.
+ *
+ * NOTHING WHERE THE NODE CANNOT SAY: `readers` is absent from a page answered
+ * by a node that reads no usage domain, and that is not "nobody read it".
  */
 export function ReadBy({
-  reads,
-  error,
+  readers,
   who,
   now,
 }: {
-  reads: PageReadsAnswer | null;
-  error: QueryErrorCode | null;
+  readers: PageReaders | undefined;
   who: Who;
   now: number;
 }) {
-  const readers = useMemo(() => reads?.readers ?? [], [reads]);
-  const { rows, more, listID } = useShown(readers);
-  // NOT SERVED HERE — a node with no usage domain — is not "nobody read it".
-  if (error === "unknown_query") return null;
+  const seats = useMemo(() => readers?.seats ?? [], [readers]);
+  const { rows, more, listID } = useShown(seats);
+  if (!readers) return null;
   return (
     <RailSection
       label="Read by agents"
@@ -203,54 +200,33 @@ export function ReadBy({
       // THE WINDOW IS STATED: the page bar's "read by n agents today" is the
       // company's day, this list is the last `days`, and side by side with no
       // window the two numbers read as a contradiction.
-      window={reads ? `last ${plural(reads.days, "day")}` : undefined}
+      window={`last ${plural(readers.days, "day")}`}
     >
-      {error ? (
-        <p className="kpage-rail-note">Who read it could not be read ({error}).</p>
-      ) : !reads ? (
-        <p className="kpage-rail-note">Reading…</p>
-      ) : readers.length === 0 ? (
+      {seats.length === 0 ? (
         <p className="kpage-rail-note">
-          No agent has read it in the last {plural(reads.days, "day")}.
+          No agent has read it in the last {plural(readers.days, "day")}.
         </p>
       ) : (
         <>
           <ul className="kpage-readers" role="list" id={listID}>
             {rows.map((r) => {
               const seat = who(r.handle);
-              const via = readVia(r);
-              const count = readCount(r);
               return (
-                <li key={`${r.handle}/${r.via}`} className="kpage-reader">
+                <li key={r.handle} className="kpage-reader">
                   <SeatAvatar name={seat.name} kind={seat.kind ?? "agent"} size="sm" decorative />
                   <span className="kpage-reader-text">
                     {/* TWO LINES, as the artboard draws them: who and how
-                        often, then how and when. The count sits on the name's
-                        line, where there is room, and the way-read line is cut
-                        with an ellipsis (whole in its title) so the age at its
-                        end is never pushed onto a third line. */}
+                        often, then how lately. */}
                     <span className="kpage-reader-head">
                       <a className="kpage-reader-name" href={href(["team", "seats", r.handle])}>
                         {seat.name}
                       </a>
-                      {count && <span className="kpage-reader-count">{count}</span>}
+                      {r.reads > 1 && (
+                        <span className="kpage-reader-count">{plural(r.reads, "read")}</span>
+                      )}
                     </span>
                     <span className="kpage-reader-via">
-                      {r.last_turn_id ? (
-                        <a
-                          className="kpage-reader-how kpage-reader-via-link"
-                          href={href(["admin", "live", "turns", r.last_turn_id])}
-                          title={via}
-                        >
-                          {via}
-                        </a>
-                      ) : (
-                        <span className="kpage-reader-how" title={via}>
-                          {via}
-                        </span>
-                      )}
                       <span className="kpage-reader-when">
-                        {" · "}
                         <time dateTime={r.last_at} title={fmtDateTime(r.last_at)}>
                           {relTime(r.last_at, now)}
                         </time>
@@ -262,19 +238,16 @@ export function ReadBy({
             })}
           </ul>
           {more}
-          {reads.readers_total > readers.length && (
+          {readers.total > seats.length && (
             <p className="kpage-rail-note">
-              The {readers.length} most recent of {reads.readers_total}.
+              The {seats.length} most recent of {readers.total}.
             </p>
           )}
         </>
       )}
-      {reads && reads.elided > 0 && (
+      {!readers.complete && (
         // THE CAP IS STATED, never silent: a seat's day keeps a bounded number
-        // of (page, way) entries, and a reader whose entry was dropped is not
-        // on this list. COMPANY-WIDE, and worded so: the engine counts what
-        // the cap dropped across every page, not this one's, so the note says
-        // the list MAY be short rather than that this page lost a read.
+        // of reads, and a reader whose entry was dropped is not on this list.
         <p className="kpage-rail-note">
           Some agents&rsquo; days were too busy to record every read, so this list may be missing
           some.
@@ -286,9 +259,20 @@ export function ReadBy({
 
 /**
  * "Read by n agents today" in the page bar: the faces of who read it on the
- * company's day, and the ENGINE's count beside them.
+ * company's day, and the count beside them — the ENGINE's where it is served
+ * one, and the list's own otherwise, `floor` saying it may be more.
  */
-export function ReadToday({ count, faces, who }: { count: number; faces: string[]; who: Who }) {
+export function ReadToday({
+  count,
+  floor = false,
+  faces,
+  who,
+}: {
+  count: number;
+  floor?: boolean;
+  faces: string[];
+  who: Who;
+}) {
   if (count === 0) return null;
   return (
     <span className="kpage-today">
@@ -299,7 +283,9 @@ export function ReadToday({ count, faces, who }: { count: number; faces: string[
         decorative
         members={faces.map((h) => ({ id: h, ...seatBadge(who(h).name, who(h).kind) }))}
       />
-      <span>read by {plural(count, "agent")} today</span>
+      <span>
+        {floor ? `read by ${count}+ agents today` : `read by ${plural(count, "agent")} today`}
+      </span>
     </span>
   );
 }

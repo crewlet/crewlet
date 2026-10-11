@@ -190,3 +190,101 @@ export function memberName(node: Node): string | null {
 export function isLocalSource(source: string): boolean {
   return source.startsWith("./") || source.startsWith("../") || source.startsWith("~/");
 }
+
+// ---------------------------------------------------------------------------
+// The calls that name a question or a write
+// ---------------------------------------------------------------------------
+
+/** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
+export const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
+/** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
+export const BOUND = new Set(["act", "useAct"]);
+
+/** One call that names a question or a write, as the engine's gates read it. */
+export interface NamedCall {
+  line: number;
+  callee: string;
+  /** The kind the call names, or null when the engine's gates cannot read one. */
+  name: string | null;
+  /** The call as written, up to its first argument, for the report. */
+  written: string;
+  /** The first argument as written. */
+  argument: string;
+}
+
+/** An import that renames one of those calls' functions. */
+export interface Alias {
+  line: number;
+  imported: string;
+  local: string;
+}
+
+/**
+ * Every call in one module that names a question or a write, and every import
+ * that renames one.
+ *
+ * HERE, BESIDE THE WALK, because two suites read the tree's calls and must
+ * read them alike: `app/source.test.ts` holds every one to a literal the
+ * engine's gates can read, and `app/shell.test.ts` judges the reach of each
+ * one a person-shell module makes. A second reading in the second suite
+ * would be a second idea of which calls name a question, and the one place
+ * the two disagreed is a call one gate certified and the other never saw.
+ */
+export function namedCalls(source: string, lang: Lang): { calls: NamedCall[]; aliases: Alias[] } {
+  const line = lineOf(source);
+  const program = parse(source, lang);
+  const bound = new Map<string, string>();
+  const namespaces = new Set<string>();
+  const aliases: Alias[] = [];
+  for (const statement of program.body as Node[]) {
+    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
+    if (!isLocalSource(String((statement.source as Node).value))) continue;
+    for (const spec of statement.specifiers as Node[]) {
+      const local = String((spec.local as Node).name);
+      if (spec.type === "ImportNamespaceSpecifier") namespaces.add(local);
+      if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
+      const imported = spec.imported as Node;
+      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+      if (!SPELLED.has(name) && !BOUND.has(name)) continue;
+      bound.set(local, name);
+      if (local !== name) aliases.push({ line: line(spec.start), imported: name, local });
+    }
+  }
+  const calls: NamedCall[] = [];
+  walk(program, (node) => {
+    if (node.type !== "CallExpression") return;
+    const callee = node.callee as Node;
+    // What the call is to, and whether the engine's gates can read that NAME
+    // at all: a computed key names the method in a string they do not read.
+    let named: string | null = null;
+    let readable = true;
+    if (callee.type === "Identifier") {
+      const name = String(callee.name);
+      named = SPELLED.has(name) ? name : (bound.get(name) ?? null);
+    } else {
+      const member = memberName(callee);
+      const object = callee.object as Node | undefined;
+      if (member !== null && SPELLED.has(member)) {
+        named = member;
+        readable = !callee.computed;
+      } else if (
+        member !== null &&
+        BOUND.has(member) &&
+        object?.type === "Identifier" &&
+        namespaces.has(String(object.name))
+      ) {
+        named = member;
+      }
+    }
+    if (named === null) return;
+    const first = (node.arguments as Node[])[0];
+    calls.push({
+      line: line(node.start),
+      callee: named,
+      name: readable ? stringValue(first) : null,
+      written: source.slice(callee.start, first ? first.start : node.end).replace(/\s+/g, " "),
+      argument: first ? source.slice(first.start, first.end) : "",
+    });
+  });
+  return { calls, aliases };
+}

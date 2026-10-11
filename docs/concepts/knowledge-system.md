@@ -668,7 +668,9 @@ Two properties differ from the vendor path and both are visible:
   included. That is an admin's read, because the turn and the search text are
   what the machine processed; anybody who reads the page reads its `readers`
   — each seat, how often and how lately, over the 30 days a node's event log
-  keeps — and nothing about how. Backlinks are this node's: the lexical indexer extracts every
+  keeps — and nothing about how. The dashboard draws `readers` on the page
+  itself and `page_reads` only on the console's view of it
+  ([`#/admin/agents/pages/{id}`](../reference/dashboard-design.md#a-page-as-the-agents-read-it)). Backlinks are this node's: the lexical indexer extracts every
   page id a body links to (`pages.Links` — `/pages/<id>` or the dashboard's
   `#/knowledge/pages/<id>`, outside code) into `page_links` in the node
   estate, beside the index it is derived with, and a task links a page either

@@ -105,7 +105,7 @@ function ToolSkills() {
           rows={rows}
           rowKey={(r) => r.id}
           defaultSort="title"
-          rowHref={(r) => href(["knowledge", "pages", r.id])}
+          rowHref={(r) => href(["admin", "agents", "pages", r.id])}
           columns={[
             {
               key: "title",

@@ -1,11 +1,20 @@
 /**
- * The engine's own conditions — the attention queue — as the screens that
- * draw it read it.
+ * The engine's own conditions — the attention queue — as the console reads it.
  *
  * `lib/attention.ts` is the pure derivation; this is the one place its inputs
- * are gathered, because the Overview and the Inbox both draw the queue and two copies
- * of "which reads feed it" is how the landing screen and the place you act
- * come to disagree about what needs a decision.
+ * are gathered, because the console's door and its Overview both draw the
+ * queue, and two copies of "which reads feed it" is how the door's figure and
+ * the page it opens come to disagree about what needs an admin.
+ *
+ * THE CONSOLE'S, AND ONLY THE CONSOLE'S: its inputs are the durable coding
+ * runs (`sandbox_runs`) and the company's meter with its figures — what the
+ * machine processed, which only an admin is served (ADR-0031). The Inbox
+ * once drew these conditions too, and that put both admin reads in the inbox
+ * a member opens; no person screen may import this now, which
+ * `app/shell.test.ts` holds by the reads it makes rather than by where it
+ * lives. It stays in `lib/` because the console's two readers are its frame
+ * chunk and its Overview, and neither may import the other's module
+ * statically (`app/lazy.test.tsx`).
  */
 
 import { useMemo } from "react";

@@ -3,11 +3,18 @@
  * words the approved Knowledge page uses — "turn 2 on ENG-412", `search:
  * “DHCP lease”` — and the faces of who read it today.
  *
- * PURE, like `lib/seats.ts`: the counts are the engine's (`page_reads`), and
- * what this file adds is only the phrasing, which is what a suite can hold.
+ * PURE, like `lib/seats.ts`: the counts are the engine's, and what this file
+ * adds is only the phrasing, which is what a suite can hold.
+ *
+ * TWO ANSWERS, TWO READERS. `page.readers` is who read a page and how lately,
+ * which every member is served and the page itself draws; `page_reads` is
+ * also HOW — the turn each read was in, the words each search used — which is
+ * what the machine processed and only an admin is served (ADR-0031), so only
+ * the console's view of a page draws it (`routes/admin/agents/PageReads.tsx`).
  */
 
 import type { PageReadRow, SkillLoad, TurnPlace } from "~/contract/pages.ts";
+import type { PageReaders } from "~/protocol/index.ts";
 import { companyMidnight } from "./range.ts";
 import { plural } from "./format.ts";
 
@@ -60,7 +67,11 @@ export function readCount(reader: PageReadRow): string {
  * read today, including one whose row the list's cap left out, and the
  * number drawn is always its `distinct_seats_today`.
  */
-export function readToday(readers: PageReadRow[], now: number, zone: string | undefined): string[] {
+export function readToday(
+  readers: readonly { handle: string; last_at: string }[],
+  now: number,
+  zone: string | undefined,
+): string[] {
   const since = companyMidnight(now, zone);
   const out: string[] = [];
   for (const reader of readers) {
@@ -69,6 +80,30 @@ export function readToday(readers: PageReadRow[], now: number, zone: string | un
     }
   }
   return out;
+}
+
+/**
+ * How many agents read the page on the company's today, from the per-seat list
+ * a member is served — the faces themselves, and whether their number is only
+ * a FLOOR.
+ *
+ * A member's answer carries no count of today's readers (that is
+ * `page_reads.distinct_seats_today`, an admin's), so the figure is the list's
+ * own: exact while the list is whole or some listed reader is older than
+ * today — the list is newest first, so every reader of today is on it — and a
+ * floor when every listed reader read today and the engine counted more than
+ * it listed, since one it left out may have read today too.
+ */
+export function readersToday(
+  readers: PageReaders,
+  now: number,
+  zone: string | undefined,
+): { faces: string[]; floor: boolean } {
+  const faces = readToday(readers.seats, now, zone);
+  return {
+    faces,
+    floor: faces.length === readers.seats.length && readers.total > readers.seats.length,
+  };
 }
 
 /**

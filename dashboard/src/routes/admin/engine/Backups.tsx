@@ -89,7 +89,7 @@ export function Backups({ domain }: { domain?: string }) {
   // be a blank screen under a heading that promises backups — so a refusal
   // known before the question is drawn as the engine would draw it, and the
   // question is not asked ([knownRefusal]).
-  const refused = knownRefusal(useViewer(), apiToken() !== "");
+  const refused = knownRefusal("backups", useViewer(), apiToken() !== "");
   const backups = useQuery("backups", undefined, {
     pollMs: BACKUPS_POLL_MS,
     enabled: refused === null && domain === undefined,

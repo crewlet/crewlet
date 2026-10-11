@@ -125,6 +125,18 @@ test("the tool skills count is the listing's total, and loaded-by reads both way
   expect(within(wiki).getByText(/offered to PM/)).toBeTruthy();
 });
 
+// A SKILL OPENS AS THE AGENTS READ IT, and the reader stays in the console:
+// who loaded it and in which turn is this page's subject, and the person's
+// page draws neither.
+test("a tool skill's row opens the page as the agents read it", async () => {
+  mount({
+    pages: { pages: [skill("s-1", "Working the tracker")], limit: 500, total: 1 },
+  });
+  await settle();
+  const row = screen.getByText("Working the tracker").closest("[data-row-index]") as HTMLElement;
+  expect(row.querySelector("a.row-link")?.getAttribute("href")).toBe("#/admin/agents/pages/s-1");
+});
+
 test("a seat's learned skills say how many of its total are listed", async () => {
   location.hash = "#/admin/agents/skills?kind=learned&seat=swe";
   const { asked } = mount({

@@ -91,6 +91,7 @@ const Schedules = lazyScreen("setup", (m) => m.Schedules);
 const Skills = lazyScreen("setup", (m) => m.Skills);
 const Diaries = lazyScreen("setup", (m) => m.Diaries);
 const Diary = lazyScreen("setup", (m) => m.Diary);
+const PageReads = lazyScreen("setup", (m) => m.PageReads);
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
@@ -176,6 +177,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Diaries />;
     case "diary":
       return <Diary key={route.handle} handle={route.handle} />;
+    case "page-reads":
+      return <PageReads key={route.id} id={route.id} />;
     case "spend":
       return <Spend />;
     case "spend-tasks":

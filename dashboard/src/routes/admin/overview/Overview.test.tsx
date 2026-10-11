@@ -247,6 +247,14 @@ function tile(label: string | RegExp): HTMLElement {
   return card as HTMLElement;
 }
 
+/** The card titled `title` — a card's own heading, never a tile's. */
+function card(title: string): HTMLElement {
+  const heading = screen.getByRole("heading", { name: new RegExp(`^${title}`) });
+  const found = heading.closest(".crewlet-card");
+  if (!found) throw new Error(`no card titled ${title}`);
+  return found as HTMLElement;
+}
+
 describe("the figures", () => {
   test("a figure whose question has not answered draws no zero", async () => {
     const silent = () => new Promise(() => {});
@@ -519,17 +527,18 @@ describe("the decisions", () => {
   // A DECISION WAITS ON A READER ONLY WHERE THEY CAN MAKE IT. A stopped seat
   // is raised through `/config` or handed on through `update_work_item`; a
   // reader who can do neither is told it is a condition, never that it waits
-  // on them.
+  // on them — and it is listed under "Needs an admin", on this page.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
       viewer: { ...JANE, ...MEMBER, acts: ["comment_on_work_item"] },
       agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
     });
     await settle();
-    expect(screen.queryByText(/DevRel stopped/)).toBeNull();
+    expect(within(card("Needs your decision")).queryByText(/DevRel stopped/)).toBeNull();
+    expect(within(card("Needs an admin")).getByText(/DevRel stopped/)).toBeTruthy();
     expect(tile("Waiting on your decision").textContent).not.toContain("1");
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");
-    expect(link?.textContent).toMatch(/1 condition needs a look/);
+    expect(link?.textContent).toMatch(/1 condition needs an admin/);
   });
 
   // A MANAGED DOCUMENT (ADR-0030) TAKES THE CEILING OUT OF AN OPERATOR'S
@@ -542,10 +551,11 @@ describe("the decisions", () => {
       agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
     });
     await settle();
-    expect(screen.queryByText(/DevRel stopped/)).toBeNull();
+    expect(within(card("Needs your decision")).queryByText(/DevRel stopped/)).toBeNull();
+    expect(within(card("Needs an admin")).getByText(/DevRel stopped/)).toBeTruthy();
     expect(tile("Waiting on your decision").textContent).not.toContain("1");
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");
-    expect(link?.textContent).toMatch(/1 condition needs a look/);
+    expect(link?.textContent).toMatch(/1 condition needs an admin/);
   });
 
   // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, ON ITS ROW. The row linked
@@ -786,14 +796,46 @@ describe("the head", () => {
     expect(greeting(at, "")).toBe("Good evening");
   });
 
-  test("a condition that needs a look links to where it is listed", async () => {
+  // THE CONDITIONS ARE THE CONSOLE'S, LISTED HERE. The clause sent an admin
+  // to the Inbox, a person's screen that no longer draws the machine: one
+  // condition now links to its own place, and every one is listed under
+  // "Needs an admin" on this page.
+  test("a condition that needs an admin links to its own place, and is listed here", async () => {
     mount({
       agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "paused" }],
     });
     await settle();
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");
-    expect(link?.textContent).toMatch(/condition needs a look/);
-    expect(link?.getAttribute("href")).toMatch(/^#\/inbox/);
+    expect(link?.textContent).toMatch(/condition needs an admin/);
+    expect(link?.getAttribute("href")).toBe("#/admin/agents/seats/devrel");
+    const look = card("Needs an admin");
+    expect(within(look).getByText("DevRel is stopped")).toBeTruthy();
+    expect(
+      within(look)
+        .getByRole("link", { name: /Go to it/ })
+        .getAttribute("href"),
+    ).toBe("#/admin/agents/seats/devrel");
+  });
+
+  test("two conditions are listed, and the clause links nowhere", async () => {
+    mount({
+      agents: [
+        { role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "paused" },
+        { role: "Ops", handle: "ops", activity: "stopped", stopped_reason: "paused" },
+      ],
+    });
+    await settle();
+    expect(document.querySelector(".home-status")?.textContent).toMatch(
+      /2 conditions need an admin/,
+    );
+    expect(document.querySelector(".home-status a")).toBeNull();
+    expect(within(card("Needs an admin")).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  test("with nothing to look at, there is no card to say so twice", async () => {
+    mount();
+    await settle();
+    expect(screen.queryByText("Needs an admin")).toBeNull();
   });
 
   test("the sentence weights what waits on the reader", async () => {

@@ -81,9 +81,9 @@ import {
   seatResolvers,
   stoppedLine,
   toneOf,
-  useSeatSetup,
   type Seat,
 } from "~/lib/seats.ts";
+import { useSeatSetup } from "./seatSetup.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";

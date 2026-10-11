@@ -33,7 +33,7 @@
  * ceiling, which is a change to the company's configuration: checked against
  * the whole company first (a seat ceiling above the company's never refuses
  * a turn, and the check says so before it is saved), stored as a revision,
- * and applied by every node (`components/budgetWrite.tsx`). The editor is
+ * and applied by every node (`budgetWrite.tsx`). The editor is
  * drawn for every reader and disabled with the reason for one without an
  * admin key.
  *
@@ -53,7 +53,7 @@ import { SeatLabel } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { CeilingEditor } from "~/components/budgetWrite.tsx";
+import { CeilingEditor } from "./budgetWrite.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import {

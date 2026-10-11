@@ -421,11 +421,7 @@ test("no control resets a budget", async () => {
   mount(answer());
   await settle();
   expect(screen.queryByRole("button", { name: /reset/i })).toBeNull();
-  for (const file of [
-    "./Budgets.tsx",
-    "../../../components/budgetWrite.tsx",
-    "../../../lib/useCeilingWrite.ts",
-  ]) {
+  for (const file of ["./Budgets.tsx", "./budgetWrite.tsx", "../../../lib/useCeilingWrite.ts"]) {
     const source = readFileSync(resolve(__dirname, file), "utf8");
     expect(source, file).not.toMatch(/budgets\/reset|resetBudget|Reset budget/i);
   }

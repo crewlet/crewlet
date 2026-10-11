@@ -285,6 +285,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return sectionPage("memory");
     case "diary":
       return inside("memory", named(labels, where.handle));
+    case "page-reads":
+      // A PAGE HAS NO LIST HERE, so its parent is the workspace, as a trace's
+      // is: a crumb named after a route with no page would lead nowhere.
+      return [root(row, true), named(labels, where.id)];
     case "budgets":
       return sectionPage("budgets");
     case "spend-tasks":

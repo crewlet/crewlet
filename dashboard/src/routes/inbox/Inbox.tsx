@@ -6,9 +6,8 @@
  *
  * The left column is ONE list in a fixed order: "Needs a decision" first —
  * the asks put to this person and the coding runs parked on a question to
- * them (the engine's `decisions`), the seats stopped on a spent budget, and
- * the engine conditions a person decides (`lib/attention.ts`, `where: seat`)
- * — then the notices that reached them, by the company's day. Decisions come
+ * them (the engine's `decisions`) — then the notices that reached them, by
+ * the company's day. Decisions come
  * first because they are what only this person can unblock; they are never
  * interleaved with the notices by time, which would eventually rank "a task
  * you watch moved" above the CEO asking whether to hold a release.
@@ -20,10 +19,13 @@
  *
  * # What is where
  *
- * The ENGINE's own conditions (no configuration, a draining node, a refused
- * token) are the console's health card and the Overview's sentence,
- * and a stalled round or the company's parked runs are Live's; this list
- * holds only what a person decides (`WHERE_OF`). The scope is a question to
+ * The ENGINE's conditions — a seat stopped on its budget or failed, a budget
+ * refusing, a draining node, a stalled round — are the console's: its
+ * Overview's "Needs an admin", its health card and Live. They are read from
+ * what only an admin is served and answered in the console, and this screen
+ * asks only what a member is (`app/shell.test.ts`), so it holds what was put
+ * to this person and what reached them, and nothing about the machine. The
+ * scope is a question to
  * the engine (Unread, All, Snoozed — `snoozed=exclude|include|only`), and the
  * Unread option carries the page's unread count inside it, as the approved
  * design draws it; the chips narrow the rows loaded, and where the page is not
@@ -60,17 +62,15 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
-import { decisionSubjects, seatConditionsOf } from "~/components/DecisionRow.tsx";
+import { decisionSubjects } from "~/components/DecisionRow.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useMediaQuery } from "~/lib/media.ts";
-import { useAgents, useOrg } from "~/lib/store-hooks.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
-import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { NoticeList } from "./NoticeList.tsx";
 import { DecisionPane } from "./DecisionPane.tsx";
@@ -94,7 +94,6 @@ export function Inbox() {
   const viewer = useViewer();
   const now = useNow();
   const org = useOrg();
-  const agents = useAgents();
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
   const zone = org?.timezone;
@@ -134,7 +133,6 @@ export function Inbox() {
   const person = useQuery("work_person", bound ? { handle: viewer.handle } : undefined, {
     enabled: bound,
   });
-  const attention = useAttention();
   // THE BADGE'S FIGURE, read where the badge reads it — the frame — and never
   // asked again here: see "Two figures, two names" above.
   const waiting = useInboxCounts();
@@ -143,16 +141,10 @@ export function Inbox() {
     () =>
       inboxRows({
         scope,
-        // EVERY SEAT STOPPED ON ITS BUDGET, not only the ones this reader can
-        // raise or hand on: the Overview counts the rest as conditions that need a
-        // look and sends the reader here, and a list that dropped them would
-        // be the one place that count is not drawn. The row's own controls
-        // say why a reader who cannot act cannot.
-        subjects: bound ? decisionSubjects(decisions.data, seatConditionsOf(agents)) : [],
-        conditions: conditionsToDecide(attention),
+        subjects: bound ? decisionSubjects(decisions.data) : [],
         notices: bound ? (inbox.data?.notices ?? []) : [],
       }),
-    [scope, bound, decisions.data, agents, attention, inbox.data],
+    [scope, bound, decisions.data, inbox.data],
   );
   const counts = useMemo(() => chipCounts(rows), [rows]);
   const shownDecisions = rows.decisions.filter((r) => rowMatches(r, chip));
@@ -198,7 +190,6 @@ export function Inbox() {
     scope,
     chip,
     shown: visible.length,
-    watched: watchedIn("seat"),
   });
   const showList = !phone || !named;
   const showPane = !phone || named !== null;
@@ -210,13 +201,12 @@ export function Inbox() {
       </PageActions>
 
       {/* THREE VIEWER STATES, three sentences — and only one of them is
-          anybody's fault. The conditions a person decides are listed for all
-          three, which is why the screen is not simply locked. */}
+          anybody's fault. The controls stay drawn for all three, each saying
+          what it would need, which is why the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
-          No API token is presented, so this browser is nobody. The conditions below are the
-          engine&rsquo;s; a person&rsquo;s notices and decisions need a credential bound to their
-          seat.
+          No API token is presented, so this browser is nobody: a person&rsquo;s notices and
+          decisions need a credential bound to their seat.
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="warning" className="inbox-callout">

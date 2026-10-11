@@ -39,6 +39,18 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 import { useQuery } from "./useQuery.ts";
 import type { Viewer, ViewerAdmin } from "~/protocol/index.ts";
 import type { Reach, TokenRole } from "~/contract/access.ts";
+import { QUESTION_REACH } from "~/contract/reach.ts";
+
+/** The guard's order, lowest first: `contract/access.ts`'s [Reach], as a rank. */
+const REACH_ORDER: readonly Reach[] = ["open", "public", "member", "admin"];
+
+/**
+ * Whether a caller who reaches `have` is served what needs `needs` — the
+ * guard's own comparison, so a surface never re-derives it from a role.
+ */
+export function reaches(have: Reach, needs: Reach): boolean {
+  return REACH_ORDER.indexOf(have) >= REACH_ORDER.indexOf(needs);
+}
 
 export interface ViewerState {
   /** The id of the key this browser presents, or "" for none. */
@@ -196,32 +208,42 @@ export function readsPersonOf(
 }
 
 /**
- * The refusal an ADMIN's read would get from this reader, when it is known
- * BEFORE the question — or null, and the question is asked.
+ * The refusal this reader would get to `what`, when it is known BEFORE the
+ * question — or null, and the question is asked.
+ *
+ * THE QUESTION'S REACH IS THE ENGINE'S (`contract/reach.ts`'s
+ * `QUESTION_REACH`, held against the registry by `internal/api/queries`),
+ * never an assumption about the screen asking it: this answered "the refusal
+ * an ADMIN's read would get", so every caller was trusting that what it asked
+ * was an admin's, and a question the engine moved would have gone on being
+ * refused here for a reader it now answers.
  *
  * NOT ASKED WHERE THE ANSWER IS KNOWN. A browser presenting no key is refused
- * every admin answer (`unauthorized`), and so is a member's key once the
- * viewer has said that is what it is (`forbidden`) — asking only puts a
- * refusal on the wire on every page that reads one. Without a key the STORED
- * TOKEN decides rather than the viewer, which arrives a round trip later and
- * would put the one refused request back — unless the viewer has answered
- * that this reader is an admin anyway, which a disabled guard makes of
- * everybody. A key is asked with until the viewer says it is not an admin's,
- * because a member's refusal costs one request and an admin waiting a round
- * trip costs every page.
+ * every keyed answer (`unauthorized`), and a key below the question's reach
+ * is too once the viewer has said what it reaches (`forbidden`) — asking only
+ * puts a refusal on the wire on every page that reads one. Without a key the
+ * STORED TOKEN decides rather than the viewer, which arrives a round trip
+ * later and would put the one refused request back — unless the viewer has
+ * answered that this reader reaches it anyway, which a disabled guard makes
+ * of everybody. A key is asked with until the viewer says it falls short,
+ * because a refusal costs one request and a reader who reaches it waiting a
+ * round trip costs every page. A question the company's public face answers
+ * is asked before the viewer has said anything, key or none.
  *
  * THE REFUSAL ITSELF IS RETURNED, not a bool, so a screen that does not ask
  * still draws exactly what the engine would have answered.
  */
 export function knownRefusal(
-  viewer: Pick<ViewerState, "loading" | "admin" | "anonymous">,
+  what: keyof typeof QUESTION_REACH,
+  viewer: Pick<ViewerState, "loading" | "reach" | "anonymous">,
   tokenStored: boolean,
 ): "unauthorized" | "forbidden" | null {
+  const needs: Reach = QUESTION_REACH[what];
   if (!viewer.loading) {
-    if (viewer.admin) return null;
+    if (reaches(viewer.reach, needs)) return null;
     return viewer.anonymous ? "unauthorized" : "forbidden";
   }
-  return tokenStored ? null : "unauthorized";
+  return tokenStored || reaches("public", needs) ? null : "unauthorized";
 }
 
 const Reading = createContext<ViewerState | null>(null);

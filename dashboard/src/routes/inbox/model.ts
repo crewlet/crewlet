@@ -6,14 +6,19 @@
  * groups are the two things a reader sees move when a poll lands, and a rule
  * that could only be tested by rendering the screen is a rule nobody re-reads.
  *
- * # One list, three kinds of row
+ * # One list, two kinds of row
  *
  * A DECISION is what the engine says waits on this person (`decisions`): an ask
- * put to them, or a coding run parked on a question to them — plus the seats
- * the engine stopped on a spent token budget, which a person unblocks. A
- * CONDITION is one of the engine's own conditions a person decides
- * (`conditionsToDecide`). A NOTICE is what reached them, under the one reason
- * of eighteen the applier recorded.
+ * put to them, or a coding run parked on a question to them. A NOTICE is what
+ * reached them, under the one reason of eighteen the applier recorded.
+ *
+ * THE ENGINE'S CONDITIONS ARE NOT HERE. A seat stopped on its budget, a seat
+ * that failed, a budget refusing — the attention queue — are about how the
+ * machine is running, read from what only an admin is served (the durable
+ * coding runs, the meter's figures), and their way out is the console's. So
+ * they are the console Overview's "Needs an admin", and this list holds what
+ * was put to a person and what reached them, which is everything a member's
+ * key is served (`app/shell.test.ts`).
  *
  * AN ASK IS ONE ROW, NOT TWO. The notice that told a person they were asked
  * and the decision the ask IS are the same question, so while the ask is in
@@ -25,7 +30,6 @@
 import { reasonPhrase } from "~/lib/reasons.ts";
 import { companyMidnight } from "~/lib/range.ts";
 import { zoneOffset } from "~/lib/format.ts";
-import { conditionKey, type Attention } from "~/lib/attention.ts";
 import { DECISIONS_VIEW, subjectKey, type DecisionSubject } from "~/components/DecisionRow.tsx";
 import type { WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
 
@@ -75,7 +79,6 @@ export type InboxRow =
       /** The notices this person holds about it — what Done and Snooze mark. */
       notices: WorkInboxNotice[];
     }
-  | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice };
 
 /** The rows, split into the decisions group and the notices it leaves. */
@@ -94,10 +97,9 @@ export interface InboxRows {
 export function inboxRows(input: {
   scope: Scope;
   subjects: readonly DecisionSubject[];
-  conditions: readonly Attention[];
   notices: readonly WorkInboxNotice[];
 }): InboxRows {
-  const { scope, subjects, conditions, notices } = input;
+  const { scope, subjects, notices } = input;
   if (scope === "snoozed") {
     return { decisions: [], notices: notices.map(noticeRow) };
   }
@@ -113,9 +115,6 @@ export function inboxRows(input: {
     for (const n of held) attached.add(n.record_id);
     return { kind: "decision", key: subjectKey(subject), at: subject.at, subject, notices: held };
   });
-  for (const item of conditions) {
-    decisions.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
-  }
   return {
     decisions,
     notices: notices.filter((n) => !attached.has(n.record_id)).map(noticeRow),
@@ -337,22 +336,16 @@ export function noticePill(notice: WorkInboxNotice): { label: string; need: bool
 }
 
 /**
- * THE PILLS FOR THE ROWS THAT ARE NOT NOTICES — a parked run, a stopped seat,
- * a condition. An ask's pill is the `asked` reason's own words, since an ask
- * IS that reason; these are not reasons, so they live here rather than in
- * `contract/reasons.ts`, whose table is exactly the engine's eighteen.
+ * THE PILL FOR THE ROW THAT IS NOT A NOTICE — a parked run. An ask's pill is
+ * the `asked` reason's own words, since an ask IS that reason; a run is not a
+ * reason, so its words live here rather than in `contract/reasons.ts`, whose
+ * table is exactly the engine's eighteen.
  */
-export const CONDITION_PILLS = {
-  run: "run waiting on you",
-  seat: "seat stopped",
-  failed: "seat failed",
-  refusing: "budget refusing",
-  near: "budget nearly spent",
-} as const;
+export const RUN_PILL = "run waiting on you";
 
 export type PillTone = "warning" | "danger" | "neutral";
 
-/** A decision or condition row's pill: its words, and whose move it is. */
+/** A row's pill: its words, and whose move it is. */
 export function rowPill(row: InboxRow): { label: string; tone: PillTone } {
   switch (row.kind) {
     case "notice": {
@@ -364,25 +357,8 @@ export function rowPill(row: InboxRow): { label: string; tone: PillTone } {
         case "ask":
           return { label: reasonPhrase("asked"), tone: "warning" };
         case "run":
-          return { label: CONDITION_PILLS.run, tone: "warning" };
-        case "seat":
-          return { label: CONDITION_PILLS.seat, tone: "danger" };
+          return { label: RUN_PILL, tone: "warning" };
       }
-      break;
-    case "condition": {
-      const item = row.item;
-      const tone: PillTone = item.severity === "critical" ? "danger" : "warning";
-      if (item.subject === "budget") {
-        return {
-          label: item.id.endsWith("-near") ? CONDITION_PILLS.near : CONDITION_PILLS.refusing,
-          tone,
-        };
-      }
-      return {
-        label: item.id.startsWith("error-") ? CONDITION_PILLS.failed : CONDITION_PILLS.seat,
-        tone,
-      };
-    }
   }
   return { label: "", tone: "neutral" };
 }
@@ -411,22 +387,17 @@ export function inboxQuiet(input: {
   chip: Chip;
   /** Rows drawn after the chip. */
   shown: number;
-  /** The sentence naming what the conditions are measured over. */
-  watched: string;
 }): { title: string; hint: string } | null {
-  const { answer, bound, error, scope, chip, shown, watched } = input;
+  const { answer, bound, error, scope, chip, shown } = input;
   if (error || shown > 0) return null;
-  if (!bound) {
-    return {
-      title: "Nothing needs a decision",
-      hint: `Checked and clear: ${watched}.`,
-    };
-  }
-  if (!answer) return null;
+  // NOBODY'S INBOX SAYS NOTHING HERE: what would make it somebody's is the
+  // screen's own sentence, above the list, and a quiet band beside it would
+  // claim to have looked on behalf of nobody.
+  if (!bound || !answer) return null;
   if (chip === DECISIONS_VIEW) {
     return {
       title: "Nothing waits on your decision",
-      hint: `No question is put to you, no coding run is waiting on your answer, and nothing in ${watched} needs a person.`,
+      hint: "No question is put to you, and no coding run is waiting on your answer.",
     };
   }
   if (chip === "reviews") {

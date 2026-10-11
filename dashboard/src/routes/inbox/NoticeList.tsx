@@ -15,7 +15,6 @@ import { EmptyValue, FilterChip, FilterChipGroup, Skeleton, Tag } from "@crewlet
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
-import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
@@ -46,7 +45,7 @@ const WAITING_IS =
 export interface Who {
   name: string;
   kind: "agent" | "human";
-  /** Null where the row is about no seat at all (the company's budget). */
+  /** The handle the badge is drawn for. */
   handle: string | null;
 }
 
@@ -75,12 +74,8 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
           return whoOf(index, row.subject.ask.asked_by_seat || row.subject.ask.asked_by);
         case "run":
           return whoOf(index, row.subject.run.agent_handle);
-        case "seat":
-          return whoOf(index, row.subject.seat.row.handle);
       }
       break;
-    case "condition":
-      return whoOf(index, row.item.who);
     case "notice": {
       const n = row.notice;
       if (n.actor_seat) return whoOf(index, n.actor_seat);
@@ -100,14 +95,8 @@ export function rowKey(row: InboxRow): string {
           return row.subject.ask.key;
         case "run":
           return row.subject.run.task?.key ?? "";
-        case "seat": {
-          const r = row.subject.seat.row;
-          return r.turn?.work_item?.key ?? r.live_call?.work_item?.key ?? "";
-        }
       }
       break;
-    case "condition":
-      return "";
     case "notice":
       return row.notice.subject_key ?? "";
   }
@@ -142,16 +131,8 @@ export function rowLine(row: InboxRow, index: OrgIndex): string {
           return row.subject.run.question
             ? `Coding run parked: ${row.subject.run.question}`
             : "Coding run parked on a question";
-        case "seat": {
-          const seat = row.subject.seat;
-          const period = seat.window ? `${PERIOD_ADJECTIVE[seat.window.period]} ` : "";
-          const onItem = rowKey(row) !== "";
-          return `${onItem ? "Stopped mid-turn" : "Stopped"}: ${period}token budget exhausted`;
-        }
       }
       break;
-    case "condition":
-      return row.item.title;
     case "notice":
       return noticeText(row.notice, index) || humanize(row.notice.kind);
   }
@@ -185,8 +166,6 @@ export function rowUnread(row: InboxRow): boolean {
       return !row.notice.read;
     case "decision":
       return row.notices.some((n) => !n.read);
-    case "condition":
-      return false;
   }
 }
 
@@ -415,7 +394,7 @@ function Row({
   const unread = rowUnread(row);
   const ring = row.kind === "notice" ? undefined : RING[pill.tone];
   const snoozedUntil = row.kind === "notice" && row.notice.snoozed ? row.notice.snoozed_until : "";
-  const where = key ? `on ${key}` : row.kind === "notice" ? "" : "engine";
+  const where = key ? `on ${key}` : "";
   return (
     <li>
       <button
@@ -427,10 +406,6 @@ function Row({
       >
         {who ? (
           <SeatAvatar name={who.name} kind={who.kind} size={30} ring={ring} decorative />
-        ) : row.kind === "condition" ? (
-          <span className="attention-icon inbox-row-mark" data-severity={row.item.severity}>
-            <Mark name={row.item.icon} size="sm" />
-          </span>
         ) : (
           <span className="inbox-row-mark inbox-row-nobody" aria-hidden="true">
             <Mark name="key" size="sm" />
@@ -438,9 +413,7 @@ function Row({
         )}
         <span className="inbox-row-main">
           <span className="inbox-row-head">
-            <span className="inbox-row-who">
-              {who?.name ?? (row.kind === "condition" ? "The company" : "An operator")}
-            </span>
+            <span className="inbox-row-who">{who?.name ?? "An operator"}</span>
             <span className="inbox-row-where">{where}</span>
             <span className="inbox-row-age t-num">
               {shortWhen(row.at, now) || <EmptyValue label="No time recorded" />}

@@ -119,6 +119,7 @@ export type Screen =
   | { screen: "skills" }
   | { screen: "memory" }
   | { screen: "diary"; handle: string }
+  | { screen: "page-reads"; id: string }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "budgets" }
@@ -377,6 +378,17 @@ function agents(rest: string[], screen: Make, under: Under): Route {
         return missing("setup", under("Agent setup"), "a seat is opened from the seats list");
       }
       return screen({ screen: "seat-setup", handle: tail[0] });
+    case "pages":
+      // A PAGE HAS NO LIST HERE, like a trace: it is opened from the page, or
+      // from a tool skill's row, both of which already hold its id.
+      if (tail.length !== 1 || !tail[0]) {
+        return missing(
+          "setup",
+          under("Agent setup"),
+          "a page is opened from the page itself or from Agent skills",
+        );
+      }
+      return screen({ screen: "page-reads", id: tail[0] });
     default:
       return missing("setup", under("Agent setup"));
   }

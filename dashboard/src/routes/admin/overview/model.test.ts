@@ -31,7 +31,7 @@ import {
   troubleParts,
   waitingOf,
 } from "./model.ts";
-import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { seatDecisionsFor } from "./seatDecisions.tsx";
 
 const base = {
   company: "Nimbus",
@@ -65,7 +65,7 @@ describe("the status sentence", () => {
         }),
       ),
     ).toBe(
-      "Nimbus is running on 3 nodes. 1 decision is waiting on you, 1 condition needs a look, and 1 agent is working right now.",
+      "Nimbus is running on 3 nodes. 1 decision is waiting on you, 1 condition needs an admin, and 1 agent is working right now.",
     );
     expect(
       sentenceText(
@@ -78,7 +78,7 @@ describe("the status sentence", () => {
         }),
       ),
     ).toBe(
-      "Nimbus is running on 1 node. 3 decisions are waiting on you, 2 conditions need a look, and 4 agents are working right now.",
+      "Nimbus is running on 1 node. 3 decisions are waiting on you, 2 conditions need an admin, and 4 agents are working right now.",
     );
     // EVERY CLAUSE AT NONE, ONE AND MANY — the fleet's own included: a
     // presence read that counted nobody is not "running on 0 nodes".
@@ -145,11 +145,23 @@ describe("the status sentence", () => {
     expect(sentenceText(statusSentence({ ...base, nodes: 0 }))).toMatch(/^Nimbus is running\. /);
   });
 
-  test("a condition that needs a look says where it is", () => {
-    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" });
-    const clause = runs.find((r) => r.text.includes("needs a look"));
-    expect(clause?.href).toBe("#/inbox?row=x");
+  test("a condition that needs an admin says where it is", () => {
+    const runs = statusSentence({
+      ...base,
+      conditions: 1,
+      conditionsHref: "#/admin/agents/seats/devrel",
+    });
+    const clause = runs.find((r) => r.text.includes("needs an admin"));
+    expect(clause?.href).toBe("#/admin/agents/seats/devrel");
     expect(runs.filter((r) => r.href)).toHaveLength(1);
+  });
+
+  // MORE THAN ONE IS LISTED UNDER THE SENTENCE, so the clause links nowhere
+  // rather than to a list of the same rows.
+  test("conditions with no one place are said plainly", () => {
+    const runs = statusSentence({ ...base, conditions: 2 });
+    const clause = runs.find((r) => r.text.includes("need an admin"));
+    expect(clause?.href).toBeUndefined();
   });
 });
 

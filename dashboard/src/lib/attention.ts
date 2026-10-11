@@ -62,7 +62,7 @@ export const SUBJECTS: Record<Subject, string> = {
  * twice and none is drawn nowhere.
  *
  *  - `seat`: the Inbox's "Needs a decision" group and the Overview's count of
- *    conditions that need a look. A person decides these — raise a ceiling,
+ *    conditions that need an admin. A person decides these — raise a ceiling,
  *    resume a paused seat, look at one that failed.
  *  - `engine`: the console's health card and the Overview's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
@@ -97,7 +97,7 @@ export function watchedIn(where: Where): string {
 
 /**
  * The conditions a PERSON decides — the Inbox's "Needs a decision" rows beside
- * the asks and runs, and what the Overview counts as needing a look.
+ * the asks and runs, and what the Overview counts as needing an admin.
  *
  * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
  * stopped for it is already a decision row of its own

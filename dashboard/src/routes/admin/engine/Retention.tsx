@@ -119,7 +119,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // surface uses. Asking anyway would refuse on every poll and paint the
   // screen red for a reader who simply is not an admin; the section's own
   // refusal above says why, once.
-  const admin = knownRefusal(useViewer(), apiToken() !== "") === null;
+  const admin = knownRefusal("retention", useViewer(), apiToken() !== "") === null;
   const { data, loading, error, refetch } = useQuery("retention", undefined, {
     pollMs: POLL_MS,
     enabled: admin,
