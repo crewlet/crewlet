@@ -482,7 +482,7 @@ func subjectPath(s Subject, container string) string {
 		// barrier never intersects any read's closure. A barrier
 		// writes no row anywhere, so a scope that intersected anything
 		// would make every linearizable read wait behind every other.
-		return statelog.BarrierScope
+		return statelog.FrameworkScope
 	case KindGeneration, KindEviction:
 		// A GATE IS ABOUT THE WHOLE DOMAIN. It licenses or drops
 		// records on every subject, so anything narrower would be a

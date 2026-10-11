@@ -2652,7 +2652,7 @@ func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 		return statelog.Envelope{
 			V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 			Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: 1,
-			Scope:  statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+			Scope:  statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 			Writer: fmt.Sprintf("node-%d", seq),
 		}
 	}
