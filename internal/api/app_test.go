@@ -219,6 +219,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
 	}
+	if opts.Operator == nil {
+		opts.Operator = fixedOperator{}
+	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
@@ -242,7 +245,7 @@ func withRequired(opts api.Options) api.Options {
 
 // operatorSurface builds an operator surface over what a case names, auditing
 // onto a queue nobody reads, and fails the test on a refusal.
-func operatorSurface(t *testing.T, opts operator.Options) *operator.Server {
+func operatorSurface(t *testing.T, opts operator.Options) fixedOperator {
 	t.Helper()
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
@@ -251,8 +254,14 @@ func operatorSurface(t *testing.T, opts operator.Options) *operator.Server {
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}
-	return s
+	return fixedOperator{server: s}
 }
+
+// fixedOperator is an operator surface answering one catalogue for good — the
+// zero value none, which is an app serving no operator tool at all.
+type fixedOperator struct{ server *operator.Server }
+
+func (f fixedOperator) Operator() (*operator.Server, bool) { return f.server, f.server != nil }
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
 // refused by name.
@@ -271,8 +280,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Coord", "Sources.Native", "Sources.Retention",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Native", "Capacity", "FleetBroker",
-		"Backup", "Audit",
+		"Config", "Secrets", "Setup", "Operator", "Retention", "Native", "Capacity",
+		"FleetBroker", "Backup", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

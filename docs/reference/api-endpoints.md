@@ -197,8 +197,8 @@ node means nothing was done.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
-| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
-| `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Absent where `/operator/mcp` is |
+| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request |
+| `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Served wherever `/operator/mcp` is, over the same catalogue |
 
 > **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
 > `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
@@ -3144,6 +3144,24 @@ tools (`list_work_items`, `get_page`, `read_project_file` and the rest the act
 transport does not serve) and none of its write tools. What appends to no log
 stays: the four tools about the fleet's own records, `search_knowledge` and
 `answer_knowledge`.
+
+**The catalogue follows what the node runs, without a restart.** Both
+transports serve the catalogue the node holds at each request, and the node
+builds it again whenever what it is built from changes: the revision that
+brings the company's first native backend (a company applied after boot —
+the [live bootstrap](../getting-started/quickstart.md) — is offered its
+tracker and knowledge base tools from that revision on), a revision that adds
+or removes the company's knowledge backend, and a rename of the company, which
+titles the MCP server. A revision that reconfigures the knowledge backend it
+has — another Confluence site or space, a rotated credential — builds nothing:
+`search_knowledge` and `answer_knowledge` reach the backend the node holds at
+each call. A revision that switches a native half
+to a vendor or back changes nothing here until the node restarts, as
+[A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)
+says for every surface. An MCP session opened on the catalogue a revision
+replaced is not served again: its next request is answered `404` for an
+unknown session, and the client opens a new one — what MCP's streamable-HTTP
+transport requires of a client whose session ended.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a

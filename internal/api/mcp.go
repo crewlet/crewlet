@@ -79,24 +79,20 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)))
 }
 
-// mountOperator registers the operator surface's transports, or says why it
-// did not.
+// mountOperator registers the operator surface's two transports, each serving
+// the catalogue the surface answers at the request — see [OperatorSurface].
 //
-// A nil server is an ordinary configuration — a company on Jira and
-// Confluence has no native record for this to manage — and the route is then
-// ABSENT rather than answering 404 from a registered handler: an endpoint
-// that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says.
-func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
-	if server == nil {
-		return
-	}
+// MOUNTED ON EVERY APP, from the one fact known at assembly — an engine is
+// beside it — rather than from a catalogue built then: the tools a node serves
+// appear with its native runtime, which can be built after this runs. The
+// lines logged here therefore name the paths and no tool; the catalogue logs
+// its tools where it is built (`operator_surface_built`).
+func (a *App) mountOperator(mux httpjson.Router, surface OperatorSurface) {
 	// EVERY METHOD, for the reason the bridge takes every method: streamable
 	// HTTP is a GET for the server-to-client stream and a DELETE to end a
 	// session.
-	mux.Handle(operator.MCPPath, server.MCPHandler())
+	mux.Handle(operator.MCPPath, operatorRoute(surface, (*operator.Server).MCPHandler))
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
-		"tools", server.Tools(),
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
 			"an api.auth.tokens entry")
@@ -104,9 +100,27 @@ func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	// one tool per request, admitting a token bound to a seat and nobody
 	// else (ADR-0024). Under the same always-guarded prefix, so the guard in
 	// front of it is the one in front of /operator/mcp.
-	mux.Handle(operator.ActPattern, server.ActHandler())
+	mux.Handle(operator.ActPattern, operatorRoute(surface, (*operator.Server).ActHandler))
 	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
-		"tools", server.Acts(),
 		"detail", "the dashboard writes here as the person the presented "+
 			"token is bound to by contact.crewlet_operator_id")
+}
+
+// operatorRoute serves one transport of the catalogue surface answers at this
+// request, or the mux's own 404 where it answers none.
+//
+// ONE RESOLUTION, AT THE TOP, so the request is served by one catalogue from
+// its first byte to its last whatever the surface answers meanwhile; and the
+// 404 is byte for byte the one a route this node does not serve answers
+// ([httpjson.NoRoute]), since to the caller it is the same fact.
+func operatorRoute(surface OperatorSurface,
+	transport func(*operator.Server) http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server, ok := surface.Operator()
+		if !ok {
+			httpjson.NoRoute(w, r)
+			return
+		}
+		transport(server).ServeHTTP(w, r)
+	})
 }

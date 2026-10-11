@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
@@ -31,8 +33,9 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 	return as(estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: actor.Provenance()})
 }
 
-// NewEngineOperator builds the operator surface — the one tool catalogue every
-// operator transport serves — over a running engine.
+// EngineOperators is the operator surface over a running engine — the one tool
+// catalogue both operator transports serve ([OperatorSurface]) — BUILT AGAIN
+// whenever what it is built from changes.
 //
 // HERE, beside the seam it fills and beside [NewEngineRuntime], rather than in
 // the command that wires the node, for that constructor's reason: `crewlet run`
@@ -40,6 +43,32 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 // the same code. A harness that assembled its own catalogue would certify what
 // it wired rather than what a node serves — and the replay's session floor is
 // read off exactly this surface's answer.
+//
+// # Built again, rather than once
+//
+// It was built once, when the API was assembled, from whatever the engine ran
+// at that instant. On a node that booted with no company that was no tracker,
+// no knowledge base and no knowledge backend — those arrive with the first
+// apply, after the API exists — so its people were offered the fleet's own
+// gestures and nothing else until a restart, and the person the live bootstrap
+// binds could not file a task from the dashboard. A knowledge backend can also
+// come and go with any revision. So every request asks [EngineOperators.Operator],
+// which reads the facts the catalogue is gated on ([operatorKey]) and builds a
+// new catalogue when they differ from the ones the current one was built from.
+// That costs a request one reading of the engine — a few atomic loads, and one
+// short lock where the company's knowledge backend is a vendor's — and only
+// when a fact moves a second reading and a build: at a node's first apply, and
+// when a revision adds or removes the company's knowledge backend or renames
+// the company. A knowledge backend a revision RECONFIGURES — another
+// Confluence site or space, a rotated credential — builds nothing, since only
+// whether there is one is a fact the catalogue is built from: its two knowledge
+// tools reach the searcher the engine holds at each call ([engineKnowledge]).
+//
+// ONE CATALOGUE PER SERVER, both transports over it, swapped together, so a
+// request is served by one whole catalogue and never by half of two. An MCP
+// session opened on a server this replaces is not served again: the next
+// request it makes is answered 404 for an unknown session, and the client
+// opens a new one, as the streamable-HTTP transport requires of it.
 //
 // THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
 // is what makes this one implementation of every tool rather than two — see
@@ -61,19 +90,198 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 // tools are ([engine.OperatorWork]) — so an operator's assistant on a node
 // whose copy of an operation's domain is out of service is answered from a
 // peer's copy of it (ADR-0031), not from the copy this node stopped serving.
-func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
-	return operator.New(EngineOperatorOptions(e))
+type EngineOperators struct {
+	// basis reads, at this instant, everything a catalogue is built from,
+	// and build builds one from it: over the engine, [operatorBasisOf] and
+	// [operator.New] of [operatorBasis.options]. Two functions rather than
+	// the engine itself, so the rule below — when a catalogue is built again,
+	// and what a failed build leaves — is held by a test that moves the facts
+	// without standing an engine up.
+	basis func() operatorBasis
+	build func(operatorBasis) (*operator.Server, error)
+
+	// current is the catalogue serving now and the key it was built under,
+	// one value swapped whole, so a request reads a server and the facts it
+	// was built from together, with one atomic load and no lock.
+	current atomic.Pointer[builtOperators]
+
+	// rebuild serialises building: a request that finds the facts moved
+	// builds, and every other request finding the same takes the catalogue
+	// it built rather than building its own.
+	rebuild sync.Mutex
 }
 
-// EngineOperatorOptions is what [NewEngineOperator] builds the surface from —
-// separate so a test can see which seams the operator's transports are handed.
+// builtOperators is one catalogue and the facts it was built from.
+type builtOperators struct {
+	key operatorKey
+	// server is the catalogue, nil where it serves nothing — which
+	// [operator.New] answers only for a node offering no tool at all, never
+	// one beside an engine, since the fleet's own gestures are always served.
+	server *operator.Server
+}
+
+// NewEngineOperators builds the operator surface over e, refusing a catalogue
+// [operator.New] refuses — a wiring mistake ([operator.ErrNoAudit]) that no
+// fact about the company can change, and so is the node's to refuse at boot
+// rather than a request's to discover.
+func NewEngineOperators(e *engine.Engine) (*EngineOperators, error) {
+	return newOperators(
+		func() operatorBasis { return operatorBasisOf(e) },
+		func(basis operatorBasis) (*operator.Server, error) {
+			return operator.New(basis.options(e))
+		})
+}
+
+// newOperators is [NewEngineOperators] over any reading and builder.
+func newOperators(basis func() operatorBasis,
+	build func(operatorBasis) (*operator.Server, error)) (*EngineOperators, error) {
+	read := basis()
+	server, err := build(read)
+	if err != nil {
+		return nil, err
+	}
+	o := &EngineOperators{basis: basis, build: build}
+	o.current.Store(&builtOperators{key: read.key(), server: server})
+	logOperatorsBuilt(server)
+	return o, nil
+}
+
+// Operator answers the catalogue that serves this request: the current one
+// where the facts it was built from still hold, and otherwise one built now
+// from the facts as they are.
+//
+// THE FACTS ARE READ AGAIN UNDER THE REBUILD LOCK, and a build is made from
+// that reading, never from the one that sent the request there. The first
+// reading may be held between taking the facts and the lock while they move
+// again and another request builds for where they moved to: built from it, the
+// held request put a catalogue of the OLDER facts back over the newer one, and
+// the next request built the newer one a second time. Read under the lock,
+// where builds are serialised, a catalogue is only ever replaced by one built
+// from facts read after it was.
+//
+// A BUILD THAT FAILS keeps the previous catalogue, which is still a correct
+// one for what it offers, and is recorded under the new facts so that the next
+// request does not try again (and log again) until they move once more:
+// [operator.New] refuses only a wiring mistake, which [NewEngineOperators]
+// already refused at boot, so this is a path no node is expected to take.
+func (o *EngineOperators) Operator() (*operator.Server, bool) {
+	if built := o.current.Load(); built.key == o.basis().key() {
+		return built.server, built.server != nil
+	}
+	o.rebuild.Lock()
+	defer o.rebuild.Unlock()
+	basis := o.basis()
+	key := basis.key()
+	previous := o.current.Load()
+	if previous.key == key {
+		return previous.server, previous.server != nil
+	}
+	server, err := o.build(basis)
+	if err != nil {
+		log.Error("operator_surface_not_built", "error", err,
+			"detail", "the operator's catalogue could not be built for what this "+
+				"node now runs; the previous one is still served")
+		o.current.Store(&builtOperators{key: key, server: previous.server})
+		return previous.server, previous.server != nil
+	}
+	o.current.Store(&builtOperators{key: key, server: server})
+	logOperatorsBuilt(server)
+	return server, server != nil
+}
+
+// Acts names the tools the act transport serves NOW — [operator.Server.Acts]
+// of the catalogue a request would be served by — for the `viewer` answer, so
+// a screen enables exactly the controls a press of would reach.
+func (o *EngineOperators) Acts() []string {
+	server, ok := o.Operator()
+	if !ok {
+		return nil
+	}
+	return server.Acts()
+}
+
+// logOperatorsBuilt says what a catalogue offers, once, where it is built.
+func logOperatorsBuilt(server *operator.Server) {
+	log.Info("operator_surface_built", "tools", server.Tools(), "acts", server.Acts(),
+		"detail", "the operator's MCP endpoint and the dashboard's act transport "+
+			"serve this catalogue")
+}
+
+// operatorKey is every fact the operator catalogue is BUILT from rather than
+// asking on each call: which of the company's halves this node serves, reads
+// and writes apart, whether the ranked item search is served, whether the
+// company has a knowledge backend, and the company's name, which titles the
+// MCP server. Everything else the catalogue's tools read — the chart, the
+// clock, the roster, the mentions, the knowledge searcher itself — is resolved
+// per call, and the object store and the queues are the process's.
+//
+// THE ONE PREDICATE both readers read: [operatorBasis.key] is what a request
+// compares, and [operatorBasis.options] gates every seam on the same reading,
+// so the catalogue a key names is exactly the one built under it.
+type operatorKey struct {
+	tracker, trackerWrites bool
+	search                 bool
+	wiki, wikiWrites       bool
+	knowledge              bool
+	company                string
+}
+
+// operatorBasis is ONE READING of everything [operatorKey] names, with the
+// seams themselves beside the facts.
+type operatorBasis struct {
+	// reads is the tracker's and the knowledge base's read seams and which
+	// of them this node serves, the ranked search among them.
+	reads engine.OperatorReads
+	// workWriter writes the tracker as one operator, nil where this node
+	// hands out no tracker writer.
+	workWriter func(estate.Actor) estate.WorkWriter
+	// pageWriter writes the knowledge base, where pagesWritable.
+	pageWriter    estate.Pages
+	pagesWritable bool
+	// knowledge says the company has a knowledge backend, native or not.
+	knowledge bool
+	// company is the company's name, "" where none is applied.
+	company string
+}
+
+// operatorBasisOf reads e once for every fact the catalogue is built from.
+func operatorBasisOf(e *engine.Engine) operatorBasis {
+	basis := operatorBasis{reads: engine.OperatorNative(e), knowledge: e.Knowledge() != nil}
+	if writer, writable := engine.OperatorWorkWriter(e); writable {
+		basis.workWriter = writer
+	}
+	basis.pageWriter, basis.pagesWritable = engine.OperatorPageWriter(e)
+	if c := e.Company(); c != nil && c.Config != nil {
+		basis.company = c.Config.Name
+	}
+	return basis
+}
+
+// key is the facts b holds, for a request to compare with the catalogue's.
+func (b operatorBasis) key() operatorKey {
+	return operatorKey{
+		tracker: b.reads.Tracker, trackerWrites: b.reads.Tracker && b.workWriter != nil,
+		search: b.reads.Search,
+		wiki:   b.reads.Wiki, wikiWrites: b.reads.Wiki && b.pagesWritable,
+		knowledge: b.knowledge,
+		company:   b.company,
+	}
+}
+
+// EngineOperatorOptions is what the catalogue over e is built from at this
+// instant — exported so a test can see which seams the operator's transports
+// are handed.
 func EngineOperatorOptions(e *engine.Engine) operator.Options {
+	return operatorBasisOf(e).options(e)
+}
+
+// options is the catalogue's deps from this one reading of e: every seam
+// gated on the fact [operatorBasis.key] carries for it.
+func (b operatorBasis) options(e *engine.Engine) operator.Options {
+	key := b.key()
 	// EVERY CALL THAT MAY WRITE is audited onto this node's own queue, so
 	// the event store here holds who did what through either transport.
-	opts := operator.Options{Audit: e.Backends().Queue}
-	if c := e.Company(); c != nil && c.Config != nil {
-		opts.Company = c.Config.Name
-	}
+	opts := operator.Options{Audit: e.Backends().Queue, Company: key.company}
 	// THE CHART, resolved per call because a config apply replaces it —
 	// and wired UNCONDITIONALLY, which it was not. It used to be set only
 	// where the company had a knowledge backend, because `search_knowledge`
@@ -131,19 +339,14 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	// drawing, nor list a project's files the REST route was answering. Every
 	// tool is gated on its own seam ([builtin.OperatorTools]), so a reader
 	// handed without a writer serves exactly the reads.
-	reader, readable := engine.OperatorWork(e)
-	if readable {
+	if key.tracker {
+		reader := b.reads.Work
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,
 			// AND THE PROJECT'S FILES — the rows through the estate
 			// router, the bytes through this node's object client.
 			Files:   reader,
 			Objects: e.ObjectStore(),
-			// AND THE RANKED SEARCH. It reads, so it takes no actor —
-			// the corpus is the same for everybody and there is nothing
-			// to attribute — and without it the operator catalogue
-			// listed a verb this surface could never register.
-			Search: engine.WorkSearcher(e),
 			// AND THE INBOX READ. It takes no actor for the reason
 			// Search takes none — it reads, and whose inbox is an
 			// argument rather than an identity — and it is this
@@ -195,7 +398,8 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			// entirely: every `due=friday`, `due=overdue` and relative date
 			// an operator's assistant wrote resolved on UTC while a seat's
 			// own resolved on the company's zone. Read per call, because
-			// this surface is built once and an apply can move the clock
+			// a catalogue outlives every apply that leaves what it is
+			// built from alone, and an apply can move the clock
 			// (ADR-0018).
 			Zone: e.Zone,
 			// THE ROUTER'S SESSION FLOOR, which every write raises
@@ -204,28 +408,37 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			// copy is out of service.
 			Await: e.AwaitEstate,
 		}
-		if writer, writable := engine.OperatorWorkWriter(e); writable {
-			operatorWorkWriters(&opts.Work, writer)
+		// AND THE RANKED SEARCH, where this node serves it
+		// ([engine.OperatorReads.Search]: the tracker and an index) —
+		// through the same reader, which is the seam it is. It reads, so
+		// it takes no actor: the corpus is the same for everybody and
+		// there is nothing to attribute. Set only here, never as a typed
+		// nil, since the catalogue offers the search wherever it is set.
+		if key.search {
+			opts.Work.Search = reader
+		}
+		if key.trackerWrites {
+			operatorWorkWriters(&opts.Work, b.workWriter)
 		}
 	}
 	// THE KNOWLEDGE BASE ON THE TRACKER'S RULE: its reads wherever this node
 	// serves them, its writer only beside them where one is handed out.
-	if pageReader, readable := engine.OperatorPages(e); readable {
+	if key.wiki {
 		opts.Pages = builtin.PageDeps{
-			Reader:   pageReader,
+			Reader:   b.reads.Pages,
 			Actor:    operator.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Reserved: engineReserved(e),
 			Await:    e.AwaitEstate,
 		}
-		if pageWriter, writable := engine.OperatorPageWriter(e); writable {
-			opts.Pages.Writer = pageWriter
+		if key.wikiWrites {
+			opts.Pages.Writer = b.pageWriter
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
+	if key.knowledge {
 		// THE CHART THE SEARCH IS SCOPED AGAINST is already wired
 		// above, for every company rather than only this one.
 		opts.Knowledge = engineKnowledge{engine: e}

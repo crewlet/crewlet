@@ -203,6 +203,44 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	}
 }
 
+// AN MCP SESSION OUTLIVES THE CALL THAT HANDED OUT ITS HANDLER. The app asks
+// its operator surface on every request and serves each through the server's
+// MCPHandler, so a session opened by one request is continued by a handler
+// fetched again for the next. The streamable-HTTP handler is where the
+// sessions live: one built per call knew none of them, and every request after
+// an assistant's `initialize` was a 404 for its own session.
+func TestAnMCPSessionOutlivesTheCallThatHandedOutItsHandler(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, operator.Options{
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Actor: operator.WorkActor(nil, nil),
+		},
+	})
+	// EACH REQUEST ASKS FOR THE HANDLER AGAIN, as the app's route does.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.MCPHandler().ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+	}))
+	t.Cleanup(srv.Close)
+	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: srv.URL + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("a session's second request, through a handler fetched again: %v", err)
+	}
+	if len(listed.Tools) == 0 {
+		t.Error("the session listed no tools")
+	}
+}
+
 // dialOperator connects an MCP client to the surface as one token.
 //
 // THE GUARD IS STOOD IN FOR by stamping the operator on the context, which is

@@ -1624,8 +1624,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	// ONE operator surface, handed to the routes that serve it and to the
-	// viewer that says what it serves.
-	operators, err := api.NewEngineOperator(e)
+	// viewer that says what it serves — both asking it per request, since the
+	// catalogue it answers is built again when this node's native runtime
+	// arrives (a company applied after boot) or the company's knowledge
+	// backend changes.
+	operators, err := api.NewEngineOperators(e)
 	if err != nil {
 		return nil, err
 	}

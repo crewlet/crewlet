@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -73,7 +74,7 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		t.Fatalf("the premise: a company on the native tracker and knowledge base hands "+
 			"the operator's MCP neither (work %v, pages %v)", work.Reader, opts.Pages.Reader)
 	}
-	operator := builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder"}
+	founder := builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder"}
 	for _, seam := range []struct {
 		name string
 		got  any
@@ -81,17 +82,18 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		{"Reader", work.Reader},
 		{"Files", work.Files},
 		{"Inbox", work.Inbox},
-		{"Writer", work.Writer(operator)},
-		{"Dependencies", work.Dependencies(operator)},
-		{"Merges", work.Merges(operator)},
-		{"Moves", work.Moves(operator)},
-		{"FileWriter", work.FileWriter(operator)},
-		{"ViewWriter", work.ViewWriter(operator)},
-		{"CatalogueWriter", work.CatalogueWriter(operator)},
-		{"PersonWriter", work.PersonWriter(operator)},
-		{"TrashWriter", work.TrashWriter(operator)},
-		{"Placer", work.Placer(operator)},
-		{"ProjectWriter", work.ProjectWriter(operator)},
+		{"Search", work.Search},
+		{"Writer", work.Writer(founder)},
+		{"Dependencies", work.Dependencies(founder)},
+		{"Merges", work.Merges(founder)},
+		{"Moves", work.Moves(founder)},
+		{"FileWriter", work.FileWriter(founder)},
+		{"ViewWriter", work.ViewWriter(founder)},
+		{"CatalogueWriter", work.CatalogueWriter(founder)},
+		{"PersonWriter", work.PersonWriter(founder)},
+		{"TrashWriter", work.TrashWriter(founder)},
+		{"Placer", work.Placer(founder)},
+		{"ProjectWriter", work.ProjectWriter(founder)},
 		{"Pages.Reader", opts.Pages.Reader},
 		{"Pages.Writer", opts.Pages.Writer},
 	} {
@@ -161,10 +163,7 @@ func TestAMaintenanceNodeServesAFilesBytesAndWritesNone(t *testing.T) {
 // promises and the node no longer serves.
 func TestAMaintenanceNodeOffersItsOperatorEveryReadAndNoLogWrite(t *testing.T) {
 	t.Parallel()
-	inService, err := api.NewEngineOperator(testEngine(t))
-	if err != nil {
-		t.Fatalf("the operator surface of a node in service: %v", err)
-	}
+	inService := operatorCatalogue(t, testEngine(t))
 	e := testEngineWith(t, engine.Options{Mode: statelog.ModeMaintenance})
 	opts := api.EngineOperatorOptions(e)
 	if opts.Work.Reader == nil || opts.Pages.Reader == nil {
@@ -175,10 +174,7 @@ func TestAMaintenanceNodeOffersItsOperatorEveryReadAndNoLogWrite(t *testing.T) {
 	if opts.Work.Writer != nil || opts.Work.FileWriter != nil || opts.Pages.Writer != nil {
 		t.Error("a node in a maintenance mode hands its operator a writer")
 	}
-	surface, err := api.NewEngineOperator(e)
-	if err != nil {
-		t.Fatalf("the operator surface of a node in a maintenance mode: %v", err)
-	}
+	surface := operatorCatalogue(t, e)
 
 	want := operatorReads(inService)
 	for _, read := range []string{builtin.ListWorkItemsTool, builtin.GetPageTool,
@@ -201,6 +197,21 @@ func TestAMaintenanceNodeOffersItsOperatorEveryReadAndNoLogWrite(t *testing.T) {
 		t.Errorf("a node in a maintenance mode offers its operator the writes %v, "+
 			"want exactly those that append to no log %v", acts, noLog)
 	}
+}
+
+// operatorCatalogue is the catalogue the operator surface over e serves now —
+// the one `crewlet run` builds ([api.NewEngineOperators]).
+func operatorCatalogue(t *testing.T, e *engine.Engine) *operator.Server {
+	t.Helper()
+	operators, err := api.NewEngineOperators(e)
+	if err != nil {
+		t.Fatalf("the operator surface: %v", err)
+	}
+	server, ok := operators.Operator()
+	if !ok {
+		t.Fatal("the operator surface serves no catalogue beside an engine")
+	}
+	return server
 }
 
 // operatorReads is every tool an operator surface offers that its act

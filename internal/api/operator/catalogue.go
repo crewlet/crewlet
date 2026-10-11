@@ -25,6 +25,14 @@
 // missing from the other, which nobody tests for because each surface looks
 // complete from inside.
 //
+// A [Server] is that one catalogue and its transports, built together and
+// never changed. What a node can serve does change after it boots — its first
+// company brings the native tracker and knowledge base, and a revision can
+// bring or retire a knowledge backend — so the node builds a NEW Server from
+// the new deps and swaps it in whole, both transports with it (the api
+// package's EngineOperators): a request is served by one catalogue, never by
+// half of two, and nothing here is mutated while a transport reads it.
+//
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
 // Not a parallel implementation. Every tool here is the one from
@@ -248,10 +256,11 @@ var ErrNoAudit = errors.New("operator: Options.Audit is required: every call " +
 
 // New builds the surface, or nil when there is nothing to serve.
 //
-// NIL RATHER THAN AN EMPTY SERVER, so no route is mounted at all: an endpoint
-// that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says. A surface with tools to
-// serve and no [Options.Audit] is refused with [ErrNoAudit].
+// NIL RATHER THAN AN EMPTY SERVER, so both transports answer as a route this
+// node does not serve answers — the mux's own 404, which the app gives a
+// request its surface answers no server for — rather than as an endpoint that
+// exists and lists no tools, which reads to an operator as broken. A surface
+// with tools to serve and no [Options.Audit] is refused with [ErrNoAudit].
 func New(opts Options) (*Server, error) {
 	// THE PAGE TOOLS READ THE CALL'S OPERATION THROUGH THEIR OWN SEAM, and
 	// it is this package's to wire because this package is the one that

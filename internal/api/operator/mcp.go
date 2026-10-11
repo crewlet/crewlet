@@ -37,9 +37,14 @@ const serverName = "crewlet-operator"
 // credential as its author (see [WorkActor]).
 type mcpTransport struct {
 	srv *mcp.Server
+
+	// handler is the streamable-HTTP handler over srv, the guard's check in
+	// front of it — see [Server.MCPHandler] for why there is exactly one.
+	handler http.Handler
 }
 
-// newMCPTransport registers every catalogue tool on an MCP server.
+// newMCPTransport registers every catalogue tool on an MCP server, and builds
+// the one HTTP handler that serves it.
 func newMCPTransport(s *Server, company string) mcpTransport {
 	title := "Crewlet"
 	if name := strings.TrimSpace(company); name != "" {
@@ -66,7 +71,7 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 				builtin.AnnotationsFor(tool.Name())),
 		}, handlerFor(s, tool.Name()))
 	}
-	return mcpTransport{srv: srv}
+	return mcpTransport{srv: srv, handler: guardedMCP(srv)}
 }
 
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
@@ -118,9 +123,22 @@ func handlerFor(s *Server, name string) mcp.ToolHandler {
 // end a session, and a pattern naming one verb answers 405 to the others —
 // which an MCP client reports as a transport that does not support streaming
 // rather than as a route registered wrong.
-func (s *Server) MCPHandler() http.Handler {
+//
+// THE SAME HANDLER ON EVERY CALL, built once with the server: the
+// streamable-HTTP handler is where the transport's SESSIONS live, so a handler
+// built per call knows none of the sessions an earlier one opened. It was
+// built per call, which cost nothing while the app asked for it once, at
+// assembly — and would have answered every request after an assistant's
+// `initialize` with a 404 for its own session once the app came to ask its
+// surface per request (the api package's OperatorSurface), as it must,
+// because the catalogue a node serves can change after the app is assembled.
+func (s *Server) MCPHandler() http.Handler { return s.mcp.handler }
+
+// guardedMCP is srv's one streamable-HTTP handler, behind a check that the
+// app's guard has run — see [Server.MCPHandler].
+func guardedMCP(srv *mcp.Server) http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return s.mcp.srv }, nil)
+		func(*http.Request) *mcp.Server { return srv }, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is in
 		// [auth.GuardedPrefixes], so a request that reaches this handler

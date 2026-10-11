@@ -22,7 +22,8 @@ import (
 
 // AnswerModels resolves a person's answer model off the CURRENT epoch, per
 // call, because a config apply replaces the registry and the operator surface
-// is built once.
+// outlives it: a node builds that surface again only when what it serves
+// changes, never for a new registry.
 //
 // THROUGH THE AUXILIARY SEAM like every other auxiliary call, which on the
 // operator stage the tool states charges the COMPANY's windows alone — a
