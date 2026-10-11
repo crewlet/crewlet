@@ -41,8 +41,16 @@ import (
 // its successor an empty one. The node's own store is no longer a condition —
 // it carries the audit rows the dashboard reads, and a missing dashboard row
 // is not a reason to stop a company's crons.
+//
+// AND THIS NODE PUBLISHES: a fire is a TaskAssigned on a seat's mailbox, and a
+// node in a maintenance mode starts no publisher. Its constructor never
+// reaches [Engine.startScheduler], which sits behind the one gate that keeps
+// them off it — but an APPLY runs on such a node like any other, and this
+// predicate is the only thing between a revision declaring a schedule and an
+// armed loop. Asked here rather than at the apply's call, so both callers
+// answer the one question.
 func (e *Engine) schedulerRuns(c *Company) bool {
-	if c == nil || !c.Config.Scheduling.Runs() {
+	if c == nil || !c.Config.Scheduling.Runs() || !e.mode.Publishes() {
 		return false
 	}
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {

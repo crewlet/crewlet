@@ -199,16 +199,18 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 	}
 
 	// A NODE WITH NO INBOUND EDGE, which a maintenance-mode node is: its
-	// constructor returns before the edge is started.
+	// constructor returns before the edge is started, and an apply starts
+	// none there ([Engine.startInbound]). Through APPLY, the way a node meets
+	// a revision, so a stage order that skipped the line on such a node is
+	// caught here too.
 	quiet, _ := aNodeInMode(t, statelog.ModeMaintenance)
 	if quiet.inboundStarted() {
 		t.Fatal("the premise: a maintenance-mode node started its inbound edge")
 	}
-	next, err := NewCompany(parseCompany(t, restartLineTrackerNone))
-	if err != nil {
-		t.Fatalf("NewCompany: %v", err)
+	applyOK(t, quiet, restartLineTrackerNone)
+	if quiet.inboundStarted() {
+		t.Fatal("the premise: an apply in a maintenance mode started the inbound edge")
 	}
-	quiet.reconcileNative(t.Context(), next, at.Add(3*time.Minute))
 	if got := len(restartLines(t, logs)); got != 3 {
 		t.Errorf("a node with no inbound edge said %d restart lines in all, want 3: "+
 			"the line belongs to the runtime, not to the edge", got)
