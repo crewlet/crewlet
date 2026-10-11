@@ -66,6 +66,8 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	if public {
 		b.API.Public = config.APIPublic{Port: 8443}
 	}
+	served := filesNative(newFakeFiles(t))
+	served.purger, served.nodes = &fakePurger{}, &fakeNodeGate{}
 	return newApp(t, api.Options{
 		Bootstrap: &b,
 		Runtime: &fakeRuntime{state: api.RuntimeState{
@@ -83,8 +85,7 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		// SERVED, not merely mounted: a native route over a runtime that
 		// holds nothing answers the mux's own 404, which the walk below
 		// could not tell from a route mounted on the wrong listener.
-		Native: fixedNative{files: newFakeFiles(t), purger: &fakePurger{},
-			nodes: &fakeNodeGate{}},
+		Native:  served,
 		Sources: queries.Sources{Company: active()},
 	})
 }

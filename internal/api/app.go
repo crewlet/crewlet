@@ -150,15 +150,19 @@ type routeMounter interface {
 // `503 no_state_log` for the gate (the routes exist on every build, and saying
 // otherwise sends an operator looking for a version mismatch).
 //
-// AN INTERFACE ANSWERING A PAIR rather than three nil-able fields, for the
-// conversion [EngineReads] states: a typed nil inside an interface passes a
-// nil check and panics on the first call, and a pair cannot hold one by
-// mistake.
+// AN INTERFACE ANSWERING PAIRS rather than nil-able fields, for the conversion
+// [EngineReads] states: a typed nil inside an interface passes a nil check and
+// panics on the first call, and a pair cannot hold one by mistake.
 type NativeRoutes interface {
-	// Files is a project's file bytes — the streamed download and upload,
-	// and the removal — or false where this node runs no native tracker or
-	// no object store, or hands out no tracker writer.
-	Files() (ProjectFiles, bool)
+	// FileReads is what a project file's download reads — its row and its
+	// bytes — or false where this node runs no native tracker or no object
+	// store.
+	FileReads() (FileReads, bool)
+
+	// FileWrites is what an upload and a removal write, or false where
+	// this node also hands out no tracker writer — in a maintenance mode,
+	// which serves its reads and hands no writer to any surface.
+	FileWrites() (FileWrites, bool)
 
 	// Purger destroys a task as the operator who asked, or false where this
 	// node hands out no tracker writer.

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -55,8 +56,11 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 	if _, ok := routes.Purger(); !ok {
 		t.Error("the purge is not served on a node running the native tracker")
 	}
-	if _, ok := routes.Files(); !ok {
-		t.Error("the file bytes are not served on a node running the native tracker")
+	if _, ok := routes.FileReads(); !ok {
+		t.Error("a file's download is not served on a node running the native tracker")
+	}
+	if _, ok := routes.FileWrites(); !ok {
+		t.Error("a file's upload is not served on a node running the native tracker")
 	}
 	if _, ok := routes.Nodes(); !ok {
 		t.Error("the eviction gate is not served on a node running the state log")
@@ -95,6 +99,35 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		default:
 			t.Errorf("the operator's MCP seam %s is %T, want the router's", seam.name, seam.got)
 		}
+	}
+}
+
+// A NODE IN A MAINTENANCE MODE SERVES A FILE'S BYTES AND WRITES NONE. The mode
+// hands no writer to any surface, so the upload, the removal and the purge are
+// absent there; a download is a READ, and a maintenance-mode node serves its
+// reads — the file listing beside it among them. Gated on the writer, the
+// download answered `no_route` for a file the same node had just listed.
+//
+// A data node, which is what one engine alone can be; a node without `data`
+// in the mode is held to the same by internal/e2e's
+// TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone, beside the data
+// member it needs to join.
+func TestAMaintenanceNodeServesAFilesBytesAndWritesNone(t *testing.T) {
+	t.Parallel()
+	e := testEngineWith(t, engine.Options{Mode: statelog.ModeMaintenance})
+	if api.EngineReads(e)().Files == nil {
+		t.Fatal("the premise: a maintenance-mode node lists no project's files")
+	}
+	routes := api.EngineNative(e)
+	if _, ok := routes.FileReads(); !ok {
+		t.Error("a node in a maintenance mode does not serve a file's bytes, " +
+			"which it lists")
+	}
+	if _, ok := routes.FileWrites(); ok {
+		t.Error("a node in a maintenance mode serves a file's upload, a write")
+	}
+	if _, ok := routes.Purger(); ok {
+		t.Error("a node in a maintenance mode serves the purge, a write")
 	}
 }
 
