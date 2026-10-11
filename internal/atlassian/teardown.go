@@ -21,10 +21,11 @@ type TeardownOptions struct {
 
 // Teardown deletes the service accounts this engine created.
 //
-// ONLY ITS OWN, matched on the description it wrote: an organization's
-// service accounts include ones people made for their own scripts, and a
-// disconnect that removed those would destroy somebody else's automation on
-// its way out.
+// ONLY ITS OWN, matched on the marker it wrote into the display name
+// ([HandleFrom]) — never the description, which Atlassian accepts and drops:
+// an organization's service accounts include ones people made for their own
+// scripts, and a disconnect that removed those would destroy somebody else's
+// automation on its way out.
 //
 // DELETION, not deactivation, because an account that merely stops working
 // still holds its seat and still appears in every user list.
@@ -33,6 +34,7 @@ type TeardownOptions struct {
 // credential that is being refused: with the key rejected, every remaining
 // call would fail the same way and the report would name every agent as a
 // separate failure of the same one thing.
+//
 // # What it reports
 //
 // Every planned seat whose account is now absent from the organization, with
