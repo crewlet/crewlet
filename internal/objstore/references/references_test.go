@@ -171,6 +171,56 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	}
 }
 
+// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS. A backup
+// restores its store copy and replays the declaring domain's log from the
+// copy's position — and a newer build applies what the copy's applier deferred
+// — so it owes every object a record of either names, and it learns how a
+// record names one only from the declaration: the log's stream, the deferred
+// records' table, and the domain's own reader of one record. A Required table
+// missing any of them is one whose files written during a backup no backup
+// carries. The deferred table is held to the schema too: one the replicated
+// estate does not have, or one without the framework's position and payload,
+// is a backup refused at its first read of it.
+func TestEveryRequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
+	t.Parallel()
+	columns, _ := schema(t)
+
+	// CONTROLS: each half missing is refused, naming it — and a retired
+	// table, which no backup carries, needs none.
+	for name, broken := range map[string]func(*objstore.ReferenceTable){
+		"Log":      func(r *objstore.ReferenceTable) { r.Log = "" },
+		"Deferred": func(r *objstore.ReferenceTable) { r.Deferred = "" },
+		"Records":  func(r *objstore.ReferenceTable) { r.Records = nil },
+	} {
+		ref := tracker.FileObjectReferences
+		broken(&ref)
+		if err := ref.ValidateLog(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("a Required declaration with no %s drew %v; want it refused naming it", name, err)
+		}
+	}
+	retired := tracker.FileObjectReferences
+	retired.Standing, retired.Log, retired.Deferred, retired.Records = objstore.Retired, "", "", nil
+	if err := retired.ValidateLog(); err != nil {
+		t.Errorf("a retired declaration naming no log was refused: %v", err)
+	}
+
+	for _, ref := range references.All {
+		if err := ref.ValidateLog(); err != nil {
+			t.Error(err)
+			continue
+		}
+		if ref.Standing != objstore.Required {
+			continue
+		}
+		have := columns[ref.Deferred]
+		if !slices.Contains(have, "position") || !slices.Contains(have, "payload") {
+			t.Errorf("%s names %s as the records its log deferred, and the replicated "+
+				"schema holds no such table with a position and a payload (%v)",
+				ref.Table, ref.Deferred, have)
+		}
+	}
+}
+
 // assumedClockSkew is the most the clocks of the node deciding a write and the
 // node running the collector are assumed to disagree by — an hour, which no
 // node an engine runs on is anywhere near (NTP keeps them within

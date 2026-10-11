@@ -36,6 +36,39 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	}
 }
 
+// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG. A backup reads
+// the log a declaration names past its store copy, and the deferred records of
+// the table it names, to carry the objects a restore's replay names — so a
+// declaration naming another domain's stream or table would have the backup
+// read records that never write it and miss the ones that do, with nothing
+// failing. The registered domain is the authority on both names; the
+// declaration restates them only because the backup cannot import every
+// domain, and this is what holds the two together.
+func TestEveryRequiredTableNamesItsDomainsLog(t *testing.T) {
+	t.Parallel()
+	byName := map[string]statelog.Domain{}
+	for _, d := range registeredDomains() {
+		byName[d.Name()] = d
+	}
+	for _, ref := range references.All {
+		if ref.Standing != objstore.Required {
+			continue
+		}
+		d, ok := byName[ref.Domain]
+		switch {
+		case !ok:
+			t.Errorf("%s is written by the %s domain, which this engine registers no log for",
+				ref.Table, ref.Domain)
+		case ref.Log != d.Stream().Name:
+			t.Errorf("%s names %s as its log; the %s domain's log is %s", ref.Table, ref.Log,
+				ref.Domain, d.Stream().Name)
+		case ref.Deferred != d.DeferredTable():
+			t.Errorf("%s names %s as its log's deferred records; the %s domain keeps them in %s",
+				ref.Table, ref.Deferred, ref.Domain, d.DeferredTable())
+		}
+	}
+}
+
 // A runtime without a tracker has no files, so no estate the collector reads —
 // and the engine starts no collector rather than one over nothing, which would
 // read every object as unreferenced.

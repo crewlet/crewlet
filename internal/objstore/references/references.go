@@ -58,6 +58,19 @@
 // (collect.Estate) — and the engine's own test builds the passes from this
 // list against the estates it hands them, so a table declared in a domain the
 // engine reads no estate of fails the build rather than the boot.
+//
+// # The log half
+//
+// A backup reads more than rows: a restore brings its store copy back and
+// replays the declaring domain's log from the copy's position — and a newer
+// build applies what the copy's applier deferred — so a Required declaration
+// also names its log ([objstore.ReferenceTable.Log]), the table its domain
+// defers that log's records into ([objstore.ReferenceTable.Deferred]) and the
+// domain's own reader of one record ([objstore.ReferenceTable.Records]). The
+// gate here refuses a Required entry missing any of them, or naming a deferred
+// table the replicated schema does not hold; the engine's gate holds the log
+// and the table to the registered domain's own, which this package cannot
+// import.
 package references
 
 import (

@@ -405,6 +405,21 @@ func FileToken(path string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// isFileToken reports whether id has a [FileToken]'s shape — thirty-two
+// lower-case hex digits — which is what tells a file's object term from every
+// other object's: a task's and a view's ids are hyphenated uuids.
+func isFileToken(id string) bool {
+	if len(id) != hex.EncodedLen(sha256.Size/2) {
+		return false
+	}
+	for _, r := range id {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // SplitFileID takes a file subject's id apart: the project and the token.
 func SplitFileID(id string) (project, token string, ok bool) {
 	project, token, ok = strings.Cut(id, ".")

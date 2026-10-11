@@ -484,3 +484,76 @@ func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 		t.Errorf("a digest in the key column: %v, want an error naming the column", err)
 	}
 }
+
+// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS: the stream, the
+// table its domain defers records into, and the domain's reader of one record
+// — each refused by name when missing, since a backup cannot carry what a
+// log it was not told about names. A retired table, which no backup carries,
+// needs none of them; and the validation every reader asks comes first.
+func TestARequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
+	t.Parallel()
+	whole := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required,
+		Log: "CREWLET_TRACKER_LOG", Deferred: "tracker_log_deferred",
+		Records: func([]byte) ([]RecordReference, error) { return nil, nil }}
+	if err := whole.ValidateLog(); err != nil {
+		t.Fatalf("a whole declaration was refused: %v", err)
+	}
+	for field, broken := range map[string]func(*ReferenceTable){
+		"Log":      func(r *ReferenceTable) { r.Log = " " },
+		"Deferred": func(r *ReferenceTable) { r.Deferred = "" },
+		"Records":  func(r *ReferenceTable) { r.Records = nil },
+		"Standing": func(r *ReferenceTable) { r.Standing = "" },
+	} {
+		ref := whole
+		broken(&ref)
+		err := ref.ValidateLog()
+		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "tracker_files") {
+			t.Errorf("a declaration with no %s = %v; want it refused naming the table and the field", field, err)
+		}
+	}
+	unquoted := whole
+	unquoted.Deferred = "tracker_log_deferred; DROP TABLE tracker_files"
+	if err := unquoted.ValidateLog(); err == nil {
+		t.Error("a deferred table that is not an identifier was accepted into a statement")
+	}
+	retired := ReferenceTable{Domain: "tracker", Table: "replaced", Key: "object", Hash: "hash",
+		Size: "size", Owner: []string{"path"}, Standing: Retired}
+	if err := retired.ValidateLog(); err != nil {
+		t.Errorf("a retired declaration naming no log was refused: %v", err)
+	}
+	if _, err := retired.DeferredRecordsAfter(256); err == nil {
+		t.Error("a retired table's deferred records were read")
+	}
+	if _, err := whole.DeferredRecordsAfter(0); err == nil {
+		t.Error("a page of no deferred records was asked for")
+	}
+	query, err := whole.DeferredRecordsAfter(256)
+	if err != nil || query != `SELECT position, payload FROM tracker_log_deferred `+
+		`WHERE position > ? ORDER BY position LIMIT 256` {
+		t.Errorf("DeferredRecordsAfter = %q, %v", query, err)
+	}
+}
+
+// AN OWNER IS JOINED ONE WAY. The walk of a table spells a row's owner values
+// with JoinOwner and a domain's reader of a record spells the row it writes
+// with it too, so the backup can tell which row a record rewrote — spelled two
+// ways, a file replaced during a backup would read as two files.
+func TestAnOwnerIsJoinedOneWay(t *testing.T) {
+	t.Parallel()
+	if got := JoinOwner("ENG", "a/b.md"); got != "ENG/a/b.md" {
+		t.Errorf(`JoinOwner("ENG", "a/b.md") = %q`, got)
+	}
+	table := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required}
+	k := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
+	var named string
+	if err := table.ScanReferences(&fakeRows{rows: [][]any{
+		{k.String(), string(HashOf(nil)), int64(0), "ENG", "a/b.md"},
+	}}, func(_ Object, namedBy string) error { named = namedBy; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if named != JoinOwner("ENG", "a/b.md") {
+		t.Errorf("the walk spells the row %q and JoinOwner %q", named, JoinOwner("ENG", "a/b.md"))
+	}
+}
