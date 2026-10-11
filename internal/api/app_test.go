@@ -119,6 +119,19 @@ type noRoutes struct{}
 
 func (noRoutes) Routes(httpjson.Router) {}
 
+// fixedNative is the native routes a case names, each served exactly where it
+// is set — so the zero value is an engine running no native backend, which
+// serves none of them.
+type fixedNative struct {
+	files  api.ProjectFiles
+	purger api.TaskPurger
+	nodes  api.NodeGate
+}
+
+func (f fixedNative) Files() (api.ProjectFiles, bool) { return f.files, f.files != nil }
+func (f fixedNative) Purger() (api.TaskPurger, bool)  { return f.purger, f.purger != nil }
+func (f fixedNative) Nodes() (api.NodeGate, bool)     { return f.nodes, f.nodes != nil }
+
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
 
@@ -203,6 +216,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
+	if opts.Native == nil {
+		opts.Native = fixedNative{}
+	}
 	if opts.Capacity == nil {
 		opts.Capacity = &fakeStateLog{}
 	}
@@ -249,8 +265,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Coord", "Sources.Native", "Sources.Retention",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
-		"Audit",
+		"Config", "Secrets", "Setup", "Retention", "Native", "Capacity", "FleetBroker",
+		"Backup", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

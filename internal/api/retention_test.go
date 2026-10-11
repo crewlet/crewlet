@@ -275,7 +275,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 			Floor: 9_000, First: 8_800},
 	}
 	gate := &fakeNodeGate{readmit: fmt.Errorf("engine: readmit node node-4: %w", refusal)}
-	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
 
 	code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
 	if code != http.StatusConflict {
@@ -338,7 +338,7 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 	b := closedPosture()
 	refusal := &statelog.EvictionRefusal{NodeID: "node-4", Detail: "it holds a live presence lease"}
 	gate := &fakeNodeGate{evict: fmt.Errorf("engine: evict node node-4: %w", refusal)}
-	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
 
 	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
 	if code != http.StatusConflict || body["error"] != "eviction_refused" {
@@ -392,7 +392,7 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
 				Reason: statelog.ReasonLogFull, Detail: "the broker refused"})},
 	}}}
-	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
 	op := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
 
 	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id="+
@@ -468,7 +468,7 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	b := closedPosture()
 	gate := &fakeNodeGate{evict: fmt.Errorf("%w: \"node*\" is not a node id",
 		engine.ErrInvalidGate)}
-	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
 	if code, body := postAck(t, a, "/work/retention/evict/node*?confirm=node*"); code !=
 		http.StatusBadRequest || body["error"] != "invalid_gate" {
 		t.Fatalf("an invalid gate answered %d %v, want 400 invalid_gate", code, body)

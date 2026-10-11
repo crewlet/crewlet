@@ -46,8 +46,20 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 	if _, ok := native.WorkSearch.(estate.Work); !ok {
 		t.Errorf("the ranked search is handed %T, want the router's estate.Work", native.WorkSearch)
 	}
-	if _, ok := nativePurger(e).(purgeAdapter); !ok {
-		t.Errorf("the purge is handed %T, want the router's writer", nativePurger(e))
+	// THE ROUTES' WRITES go through the router by construction — the purge's
+	// and the file bytes' adapters hold the router's writer facade
+	// (estate.WorkWriter, a struct over the router) and can hold nothing else
+	// — so what is held here is that a node running the native tracker serves
+	// them, and its eviction gate, at all.
+	routes := api.EngineNative(e)
+	if _, ok := routes.Purger(); !ok {
+		t.Error("the purge is not served on a node running the native tracker")
+	}
+	if _, ok := routes.Files(); !ok {
+		t.Error("the file bytes are not served on a node running the native tracker")
+	}
+	if _, ok := routes.Nodes(); !ok {
+		t.Error("the eviction gate is not served on a node running the state log")
 	}
 
 	opts := api.EngineOperatorOptions(e)

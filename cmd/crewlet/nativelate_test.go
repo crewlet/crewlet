@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -35,6 +36,38 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 		if status != http.StatusOK {
 			t.Errorf("GET /query/%s = %d %s, want it answered for the company applied "+
 				"after boot", question, status, body)
+		}
+	}
+
+	// THE ROUTES: a file's bytes, the purge and the eviction gate, each
+	// reaching its own handler — which answers with a refusal of its own
+	// that writes nothing — where a route resolved at assembly answered the
+	// mux's `no_route` (the file bytes and the purge, never mounted) or
+	// `no_state_log` (the gate, handed no state log) for the life of the
+	// process.
+	for _, route := range []struct {
+		method, path string
+		status       int
+		code         string
+	}{
+		// The tracker answered: there is no such project.
+		{http.MethodGet, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
+		// The purge's own refusal, before anything is judged.
+		{http.MethodPost, "/work/no-such/purge?confirm=X", http.StatusBadRequest,
+			"project_required"},
+		// The gate's own refusal, before anything is judged.
+		{http.MethodPost, "/work/retention/evict/no-such-node", http.StatusBadRequest,
+			"confirm_required"},
+	} {
+		status, body := n.send(t, route.method, route.path)
+		var answer struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(body), &answer)
+		if status != route.status || answer.Error != route.code {
+			t.Errorf("%s %s = %d %s, want %d %s from its own handler for the company "+
+				"applied after boot", route.method, route.path, status, body,
+				route.status, route.code)
 		}
 	}
 }

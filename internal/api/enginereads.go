@@ -14,7 +14,7 @@ import (
 // one item, answered from this node's copy while it serves and from another
 // data node's while it does not.
 //
-// HERE, beside the surface it feeds, for [EngineFiles]' reason: `crewlet run`
+// HERE, beside the surface it feeds, for [EngineNative]'s reason: `crewlet run`
 // and the end-to-end suite build their read surfaces through this one
 // constructor, so a case asking a page or a ranked search of a harness node is
 // exercising the view a deployment serves rather than a narrower one the
