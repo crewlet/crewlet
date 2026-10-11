@@ -244,22 +244,6 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: git on the engine host. Listed for the same reason as the
-	// shell entry above — it does not fire on any machine the gates run on
-	// (ubuntu runners ship git, and a checkout needs it) — and an entry is
-	// what makes the day it starts firing visible.
-	// -----------------------------------------------------------------
-	{
-		Package: "internal/sandbox/codingagent",
-		Test:    "TestTheAskShimRecordsTheBranchItWasRunOn",
-		When:    Environment,
-		Why: "Needs `git` on PATH: the ask shim reads the branch a run pushed from the " +
-			"repository it asked in, and only a real repository proves the upstream, " +
-			"detached-HEAD and no-repository readings. The branch an agent names with " +
-			"--branch, which needs no git, is TestTheAskShimRecordsTheBranchItIsGiven's.",
-	},
-
-	// -----------------------------------------------------------------
 	// Environment: the right to chown. Unlike the entries above, this one
 	// DOES fire on the gates' runners, which run unprivileged — and the
 	// coverage it skips is held on every machine by its sibling case, which

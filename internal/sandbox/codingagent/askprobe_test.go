@@ -1,10 +1,10 @@
 package codingagent_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -181,9 +181,9 @@ func TestTheAskShimRecordsTheBranchItIsGiven(t *testing.T) {
 // TestTheAskShimRecordsTheBranchItIsGiven proves with no git involved.
 func TestTheAskShimRecordsTheBranchItWasRunOn(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not on PATH: the shim's own reading of the branch needs a repository to read")
-	}
+	// The shim's own reading of the branch needs a repository to read, and git
+	// is a prerequisite of the suite (gittest.Require), never a reason to skip.
+	gittest.Require(t)
 	const repo = `git init -q && git symbolic-ref HEAD refs/heads/wip/t1 && `
 	for name, tc := range map[string]struct {
 		setup, ask, want string
