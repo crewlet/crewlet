@@ -139,6 +139,27 @@ export function takenBytes(manifest: TakenBackup): number {
 }
 
 /**
+ * The refusals `POST /backup` makes over the fleet's own state, each with the
+ * sentence said when an engine sends no hint — its hint, as a sentence of its
+ * own, is said when it does.
+ */
+const FLEET_REFUSALS = new Map<string, string>([
+  ["objects_unreachable", "The object store did not answer for the company's files."],
+  [
+    "record_unreadable",
+    "A log this backup replays holds a record a newer build wrote; take the backup from a node running that build.",
+  ],
+  [
+    "log_recreated",
+    "This node's copy is keyed to a log that has since been recreated; take the backup once the node has re-keyed to it, or from a node that has.",
+  ],
+  [
+    "log_gap",
+    "A log a restore would replay no longer holds every record the copy needs; take the backup again.",
+  ],
+]);
+
+/**
  * Why a backup was not taken, and whether it is the directory's fault.
  *
  * THE ENGINE NAMES ONLY THE CALLER'S OWN MISTAKE (a 400 carries the detail —
@@ -175,14 +196,18 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
         "A backup is already running on this node, and two at once would share its one trim hold. Nothing was written; take this one once it finishes — the history on this page records it.",
     };
   }
-  // THE OBJECT STORE DID NOT ANSWER: the fleet's state rather than this
-  // node's, and the engine says what to check in its hint. The hint is a
+  // THE FLEET'S STATE RATHER THAN THIS NODE'S: the object store did not
+  // answer, a log the backup replays holds a newer build's record, the copy is
+  // keyed to a log since recreated, or a log is missing records the copy needs.
+  // The engine says what to do in its hint; the copy-failed sentence below
+  // would send the reader to a node with nothing wrong on it. The hint is a
   // CLAUSE — lower-case and unstopped — so it is made a sentence before the
   // one that follows it, or the two run together.
-  if (err.code === "objects_unreachable") {
+  const fleet = FLEET_REFUSALS.get(err.code);
+  if (fleet !== undefined) {
     return {
       field: false,
-      message: `${err.hint ? sentence(err.hint) : "The object store did not answer for the company's files."} Whatever was written there has no manifest, so it is not a backup.`,
+      message: `${err.hint ? sentence(err.hint) : fleet} Whatever was written there has no manifest, so it is not a backup.`,
     };
   }
   return {
