@@ -355,6 +355,10 @@ type Service struct {
 	tables  []objstore.ReferenceTable
 	metrics *metrics.Recorder
 	now     func() time.Time
+	// pageRead is called after each read of the copy's references — nil but
+	// in a test (export_test.go), which counts the reads to see that the
+	// copy is walked a page at a time rather than gathered first.
+	pageRead func()
 }
 
 // HoldPurpose names this subsystem in the trim-hold register, so an operator
@@ -494,9 +498,12 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// is the only one that describes the file — and the applier ran
 	// throughout the copy, so the live cursor names where this node was
 	// when the copy started.
-	var refs []reference
+	var (
+		pass *objectPass
+		path string
+	)
 	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
-		path := filepath.Join(dir, replicated)
+		path = filepath.Join(dir, replicated)
 		cursors, err := statelog.CursorsInFile(ctx, path)
 		if err != nil {
 			return Manifest{}, fmt.Errorf("backup: read the copy's own "+
@@ -512,45 +519,14 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		}
 		// THE OBJECTS THE COPY'S REQUIRED TABLES NAME, read from the
 		// copy for the reason the positions are: the rows a restore
-		// brings back are the ones in this file, and a file created
-		// after the copy is one whose record the restore replays and
-		// whose bytes the fleet still holds.
-		refs, err = referencedIn(ctx, path, s.tables)
-		if err != nil {
+		// brings back are the ones in this file. Copied now, before the
+		// streams, where the backup copies them (`s3`); asked after once
+		// the streams are snapshotted where they ride one (`nats`).
+		if pass, err = s.newObjectPass(ctx, dir, path); err != nil {
 			return Manifest{}, err
 		}
-		prev := s.previousObjects(ctx, dir)
-		if manifest.Objects, err = copyObjects(ctx, dir, refs, s.objects, prev); err != nil {
+		if err := pass.carryCopy(ctx); err != nil {
 			return Manifest{}, err
-		}
-		// READING A DATABASE CREATES SIDECARS, even for a read, so the
-		// copy is folded back into one file — a -wal left inside the
-		// artefact is debris carrying the reader's own umask rather
-		// than this directory's deliberate 0700, and a restore script
-		// looking for a set of named files finds one it does not know.
-		//nolint:govet // shadow: scoped to this block, which returns; see .golangci.yml
-		if err := store.QuiesceCopy(ctx, path); err != nil {
-			return Manifest{}, err
-		}
-		// AND THE DIGEST IS RETAKEN, because it now describes a file
-		// this package has opened since the copy was verified. A
-		// checksum that named the bytes before that open would answer
-		// the ONE question a shipped artefact raises — is the file that
-		// arrived the file that was verified — with a number that never
-		// matched what was written.
-		digest, err := store.FileDigest(path)
-		if err != nil {
-			return Manifest{}, err
-		}
-		size, err := os.Stat(path)
-		if err != nil {
-			return Manifest{}, fmt.Errorf("backup: measure the copy: %w", err)
-		}
-		for i := range manifest.Stores {
-			if manifest.Stores[i].Estate == store.EstateReplicated {
-				manifest.Stores[i].SHA256 = digest
-				manifest.Stores[i].Bytes = size.Size()
-			}
 		}
 	}
 
@@ -570,14 +546,48 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
-	// THE OBJECTS A STREAM CARRIES are asked about once its snapshot is
-	// taken — see [checkStreamObjects] for why after and not before.
-	if err := checkStreamObjects(ctx, manifest.Objects, refs, s.objects); err != nil {
-		return Manifest{}, err
+	if pass != nil {
+		// THE OBJECTS A STREAM CARRIES are asked about once its snapshot
+		// is taken — see [objectPass.finish] for why after and not
+		// before.
+		var err error
+		if manifest.Objects, err = pass.finish(ctx); err != nil {
+			return Manifest{}, err
+		}
+		// READING A DATABASE CREATES SIDECARS, even for a read, so the
+		// copy is folded back into one file — a -wal left inside the
+		// artefact is debris carrying the reader's own umask rather than
+		// this directory's deliberate 0700, and a restore script looking
+		// for a set of named files finds one it does not know. HERE,
+		// after every read of the copy: the stream backup's question
+		// about each object it names re-opens it once the streams are
+		// snapshotted.
+		if err = store.QuiesceCopy(ctx, path); err != nil {
+			return Manifest{}, err
+		}
+		// AND THE DIGEST IS RETAKEN, because it now describes a file this
+		// package has opened since the copy was verified. A checksum that
+		// named the bytes before that open would answer the ONE question a
+		// shipped artefact raises — is the file that arrived the file that
+		// was verified — with a number that never matched what was written.
+		digest, err := store.FileDigest(path)
+		if err != nil {
+			return Manifest{}, err
+		}
+		size, err := os.Stat(path)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("backup: measure the copy: %w", err)
+		}
+		for i := range manifest.Stores {
+			if manifest.Stores[i].Estate == store.EstateReplicated {
+				manifest.Stores[i].SHA256 = digest
+				manifest.Stores[i].Bytes = size.Size()
+			}
+		}
 	}
 	if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
 		log.WarnContext(ctx, "backup_objects_lost",
-			"dir", dir, "lost", len(lost.Lost), "objects", len(refs),
+			"dir", dir, "lost", len(lost.Lost), "objects", lost.Objects+len(lost.Lost),
 			"detail", "the copy names files whose objects the store does not hold, "+
 				"or holds as other bytes; the backup carries everything else and "+
 				"lists them in its manifest, and the objects_missing alarm counts them")

@@ -1,0 +1,388 @@
+package backup_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// gate holds every call that passes it until it is opened, counting how many
+// it holds at once and the most it ever held — the collector's own measure of
+// a bound, applied to the backup's.
+type gate struct {
+	open     chan struct{}
+	openOnce sync.Once
+
+	mu         sync.Mutex
+	held, peak int
+}
+
+func newGate() *gate { return &gate{open: make(chan struct{})} }
+
+// pass is a call arriving: counted, then held until the gate opens or ctx
+// ends — whose error it answers.
+func (g *gate) pass(ctx context.Context) error {
+	g.mu.Lock()
+	g.held++
+	g.peak = max(g.peak, g.held)
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.held--
+		g.mu.Unlock()
+	}()
+	select {
+	case <-g.open:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// release opens the gate, once however often it is called.
+func (g *gate) release() { g.openOnce.Do(func() { close(g.open) }) }
+
+// counts is how many calls the gate holds now, and the most it has held.
+func (g *gate) counts() (held, peak int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held, g.peak
+}
+
+// waitHeld fails the test unless n calls are held at once within ten seconds.
+func (g *gate) waitHeld(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		held, peak := g.counts()
+		if held >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the gate never held %d calls at once (at most %d): the calls are not "+
+				"made concurrently", n, peak)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// manyFiles uploads n small files and names each from the copy, as
+// `ENG/file-<i>`.
+func manyFiles(t *testing.T, db *store.DB, files *objstore.Store, n int) []stored {
+	t.Helper()
+	bodies := make([]string, n)
+	for i := range bodies {
+		bodies[i] = fmt.Sprintf("file %d", i)
+	}
+	held := upload(t, files, bodies...)
+	filesNaming(t, db, held...)
+	return held
+}
+
+// boundedService is a backup of db whose objects are reached through objs.
+func boundedService(t *testing.T, db *store.DB, objs *backup.Objects) *backup.Service {
+	t.Helper()
+	fleet := memory.NewFleet()
+	return build(t, backup.Options{
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
+		Now: func() time.Time { return clock }, Objects: objs,
+	})
+}
+
+// takeAsync runs Take in the background, answering its result on a channel.
+func takeAsync(t *testing.T, svc *backup.Service, dir string) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Take(context.WithoutCancel(t.Context()), dir)
+		done <- err
+	}()
+	return done
+}
+
+// A BACKUP READS UP TO ITS BOUND OF OBJECTS AT ONCE, AND NEVER MORE. Four at a
+// time, a first copy of a terabyte of objects is hours on a link that carries
+// it in minutes sixteen wide — and the trim hold covers the whole copy; with no
+// bound it would flood the prefix the company's own downloads share.
+func TestABackupReadsAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	// SIXTEEN, the value backupFetchConcurrency's doc derives: a change to it
+	// is a decision this test makes somebody restate.
+	if backup.FetchConcurrency != 16 {
+		t.Fatalf("the backup reads %d objects at once; its doc derives sixteen", backup.FetchConcurrency)
+	}
+	db := openStore(t)
+	files, _ := filesStore(t)
+	held := manyFiles(t, db, files, 3*backup.FetchConcurrency)
+	g := newGate()
+	defer g.release()
+	svc := boundedService(t, db, &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
+		if err := g.pass(ctx); err != nil {
+			return nil, err
+		}
+		return files.Open(ctx, o)
+	}})
+	dir := filepath.Join(t.TempDir(), "bounded")
+	done := takeAsync(t, svc, dir)
+	g.waitHeld(t, backup.FetchConcurrency)
+	time.Sleep(50 * time.Millisecond)
+	if _, peak := g.counts(); peak != backup.FetchConcurrency {
+		t.Fatalf("the backup had %d objects out at once, want its bound of %d", peak, backup.FetchConcurrency)
+	}
+	g.release()
+	if err := <-done; err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if heldNow, peak := g.counts(); heldNow != 0 || peak != backup.FetchConcurrency {
+		t.Fatalf("after the backup: %d calls held, %d at most; want none and %d", heldNow, peak,
+			backup.FetchConcurrency)
+	}
+	restoresWhole(t, filepath.Join(dir, "objects"), held)
+}
+
+// A BACKUP OF A STREAM ASKS UP TO ITS BOUND AT ONCE, AND NEVER MORE. Asked one
+// at a time, two million objects on the broker's bucket are minutes of round
+// trips end to end; thirty-two out is the audit's own depth for the same
+// question.
+func TestABackupAsksTheStreamStoreAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	// THIRTY-TWO, the collector's audit depth for the same question.
+	if backup.StreamCheckConcurrency != 32 {
+		t.Fatalf("the backup asks %d at once; its doc holds it to the audit's thirty-two",
+			backup.StreamCheckConcurrency)
+	}
+	db := openStore(t)
+	files, _ := filesStore(t)
+	manyFiles(t, db, files, 3*backup.StreamCheckConcurrency)
+	g := newGate()
+	defer g.release()
+	svc := boundedService(t, db, &backup.Objects{Stream: "OBJ_crewlet_files",
+		Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+			if err := g.pass(ctx); err != nil {
+				return objstore.Info{}, err
+			}
+			return files.Stat(ctx, k)
+		},
+		Open: func(context.Context, objstore.Object) (io.ReadCloser, error) {
+			t.Error("an object was read although the stream snapshot carries it")
+			return nil, errors.New("not expected")
+		}})
+	done := takeAsync(t, svc, filepath.Join(t.TempDir(), "bounded-stream"))
+	g.waitHeld(t, backup.StreamCheckConcurrency)
+	time.Sleep(50 * time.Millisecond)
+	if _, peak := g.counts(); peak != backup.StreamCheckConcurrency {
+		t.Fatalf("the backup asked %d at once, want its bound of %d", peak, backup.StreamCheckConcurrency)
+	}
+	g.release()
+	if err := <-done; err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if heldNow, peak := g.counts(); heldNow != 0 || peak != backup.StreamCheckConcurrency {
+		t.Fatalf("after the backup: %d calls held, %d at most; want none and %d", heldNow, peak,
+			backup.StreamCheckConcurrency)
+	}
+}
+
+// THE FIRST OBJECT THE STORE DOES NOT ANSWER FOR STOPS THE BACKUP, with nothing
+// left in flight. It is refused for that object whatever the rest does — the
+// object may be intact in a store that did not answer — so reading on is a
+// terabyte sent for a refusal, and asking on is a store that stopped answering
+// asked about every object it holds.
+func TestABackupStopsAtTheFirstObjectTheStoreDoesNotAnswerFor(t *testing.T) {
+	t.Parallel()
+	const files = 200
+	refuse := errors.New("the store did not answer")
+	// first is the first key in key order — the one the walk hands on first.
+	first := func(held []stored) objstore.Key {
+		k := held[0].object.Key
+		for _, o := range held[1:] {
+			if o.object.Key.Compare(k) < 0 {
+				k = o.object.Key
+			}
+		}
+		return k
+	}
+
+	t.Run("copied", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		bucket, _ := filesStore(t)
+		held := manyFiles(t, db, bucket, files)
+		unanswered := first(held)
+		g := newGate()
+		defer g.release()
+		var calls atomic.Int32
+		svc := boundedService(t, db, &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
+			calls.Add(1)
+			if o.Key == unanswered {
+				// THE GATE OPENS ONCE THE FAILURE IS ANSWERED, so a
+				// backup that carries on reaches every object rather
+				// than waiting on the gate for ever.
+				defer g.release()
+				return nil, refuse
+			}
+			if err := g.pass(ctx); err != nil {
+				return nil, err
+			}
+			return bucket.Open(ctx, o)
+		}})
+		dir := filepath.Join(t.TempDir(), "unanswered")
+		_, err := svc.Take(t.Context(), dir)
+		if !errors.Is(err, backup.ErrObjectsUnreachable) || !strings.Contains(err.Error(), unanswered.String()) {
+			t.Fatalf("Take = %v; want ErrObjectsUnreachable naming %s", err, unanswered)
+		}
+		if n := calls.Load(); n >= 2*backup.FetchConcurrency {
+			t.Errorf("the store was asked for %d objects; a backup that stops at the first it does "+
+				"not answer for asks fewer than %d", n, 2*backup.FetchConcurrency)
+		}
+		if heldNow, _ := g.counts(); heldNow != 0 {
+			t.Errorf("%d reads were still out when Take returned", heldNow)
+		}
+		if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
+			t.Fatal("a backup refused for an object wrote its manifest")
+		}
+	})
+
+	t.Run("in a stream", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		bucket, _ := filesStore(t)
+		held := manyFiles(t, db, bucket, files)
+		unanswered := first(held)
+		g := newGate()
+		defer g.release()
+		var calls atomic.Int32
+		svc := boundedService(t, db, &backup.Objects{Stream: "OBJ_crewlet_files",
+			Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+				calls.Add(1)
+				if k == unanswered {
+					defer g.release()
+					return objstore.Info{}, refuse
+				}
+				if err := g.pass(ctx); err != nil {
+					return objstore.Info{}, err
+				}
+				return bucket.Stat(ctx, k)
+			},
+			Open: func(context.Context, objstore.Object) (io.ReadCloser, error) {
+				return nil, errors.New("not expected")
+			}})
+		dir := filepath.Join(t.TempDir(), "unanswered-stream")
+		_, err := svc.Take(t.Context(), dir)
+		if !errors.Is(err, backup.ErrObjectsUnreachable) || !strings.Contains(err.Error(), unanswered.String()) {
+			t.Fatalf("Take = %v; want ErrObjectsUnreachable naming %s", err, unanswered)
+		}
+		if n := calls.Load(); n >= 2*backup.StreamCheckConcurrency {
+			t.Errorf("the store was asked about %d objects; a backup that stops at the first it "+
+				"does not answer for asks fewer than %d", n, 2*backup.StreamCheckConcurrency)
+		}
+		if heldNow, _ := g.counts(); heldNow != 0 {
+			t.Errorf("%d questions were still out when Take returned", heldNow)
+		}
+		if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
+			t.Fatal("a backup refused for an object wrote its manifest")
+		}
+	})
+}
+
+// THE FETCH BOUND RIDES WARM CONNECTIONS: past the shared transport's idle
+// pool per host, a GET over the bound would open a connection of its own and
+// pay a handshake the pool exists to save — the collector holds its audit's
+// bound the same way.
+func TestTheFetchBoundRidesWarmConnections(t *testing.T) {
+	t.Parallel()
+	for name, bound := range map[string]int{
+		"fetch": backup.FetchConcurrency, "stream check": backup.StreamCheckConcurrency,
+	} {
+		if bound > httpx.MaxIdleConnsPerHost {
+			t.Errorf("the backup's %s bound is %d, past the %d connections the shared "+
+				"transport keeps warm per host", name, bound, httpx.MaxIdleConnsPerHost)
+		}
+	}
+}
+
+// THE COPY IS WALKED A PAGE AT A TIME, never gathered first. A company of two
+// million objects is two million references, and a backup that read them all
+// before copying the first held half a gibibyte of them — twice; walked, it
+// holds a page of each table while the objects of the page before are copied.
+func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	files, _ := filesStore(t)
+	held := manyFiles(t, db, files, 4*objstore.WalkPage+1)
+	g := newGate()
+	defer g.release()
+	svc := boundedService(t, db, &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
+		if err := g.pass(ctx); err != nil {
+			return nil, err
+		}
+		return files.Open(ctx, o)
+	}})
+	var pages atomic.Int32
+	backup.SetPageObserver(svc, func() { pages.Add(1) })
+	dir := filepath.Join(t.TempDir(), "paged")
+	done := takeAsync(t, svc, dir)
+	g.waitHeld(t, backup.FetchConcurrency)
+	if read := pages.Load(); read > 2 {
+		t.Fatalf("the backup had read %d pages of the copy while copying its first %d objects: "+
+			"it gathers the copy's references before copying them", read, backup.FetchConcurrency)
+	}
+	g.release()
+	if err := <-done; err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	// FOUR WHOLE PAGES AND THE SHORT ONE THAT ENDS THE WALK — and no read
+	// past it.
+	if read := pages.Load(); read != 5 {
+		t.Fatalf("the backup read the copy in %d pages, want 5", read)
+	}
+	restoresWhole(t, filepath.Join(dir, "objects"), held)
+}
+
+// A KEY THE COPY NAMES AS TWO OBJECTS REFUSES THE BACKUP. A key is minted for
+// one upload, so two rows giving it two digests are a copy that contradicts
+// itself, and a backup that verified the object against either would certify
+// the other wrong. The walk hands the two rows on adjacent, which is where the
+// contradiction is caught.
+func TestABackupRefusesAKeyNamedAsTwoObjects(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	files, _ := filesStore(t)
+	held := upload(t, files, "the bytes one row records")
+	filesNaming(t, db, held...)
+	other := held[0].object
+	other.Hash = objstore.HashOf([]byte("the bytes another row records"))
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_files
+			(id, project_key, path, hash, size, object, created_at, updated_at, version, document)
+			VALUES ('ENG.other', 'ENG', 'other', ?, ?, ?, 0, 0, 1, x'7b7d')`,
+			string(other.Hash), other.Size, other.Key.String())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := boundedService(t, db, &backup.Objects{Open: files.Open})
+	dir := filepath.Join(t.TempDir(), "contradicted")
+	_, err := svc.Take(t.Context(), dir)
+	if err == nil || !strings.Contains(err.Error(), "ENG/file-0") || !strings.Contains(err.Error(), "ENG/other") {
+		t.Fatalf("Take = %v; want it refused naming both rows", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatal("a backup over a copy that contradicts itself wrote its manifest")
+	}
+}
