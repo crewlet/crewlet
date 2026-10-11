@@ -27,6 +27,17 @@
 // query (`?uploads`, `?partNumber=&uploadId=`, `?uploadId=`). A fake that
 // routed on the method would store each part as the whole object and pass
 // every multipart test while testing none of it, so the query is read first.
+//
+// # And the real bucket beside it
+//
+// A benchmark that measures a path through S3 measures it here AND, when the
+// CREWLET_BENCH_S3_* variables name one, against a real bucket — the figure
+// the fake can only model. [RealBucket] is where those variables are read,
+// once for every such benchmark: a second parser of them is a benchmark that
+// reads a region, a prefix or a path style differently from the first and
+// points its measurement at a bucket nobody meant, so this package's tests
+// fail on any other package that spells their names or the stem one is built
+// from.
 package s3fake
 
 import (
