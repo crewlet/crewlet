@@ -43,15 +43,7 @@
  */
 
 import { useMemo, useSyncExternalStore } from "react";
-import {
-  AppShell,
-  BrandLockup,
-  Button,
-  Kbd,
-  SearchTrigger,
-  SidebarNav,
-  useAppShell,
-} from "@crewlethq/ui";
+import { AppShell, BrandLockup, Button, Kbd, SidebarNav, useAppShell } from "@crewlethq/ui";
 import { ListFilterGlyph, SendGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import { workspaceOf, workspaceRow, workspacesOf, type WorkspaceRow } from "~/app/nav.ts";
@@ -80,13 +72,7 @@ const PROJECTS_PAGE = 200;
 /** The door to the console, out of the console's chunk — see the file's doc. */
 const AdminDoor = lazyScreen("console", (module) => module.AdminDoor);
 
-export function PersonSidebar({
-  onSearch,
-  onSetToken,
-}: {
-  onSearch: () => void;
-  onSetToken: () => void;
-}) {
+export function PersonSidebar({ onSetToken }: { onSetToken: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
@@ -173,16 +159,6 @@ export function PersonSidebar({
           <span className="side-handoff-label">Hand off</span>
           <Kbd keys={capsOf(keyRow("handoff").presses[0]!)} subtle />
         </Button>
-      </div>
-      <div className="side-search">
-        <SearchTrigger
-          variant="rail"
-          label={`Search ${org?.name || "everything"}`}
-          title="Search everything"
-          onClick={onSearch}
-          keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
-        />
       </div>
       <SidebarNav label="Navigation">
         <SidebarNav.Group>{rows.filter((ws) => ws.place === "you").map(row)}</SidebarNav.Group>

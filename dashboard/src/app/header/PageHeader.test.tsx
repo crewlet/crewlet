@@ -26,6 +26,7 @@ import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { rosterOf } from "~/test/seats.ts";
@@ -147,74 +148,22 @@ describe("the breadcrumb", () => {
     expect(trail().getAttribute("tabindex")).toBe("0");
   });
 
-  // THE FLOOR IS THE WAY BACK OUT: where the last crumb starts, so a trail that
-  // cannot show its ancestry beside the controls breaks the bar's line rather
-  // than sharing it at 20ch and cutting "Engineering · Co" mid-letter.
-  test("the trail's floor is where its last crumb starts, measured from its own start", async () => {
+  // THE CONSOLE'S TRAIL STARTS "ADMIN ›" — a label rather than a crumb, so it
+  // links nowhere (the console's first crumb is already its first screen),
+  // and it is not the page's heading. The person shell's trail has none.
+  test("a prefix is a label before the first crumb, linking nowhere and never the heading", () => {
     widths(400, 400);
-    const rect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      const left = this.classList.contains("crumbs")
-        ? 12
-        : this.classList.contains("crumb-here")
-          ? 262
-          : 0;
-      return {
-        width: 0,
-        height: 20,
-        top: 0,
-        left,
-        right: left,
-        bottom: 20,
-        x: left,
-        y: 0,
-      } as DOMRect;
-    };
-    try {
-      render(<Breadcrumb crumbs={crumbs} />);
-      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("250px"));
-    } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
-    }
-  });
-
-  // BUT NEVER WIDER THAN THE ROOM BESIDE THE DRAWER TOGGLE: a floor past it put
-  // the trail on a line under the toggle, and the bar stood three lines tall.
-  test("the floor is capped at the room the drawer toggle leaves on the bar's line", async () => {
-    widths(366, 366);
-    const rect = HTMLElement.prototype.getBoundingClientRect;
-    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-      const left = this.classList.contains("crumbs")
-        ? 12
-        : this.classList.contains("crumb-here")
-          ? 362
-          : 0;
-      const width = this.classList.contains("toggle") ? 30 : 0;
-      return {
-        width,
-        height: 20,
-        top: 0,
-        left,
-        right: left + width,
-        bottom: 20,
-        x: left,
-        y: 0,
-      } as DOMRect;
-    };
-    try {
-      render(
-        <div className="bar">
-          <button type="button" className="toggle">
-            menu
-          </button>
-          <Breadcrumb crumbs={crumbs} />
-        </div>,
-      );
-      // 350 wanted; 366 of bar less the 30 toggle leaves 336.
-      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("336px"));
-    } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
-    }
+    const { rerender } = render(<Breadcrumb crumbs={crumbs} prefix="Admin" />);
+    const parts = trail().querySelectorAll(":scope > .crumb-part");
+    expect(parts[0]?.textContent).toBe("Admin");
+    expect(parts[0]?.querySelector("a")).toBeNull();
+    // A SEPARATOR BEFORE EVERY CRUMB AFTER IT, the first included.
+    expect(parts[1]?.querySelector(".crumb-sep")).not.toBeNull();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(crumbs[2]!.label);
+    rerender(<Breadcrumb crumbs={crumbs} />);
+    const bare = trail().querySelectorAll(":scope > .crumb-part");
+    expect(bare).toHaveLength(crumbs.length);
+    expect(bare[0]?.querySelector(".crumb-sep")).toBeNull();
   });
 
   // EACH LABEL IS ITS OWN BOX, the one `.crumb-text` ellipsises: text straight
@@ -254,18 +203,21 @@ describe("who is working", () => {
     return render(
       <Router>
         <ClientContext.Provider value={{ store, socket }}>
-          <AppShell
-            topbar={
-              <PageHeader
-                crumbs={[]}
-                row={undefined}
-                counts={{}}
-                title="Somewhere"
-                workspace="home"
-                {...(working === undefined ? {} : { working })}
-              />
-            }
-          />
+          {/* THE FRAME'S READING OF WHO IS ASKING, which the header's phone
+              "More" asks for its Admin group. */}
+          <ViewerProvider>
+            <AppShell
+              topbar={
+                <PageHeader
+                  row={undefined}
+                  counts={{}}
+                  title="Somewhere"
+                  workspace="today"
+                  {...(working === undefined ? {} : { working })}
+                />
+              }
+            />
+          </ViewerProvider>
         </ClientContext.Provider>
       </Router>,
     );

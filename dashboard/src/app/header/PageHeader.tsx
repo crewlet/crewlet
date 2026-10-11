@@ -1,20 +1,23 @@
 /**
- * The page header: where the reader is, what they can do here, and the
- * sections of the workspace they are in.
+ * The page header, at the top of the panel: what this page can do, and the
+ * sections of the workspace it is in. Where the reader IS is the band's — the
+ * trail, out on the frame (`Band.tsx`).
  *
- * # Two rows, one banner
+ * # Two rows, inside the panel
  *
- * The first row is the kit's top bar — the drawer toggle below the shell
- * breakpoint, the breadcrumb, an object page's lenses beside it (`PageLenses`),
- * and what this page can do: who is working right now (the Overview's bar only), the
- * star and the link, and LAST the screen's own controls (portalled in through
- * `PageActions`) — because a screen's primary action ("New task") belongs at
- * the bar's end, where the approved designs put it and where the eye finishes
- * the row; the frame's quiet controls come before it. The second row is the
- * workspace's SECTIONS, drawn
- * as tabs, on a section's own page only: on an object page the crumbs are the
- * way back out, and a strip of tabs over a task page would say the task is a
- * fourth kind of list.
+ * The first row is an object page's lenses at its start (`PageLenses`) and
+ * what this page can do at its end: who is working right now (the Overview's
+ * only), the star and the link, and LAST the screen's own controls (portalled
+ * in through `PageActions`) — because a screen's primary action ("New task")
+ * belongs at the row's end, where the approved designs put it and where the
+ * eye finishes the row; the frame's quiet controls come before it. The second
+ * row is the workspace's SECTIONS, drawn as tabs, on a section's own page
+ * only: on an object page the crumbs are the way back out, and a strip of
+ * tabs over a task page would say the task is a fourth kind of list.
+ *
+ * It stands at the panel's top and does not scroll with the screen, as the
+ * sheet's bar never did: the controls a page offers are in reach wherever the
+ * reader has scrolled to.
  *
  * # A section is a path
  *
@@ -37,11 +40,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
-import { AppShell, AvatarStack, Button, Menu, cx, useToast, type MenuEntry } from "@crewlethq/ui";
+import { AvatarStack, Button, Menu, cx, useToast, type MenuEntry } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
   ChevronRightGlyph,
@@ -61,6 +63,7 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
+import { useAdminGroup } from "../crossing.tsx";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -78,7 +81,6 @@ export interface PageMenuEntry {
 }
 
 export function PageHeader({
-  crumbs,
   row,
   counts,
   title,
@@ -87,7 +89,6 @@ export function PageHeader({
   menu = [],
   children,
 }: {
-  crumbs: Crumb[];
   /** The workspace the reader is in, or undefined on a route nothing owns. */
   row: WorkspaceRow | undefined;
   /** Each section's figure, as the screen published it. */
@@ -107,11 +108,10 @@ export function PageHeader({
   const edges = useScrollEdges(controls);
   return (
     <div className="page-head">
-      <AppShell.Topbar className="page-bar">
-        <Breadcrumb crumbs={crumbs} />
-        {/* AN OBJECT'S LENSES, beside the name they are lenses on — see
-            `PageLenses`. Empty on every other page, where it takes no room
-            (`.page-lenses:empty`). */}
+      <div className="page-row">
+        {/* AN OBJECT'S LENSES, at the row's start under the name they are
+            lenses on — see `PageLenses`. Empty on every other page, where it
+            takes no room (`.page-lenses:empty`). */}
         <div className="page-lenses" id={PAGE_LENSES_SLOT} />
         <div className="page-controls" ref={controls} {...edges}>
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
@@ -133,7 +133,7 @@ export function PageHeader({
           <PageMore path={route.path} label={title} workspace={workspace} entries={menu} />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
-      </AppShell.Topbar>
+      </div>
       {row && row.renderer === "tabs" && (
         <SectionTabs row={row} path={route.path} query={route.query} counts={counts} />
       )}
@@ -393,16 +393,16 @@ function useTabFit(
 /**
  * The trail, and it is a SCROLLPORT — so while it overflows it is a tab stop.
  *
- * `.crumbs` scrolls sideways past its floor rather than clipping the ancestry
- * as a box (see frame.css), and its scrollbar is not drawn, because on a bar
- * this short it would sit on the baseline the trail is written on. Both of
- * those together are what make the tab stop load-bearing: a pointer can drag
- * a hidden scrollport and a trackpad can swipe it, but a keyboard reaches a
- * scroll container's arrow keys only once it can be FOCUSED, and there is no
- * other route to the overflowed crumbs — the links inside it are focusable
- * and scroll into view, but the deepest trail this route table builds
- * overflows on its ancestor SPANS, which are not links and take no focus of
- * their own.
+ * `.crumbs` scrolls sideways once the ancestry is wider than the band rather
+ * than clipping it as a box (see frame.css), and its scrollbar is not drawn,
+ * because on a band this short it would sit on the baseline the trail is
+ * written on. Both of those together are what make the tab stop
+ * load-bearing: a pointer can drag a hidden scrollport and a trackpad can
+ * swipe it, but a keyboard reaches a scroll container's arrow keys only once
+ * it can be FOCUSED, and there is no other route to the overflowed crumbs —
+ * the links inside it are focusable and scroll into view, but the deepest
+ * trail this route table builds overflows on its ancestor SPANS, which are
+ * not links and take no focus of their own.
  *
  * ONLY WHILE IT OVERFLOWS. A trail that fits — nearly every trail, at any
  * width the frame draws a sidebar beside — has nowhere for the arrow keys to
@@ -417,28 +417,32 @@ function useTabFit(
  * edge with no ellipsis at all. A span is a real flex item, blockified, which
  * is the box an ellipsis applies to.
  *
- * ITS FLOOR IS THE WAY BACK OUT (`--crumb-floor`, [useCrumbFloor]): the
- * ancestors at their width and the last crumb at its stub. The bar breaks a
- * line when the trail's floor cannot sit beside the controls, and a floor of
- * 20ch alone let a seat's trail share a phone's line with its one button at
- * two hundred pixels — the unit crumb ("Engineering · Co") cut mid-letter under
- * Message, the seat's own crumb scrolled out of sight. Measured, the floor is
- * what the trail must show, so a trail that cannot show it beside the
- * controls takes a line of its own, and it scrolls only when its ancestry
- * alone is wider than the whole bar.
+ * THE TRAIL HAS THE BAND TO ITSELF, bar search. It used to share the sheet's
+ * bar with every control a page offers, and it carried a measured floor — its
+ * ancestry and the last crumb's stub — so the bar would break a line rather
+ * than squeeze the way back out under a row of buttons. The controls are the
+ * panel's now, and the one thing beside the trail is a search box that folds
+ * to its glyph wherever room runs out, so there is nothing for a floor to
+ * hold off.
+ *
+ * `prefix` is a label before the first crumb that is not a place — the
+ * console's "Admin" — drawn as an ancestor is and linking nowhere.
  */
-export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
+export function Breadcrumb({ crumbs, prefix }: { crumbs: Crumb[]; prefix?: string | undefined }) {
   const trail = useRef<HTMLElement>(null);
   const overflows = useOverflows(trail, crumbs);
-  const floor = useCrumbFloor(trail, crumbs);
   return (
     <nav
       ref={trail}
       className="crumbs"
       aria-label="Breadcrumb"
       tabIndex={overflows ? 0 : undefined}
-      style={floor > 0 ? ({ "--crumb-floor": `${floor}px` } as CSSProperties) : undefined}
     >
+      {prefix && (
+        <span className="crumb-part crumb-prefix">
+          <span className="crumb-text">{prefix}</span>
+        </span>
+      )}
       {crumbs.map((crumb, i) => {
         const last = i === crumbs.length - 1;
         const Glyph = crumb.icon ? glyphFor(crumb.icon) : undefined;
@@ -461,13 +465,15 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
         );
         return (
           <span key={`${crumb.label}-${i}`} className="crumb-part">
-            {i > 0 && <ChevronRightGlyph size="xs" className="crumb-sep" aria-hidden="true" />}
+            {(i > 0 || prefix) && (
+              <ChevronRightGlyph size="xs" className="crumb-sep" aria-hidden="true" />
+            )}
             {crumb.path && !last ? (
               <a className={cx("crumb-link", face)} href={href(crumb.path, crumb.query)}>
                 {words}
               </a>
             ) : last ? (
-              // THE OBJECT IS THE PAGE'S HEADING. The bar is the page's banner
+              // THE OBJECT IS THE PAGE'S HEADING. The band is the page's banner
               // and outside `main`, and the name of the place the reader is at
               // is what a reader navigating by heading lands on first — so the
               // last crumb is the `h1`, and every screen's own headings start
@@ -483,71 +489,6 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
       })}
     </nav>
   );
-}
-
-/**
- * The narrowest the trail can be and still show the way back out: where the
- * last crumb's name starts, measured from the trail's own start, plus the stub
- * that part keeps (its `min-width`) — or 0 before anything is laid out.
- *
- * NEVER MORE THAN THE ROOM BESIDE WHAT LEADS THE BAR. Below the shell
- * breakpoint the kit's drawer toggle opens the bar's first line, and a floor
- * wider than what the toggle leaves pushed the trail under it — a line holding
- * the toggle alone, then the trail, then the controls. Capped at that room, a
- * trail whose ancestry is wider still scrolls beside the toggle, as it always
- * has past its floor.
- *
- * STABLE UNDER ITS OWN EFFECT. The ancestors never shrink (`frame.css`), so
- * where the last part starts does not depend on how wide the trail is drawn,
- * and neither the bar's width nor the toggle's does either — so the floor it
- * sets cannot move what it was measured from. Measured again whenever a crumb
- * or the bar changes size: a screen publishing its object's name, a font
- * finishing loading, the window.
- */
-function useCrumbFloor(el: RefObject<HTMLElement | null>, content: unknown): number {
-  const [floor, setFloor] = useState(0);
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const bar = node.parentElement;
-    const measure = () => {
-      const last = node.querySelector(
-        ".crumb-part:last-child > .crumb-here, .crumb-part:last-child > .crumb-link",
-      );
-      if (!last) return setFloor(0);
-      const start = node.getBoundingClientRect().left - node.scrollLeft;
-      const offset = last.getBoundingClientRect().left - start;
-      const stub = parseFloat(getComputedStyle(last).minWidth) || 0;
-      const wanted = Math.max(0, Math.ceil(offset + stub));
-      setFloor(bar ? Math.min(wanted, roomBeside(bar, node)) : wanted);
-    };
-    measure();
-    const watch = new ResizeObserver(measure);
-    for (const part of node.querySelectorAll(".crumb-part")) watch.observe(part);
-    if (bar) watch.observe(bar);
-    return () => watch.disconnect();
-  }, [el, content]);
-  return floor;
-}
-
-/**
- * How wide `item` can be on its bar's first line: the bar's content box less
- * everything drawn before it (the drawer toggle, below the shell breakpoint)
- * and the gap after each. A bar not laid out yet has no room to report, and
- * caps nothing.
- */
-function roomBeside(bar: HTMLElement, item: HTMLElement): number {
-  const style = getComputedStyle(bar);
-  const content =
-    bar.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-  if (content <= 0) return Infinity;
-  const gap = parseFloat(style.columnGap) || 0;
-  let before = 0;
-  for (let sib = item.previousElementSibling; sib; sib = sib.previousElementSibling) {
-    const width = sib.getBoundingClientRect().width;
-    if (width > 0) before += width + gap;
-  }
-  return Math.max(0, Math.floor(content - before));
 }
 
 /**
@@ -749,6 +690,9 @@ export function PageMore({
           },
     );
   }
+  // AND THE ADMIN GROUP LAST, an admin's alone in the person shell — the one
+  // place a phone reaches it from (`app/crossing.tsx`).
+  const adminGroup = useAdminGroup();
   items.push({
     key: "copy-link",
     label: "Copy link",
@@ -765,6 +709,7 @@ export function PageMore({
       );
     },
   });
+  items.push(...adminGroup);
   return (
     <span className="page-more">
       <Menu

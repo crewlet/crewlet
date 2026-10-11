@@ -1,0 +1,1 @@
+import{t as e}from"./react-DjX0U0Iu.js";import{ya as t}from"./clock-DqcBNY-E.js";var n=e();function r({columns:e=4,className:r,children:i,...a}){return(0,n.jsx)(`div`,{...a,className:t(`crewlet-stat-group`,r),style:{"--crewlet-stat-group-cols":e,...a.style},children:i})}export{r as t};

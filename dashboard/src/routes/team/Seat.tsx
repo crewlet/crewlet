@@ -38,8 +38,15 @@
  */
 
 import { useId, useMemo, useState } from "react";
-import { Button, Callout, EmptyState, Tag, tabId } from "@crewlethq/ui";
-import { MessageSquareGlyph, PauseGlyph, PlusGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
+import {
+  EllipsisGlyph,
+  MessageSquareGlyph,
+  PauseGlyph,
+  PlusGlyph,
+  UserGlyph,
+} from "@crewlethq/icons/glyphs";
+import { useAdminGroup } from "~/app/crossing.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
@@ -145,6 +152,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const messageAccess = useWriteAccess("create_work_item");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
+  const adminGroup = useAdminGroup();
   usePageMenu(
     seat
       ? [
@@ -222,6 +230,19 @@ export function SeatScreen({ handle }: { handle: string }) {
               working={activityOf(agent) === "working"}
               open={pausing}
               onOpenChange={setPausing}
+            />
+          </span>
+        )}
+        {/* THE ADMIN GROUP, an admin's alone (`app/crossing.tsx`): the same
+            seat's setup in the console. On a phone the frame's own "More"
+            carries it. */}
+        {adminGroup.length > 0 && (
+          <span className="page-action-folds">
+            <Menu
+              label={`More for ${seat.name}`}
+              icon={<EllipsisGlyph size="sm" />}
+              align="end"
+              items={adminGroup.filter((entry) => entry.kind !== "separator")}
             />
           </span>
         )}

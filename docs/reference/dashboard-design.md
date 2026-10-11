@@ -678,6 +678,18 @@ answered by the frame as an admin's page, never Not Found (see
   A place with no twin crosses to the other shell's first screen — Today, or
   the Overview — never to a screen that would read as being about it.
 - **`g .` is the doors as a key**, for an admin, from anywhere.
+- **The console's band** carries **Open in {company} ↗** beside search: the
+  person twin of the console object that is open, quiet because it is a way
+  out rather than the page's business.
+- **An object's ⋯ menu ends with an Admin group** in the person shell — a
+  task's and a teammate's (`app/crossing.tsx`) — and so does a phone's "More":
+  **Open in the admin console**, wearing `g .` and saying it is an admin's, to
+  the console twin of the page. There is no inline "Trace ↗" anywhere in the
+  person shell: the crossing is one deliberate step, and a page that names no
+  twin (a project, Knowledge) offers none, since an entry that opens the
+  Overview is not about the thing the reader was looking at. A member's menus
+  carry no such entry, not even a held one — the console is not a write a
+  member could be given.
 - **The palette** carries an **Admin** group of the console's destinations,
   for an admin only; a member's palette goes to the person shell's.
 
@@ -685,6 +697,17 @@ answered by the frame as an admin's page, never Not Found (see
 means.** The console's chord rows, `g .` and `g r` are bound, and listed in
 the legend, for an admin alone: a member pressing one would be taken to an
 address their key does not reach, which is a refusal wearing a shortcut.
+
+**The phone has a tab bar, and it is the person shell's.** Under
+`breakpoint.phone` the person shell draws a tab bar along the bottom of the
+window (`app/PhoneBar.tsx`), derived from the same table as everything else:
+the workspaces it places as a TAB (Today, Inbox with its badge, My work),
+Search, and **More** — the workspaces it places in MORE (Work, Team,
+Knowledge), the console for an admin, and **Projects, favourites and you**,
+which opens the drawer that already draws them. Where you are is the primary
+ink and the heavier weight, never a hue, as everywhere in the chrome. The
+console draws none: nobody runs an engine from a phone's tab bar, and it keeps
+its drawer.
 
 **The console is a chunk a member never downloads.** Each shell's screens are
 their own lazy chunks (`app/lazyScreen.ts`), the console's sidebar and the
@@ -763,11 +786,15 @@ admins" — by the frame (`AdminRequired`), before the screen mounts. Never Not
 Found: the address is right, and it is the reader's key that does not reach
 it. Its remedy follows the reader, because the two readers are missing
 different things. With **no key at all** the remedy is a key: the refusal says
-the page needs an admin's API key and offers **Set token**. With a
+the page needs an admin's access key and offers **Sign in**. With a
 **member's** key the key works — it reaches the company's work, pages and
-chart — and pasting it again changes nothing, so there is no token button:
-the refusal says the key is a member's and names the admin to ask, the first
-of `viewer.admins` by name, or "an admin" when no person holds an admin key.
+chart — and pasting it again changes nothing, so there is no sign-in: the
+refusal says the page is part of the admin console and names the admin to ask
+if something needs changing there, the first of `viewer.admins` by name, or
+"an admin" when no person holds an admin key. Both carry **Go to Today**, the
+way back to the reader's own day, and both speak as the person shell does — no
+API, no `api.auth`, no role field — because the reader is a person who
+followed a link.
 A screen that mounted anyway was refused and drew the refusal as data: "0
 nodes" in its header, four tiles of 0 and "No nodes are reporting", under a
 banner calling the refusal the last reading that succeeded, while the
@@ -1551,13 +1578,49 @@ navigation — opened from the bar's toggle or with `Mod+\` (`⌘\` on a Mac,
 `Ctrl+\` elsewhere), a chord that does nothing above the breakpoint, where the
 sidebar is always on screen; the skip link precedes everything and lands on
 the scroller. None of that is written in this repository, because a second
-copy of it is how the two drift. What `dashboard/src/app/` owns:
+copy of it is how the two drift.
+
+**From the shell breakpoint up, the frame is an L.** The sidebar's ground does
+not stop at the sidebar: it runs across the top of the window as the BAND — the
+kit's bar, holding the trail and search — so the chrome reads as one L-shaped
+frame and the page sits inside it as the sheet, a rounded PANEL. The frame is
+where you are and how you move; the panel is the thing you are working on. The
+band is the kit's bar slot, which the kit draws inside the sheet; positioned
+against the shell's root, it is laid out in the gap the sheet's top margin
+leaves, and the sheet's clip does not reach it, because a box is clipped by an
+ancestor's overflow only when that ancestor is in its containing-block chain.
+The panel keeps the sheet's inset on its right and bottom, so the peek
+arithmetic below counts the same widths it did, and the rail's head stands in
+the band, its lockup centred on the trail's line. Under the breakpoint there is
+no frame beside the sheet for a band to stand on, and it is the sheet's own
+bar, as the kit draws it. Every number is the kit's — the rail's width, the
+bar's height, the inset, the sheet's corner — rather than the sketch's 240, 56,
+12 and 16, because a second set of shell numbers is the drift the kit's tokens
+exist to stop.
+
+**The console wears the L in ink.** The address picks the shell, and the shell
+picks the ground: the console's rail, and its band where it stands on the
+frame, are on the inverse ground (`--color-surface-inverse`), so which shell a
+reader is in can be told from across the room — ink in the light theme, the
+light ground in the dark one — and the panel inside is the sheet in both. Every
+ink on it is the inverse text at a step (whole for what is current or pointed,
+about three quarters for a resting row, a little over half for a label or a
+figure, a tenth for an overlay or a hairline), because this tree declares no
+colour of its own; the current row lifts and wears the accent as a bar at its
+start, its hairline outline kept for forced colours. `frame.test.ts` holds
+every console rule to the inverse inks, and the band's ink to the width where
+the band is on the frame.
+
+What `dashboard/src/app/` owns:
 
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the person sidebar — [The sidebar](#the-sidebar) — and the pieces both sidebars draw: the user block, the health card, the connection line |
 | `console/` | the console's sidebar and the person sidebar's door into it, in the console's own chunk |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (the Overview's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Knowledge draws a TREE beside the screen — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
+| `header/Band` + `Breadcrumb` | the band: the kit's top bar on the frame, holding the trail (whose last crumb is the page's `h1`; in the console it starts with an "Admin" label that links nowhere) and search; in the console, "Open in {company} ↗" beside search, the person twin of what is open (`personPathOf`) |
+| `header/PageHeader` | the panel's header: an object page's lenses and what the page can do — who is working now (the Overview's only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. It stands at the panel's top and does not scroll. Knowledge draws a TREE beside the screen — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
+| `PhoneBar` | the phone's tab bar, the person shell's alone, under `breakpoint.phone`: the table's tab workspaces (Today, Inbox with its badge, My work), Search, and More — the rest of the table's person workspaces, the console for an admin, and the drawer for projects, favourites and the account |
+| `crossing` | the Admin group that ends an object's ⋯ menu in the person shell, for an admin alone: the console twin of the page (`adminPathOf`), wearing `g .` and saying it is an admin's |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1736,23 +1799,31 @@ answered — the chart claiming `+`, a menu its arrows — or one an input metho
 is still composing is not a key at all: Enter that picks a Japanese candidate
 must not also open the grid row behind the field.
 
-### The page bar wraps by what it holds
+### The panel's header wraps by what it holds
 
-The bar holds the trail, who is working now (on the Overview's bar only, as
-the Main artboard draws it — the console sidebar's Live row carries the same
-count on every other console page, and a chip in every bar sat between a task's trail and its actions
-and pushed a profile's controls past a phone's edge), the star and Copy link — which is what the
-approved artboards label **Share**: sharing a page here IS its address, since
-anyone the link reaches reads it under their own token — and LAST
-the screen's own controls (portalled in by `PageActions`), so a screen's
-primary action ("New task") ends the row where the approved designs put it.
-An OBJECT page's lenses (a project's Items, About and History) are portalled
-into a second slot straight after the trail (`PageLenses`): that slot is no
-flex item at all while it is empty, and when it holds lenses it is the lens
-group that takes the line's slack — the trail sizes to its content, capped at
-60% of the bar so a long name ellipsises beside its lenses rather than pushing
-them onto a line of their own.
-On a phone the bar keeps ONE action in view — the screen's primary one, which
+The band holds the trail and search and nothing a page does; what the page can
+do is the panel's first row. That row holds an OBJECT page's lenses (a
+project's Items, About and History) at its start, portalled into their slot
+(`PageLenses`) — no flex item at all while it is empty, and the row's slack
+when it holds lenses — then who is working now (on the Overview only, as the
+Main artboard draws it — the console sidebar's Live row carries the same count
+on every other console page, and a chip on every page sat between a task's
+trail and its actions and pushed a profile's controls past a phone's edge), the
+star and Copy link — which is what the approved artboards label **Share**:
+sharing a page here IS its address, since anyone the link reaches reads it
+under their own token — and LAST the screen's own controls (portalled in by
+`PageActions`), so a screen's primary action ("New task") ends the row where
+the approved designs put it.
+
+**One `h1`, and it is the band's last crumb.** The panel draws no title over
+the page: a heading a line under the trail saying the trail's last word again
+is two level-one headings to a screen reader, one repeating the other. An
+object page's own title block (`ObjectHeader`) is a level two inside the
+screen, as it always was. That is the one place the frame's sketch is not
+followed, which drew a title row in the panel under a trail ending in the same
+word.
+
+On a phone the row keeps ONE action in view — the screen's primary one, which
 leads the line — and folds the rest into **More** (⋯) at the line's end: the
 frame's star and Copy link, and whatever a screen marks as secondary and
 publishes to the frame with `usePageMenu` (a project's **Edit project**, which
@@ -1760,33 +1831,24 @@ opens the same dialog its inline button does). The menu is drawn only at that
 width, so no action is ever in two places a reader can see at once, and what a
 press did (copied, refused, at the star cap) is said in a toast, because the
 menu closes on it. A task's own "More for ENG-42" folds into it too, rather
-than standing as a second ellipsis beside the frame's. What is left of the
-controls shares a line with the trail or the lenses when it fits: laid out
-inline, a project's bar stood three rows tall on a 390 px screen — the trail,
-the lenses, then four controls — about 105 px of chrome over the work.
+than standing as a second ellipsis beside the frame's, and so does the Admin
+group an admin's menus end with. What is left of the controls shares a line
+with the lenses when it fits: laid out inline, a project's bar stood three rows
+tall on a 390 px screen — the trail, the lenses, then four controls — about
+105 px of chrome over the work.
 
-**A wrapping flex container assigns lines BEFORE it shrinks**, so a trail at its
-content width broke the line as soon as a long title and the controls exceeded
-the bar, with free space left on the first line. The trail's flex BASIS is
-therefore 0, clamped by its FLOOR: a line holds the floor plus the controls,
-the break comes only when even the floor cannot sit beside them, and the grow
-factor hands the trail everything the line has left. A threshold measured on
-the busiest bar would push the controls onto their own line on every screen
-under it, a sparse one included.
+**The trail has the band, bar one field.** It used to share the sheet's bar
+with every control a page offers, and it carried a measured floor — its
+ancestry and the last crumb's stub — so the bar would break a line rather than
+squeeze the way back out under a row of buttons (a fixed 20ch had cut the unit
+crumb, "Engineering · Co", mid-letter under a seat's Message). With the
+controls in the panel, the one thing beside the trail is search, which folds to
+its glyph wherever room runs out, so the trail takes the band's slack and has
+no floor to keep.
 
-**The floor is the way back out, measured.** It is where the last crumb starts
-— every ancestor at its own width — plus the few characters the last crumb
-keeps as a stub, never under 20ch and never past the room the bar's first line
-has beside the drawer toggle (below the shell breakpoint), or the trail would
-drop under the toggle and leave it a line of its own. A fixed 20ch
-alone let a seat's trail share a phone's line with its one button at two
-hundred pixels, and the unit crumb ("Engineering · Co") was cut mid-letter under
-Message with the seat's own crumb out of sight; measured, a trail that cannot
-show its ancestry beside the controls takes a line of its own.
-
-- **The trail is what gives way**, and past its floor it SCROLLS rather than
+- **The trail is what gives way**, and past the band it SCROLLS rather than
   clipping as a box: the ancestors do not shrink, so once they alone are wider
-  than the whole bar there is nothing left to ellipsise. The scrollbar is not drawn — on a
+  than the band there is nothing left to ellipsise. The scrollbar is not drawn — on a
   52 px bar it would sit on the baseline the trail is drawn on — and while it
   overflows the trail is a tab stop, which is how a keyboard reaches what is
   past its edge. Only then: a trail that fits has nowhere for the arrow keys
@@ -1802,10 +1864,10 @@ show its ancestry beside the controls takes a line of its own.
   pixel. A `max-width` is the valve that keeps a group wider than the whole bar
   wrapping rather than running past the edge.
 - **On a phone's width the controls are one line that scrolls** — sharing the
-  trail's or the lenses' line when they fit, by the same rule the wide bar
-  keeps, and a line of their own when they do not — a
-  container query on the header, because what overflows is the header and a
-  viewport query cannot see a sidebar or a peek. Rows of controls stacked under
+  lenses' line when they fit, by the same rule the wide row keeps, and a line
+  of their own when they do not — a container query on the header, because
+  what overflows is the header and a viewport query cannot see a sidebar or a
+  peek. Rows of controls stacked under
   the trail would push the screen a third of the way down a phone. The edge
   with more past it FADES: with the scrollbar hidden, a control cut at the edge
   read as a broken label rather than as more to swipe to. A row that fits
@@ -4583,7 +4645,7 @@ seat, the phase count, the attempt, the problem count and "nothing went wrong"
 were all portalled into `PageActions`, beside Copy turn and Download turn. It
 cost three things at once. The bar reached ten items and broke onto a second
 line on a laptop (see [The page bar wraps by what it
-holds](#the-page-bar-wraps-by-what-it-holds)). The reader's eye
+holds](#the-panels-header-wraps-by-what-it-holds)). The reader's eye
 had to travel to the far right corner and back for a fact about the object
 named forty pixels below. And two of the five were the fact line repeated:
 `Agent CEO` and `7 phases` sat directly above `SEAT Agent CEO` and `PHASES 7`

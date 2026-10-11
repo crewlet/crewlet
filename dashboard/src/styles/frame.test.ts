@@ -1173,7 +1173,7 @@ describe("the frame's layout", () => {
     ).not.toMatch(/max-width:/);
   });
 
-  test("the page bar wraps by what it holds, a phone's included, and folds there into More", () => {
+  test("the panel's row wraps by what it holds, a phone's included, and folds there into More", () => {
     const css = sheet("frame.css");
     // THE BREAK'S OWN BODY, braces balanced — not everything after it. Sliced
     // to the end of the file, the "nothing else reorders at this break" case
@@ -1183,39 +1183,28 @@ describe("the frame's layout", () => {
     const atBreak = atRuleBody(css, `@container page (width < ${PHONE_BREAKPOINT}px)`);
     const base = css.slice(0, css.indexOf("@container page ("));
 
-    // A FLOOR RATHER THAN A HEIGHT, so the second line the bar can create is
-    // not clipped, and a bar that needs none is exactly the kit's height.
-    const bar = block(base, ".app .page-bar");
-    expect(bar).toMatch(/flex-wrap:\s*wrap/);
-    expect(bar).toMatch(/min-height:\s*var\(--page-bar-h\)/);
-    expect(bar).toMatch(/height:\s*auto/);
+    // A FLOOR RATHER THAN A HEIGHT, so the second line the row can create is
+    // not clipped, and a row that needs none is exactly the kit's bar height.
+    const row = block(base, ".page-row");
+    expect(row).toMatch(/flex-wrap:\s*wrap/);
+    expect(row).toMatch(/min-height:\s*var\(--page-bar-h\)/);
     expect(
-      mentioning(css, ".page-bar")
+      mentioning(css, ".page-row")
         .map((r) => r.body)
         .join(" "),
-      "a fixed height clips the second line the bar creates",
+      "a fixed height clips the second line the row creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // IT WRAPS BY WHAT IT HOLDS. A flex container assigns items to lines by
-    // their UNSHRUNK size, so a trail at its content width broke the line as
-    // soon as a long title and the controls exceeded the bar, with free space
-    // left on the first line — and a width threshold measured on the busiest
-    // bar forced the controls down on every screen under it, a sparse one
-    // included. A basis of 0 is what makes the break depend on the trail's
-    // FLOOR beside the controls; the grow factor hands the trail the rest.
+    // THE TRAIL HAS THE BAND, bar one search field, so it takes the slack and
+    // has no floor to keep: the page's controls are the panel's, and nothing
+    // on the band can squeeze the way back out.
     const crumbs = block(base, ".crumbs");
-    expect(crumbs).toMatch(/flex:\s*1 100 0(?![.\d])/);
-    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: at the MEASURED floor
-    // (`--crumb-floor`, the ancestors and the last crumb's stub, written by
-    // `Breadcrumb`), never under 20ch — what the narrowest line can give,
-    // measured at 178.8px on a 310px viewport — and never past the whole bar,
-    // where a trail whose ancestry alone is wider has to scroll. A fixed 20ch
-    // let a seat's trail share a phone's line with its button and cut its
-    // unit crumb mid-letter.
-    expect(crumbs).toMatch(
-      /min-width:\s*min\(100%,\s*max\(20ch,\s*var\(--crumb-floor,\s*0px\)\)\)/,
+    expect(crumbs).toMatch(/flex:\s*1 1 auto/);
+    expect(crumbs).toMatch(/min-width:\s*0/);
+    expect(css, "the measured floor is back, with nothing left to measure it against").not.toMatch(
+      /--crumb-floor/,
     );
-    // PAST ITS FLOOR IT SCROLLS rather than clipping as a box, on the inline
+    // PAST THE BAND IT SCROLLS rather than clipping as a box, on the inline
     // axis only — `overflow-x: auto` alone computes the block axis to `auto`
     // too, which puts a vertical scrollport on a one-line box.
     expect(crumbs, "the trail clips its overflow again").not.toMatch(/(^|[;\s])overflow:\s*hidden/);
@@ -1555,13 +1544,132 @@ test("the work search form wraps before its phrase field goes under a readable w
 // its grow would push the lenses against the controls at the far end, away
 // from the name they are lenses on — and is capped so a long name ellipsises
 // beside them rather than pushing them onto a line of their own.
-test("the lens slot vanishes when empty and takes the slack beside the trail when not", () => {
+test("the lens slot vanishes when empty and takes the panel row's slack when not", () => {
   const css = sheet("frame.css");
   expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
   expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
-  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .crumbs");
-  expect(trail).toMatch(/flex:\s*0 100 auto/);
-  expect(trail).toMatch(/max-width:\s*60%/);
+});
+
+/** The body of the one `@media` block whose prelude is exactly `prelude` and holds `needle`. */
+function mediaHolding(css: string, prelude: string, needle: string): string {
+  const bodies = mediaBodies(css).filter((r) => r.prelude === prelude && r.body.includes(needle));
+  expect(bodies, `no one ${prelude} block holds ${needle}`).toHaveLength(1);
+  return bodies[0]!.body;
+}
+
+/** Every rule whose selector names `needle` — which, unlike [mentioning], may be none. */
+function rulesNaming(css: string, needle: string): { sel: string; body: string }[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((m) => m[1]!.includes(needle))
+    .map((m) => ({ sel: m[1]!.trim(), body: m[2]! }));
+}
+
+// THE FRAME IS AN L FROM THE SHELL BREAKPOINT UP: the band stands on the
+// frame's ground above the sheet, positioned against the shell's root (so the
+// sheet's clip does not reach it), and the sheet — the panel — starts where
+// the bar's foot was. Under the breakpoint the sheet is the whole window and
+// the band is its own bar, so none of it may leak into the narrow layout.
+describe("the L", () => {
+  const css = sheet("frame.css");
+  const wide = mediaHolding(
+    css,
+    `@media (width >= ${SHELL_BREAKPOINT}px)`,
+    ".app.crewlet-app-shell",
+  );
+
+  test("the band stands on the frame, beside the rail and over the panel", () => {
+    expect(block(wide, ".app.crewlet-app-shell")).toMatch(/position:\s*relative/);
+    const band = block(wide, ".app .frame-band");
+    expect(band).toMatch(/position:\s*absolute/);
+    expect(band).toMatch(/top:\s*0/);
+    // FROM THE SHELL'S OWN TOKENS, so the band starts at the rail's edge and
+    // ends at the panel's whatever the rail's width or the inset's density.
+    expect(band).toMatch(/left:\s*var\(--size-shell-rail\)/);
+    expect(band).toMatch(/right:\s*var\(--size-shell-inset\)/);
+    expect(band, "the band paints a ground of its own over the frame's").toMatch(
+      /background:\s*transparent/,
+    );
+    expect(band).toMatch(/border-bottom:\s*0/);
+    // THE PANEL'S TOP IS THE BAR'S FOOT, and the rail's head stands in the
+    // band, centred on the trail's line with no inset above it.
+    expect(block(wide, ".app .crewlet-app-shell__sheet")).toMatch(
+      /margin-top:\s*var\(--size-shell-topbar\)/,
+    );
+    const head = block(wide, ".app .crewlet-app-shell__rail-head");
+    expect(head).toMatch(/min-height:\s*var\(--size-shell-topbar\)/);
+    expect(head).toMatch(/padding-top:\s*0/);
+  });
+
+  test("none of it reaches the narrow layout, where the band is the sheet's own bar", () => {
+    const outside = css.replace(wide, "");
+    for (const rule of rulesNaming(outside, ".frame-band")) {
+      expect(rule.body, rule.sel).not.toMatch(/position:\s*absolute/);
+    }
+    for (const rule of rulesNaming(outside, ".crewlet-app-shell__sheet")) {
+      expect(rule.body, rule.sel).not.toMatch(/margin-top/);
+    }
+  });
+});
+
+// THE ADDRESS PICKS THE SHELL, AND THE SHELL PICKS THE GROUND: the console's
+// L stands on the inverse ground in both themes, and every ink on it is the
+// inverse text — never a colour of this tree's (`tokens.test.ts`) and never
+// the sheet's text steps, which on the inverse ground are the ground's own
+// colour or near it.
+describe("the console's ink", () => {
+  const css = sheet("frame.css");
+
+  test("the console's root and rail stand on the inverse ground", () => {
+    const ground = block(
+      css,
+      '.app[data-shell="admin"],\n.app[data-shell="admin"] .crewlet-app-shell__rail',
+    );
+    expect(ground).toMatch(/background:\s*var\(--color-surface-inverse\)/);
+    // AND ITS WORDS IN THE INVERSE INK: the rail's own rule, beside the one the
+    // root shares, sets what every row inherits.
+    const rail = mentioning(css, '.app[data-shell="admin"] .crewlet-app-shell__rail').filter(
+      (r) => r.sel === '.app[data-shell="admin"] .crewlet-app-shell__rail',
+    );
+    expect(rail.some((r) => /(^|[;\s])color:\s*var\(--color-text-inverse\)/.test(r.body))).toBe(
+      true,
+    );
+  });
+
+  test("every console rule paints in the inverse ink, and only there", () => {
+    const rules = mentioning(css, '[data-shell="admin"]');
+    // A FLOOR: a scan that found no console rule would pass on nothing.
+    expect(rules.length).toBeGreaterThan(10);
+    for (const rule of rules) {
+      for (const m of rule.body.matchAll(
+        /(?:^|[;\s])(color|background|border(?:-[a-z]+)?-color|outline-color):\s*([^;]+)/g,
+      )) {
+        const value = m[2]!.trim();
+        expect(
+          /--color-text-inverse|--color-surface-inverse|--color-brand-accent|^transparent$|^inherit$/.test(
+            value,
+          ),
+          `${rule.sel} { ${m[1]}: ${value} } paints the console in a sheet ink`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("the band takes the ink only where it stands on the frame", () => {
+    const wide = mediaHolding(
+      css,
+      `@media (width >= ${SHELL_BREAKPOINT}px)`,
+      '[data-shell="admin"] .frame-band',
+    );
+    expect(block(wide, '.app[data-shell="admin"] .frame-band')).toMatch(
+      /color:\s*var\(--color-text-inverse\)/,
+    );
+    const outside = css.replace(wide, "");
+    expect(
+      rulesNaming(outside, '[data-shell="admin"] .frame-band').map((r) => r.sel),
+      "the band's ink reaches the narrow layout, where it is the sheet's bar",
+    ).toEqual([]);
+  });
 });
 
 // AN OBJECT'S TAB STRIP IS AS WIDE AS WHAT HOLDS IT. `ObjectTabs` folds the

@@ -12,10 +12,11 @@
    floating beside it at `--size-shell-inset` with its corner and hairline, the
    52px bar, the drawer below `breakpoint.shell` — all of that is
    `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
-   What is here is what the kit has no opinion about: the two rows the page
-   header draws, the peek as a column of the sheet, the Knowledge tree's
-   column, and the sidebars' own few rows (the health card, the user block,
-   the console's ink).
+   What is here is what the kit has no opinion about: the L the band makes of
+   the frame (the bar moved off the sheet and onto the frame's ground), the
+   rows the panel's header draws, the peek as a column of the sheet, the
+   Knowledge tree's column, the sidebars' own few rows (the health card, the
+   user block) and the console's ink.
 
    WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
    current section are raised or underlined, and the one accent in the chrome
@@ -442,8 +443,8 @@
 
 /* ---- The sidebars' own rows ---------------------------------------------
    The navigation is the kit's `SidebarNav`; what is here is what the kit has
-   no row for — the ⌘K field's place, the engine's state, the connection's
-   trouble and who this browser is. */
+   no row for — Hand off, the engine's state, the connection's trouble and who
+   this browser is. Search is the band's (`header/Band.tsx`). */
 
 /* THE FOOT'S OWN NAVIGATION SITS ON THE FOOT'S INSET. The kit's `SidebarNav`
    brings the rail's gutter with it, and the foot already stands on that
@@ -467,12 +468,6 @@
 .side-head > :first-child {
   flex: 1;
   min-width: 0;
-}
-
-/* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
-   edge every nav row's background starts at. */
-.side-search {
-  padding: 0 var(--size-nav-gutter) var(--spacing-3);
 }
 
 /* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
@@ -636,6 +631,189 @@ button.side-connection:focus-visible {
   min-width: 0;
 }
 
+/* ---- The L: the band on the frame, and the page a panel inside it --------
+   The frame's ground does not stop at the sidebar: from the shell
+   breakpoint up it runs across the top of the window as the BAND (the kit's
+   top bar, holding the trail and search — `header/Band.tsx`), so the chrome
+   reads as one L and the page sits inside it as the kit's rounded sheet —
+   the PANEL. The frame is where you are and how you move; the panel is what
+   you are working on.
+
+   THE BAND STANDS ON THE FRAME, ABOVE THE SHEET IT IS IN. It is the kit's bar
+   slot, which the kit draws inside the sheet; positioned against the shell's
+   root it is laid out in the gap the sheet's top margin leaves, and the
+   sheet's `overflow: hidden` does not clip it, because a box is clipped by an
+   ancestor's overflow only when that ancestor is in its containing-block
+   chain, and the band's containing block is the root. The sheet keeps its
+   own inset on the right and the bottom and the rail's edge on the left, so
+   the peek arithmetic (`app/layout.ts`) counts the same widths it did; what
+   changes is the height above it, which is the bar's own height, so the
+   panel's top is where the bar's foot was.
+
+   AND THE RAIL'S HEAD STANDS IN THE BAND: the lockup (or the console's way
+   back) is centred on the line the trail is written on, with no inset above
+   it, because the band starts at the window's top.
+
+   Under the shell breakpoint none of this applies: the sheet is the whole
+   window, the sidebar a drawer, and the band is the sheet's own bar, as the
+   kit draws it. */
+@media (width >= 1024px) {
+  .app.crewlet-app-shell {
+    position: relative;
+  }
+
+  .app .frame-band {
+    position: absolute;
+    top: 0;
+    right: var(--size-shell-inset);
+    left: var(--size-shell-rail);
+    padding-right: 0;
+    border-bottom: 0;
+    background: transparent;
+  }
+
+  .app .crewlet-app-shell__sheet {
+    margin-top: var(--size-shell-topbar);
+  }
+
+  .app .crewlet-app-shell__rail-head {
+    min-height: var(--size-shell-topbar);
+    padding-top: 0;
+  }
+}
+
+/* ---- The console's ink ------------------------------------------------------
+   THE ADDRESS PICKS THE SHELL, AND THE SHELL PICKS THE GROUND. The console's
+   L — the rail, and the band from the shell breakpoint up — stands on the
+   inverse ground, so which shell a reader is in can be told from across the
+   room; the panel inside it is the sheet in both. Light or dark, the console
+   is the person shell's frame inverted: ink in light, the light ground in
+   dark.
+
+   THE INKS ARE THE INVERSE TEXT, MIXED, NEVER A COLOUR OF OURS: this tree
+   declares no colour (`tokens.test.ts`), so what the kit draws in the text
+   steps is drawn here in `--color-text-inverse` at a step of its own — whole
+   for what is current or pointed, about three quarters for a resting row, a
+   little over half for a group's label and a figure — and an overlay or a
+   hairline is the same ink at a tenth. Mixed toward transparency rather than
+   toward a ground, so the step holds over whatever the rail stands on. */
+.app[data-shell="admin"],
+.app[data-shell="admin"] .crewlet-app-shell__rail {
+  background: var(--color-surface-inverse);
+}
+
+.app[data-shell="admin"] .crewlet-app-shell__rail {
+  color: var(--color-text-inverse);
+}
+
+.app[data-shell="admin"] .crewlet-app-shell__rail-foot {
+  border-top-color: color-mix(in srgb, var(--color-text-inverse) 14%, transparent);
+}
+
+.app[data-shell="admin"] .crewlet-nav-item__row {
+  color: color-mix(in srgb, var(--color-text-inverse) 76%, transparent);
+}
+
+.app[data-shell="admin"] .crewlet-nav-item__row:hover {
+  background: color-mix(in srgb, var(--color-text-inverse) 10%, transparent);
+  color: var(--color-text-inverse);
+}
+
+/* WHERE THE READER IS, ON INK: the row lifts by the same overlay at a step
+   more, takes the whole ink, and wears the accent as a bar at its start —
+   the hairline outline stays, so forced colours (which drop backgrounds and
+   shadows) still draw it. */
+.app[data-shell="admin"] .crewlet-nav-item__row[aria-current="page"] {
+  background: color-mix(in srgb, var(--color-text-inverse) 16%, transparent);
+  outline-color: color-mix(in srgb, var(--color-text-inverse) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+  color: var(--color-text-inverse);
+}
+
+.app[data-shell="admin"] .crewlet-nav-group__label,
+.app[data-shell="admin"] .crewlet-nav-item__count,
+.app[data-shell="admin"] .user-block-detail,
+.app[data-shell="admin"] .health-card-detail {
+  color: color-mix(in srgb, var(--color-text-inverse) 62%, transparent);
+}
+
+.app[data-shell="admin"] .crewlet-kbd {
+  border-color: color-mix(in srgb, var(--color-text-inverse) 24%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text-inverse) 70%, transparent);
+}
+
+.app[data-shell="admin"] .console-back,
+.app[data-shell="admin"] .console-title,
+.app[data-shell="admin"] .user-block-who {
+  color: var(--color-text-inverse);
+}
+
+.app[data-shell="admin"] .console-back:hover,
+.app[data-shell="admin"] a.user-block-who:hover {
+  background: color-mix(in srgb, var(--color-text-inverse) 10%, transparent);
+}
+
+.app[data-shell="admin"] .health-card {
+  border-color: color-mix(in srgb, var(--color-text-inverse) 16%, transparent);
+  background: color-mix(in srgb, var(--color-text-inverse) 6%, transparent);
+  color: var(--color-text-inverse);
+}
+
+.app[data-shell="admin"] .health-card:hover {
+  border-color: color-mix(in srgb, var(--color-text-inverse) 32%, transparent);
+}
+
+.app[data-shell="admin"] .health-card-go {
+  color: color-mix(in srgb, var(--color-text-inverse) 62%, transparent);
+}
+
+/* THE BAND ON INK, where it stands on the frame. Under the shell breakpoint
+   it is the sheet's own bar and keeps the sheet's inks. */
+@media (width >= 1024px) {
+  .app[data-shell="admin"] .frame-band {
+    color: var(--color-text-inverse);
+  }
+
+  .app[data-shell="admin"] .frame-band .crumb-link,
+  .app[data-shell="admin"] .frame-band .crumb-prefix {
+    color: color-mix(in srgb, var(--color-text-inverse) 66%, transparent);
+  }
+
+  .app[data-shell="admin"] .frame-band .crumb-link:hover,
+  .app[data-shell="admin"] .frame-band .crumb-here {
+    color: var(--color-text-inverse);
+  }
+
+  .app[data-shell="admin"] .frame-band .crumb-sep {
+    color: color-mix(in srgb, var(--color-text-inverse) 45%, transparent);
+  }
+
+  .app[data-shell="admin"] .band-cross {
+    color: color-mix(in srgb, var(--color-text-inverse) 80%, transparent);
+  }
+
+  .app[data-shell="admin"] .band-cross:hover {
+    background: color-mix(in srgb, var(--color-text-inverse) 10%, transparent);
+    color: var(--color-text-inverse);
+  }
+
+  .app[data-shell="admin"] .band-search {
+    border-color: color-mix(in srgb, var(--color-text-inverse) 20%, transparent);
+    background: color-mix(in srgb, var(--color-text-inverse) 8%, transparent);
+    color: color-mix(in srgb, var(--color-text-inverse) 66%, transparent);
+  }
+
+  .app[data-shell="admin"] .band-search:hover {
+    border-color: color-mix(in srgb, var(--color-text-inverse) 36%, transparent);
+    color: var(--color-text-inverse);
+  }
+
+  .app[data-shell="admin"] .band-search svg {
+    color: inherit;
+  }
+}
+
 /* THE ENGINE'S STATE, the design's status block: its words over one detail
    line, on the card rung inside the hairline — the one row in the foot that
    reports rather than goes somewhere. A link to the nodes, or the button that
@@ -790,11 +968,14 @@ a.user-block-who:focus-visible {
   gap: var(--spacing-3);
 }
 
-/* ---- The page header -----------------------------------------------------
-   Two rows and the state bar: the kit's top bar (the breadcrumb and what this
-   page can do), the workspace's section tabs, and whatever the engine's
-   condition says. ONE element for all of them, so the peek column's grid can
-   place the header as one block across both columns.
+/* ---- The band, and the page header in the panel ---------------------------
+   THE BAND is the kit's top bar with the trail and search in it — on the
+   frame's ground from the shell breakpoint up, and the full-bleed sheet's own
+   bar under it (see "The L" below). THE PAGE HEADER is the panel's first
+   block: two rows and the state bar — an object's lenses and what this page
+   can do, the workspace's section tabs, and whatever the engine's condition
+   says. ONE element for all three, so the peek column's grid can place the
+   header as one block across both columns.
 
    AND IT IS THE BAR'S MEASURING STICK. Every rule that decides whether the
    bar's contents still fit was written against the WINDOW, and the window is
@@ -811,62 +992,86 @@ a.user-block-who:focus-visible {
   background: var(--color-surface-background);
 }
 
-/* THE BAR GROWS RATHER THAN CLIPS. The kit's top bar is exactly one row high,
-   and this one breaks a line when what it holds does not fit — so its height
-   is a FLOOR here.
+/* THE BAND: the trail takes what search leaves it, and search keeps its
+   width. One line, never two: the band is a fixed height on the frame, and
+   what it holds is the trail and one field — a trail longer than the band
+   scrolls (see `.crumbs`), and the field folds to its glyph under the shell
+   breakpoint (the kit's `toolbar` field). */
+.app .frame-band {
+  gap: var(--spacing-3);
+  padding: 0 var(--spacing-4) 0 var(--spacing-5);
+}
 
-   IT WRAPS BY WHAT IT HOLDS, NOT AT A WIDTH. A flex container assigns items to
-   lines by their UNSHRUNK size, so a wrap over a trail at its content width
-   breaks as soon as a long title and the controls exceed the bar, with free
-   space left on the first line. The trail's basis is therefore 0 (`.crumbs`),
-   clamped by its floor — the way back out, measured: the line holds the
-   floor plus the controls, the break comes only when even the floor cannot
-   sit beside them, and the grow factor hands the trail everything the line
-   has left. A threshold measured
-   on the busiest bar forced the controls onto their own line on every screen
-   under it, a sparse one included. */
-.app .page-bar {
+.band-end {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--spacing-2);
+  margin-left: auto;
+}
+
+/* THE CONSOLE'S WAY TO THE PERSON TWIN: quiet, a word and an arrow, because
+   it is a way out rather than the page's business. */
+.band-cross {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-height: var(--size-control-sm);
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.band-cross:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.band-cross:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* THE PANEL'S FIRST ROW GROWS RATHER THAN CLIPS: an object's lenses at its
+   start and what the page can do at its end, breaking a line only when the
+   two do not fit side by side. Its height is a FLOOR, the kit's bar height,
+   so a row holding only the star and the link stands as tall as a peek's
+   bar beside it. */
+.page-row {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--spacing-1) var(--spacing-2);
-  height: auto;
+  min-width: 0;
   min-height: var(--page-bar-h);
   padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
 }
 
-/* THE TRAIL IS WHAT GIVES WAY, AND IT IS WHAT TAKES THE SLACK.
+/* THE TRAIL TAKES THE BAND'S SLACK, AND IT IS WHAT GIVES WAY.
 
-   `flex-grow: 1` is the spacer this replaces: the trail absorbs the free
-   space, so the controls stay in the right-hand corner without a blank element
-   between them and the breadcrumb. Its BASIS is 0, which is what lets the bar
-   wrap by what it holds (see `.page-bar`). `flex-shrink: 100` is the ordering
-   against the only other things here that can give — the kit's own idiom
-   (`.crewlet-card__subtitle` takes the same factor so a title never gives way
-   first).
+   `flex-grow` is the spacer this replaces: the trail absorbs the free space,
+   so search stays in the right-hand corner without a blank element between
+   them. It shares the band with nothing but that one field — the page's
+   controls are the panel's — so its floor is zero: there is no row of
+   buttons for it to be squeezed under.
 
-   AND ITS FLOOR IS THE WAY BACK OUT, which is the correction to the obvious
-   `min-width: 0`: at zero the trail gives way until the way back out is gone,
-   and the way back out is the one thing on this bar the reader cannot
-   reconstruct from anywhere else. The floor is MEASURED (`--crumb-floor`,
-   written by `Breadcrumb`): the ancestors at their width and the last crumb's
-   stub — at least 20ch, and at most the room beside the drawer toggle (which
-   `Breadcrumb` caps it at) or the whole bar. A fixed 20ch alone let a
-   seat's trail share a phone's line with its one button and cut
-   "Engineering · Co" mid-letter under it; measured, a trail that cannot show
-   its ancestry beside the controls breaks the line instead.
-
-   Past the whole bar the trail SCROLLS rather than clipping as a box: the
+   Past the band the trail SCROLLS rather than clipping as a box: the
    ancestors never shrink (see below), so once they alone are wider than the
-   bar there is nothing left to ellipsise and a clip lands wherever the pixels
-   ran out. A thumb, a trackpad or a shift-wheel reaches a scroller, and the
-   tab stop in `Breadcrumb` is what reaches it from a keyboard. The scrollbar
-   is not drawn: on a 52px bar it would sit on the baseline the trail is
-   written on. */
+   band there is nothing left to ellipsise and a clip lands wherever the
+   pixels ran out. A thumb, a trackpad or a shift-wheel reaches a scroller,
+   and the tab stop in `Breadcrumb` is what reaches it from a keyboard. The
+   scrollbar is not drawn: on a 52px band it would sit on the baseline the
+   trail is written on. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1 100 0;
-  min-width: min(100%, max(20ch, var(--crumb-floor, 0px)));
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
@@ -964,17 +1169,13 @@ a.user-block-who:focus-visible {
   min-width: 5ch;
 }
 
-/* AN OBJECT'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx):
-   `Work › ENG Core · Items | About | History`. On every page without lenses
-   the slot is empty and is no flex item at all, so it costs the bar no gap.
+/* AN OBJECT'S LENSES, at the panel row's start, under the name they are
+   lenses on (`PageLenses` in PageActions.tsx): `Items | About | History`
+   under `Work › ENG Core`. On every page without lenses the slot is empty and
+   is no flex item at all, so it costs the row no gap.
 
-   WITH LENSES, THE LENSES TAKE THE LINE'S SLACK, not the trail: the trail's
-   grow is what keeps the controls in the right-hand corner, and it would push
-   the lenses there too — against the controls, away from the name they are
-   about. So the trail sizes to its content and still gives way first
-   (`flex-shrink: 100`, down to its floor), capped at 60% of the bar so a
-   long name ellipsises beside its lenses rather than pushing them onto a line
-   of their own; the lens group grows, holding its tabs at its start. */
+   THE LENSES TAKE THE ROW'S SLACK, holding their tabs at its start, which is
+   what keeps the controls in the right-hand corner beside them. */
 .page-lenses {
   display: flex;
   align-items: center;
@@ -984,11 +1185,6 @@ a.user-block-who:focus-visible {
 
 .page-lenses:empty {
   display: none;
-}
-
-.page-bar:has(> .page-lenses:not(:empty)) > .crumbs {
-  flex: 0 100 auto;
-  max-width: 60%;
 }
 
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
@@ -2305,6 +2501,100 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   flex: 0 0 auto;
 }
 
+/* ---- The phone's tab bar ---------------------------------------------------
+   A person's day along the bottom of the window (`app/PhoneBar.tsx`): Today,
+   Inbox and My work, Search, More. Drawn under `breakpoint.phone` only, where
+   the sidebar is a drawer and the window's foot is where a thumb is; above it
+   the sidebar is on screen and a second row of the same places would be two
+   navigations. It stands on the FRAME's ground, the sidebar's, because it is
+   the sidebar's job done at a phone's size.
+
+   WHERE YOU ARE IS DRAWN WITHOUT A HUE, as everywhere in the chrome: the
+   current tab lifts to the primary ink and the heavier weight, and the one
+   accent is the Inbox's badge. */
+.phone-bar {
+  display: none;
+}
+
+.phone-tab {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: calc(var(--size-control-lg) + var(--spacing-3));
+  padding: var(--spacing-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.phone-tab[aria-current="page"] {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.phone-tab:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+.phone-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* THE INBOX'S COUNT, the badge the sidebar's Inbox row wears, at the glyph's
+   shoulder. */
+.phone-tab-badge {
+  position: absolute;
+  top: var(--spacing-1);
+  left: calc(50% + var(--spacing-2));
+  min-width: var(--spacing-4);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+  color: var(--color-text-on-accent);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+/* MORE IS THE KIT'S MENU BUTTON, given the tab's share of the bar; its face
+   is a `.phone-tab` inside it. */
+.phone-more {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.phone-more > button {
+  flex: 1 1 auto;
+  height: auto;
+  padding: 0;
+}
+
+@media (width < 640px) {
+  .phone-bar {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    padding: 0 var(--spacing-1) env(safe-area-inset-bottom);
+    border-top: 1px solid var(--color-border-default);
+    background: var(--color-surface-frame);
+  }
+}
+
 /* ---- Phone: one pane, and a row is a card ------------------------------- */
 
 /* BELOW THE KIT'S `breakpoint.phone` (640, `app/layout.ts`), which is the
@@ -2330,9 +2620,11 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     flex-wrap: wrap;
   }
 
-  /* The bar's inset tightens to the sheet's own phone inset, so the trail
-     starts where the screen's content does. */
-  .app .page-bar {
+  /* The band's and the panel row's insets tighten to the sheet's own phone
+     inset, so the trail and the controls start where the screen's content
+     does. */
+  .app .frame-band,
+  .page-row {
     padding-inline: var(--spacing-3);
   }
 
