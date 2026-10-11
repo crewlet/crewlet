@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
-	"time"
+
+	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
 // What these cases protect: a container box is one directory shared by two
@@ -32,52 +36,46 @@ import (
 func fakeRuntime(t *testing.T, name, wantFormat, info string, exit int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
-	script := fmt.Sprintf(`#!/bin/sh
-[ "$1" = info ] || exit 0
+	writeRuntime(t, path, fmt.Sprintf(`[ "$1" = info ] || exit 0
 [ "$3" = '%s' ] || { echo "template error: $3" >&2; exit 125; }
 printf '%%s' '%s'
 exit %d
-`, wantFormat, info, exit)
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, path)
+`, wantFormat, info, exit))
 	return path
 }
 
-// waitExecutable blocks until a just-written script can actually be exec'd.
+// settleProbe is the argument every runtime stub answers by exiting at once:
+// writeRuntime puts that answer ahead of each stub's body and settles the stub
+// with it, so settling runs none of a body and leaves nothing in a log a case
+// reads back. The engine never sends it, so the line answers nothing a case
+// asserts on.
+const settleProbe = "--settle-probe"
+
+// writeRuntime writes a runtime stub at path — `#!/bin/sh`, the answer to
+// [settleProbe], then body — and returns once the stub can be exec'd, through
+// [hostbox.Settle], the one wait for a freshly written executable. It is the
+// ONE way this package writes an executable, and
+// TestEveryExecutableThisSuiteWritesIsSettled holds it to that, so no stub can
+// skip the wait.
 //
-// # A FRESHLY WRITTEN EXECUTABLE CAN BE ETXTBSY, and this file execs one
-//
-// os.WriteFile closes its own descriptor, but any goroutine that forked
-// while it was open inherited it, and Linux refuses to exec a file that any
-// process holds open for writing. The child closes it at its own exec — Go
-// opens with O_CLOEXEC — so the window is short. This package forks
-// constantly, and under -race on a loaded runner it is wide enough to hit:
-// measured at 17 failures in 200 execs of a just-written script with eight
-// goroutines forking alongside.
-//
-// The symptom was not an error anyone could read. runHost reported a start
-// failure, runtimeIsRootless turned that into "not rootless", and the
-// rootless subtest failed asserting on an argv that carried --user — a
-// result indistinguishable from the detection genuinely being wrong.
-//
-// Waiting here is enough rather than a retry at every call site: nothing
-// reopens the file for writing afterwards, so once one exec gets through,
-// every later one does.
-func waitExecutable(t *testing.T, path string) {
+// This package forks constantly, and a goroutine that forks while
+// os.WriteFile has a script open holds it open for writing until its child
+// execs, so the script's first exec can fail ETXTBSY. The symptom is never an
+// error anyone can read, because every caller of the runtime reads a start
+// failure as an answer: runtimeIsRootless as "not rootless", so the argv
+// carries --user; Create's mount proof as a refusal of the box; and
+// containerBox.paused as "not paused", so an attach to a paused container
+// succeeds. Each reads as the code under test being wrong — or, for the mount
+// proof, as exactly the refusal its cases assert.
+func writeRuntime(t *testing.T, path, body string) {
 	t.Helper()
-	for attempt := range 100 {
-		err := exec.Command(path).Run() //nolint:noctx // a local probe of one script
-		if !errors.Is(err, syscall.ETXTBSY) {
-			return
-		}
-		// A few milliseconds is a fork/exec, which is what this waits
-		// out; 100 attempts is half a second of a window measured in
-		// microseconds.
-		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	script := "#!/bin/sh\nif [ \"$1\" = " + settleProbe + " ]; then exit 0; fi\n" + body
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("%s stayed ETXTBSY: something is holding it open for writing", path)
+	if err := hostbox.Settle(t.Context(), path, settleProbe); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The template each runtime answers. Docker carries the flag among its
@@ -301,31 +299,21 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 func stubRuntime(t *testing.T, stateDir string, faithful bool) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "docker")
-	script := `#!/bin/sh
-verb="$1"
+	writeRuntime(t, path, `verb="$1"
 case "$verb" in
 info) printf '%s' '[name=seccomp]'; exit 0 ;;
 exec)
   root=""
-  for candidate in "` + filepath.Join(stateDir, "boxes") + `"/*; do root="$candidate"; done
+  for candidate in "`+filepath.Join(stateDir, "boxes")+`"/*; do root="$candidate"; done
   [ -d "$root" ] || exit 1
-  if [ "` + fmt.Sprint(faithful) + `" = false ]; then printf 'another host'; exit 0; fi
+  if [ "`+fmt.Sprint(faithful)+`" = false ]; then printf 'another host'; exit 0; fi
   cat "$root/home/.crewlet/mount-probe" || exit 1
   mkdir -p "$root/home/.crewlet/mount-probe.d" || exit 1
   exit 0 ;;
-rm) printf '%s' "$*" >> "` + filepath.Join(t.TempDir(), "removed") + `"; exit 0 ;;
+rm) printf '%s' "$*" >> "`+filepath.Join(t.TempDir(), "removed")+`"; exit 0 ;;
 *) exit 0 ;;
 esac
-`
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// The same wait fakeRuntime takes, for the same reason: this script is
-	// written and then exec'd by parallel subtests, so it inherits the same
-	// ETXTBSY window. It fails differently here — Create's mount proof cannot
-	// start the container at all — and that reads as the proof legitimately
-	// refusing a box, which is exactly what these cases assert.
-	waitExecutable(t, path)
+`)
 	return path
 }
 
@@ -374,21 +362,22 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	}
 }
 
-// THE FAKE RUNTIME IS EXECUTABLE BY THE TIME fakeRuntime RETURNS.
+// A RUNTIME STUB IS EXECUTABLE BY THE TIME writeRuntime RETURNS.
 //
-// The guard for [waitExecutable]. Without it this package's own rootless
-// probe intermittently could not START the script it had just written —
-// Linux refuses to exec a file another process holds open for writing, and a
-// goroutine that forks while os.WriteFile has it open inherits exactly that.
-// runHost reported a start failure, runtimeIsRootless read that as "not
-// rootless", and TestTheContainerRunsAsWhoeverCanManageTheMount failed on an
-// argv carrying --user — a result indistinguishable from the detection being
-// wrong, which is what makes it worth a test of its own.
+// The guard for [writeRuntime], driven through fakeRuntime. Without the wait
+// this package's own rootless probe intermittently could not START the script
+// it had just written — Linux refuses to exec a file another process holds
+// open for writing, and a goroutine that forks while os.WriteFile has it open
+// inherits exactly that. runHost reported a start failure, runtimeIsRootless
+// read that as "not rootless", and
+// TestTheContainerRunsAsWhoeverCanManageTheMount failed on an argv carrying
+// --user — a result indistinguishable from the detection being wrong, which
+// is what makes it worth a test of its own.
 //
 // The forkers are the point: this reproduces at ~8% without them being
 // goroutines of THIS process, and not at all with load applied from outside
 // it, because the inherited descriptor is what does the refusing.
-func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
+func TestARuntimeStubIsExecutableWhenItIsHandedOver(t *testing.T) {
 	t.Parallel()
 	stop := make(chan struct{})
 	var forkers sync.WaitGroup
@@ -423,5 +412,81 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 		t.Fatalf("%d of 64 rootless probes could not run the runtime they "+
 			"were just handed; every one of them reads downstream as a "+
 			"rootful runtime and adds --user", n)
+	}
+}
+
+// EVERY EXECUTABLE THIS SUITE WRITES IS SETTLED, because writeRuntime writes
+// every one. A stub written any other way skips the wait, and its first exec
+// fails ETXTBSY a few runs in a few hundred, as an answer that reads as the
+// code under test being wrong: the paused-container case's stub was written
+// that way while the two beside it were settled, and with eight goroutines
+// forking beside it, 3 of its 200 runs read a paused container as running.
+//
+// It reads this package's own test files and refuses every os.WriteFile,
+// os.OpenFile and os.Chmod outside writeRuntime whose mode carries an exec
+// bit — and every mode it cannot read as a literal, which it names rather
+// than assumes harmless. It requires the one write writeRuntime makes to be
+// found as well, or a reader that recognised nothing would pass on any tree.
+//
+// Mutation: write the paused-container stub with os.WriteFile(…, 0o700)
+// again, and this names the line.
+func TestEveryExecutableThisSuiteWritesIsSettled(t *testing.T) {
+	t.Parallel()
+	// Where each call takes its mode among its arguments.
+	modeAt := map[string]int{"WriteFile": 2, "OpenFile": 2, "Chmod": 1}
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	settled := 0
+	for _, name := range files {
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			helper := isFunc && fn.Recv == nil && fn.Name.Name == "writeRuntime"
+			ast.Inspect(decl, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				at, writes := modeAt[sel.Sel.Name]
+				if !ok || pkg.Name != "os" || !writes || len(call.Args) <= at {
+					return true
+				}
+				where := fset.Position(call.Pos())
+				lit, ok := call.Args[at].(*ast.BasicLit)
+				if !ok || lit.Kind != token.INT {
+					t.Errorf("%s: os.%s with a mode this gate cannot read; spell it as an integer literal",
+						where, sel.Sel.Name)
+					return true
+				}
+				mode, err := strconv.ParseUint(lit.Value, 0, 32)
+				switch {
+				case err != nil:
+					t.Errorf("%s: os.%s with a mode this gate cannot read (%v)", where, sel.Sel.Name, err)
+				case mode&0o111 == 0:
+				case helper:
+					settled++
+				default:
+					t.Errorf("%s: os.%s writes an executable outside writeRuntime, so nothing "+
+						"waits for it to settle before its first exec; write it with writeRuntime",
+						where, sel.Sel.Name)
+				}
+				return true
+			})
+		}
+	}
+	if settled != 1 {
+		t.Fatalf("found %d executable writes in writeRuntime, want its one os.WriteFile: "+
+			"this gate is not reading what it thinks it reads", settled)
 	}
 }

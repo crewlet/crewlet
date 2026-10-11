@@ -417,7 +417,8 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 // into it, which a paused container refuses, so it cannot be read as it is —
 // and Attach reads the runtime's own state rather than unpausing to find out.
 // The fake runtime here logs every call it is handed and answers `inspect` from
-// a file the test writes.
+// a file the test writes; writeRuntime's settle probe is answered ahead of the
+// log line, so the log holds only what the engine asked.
 //
 // Mutation: unpause in Attach, and the log shows it.
 func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
@@ -425,11 +426,8 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 	dir := t.TempDir()
 	calls, state := filepath.Join(dir, "calls"), filepath.Join(dir, "paused")
 	runtime := filepath.Join(dir, "runtime")
-	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n" +
-		"if [ \"$1\" = inspect ]; then read s < " + state + "; echo \"$s\"; fi\n"
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime(t, runtime, "echo \"$@\" >> "+calls+"\n"+
+		"if [ \"$1\" = inspect ]; then read s < "+state+"; echo \"$s\"; fi\n")
 	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), runtime: runtime}
 	layout, err := local.layout("box1")
 	if err != nil {
