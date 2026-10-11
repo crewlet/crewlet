@@ -175,15 +175,16 @@
 //
 // # How hard the store is asked
 //
-// A collection makes a request per object it deletes, and an audit one per
-// object it asks about — or, on a store that lists in order, one per
-// [rangeChunk] of them while their range fits a page, and a stat for each
-// object its listings pass over. One at a
-// time they are round trips in a row: an audit of two million objects by stat
-// was two million of them, end to end. So the audit asks up to
-// [auditConcurrency] questions at once — a stat, or a listing of a range — and
-// a collection has up to [deleteConcurrency] deletions in flight beside its
-// listing.
+// A collection makes a request per object it deletes — or, on a store that
+// deletes in batches ([objstore.BatchDeleter]), one per judged batch of them —
+// and an audit one per object it asks about — or, on a store that lists in
+// order, one per [rangeChunk] of them while their range fits a page, and a
+// stat for each object its listings pass over. One at a time they are round
+// trips in a row: an audit of two million objects by stat was two million of
+// them, end to end. So the audit asks up to [auditConcurrency] questions at
+// once — a stat, or a listing of a range — and a collection has up to
+// [deleteConcurrency] deletions in flight beside its listing, or
+// [batchesInFlight] batches of them.
 //
 // THE BOUNDS ARE CLOSED LOOPS, never a rate: a request goes out only when one
 // in flight has been answered, so a store that slows down is asked more slowly
@@ -357,7 +358,9 @@ const judgeBatch = 500
 // away, since no real bucket has been measured.
 const auditConcurrency = 32
 
-// deleteConcurrency is how many deletions a collection has in flight at once.
+// deleteConcurrency is how many deletions a collection has in flight at once
+// on a store that deletes one object a request — the broker's, an S3-compatible
+// gateway that does not offer a batch.
 //
 // SIXTEEN, half the audit's, because a deletion is a WRITE. On S3 a prefix's
 // writes — AWS documents at least 3,500 PUT, POST and DELETE requests a second
@@ -370,6 +373,23 @@ const auditConcurrency = 32
 // a time a collection's deletions are round trips in a row; sixteen out divide
 // that by sixteen.
 const deleteConcurrency = 16
+
+// batchesInFlight is how many batch deletions ([objstore.BatchDeleter]) a
+// collection has out at once on a store that deletes in batches: each judged
+// batch's unnamed objects — up to [judgeBatch] — in one DeleteObjects.
+//
+// ONE, and the reason is the prefix's write rate rather than the requests.
+// AWS states that rate in requests and is silent on how a batch's keys count
+// against it; read the way that cannot spend the uploads' share — each key a
+// write — one batch of five hundred out reaches a quarter of the prefix's
+// writes only if it is answered in under 0.57 s, about what the sixteen single
+// deletions out reached, while a second batch out would take as much again
+// from the company's uploads on the same prefix. What a
+// batch buys is the requests: a bulk removal of a million objects is two
+// thousand of them rather than a million, at the pace the prefix allowed
+// anyway. Whether S3 counts a batch as one write is a measurement against a
+// real bucket nobody has made; if it does, this is the number to raise.
+const batchesInFlight = 1
 
 // rangePage is how many names one request of a ranged listing answers on the
 // store the ranged audit exists for: S3's ListObjectsV2, at most a thousand
@@ -731,9 +751,60 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 	// are in flight, and waits only when all of them are. The estate is still
 	// read by this goroutine alone — only the store's deletions are parallel —
 	// and a deletion that fails ends dctx, which stops the listing.
+	//
+	// ON A STORE THAT DELETES IN BATCHES ([objstore.BatchDeleter]) a judged
+	// batch's unnamed objects go in ONE request, [batchesInFlight] of them
+	// out at once — a slot a batch waits for in its own goroutine, so the
+	// listing still runs ahead — until the store refuses a batch as a request
+	// ([objstore.ErrNoBatch]): a gateway without the verb, from which the
+	// rest of the pass deletes each object on its own.
 	deletes, dctx := errgroup.WithContext(ctx)
 	deletes.SetLimit(deleteConcurrency)
-	var deleted atomic.Int64
+	var (
+		deleted atomic.Int64
+		batched atomic.Bool
+		refused sync.Once
+		slot    = make(chan struct{}, batchesInFlight)
+	)
+	batched.Store(c.opts.Store.BatchDeletes())
+	each := func(keys []objstore.Key) error {
+		for _, k := range keys {
+			if derr := c.opts.Store.Delete(dctx, k); derr != nil {
+				return derr
+			}
+			deleted.Add(1)
+		}
+		return nil
+	}
+	inBatch := func(keys []objstore.Key) error {
+		select {
+		case slot <- struct{}{}:
+		case <-dctx.Done():
+			return dctx.Err()
+		}
+		if !batched.Load() {
+			// A BATCH BEFORE IT WAS REFUSED, given its slot only now:
+			// deleted one at a time, not offered to a store that just
+			// refused the verb.
+			<-slot
+			return each(keys)
+		}
+		n, derr := c.opts.Store.DeleteKeys(dctx, keys)
+		deleted.Add(int64(n))
+		if errors.Is(derr, objstore.ErrNoBatch) {
+			batched.Store(false) // before the slot goes, so no batch queued behind it is sent
+			refused.Do(func() {
+				log.WarnContext(ctx, "objects_collect_one_by_one", "error", derr,
+					"detail", "the object store refused a batch deletion as a request, so the "+
+						"collection deletes each object on its own: one request an object")
+			})
+		}
+		<-slot
+		if !errors.Is(derr, objstore.ErrNoBatch) {
+			return derr
+		}
+		return each(keys)
+	}
 	var batch []objstore.Key
 	judge := func() error {
 		if len(batch) == 0 {
@@ -747,21 +818,29 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		if !complete {
 			return errIncomplete
 		}
+		var unnamed []objstore.Key
 		for _, k := range batch {
 			if _, named := refs[k]; named {
 				r.Referenced++
 				continue
 			}
+			unnamed = append(unnamed, k)
+		}
+		if len(unnamed) == 0 {
+			return nil
+		}
+		if derr := dctx.Err(); derr != nil {
+			return derr // a deletion failed: judge nothing more
+		}
+		if batched.Load() {
+			deletes.Go(func() error { return inBatch(unnamed) })
+			return nil
+		}
+		for _, k := range unnamed {
 			if derr := dctx.Err(); derr != nil {
 				return derr // a deletion failed: judge nothing more
 			}
-			deletes.Go(func() error {
-				if derr := c.opts.Store.Delete(dctx, k); derr != nil {
-					return derr
-				}
-				deleted.Add(1)
-				return nil
-			})
+			deletes.Go(func() error { return each([]objstore.Key{k}) })
 		}
 		return nil
 	}

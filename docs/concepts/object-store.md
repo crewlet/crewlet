@@ -214,7 +214,8 @@ promises, and its size is the provider's problem rather than any node's disk.
   shared profile, a web identity token or the instance's role.
 - **The identity needs six permissions** on the bucket and its objects under
   the prefix: `s3:PutObject` (a single upload, and every step of one in parts),
-  `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` (the check at boot, the
+  `s3:GetObject`, `s3:DeleteObject` (a deletion, and the collector's batches of
+  them), `s3:ListBucket` (the check at boot, the
   collector's listing and the audit's listings of ranges), and
   `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpload` (finding and
   aborting unfinished uploads). Without the last two, uploads still work and
@@ -329,11 +330,14 @@ judged against the replicated estate the data node holds:
   so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row — [live or retired](#live-and-retired-references) —
-  names**. It deletes up to sixteen at a time while the listing goes on. The
-  day is the grace an upload in flight is given between storing its object
-  and writing its row. Only a name under the engine's `files/` corner is the
-  collector's: anything else in the bucket, or under the prefix, is never
-  counted, judged or deleted. A collection that
+  names**. It deletes while the listing goes on: on S3, each batch of up to
+  500 objects it judged in one `DeleteObjects` request, one batch at a time;
+  on `nats`, or on a gateway that refuses that request, each object on its
+  own, up to sixteen at a time — [How far it scales](#how-far-it-scales) says
+  why those bounds. The day is the grace an upload in flight is given between
+  storing its object and writing its row. Only a name under the engine's
+  `files/` corner is the collector's: anything else in the bucket, or under
+  the prefix, is never counted, judged or deleted. A collection that
   cannot read the whole estate — this node holds a record it could not apply
   — **stops deleting**: a row it could not read may name any object, and the
   report says what it deleted before it stopped and why it stopped.
@@ -569,9 +573,16 @@ dashboard draws the same under **Settings › Nodes**.
   answered 1,380–1,450 a second with 32 out in the S3 backend's benchmark, and
   one 50 ms away about 610, where one at a time answers 47 and 19: two million
   objects are 23–24 minutes and 55 rather than twelve hours and twenty-nine. A
-  collection keeps up to 16 deletions out, a quarter of the 3,500 writes a
-  second AWS documents for a prefix only if a deletion averages under 18 ms,
-  which leaves the rest to the company's uploads. On `nats` a question is a
+  collection on S3 deletes each batch of up to 500 objects it judged in **one
+  `DeleteObjects` request**, one batch at a time — a million objects nobody
+  names are two thousand requests rather than a million. AWS states a prefix's
+  3,500 writes a second in requests without saying how a batch's keys count,
+  so a batch is taken to spend one write a key, and one batch out reaches a
+  quarter of them only if it is answered in under 0.57 s, which leaves the
+  rest to the company's uploads. On a gateway that refuses the verb — Google
+  Cloud Storage's has none — the collection deletes each object on its own
+  instead, up to 16 out, a quarter of the prefix's writes only if a deletion
+  averages under 18 ms. On `nats` a question is a
   read from the bucket stream's leader and a deletion three requests to it,
   two of them replicated writes; the backend's own benchmark answered
   15,000–19,000 questions a second with 32 out on a member's own client,
@@ -579,7 +590,7 @@ dashboard draws the same under **Settings › Nodes**.
   a follower at three replicas — about two minutes for two million objects on
   a member, where one at a time took four to seven. The S3 figures are against
   an in-process fake held that far away; no real bucket has been measured.
-  Both bounds are on requests in flight rather than tuned rates: a store that
+  Every bound is on requests in flight rather than a tuned rate: a store that
   slows down is asked more slowly, and one that is failing stops the pass with
   at most that many requests out — a collection at its first failed deletion,
   an audit at the thirty-second failed question in a row.

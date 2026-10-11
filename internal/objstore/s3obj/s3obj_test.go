@@ -104,7 +104,7 @@ func TestContract(t *testing.T) {
 		b := open(t, srv, "crewlet/")
 		servers.Store(objstore.Backend(b), srv)
 		return b
-	}, objstoretest.Options{Piece: part, Ranged: true,
+	}, objstoretest.Options{Piece: part, Ranged: true, BatchDeletes: true,
 		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
 		// prefix: what a process killed mid-upload leaves, named by
 		// what follows the prefix.
@@ -690,5 +690,91 @@ func TestADirectoryBucketsRangesAreUnordered(t *testing.T) {
 	}
 	if n := srv.RequestsOf("ListObjectsV2"); n != 0 {
 		t.Fatalf("refusing a directory bucket's range cost %d listings, want none", n)
+	}
+}
+
+// A BATCH DELETION IS ONE DeleteObjects REQUEST, carrying the Content-MD5 the
+// API long required of it — the fake, as many gateways do, refuses one
+// without — and a key the bucket refuses is named back by the name it was
+// handed, the rest of the batch gone: the caller learns which files it could
+// not remove, never just that the request did not wholly succeed.
+func TestABatchDeletionIsOneRequestNamingWhatItCouldNotRemove(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b := open(t, srv, "crewlet/")
+	names := []string{"files/a", "files/b", "files/c", "files/never-put"}
+	for _, name := range names[:3] {
+		if err := b.Put(t.Context(), name, bytes.NewReader([]byte(name)), objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.RefuseDelete("crewlet/files/b", "AccessDenied")
+	err := b.DeleteBatch(t.Context(), names)
+	var refused *objstore.DeleteBatchError
+	if !errors.As(err, &refused) || len(refused.Failed) != 1 || refused.Failed["files/b"] == nil {
+		t.Fatalf("DeleteBatch with one key refused = %v; want a DeleteBatchError naming files/b alone", err)
+	}
+	if errors.Is(err, objstore.ErrNoBatch) {
+		t.Fatalf("a batch the bucket answered key by key was read as refused whole: %v", err)
+	}
+	if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/b"}) {
+		t.Fatalf("after the batch the bucket holds %q, want only the refused key", got)
+	}
+	if n := srv.RequestsOf("DeleteObjects"); n != 1 {
+		t.Fatalf("a batch of %d names made %d DeleteObjects requests, want one", len(names), n)
+	}
+	if n := srv.RequestsOf("DeleteObject"); n != 0 {
+		t.Fatalf("a batch deletion made %d single deletions, want none", n)
+	}
+	// PAST THE BATCH THE API TAKES, refused before any request.
+	if err := b.DeleteBatch(t.Context(), make([]string, objstore.MaxDeleteBatch+1)); err == nil {
+		t.Fatal("a batch past MaxDeleteBatch was accepted")
+	}
+	if n := srv.RequestsOf("DeleteObjects"); n != 1 {
+		t.Fatalf("a batch past MaxDeleteBatch was sent (%d requests in all)", n)
+	}
+}
+
+// A BATCH THE BUCKET REFUSES AS A REQUEST IS ErrNoBatch, AND ONLY THAT IS: a
+// gateway that does not offer the verb answers it with a client error or 501,
+// having removed nothing, and its caller deletes each name instead. A throttle
+// — 503 SlowDown, or 429 — and a server error are the bucket failing: read as
+// a missing verb, they would have the caller send a request for every key to a
+// prefix that has just said to slow down.
+func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		status  int
+		code    string
+		noBatch bool
+	}{
+		{http.StatusNotImplemented, "NotImplemented", true},
+		{http.StatusBadRequest, "InvalidArgument", true},
+		{http.StatusMethodNotAllowed, "MethodNotAllowed", true},
+		{http.StatusForbidden, "AccessDenied", true},
+		{http.StatusTooManyRequests, "TooManyRequests", false},
+		{http.StatusServiceUnavailable, "SlowDown", false},
+		{http.StatusInternalServerError, "InternalError", false},
+	} {
+		t.Run(c.code, func(t *testing.T) {
+			t.Parallel()
+			srv := s3fake.Start(t, "files")
+			b := open(t, srv, "crewlet/")
+			if err := b.Put(t.Context(), "files/a", bytes.NewReader([]byte("a")), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			srv.RefuseBatches(c.status, c.code)
+			err := b.DeleteBatch(t.Context(), []string{"files/a"})
+			if err == nil {
+				t.Fatalf("a batch the bucket refused with %d %s succeeded", c.status, c.code)
+			}
+			if got := errors.Is(err, objstore.ErrNoBatch); got != c.noBatch {
+				t.Fatalf("DeleteBatch refused with %d %s = %v; ErrNoBatch %v, want %v",
+					c.status, c.code, err, got, c.noBatch)
+			}
+			if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/a"}) {
+				t.Fatalf("a refused batch left the bucket holding %q", got)
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 // Package s3fake is an in-process S3 endpoint for tests: the calls the object
 // store makes — head bucket; put, get (whole or ranged), head and delete an
-// object; a paged ListObjectsV2, from a start-after or not; a multipart
+// object; delete up to a thousand at once; a paged ListObjectsV2, from a
+// start-after or not; a multipart
 // upload's start, parts, completion and abandonment; and a paged listing of
 // the uploads begun and not finished — over one bucket, path-style, counting
 // the requests of each kind it answers ([Server.RequestsOf]).
@@ -29,6 +30,8 @@
 package s3fake
 
 import (
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"hash/crc32"
@@ -99,6 +102,17 @@ type Server struct {
 	held *heldPart
 	// undated is the keys whose listings leave the date out.
 	undated map[string]bool
+	// batchRefusal is what every DeleteObjects answers, while its status is
+	// set ([Server.RefuseBatches]); refusedKeys the code a DeleteObjects
+	// refuses each key it names with ([Server.RefuseDelete]).
+	batchRefusal refusal
+	refusedKeys  map[string]string
+}
+
+// refusal is an error answer: a status and the code it carries.
+type refusal struct {
+	status int
+	code   string
 }
 
 // heldPart is a part number whose every upload the bucket takes and never
@@ -185,8 +199,8 @@ func (s *Server) partArrived() func() {
 
 // RequestsOf is how many requests of one kind the bucket has answered — the
 // operation's name in the API: "HeadObject", "GetObject", "PutObject",
-// "DeleteObject", "ListObjectsV2", "HeadBucket" and the multipart calls — so a
-// test can count what a pass cost.
+// "DeleteObject", "DeleteObjects", "ListObjectsV2", "HeadBucket" and the
+// multipart calls — so a test can count what a pass cost.
 func (s *Server) RequestsOf(op string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -322,6 +336,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.list(w, r)
 	case key == "" && r.Method == http.MethodGet && q.Has("uploads"):
 		s.listUploads(w, r)
+	case key == "" && r.Method == http.MethodPost && q.Has("delete"):
+		s.deleteObjects(w, r)
 	case key == "":
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
 
@@ -387,6 +403,8 @@ func operation(method, key string, q map[string][]string) string {
 		return "HeadBucket"
 	case key == "" && has("uploads"):
 		return "ListMultipartUploads"
+	case key == "" && method == http.MethodPost && has("delete"):
+		return "DeleteObjects"
 	case key == "":
 		return "ListObjectsV2"
 	case method == http.MethodPost && has("uploads"):
@@ -572,6 +590,106 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request, key, id 
 	delete(s.uploads, id)
 	s.mu.Unlock()
 	s.writeXML(w, completeResult{Bucket: s.bucket, Key: key, ETag: etag(data)})
+}
+
+// maxDeleteKeys is the most keys one DeleteObjects takes.
+const maxDeleteKeys = 1000
+
+type deleteRequest struct {
+	XMLName xml.Name `xml:"Delete"`
+	Objects []struct {
+		Key string `xml:"Key"`
+	} `xml:"Object"`
+	Quiet bool `xml:"Quiet"`
+}
+
+type deleteResult struct {
+	XMLName xml.Name      `xml:"DeleteResult"`
+	Deleted []deletedKey  `xml:"Deleted"`
+	Errors  []deleteError `xml:"Error"`
+}
+
+type deletedKey struct {
+	Key string `xml:"Key"`
+}
+
+type deleteError struct {
+	Key     string `xml:"Key"`
+	Code    string `xml:"Code"`
+	Message string `xml:"Message"`
+}
+
+// deleteObjects removes up to a thousand keys, as DeleteObjects does: each
+// that is not there answered deleted, each [Server.RefuseDelete] names refused
+// by its code, and a quiet request answered with its refusals alone. It
+// requires the body's Content-MD5, as the API long did and S3-compatible
+// gateways still do, so a client that sends none is refused here too.
+func (s *Server) deleteObjects(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	refused := s.batchRefusal
+	s.mu.Unlock()
+	if refused.status != 0 {
+		s.fail(w, r, refused.status, refused.code)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
+		return
+	}
+	sum := md5.Sum(body)
+	switch got := r.Header.Get("Content-MD5"); {
+	case got == "":
+		s.fail(w, r, http.StatusBadRequest, "MissingContentMD5")
+		return
+	case got != base64.StdEncoding.EncodeToString(sum[:]):
+		s.fail(w, r, http.StatusBadRequest, "BadDigest")
+		return
+	}
+	var req deleteRequest
+	if err := xml.Unmarshal(body, &req); err != nil || len(req.Objects) > maxDeleteKeys {
+		s.fail(w, r, http.StatusBadRequest, "MalformedXML")
+		return
+	}
+	var out deleteResult
+	s.mu.Lock()
+	for _, o := range req.Objects {
+		if code := s.refusedKeys[o.Key]; code != "" {
+			out.Errors = append(out.Errors, deleteError{Key: o.Key, Code: code, Message: code})
+			continue
+		}
+		delete(s.objects, o.Key)
+		if !req.Quiet {
+			out.Deleted = append(out.Deleted, deletedKey{Key: o.Key})
+		}
+	}
+	s.mu.Unlock()
+	s.writeXML(w, out)
+}
+
+// RefuseBatches makes every DeleteObjects answer status with code, removing
+// nothing — what a gateway that does not offer the verb answers; a status of
+// zero offers it again.
+func (s *Server) RefuseBatches(status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batchRefusal = refusal{status: status, code: code}
+}
+
+// RefuseDelete makes a DeleteObjects that names key refuse it with code,
+// deleting the rest — what S3 answers a key it would not remove; an empty code
+// removes it again.
+func (s *Server) RefuseDelete(key, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refusedKeys == nil {
+		s.refusedKeys = map[string]string{}
+	}
+	if code == "" {
+		delete(s.refusedKeys, key)
+		return
+	}
+	s.refusedKeys[key] = code
 }
 
 func (s *Server) abortUpload(w http.ResponseWriter, r *http.Request, id string) {

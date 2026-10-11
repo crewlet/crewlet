@@ -114,6 +114,24 @@ func (b *Backend) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteBatch implements [objstore.BatchDeleter]: every name at once, under
+// one hold of the lock, as one request removes them on S3.
+func (b *Backend) DeleteBatch(ctx context.Context, names []string) error {
+	if len(names) > objstore.MaxDeleteBatch {
+		return fmt.Errorf("memobj: a batch deletion of %d names, past the %d one takes",
+			len(names), objstore.MaxDeleteBatch)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, name := range names {
+		delete(b.objects, name)
+	}
+	return nil
+}
+
 // List implements [objstore.Backend]. It visits a snapshot, so a visitor may
 // put and delete as it goes.
 func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) error {
