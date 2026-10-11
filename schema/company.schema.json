@@ -3865,7 +3865,7 @@
       ]
     }
   },
-  "$id": "https://docs.crewlet.ai/schema/company.schema.json",
+  "$id": "https://docs.crewlet.ai/engine/latest/schema/company.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

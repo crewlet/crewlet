@@ -125,18 +125,29 @@ export interface Entry {
   /** The API rows that together are this tool. Most tools have one. */
   surfaces: Surface[];
   /**
-   * This tool's page on docs.crewlet.ai, under `integrations/`, for the one
-   * tile that has nothing a person can do from here: Learn more.
+   * This tool's page on docs.crewlet.ai, `docs/integrations/<doc>.md` in the
+   * engine's tree, for the one tile that has nothing a person can do from
+   * here: Learn more.
    */
   doc: string;
 }
 
-/** Where the product documentation is published. See `docs/index.md`. */
-const DOCS_BASE = "https://docs.crewlet.ai/";
+/**
+ * Where the engine's documentation is published: the newest release's copy
+ * (`/engine/latest/`; main is `/engine/next/`, an older line `/engine/vX.Y/`).
+ * See `docs/index.md`.
+ */
+const DOCS_BASE = "https://docs.crewlet.ai/engine/latest/";
 
-/** The published address of an integration's own page. */
+/**
+ * The published address of an integration's own page.
+ *
+ * WITH ITS TRAILING SLASH, because every page on the site is a directory: the
+ * slashless spelling answers a redirect to this one, a round trip on every
+ * click before the page loads.
+ */
 export function docHref(entry: Entry): string {
-  return `${DOCS_BASE}integrations/${entry.doc}`;
+  return `${DOCS_BASE}integrations/${entry.doc}/`;
 }
 
 /**

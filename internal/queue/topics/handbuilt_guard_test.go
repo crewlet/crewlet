@@ -125,7 +125,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	}
 	for _, negative := range []string{
 		"crewlet.db",
-		"https://docs.crewlet.ai/schema/bootstrap.schema.json",
+		"https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json",
 		"agent-only field set on a human seat",
 		"Maximum depth of agent-to-agent delegation chains.",
 		"github.com/crewlet/crewlet/internal/queue/topics",

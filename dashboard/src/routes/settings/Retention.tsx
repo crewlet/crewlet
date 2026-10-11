@@ -96,7 +96,7 @@ export function BlockedBanner({ domain: d, now }: { domain: RetentionDomain; now
         {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
         <a
           className="prose-link"
-          href="https://docs.crewlet.ai/guides/retention"
+          href="https://docs.crewlet.ai/engine/latest/guides/retention/"
           target="_blank"
           rel="noreferrer"
         >
