@@ -1,0 +1,137 @@
+name: main image
+
+# THE ENGINE IMAGE OF MAIN: ghcr.io/crewlet/crewlet:main, rebuilt on every
+# push to main. See RELEASING.md, "Images from main".
+#
+# ONE TAG, AND IT MOVES. Each push to main builds the image of its head commit
+# and moves `main` to it. Nothing else is ever pushed: no tag per commit, never
+# `latest`, never a release's tag — an image of main is not a release. The
+# binary inside reports `main-` and the first twelve hex digits of the commit
+# (internal/version), which no release version can be.
+#
+# A PUSH TO MAIN IS ITS ONLY TRIGGER. A pull request has nothing to publish.
+# One touching the Dockerfile, go.mod, internal/version or scripts/notices
+# runs release.yml's snapshot job, which builds the release image from this
+# same Dockerfile and checks its binary's version; nothing runs this file's
+# own build before a merge, so a change here is first exercised on main. The
+# job has no event condition, so any other trigger would hand the registry
+# and a signing identity to a run no merge started.
+#
+# THE RELEASE'S BUILD, without goreleaser: a release run needs a semver tag
+# on the commit, and a snapshot run pushes nothing. `make image-context`
+# builds the binaries with .goreleaser.yaml's settings and stages them in the
+# layout it stages, and the image is built from the same Dockerfile for the
+# same two platforms.
+#
+# THE IMAGES `main` NO LONGER NAMES ARE DELETED, so the package holds the
+# image of main and the releases rather than one image per push.
+#
+# ITS OWN WORKFLOW rather than a job in release.yml: docs-publish.yml reads
+# every completed push run of `release` as a new v* tag.
+#
+# EVERY ACTION IS PINNED BY COMMIT SHA, as in release.yml and for its reason:
+# this job holds the registry and a signing identity.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push CANCELS the run before it, in progress or pending: only the
+# newest commit's image is worth finishing, since `main` moves to it next.
+# Named after the workflow because a concurrency group is shared by every
+# workflow in the repository.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: build, push and sign main's image
+    # A fork's own push to its main would run with the fork's token and
+    # identity, so it could only fail here.
+    if: github.repository == 'crewlet/crewlet'
+    runs-on: ubuntu-latest
+    # Two binaries and one two-platform image whose arm64 leg runs its
+    # package install under QEMU. Not the six-hour default, under which a hung
+    # step holds `main` back until the next push cancels it.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # The image, to this repository's own GHCR namespace, and the deletion
+      # of the ones it replaces (which the package must also allow: the
+      # repository holds its Admin role).
+      packages: write
+      # The keyless signature: cosign mints a short-lived certificate from
+      # this run's OIDC identity, as the release does.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No build cache, on release.yml's policy and for its reasons.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The binaries and the context the Dockerfile builds from, by the
+      # Makefile's image-context, which builds them as a release does and runs
+      # the one this runner can before anything is pushed. Stamped `main-` and
+      # twelve hex digits of the commit: the length Go gives a commit in a
+      # pseudo-version.
+      - name: build the image context
+        run: |
+          version="main-${GITHUB_SHA:0:12}"
+          make image-context VERSION="${version}" IMAGE_CONTEXT="${RUNNER_TEMP}/image"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/image
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/crewlet/crewlet:main
+          labels: |
+            org.opencontainers.image.title=crewlet
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      # Keyless, by the digest just pushed, as docker_signs signs a release's
+      # image; the certificate names this workflow on main and this commit.
+      # cosign is the installer's default, as in release.yml and for its
+      # reason: the pin Dependabot moves is the action's.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: sign the image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/crewlet/crewlet@${DIGEST}"
+
+      # The images no tag names any more, which is every earlier image of
+      # main. Untagged IMAGES, not untagged package VERSIONS: GHCR lists each
+      # platform manifest, attestation and signature of a tagged image as a
+      # version of its own, so deleting every untagged version
+      # (actions/delete-package-versions) deletes them out from under `main`
+      # and every release. This action keeps a tagged image's children and
+      # deletes the signatures whose image is gone. Only images older than an
+      # hour: a push uploads an image's platform manifests moments before the
+      # index that tags them, and a release's push can be in flight.
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: crewlet
+          delete-untagged: true
+          delete-orphaned-images: true
+          older-than: 1 hour

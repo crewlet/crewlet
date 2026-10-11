@@ -333,20 +333,11 @@ func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, ?, ?, 0)
-			ON CONFLICT (stream) DO UPDATE SET
-				generation = excluded.generation, seq = excluded.seq,
-				stream_created_at = excluded.stream_created_at`,
-			at.Stream, int64(at.Generation), int64(at.Seq),
-			store.EncodeTime(created), store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("move the copy's checkpoint: %v", err)
+	log, err := q.DomainLog(t.Context(), at.Stream)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
 	}
+	moveCheckpoint(t, log, copyDB, at, created)
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}

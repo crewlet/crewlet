@@ -1,6 +1,7 @@
 # Build output. `crewlet` is what `go build ./cmd/crewlet` drops in the
 # working directory; dist/ is goreleaser's, and build/ holds what its before
-# hook generates for the archives and the image (the Go notices file).
+# hook generates for the archives and the image (the Go notices file) and the
+# image context `make image-context` stages.
 /crewlet
 /dist/
 /build/

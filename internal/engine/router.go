@@ -301,9 +301,15 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 	known, held := l.slot.known, l.slot.held
 	if v.refusal == statelog.RefuseBrokerUnreachable {
 		v.answers = known && held.answers
-		if v.fault == "" && known {
-			v.fault = held.fault
-		}
+	}
+	// A FAULT IS CARRIED ONLY WHERE ITS OWN LOG WENT UNREAD. Carried
+	// whenever any log went unread, a copy whose faulted log had just been
+	// read and found sound stayed out of service for as long as some OTHER
+	// log's health could not be read in its budget — on a loaded broker,
+	// reading after reading — which is the opposite of what an unread
+	// number may do in either direction.
+	if v.fault == "" && known && slices.Contains(v.unread, held.fault) {
+		v.fault = held.fault
 	}
 	l.slot.held, l.slot.known, l.slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
 	l.mu.Unlock()

@@ -446,21 +446,29 @@ func (h *applyHarness) retainedCount() int64 {
 	return count
 }
 
-// boot runs the loop with nothing queued until the retained table holds want
-// records, or fails. It is how a reprocess is observed: the checkpoint does
-// not move, so [applyHarness.run] has nothing to wait on.
+// boot runs the loop with nothing queued until it has BOOTED and the retained
+// table holds want records, or fails. It is how a reprocess is observed: the
+// checkpoint does not move, so [applyHarness.run] has nothing to wait on.
+//
+// BOOTED IS THE LOOP'S FIRST FETCH, which it makes only once its startup has
+// returned: the checkpoint loaded with the reanchor's rules on it, the
+// retained records reprocessed, and the applier's Committed hook run for
+// them. The retained count alone says none of that — on a runner holding
+// nothing it is already want before the loop has run a line — and a boot
+// that waited on it and a sleep handed back a runner that, on a loaded
+// machine, had not yet read its checkpoint: a case that then asked its
+// reanchor rules found them voiding nothing.
 func (h *applyHarness) boot(want int64) error {
 	h.t.Helper()
 	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
 	defer cancel()
+	fetched := h.fetch.fetchCount()
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
+	booted := func() bool { return h.fetch.fetchCount() > fetched }
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if h.retainedCount() == want {
-			// Settle: the release and the applier's Committed hook
-			// run in that order, and the count moves first.
-			time.Sleep(20 * time.Millisecond)
+		if booted() && h.retainedCount() == want {
 			cancel()
 			<-errs
 			return nil
@@ -473,6 +481,9 @@ func (h *applyHarness) boot(want int64) error {
 	}
 	cancel()
 	<-errs
+	if !booted() {
+		return fmt.Errorf("the loop never finished its startup: it made no fetch in 10s")
+	}
 	return fmt.Errorf("%d record(s) are still retained, want %d", h.retainedCount(), want)
 }
 
@@ -2018,18 +2029,23 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 	}
 	// AND A RUN THAT STARTS AGAIN DOES NOT FORGET IT. The loop restarts
 	// after an adoption; the positions it was built on do not change.
-	if err := h.boot(0); err != nil {
-		t.Fatalf("run again: %v", err)
-	}
-	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
-		t.Fatal("a re-run cleared the rebuild, so the writes would start " +
-			"landing on it again")
-	}
+	//
 	// NOR DOES IT APPLY FROM THE REBUILT STREAM. The checkpoint row still
 	// names the instant the runner was built with, so the boot comparison
 	// passes — and a loop that resumed would apply the rebuilt stream's
 	// records into rows keyed to the one before it. It stops instead, on
 	// the verdict it already holds, exactly as a boot on that stream does.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := h.runner.Run(ctx); !errors.Is(err, statelog.ErrStopped) ||
+		!errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("a re-run over an established rebuild returned %v, want the "+
+			"recreation stop", err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
+		t.Fatal("a re-run cleared the rebuild, so the writes would start " +
+			"landing on it again")
+	}
 	if stopped := h.runner.Stopped(); !errors.Is(stopped, statelog.ErrStreamRecreated) {
 		t.Fatalf("a re-run over an established rebuild reports %v, want the "+
 			"recreation stop", stopped)

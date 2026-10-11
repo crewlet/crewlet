@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -129,6 +130,30 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	}
 	if bound(boot.API.Port) {
 		t.Error("api.port is still listening although the node failed to start")
+	}
+}
+
+// A STOP THAT RUNS BEFORE THE LISTENER IS SERVED STILL LEAVES NOTHING BOUND.
+// listenAPI serves from a goroutine, and Shutdown closes only the listeners
+// Serve has registered, so a stop the scheduler ran first — a failed public
+// bind's, a moment after api.port was bound — returned with the socket still
+// accepting connections. This holds that window open: a socket nothing has
+// served yet, stopped, and the Serve that starts after the stop.
+func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
+	t.Parallel()
+	socket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := socket.Addr().(*net.TCPAddr).Port
+	l := &apiListener{server: &http.Server{ReadHeaderTimeout: apiReadHeaderTimeout}, socket: socket}
+
+	shutdownListener(t.Context(), l, "api", logging.Get("test"))
+	if bound(port) {
+		t.Error("the socket is still listening after its stop returned")
+	}
+	if err := l.server.Serve(socket); !errors.Is(err, http.ErrServerClosed) {
+		t.Errorf("a Serve that started after the stop = %v, want %v", err, http.ErrServerClosed)
 	}
 }
 
