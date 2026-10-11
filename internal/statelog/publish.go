@@ -1107,7 +1107,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 			p.domain.Name(), req.Subject, appendErr)
 
 	case faultUnknown:
-		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res, err := p.classifyAmbiguous(ctx, req, snap, gen, detail)
 		res.Rounds = round
 		if err != nil || res.Outcome != "" {
 			return res, dispDone, err
@@ -1208,8 +1208,7 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 	// a licence to publish at zero: only the broker can tell a subject
 	// that has never been written from one whose only record this node
 	// has not applied.
-	if snap.Anchor.Seq > 0 && snap.Anchor.Generation == gen {
-		seq := snap.Anchor.Seq
+	if seq := snap.anchorIn(gen); seq > 0 {
 		return &seq, nil, nil
 	}
 
@@ -1361,7 +1360,11 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, 
 //
 // A zero Outcome with a nil error means nothing landed and the caller should
 // retake its snapshot.
-func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Snap, detail string) (Result, error) {
+//
+// gen is the generation the append was made in, which is the number space the
+// broker's answer about the subject is in — and so the only generation whose
+// anchor that answer can be compared with ([Snap.anchorIn]).
+func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Snap, gen uint32, detail string) (Result, error) {
 	subject := p.subjectOf(req.Subject)
 	seq, found, err := p.log.LastSeq(ctx, subject)
 	switch {
@@ -1375,10 +1378,17 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 			"op_id", req.OpID, "publish_error", detail, "probe_error", err.Error())
 		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
 
-	case !found, seq <= snap.Anchor.Seq:
+	case !found, seq <= snap.anchorIn(gen):
 		// At or below the anchor this write decided against, so the
 		// subject holds nothing this write put there. Nothing landed:
 		// retake the snapshot and re-decide.
+		//
+		// THIS GENERATION'S ANCHOR, and none where the row's is from
+		// the generation before: a restored log counts again below such
+		// an anchor, so a record this write landed there read as "at or
+		// below it" and was decided again — on a node that had not
+		// applied it, behind it on every round, until a write that was
+		// on the log came back a conflict.
 		return Result{}, nil
 
 	default:
