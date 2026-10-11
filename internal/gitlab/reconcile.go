@@ -896,12 +896,6 @@ func clock(opts Options) time.Time {
 	return time.Now()
 }
 
-// ensureAccount finds or creates a seat's service account.
-//
-// THE LOOKUP IS MODE-INDEPENDENT: /users?username= sees every account on the
-// instance whatever owns it, which is what makes switching modes safe — an
-// operator who moves a company from group to instance finds the accounts it
-// already has rather than colliding with their usernames.
 // accountsURL is the page a person acts on this engine's service accounts
 // from, or "" when this run cannot name one.
 //
@@ -909,11 +903,12 @@ func clock(opts Options) time.Time {
 // changes its state; the group's service-accounts settings and the instance's
 // user administration both do, and which one applies is exactly what
 // [Options.Mode] already decides.
+//
+// ON THE ADDRESS THE PASS DIALLED, as [groupsURL] is. This read the
+// document's `url`, which may be a ${VAR} or carry the /api/v4 suffix
+// [NewClient] strips, so an instance-mode deployment holding either was sent
+// to `${GITLAB_URL}/admin/users…` or to a path under the API.
 func accountsURL(opts Options) string {
-	base := strings.TrimRight(strings.TrimSpace(opts.Config.URL), "/")
-	if base == "" {
-		return ""
-	}
 	// ONLY THE INSTANCE'S, and the group half is deliberately absent.
 	//
 	// /admin/users has been GitLab's user administration for many years and
@@ -925,7 +920,7 @@ func accountsURL(opts Options) string {
 	// the account and the state in words instead, which is worse than a
 	// working link and better than a broken one.
 	if opts.Mode.Or() == ModeInstance {
-		return base + "/admin/users?filter=blocked"
+		return opts.Client.URL() + "/admin/users?filter=blocked"
 	}
 	return ""
 }
@@ -960,6 +955,12 @@ type BlockedAccount struct {
 	Handle, Username, State string
 }
 
+// ensureAccount finds or creates a seat's service account.
+//
+// THE LOOKUP IS MODE-INDEPENDENT: /users?username= sees every account on the
+// instance whatever owns it, which is what makes switching modes safe — an
+// operator who moves a company from group to instance finds the accounts it
+// already has rather than colliding with their usernames.
 func ensureAccount(ctx context.Context, opts Options, groupID int,
 	seat provision.Seat,
 ) (User, bool, error) {

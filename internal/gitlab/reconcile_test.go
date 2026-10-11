@@ -4600,9 +4600,17 @@ func TestAnInstanceLinksItsUserAdmin(t *testing.T) {
 	f.blocked["crewlet-swe"] = true
 	f.mu.Unlock()
 
+	// THE DOCUMENT NAMES THE INSTANCE BY A ${VAR}, which is how a company
+	// that keeps its address in the environment writes it, and the client
+	// is pointed at what it resolved to — the test server.
+	var dialled string
 	res, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
-		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+		func(o *gitlab.Options) {
+			o.Mode = gitlab.ModeInstance
+			o.Config.URL = "${GITLAB_URL}"
+			dialled = o.Client.URL()
+		})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -4612,7 +4620,9 @@ func TestAnInstanceLinksItsUserAdmin(t *testing.T) {
 			got = finding
 		}
 	}
-	if want := "https://gitlab.example.com/admin/users?filter=blocked"; got.ActionURL != want {
+	// ON THE ADDRESS THE PASS DIALLED, never the document's spelling of it:
+	// built from the ${VAR} it linked to `${GITLAB_URL}/admin/users…`.
+	if want := dialled + "/admin/users?filter=blocked"; got.ActionURL != want {
 		t.Errorf("action_url = %q, want %q", got.ActionURL, want)
 	}
 }
