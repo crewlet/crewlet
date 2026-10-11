@@ -340,7 +340,9 @@ whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-A running node always serves the store, not the file.
+A running node always serves the store, not the file — and once the store
+holds a company it also *starts* on the store's, so nothing it builds at boot
+comes from a file it is about to ignore.
 
 **Or two steps** — import once, then run:
 

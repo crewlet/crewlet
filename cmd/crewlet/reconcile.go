@@ -53,6 +53,10 @@ import (
 
 // startReconciler seeds the store from the file, converges this node on the
 // pointer, and returns the loop for the caller to run.
+//
+// The seed arrives DECIDED by [bootOptions] — a managed deployment's
+// bootstrap file already dropped ([managedSeed]) — because the engine was
+// booted from the same decision.
 func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
 	seed tierBSeed, cipher secrets.Cipher, log *slog.Logger,
 ) (*engine.Reconciler, error) {
@@ -64,7 +68,6 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	if err != nil {
 		return nil, fmt.Errorf("node identity: %w", err)
 	}
-	seed = managedSeed(ctx, boot, seed, log)
 	if err = seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher,
 		nodeID, log); err != nil {
 		return nil, err
@@ -345,41 +348,78 @@ func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string,
 
 // bootOptions is what `crewlet run` builds its engine from: the Tier A it
 // loaded, the company this node starts on, and the instant that company was
-// activated at.
+// activated at — and the seed the reconciler is then handed, DECIDED here
+// rather than beside the import, because the two are readings of one
+// decision.
 //
-// With a Tier B file the company is that file's, which the reconcile converges
-// onto the fleet's before anything is claimed — and a file's company has NO
-// ACTIVATION YET, so its instant stays zero and the engine leaves its chart to
-// the reconciler's first tick, which publishes the file and applies it with
-// the pointer's own instant. Without one it is whatever this node's store has
-// marked active, WITH the instant it was activated at ([companyFromStore]),
-// which is what the engine stamps the chart and the knowledge spaces with at
-// boot ([engine.Options.ActivatedAt]): a boot that dropped it would stamp
-// nothing at all, and the company's projects would wait for the next apply.
+// # The company the node is going to serve, never merely the one it was handed
+//
+// The engine builds several things ONCE PER PROCESS from the company it boots
+// on — the native runtime and which of its halves exist, the code sandbox's
+// runtime, the store's embedding width — and the reconciler's first tick
+// changes none of them. So the boot company has to be the one [seedCompany]
+// is about to leave active, decided by the same rule:
+//
+//   - a managed deployment never imports a bootstrap seed, so the seed is
+//     dropped first ([managedSeed]) and everything below reads what is left;
+//   - an OVERRIDE (`-import-company`) is about to become the active revision,
+//     so it is the file's;
+//   - otherwise, a store that holds a company is what the node serves — a
+//     `-company` bootstrap seed is ignored over it — so it is the store's,
+//     WITH the instant it was activated at ([companyFromStore]);
+//   - and a store that holds none boots on the bootstrap seed, which is about
+//     to be imported into it, or on nothing at all.
+//
+// It used to take the file whenever there was one. `-company` defaults to
+// ./company.yaml and the quickstart passes it on every start, so a node whose
+// company had been edited live booted on the stale file at every restart: its
+// native runtime was built from a document the seed then ignored, and a
+// tracker turned native through the dashboard came back as no tracker after
+// each restart, for ever. And the managed drop was made only at the import,
+// after the engine had booted on the file, so a managed deployment's empty
+// store served a company nobody had activated.
+//
+// A file's company has NO ACTIVATION YET, so its instant stays zero and the
+// engine leaves its chart to the reconciler's first tick, which publishes the
+// file and applies it with the pointer's own instant. The store's instant is
+// what the engine stamps the chart and the knowledge spaces with at boot
+// ([engine.Options.ActivatedAt]): a boot that dropped it would stamp nothing
+// at all, and the company's projects would wait for the next apply.
+//
+// What this cannot see is the FLEET's pointer: on the embedded topology the
+// coordination store is inside the engine this is building, so a node that
+// was down while a newer revision was activated boots on its own store's
+// older one, and the first tick moves it on.
 //
 // Read BEFORE the engine, in its own open-and-close, so the engine still owns
 // the backends it opens.
 func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstrap,
-	file *config.Company) (engine.Options, error) {
+	seed tierBSeed, log *slog.Logger) (engine.Options, tierBSeed, error) {
 
-	opts := engine.Options{Bootstrap: boot, Company: file}
-	if file != nil {
-		return opts, nil
+	seed = managedSeed(ctx, boot, seed, log)
+	opts := engine.Options{Bootstrap: boot, Company: seed.Company}
+	if seed.Override {
+		return opts, seed, nil
 	}
 	// A SCRATCH STORE IS NOT READ: what it holds is the previous run's, it is
 	// deleted as the engine opens it, and opening it here would create the
-	// replicated estate a node without `data` must not have. Such a node
-	// boots unconfigured and its reconciler fetches the fleet's active
-	// revision off the coordination store before any seat is claimed.
+	// replicated estate a node without `data` must not have. So it holds no
+	// company as far as this boot is concerned: the node boots on its seed,
+	// or unconfigured, and its reconciler fetches the fleet's active revision
+	// off the coordination store before any seat is claimed.
 	if boot.Store.Scratch {
-		return opts, nil
+		return opts, seed, nil
 	}
 	company, activatedAt, err := companyFromStore(ctx, bootstrapPath)
 	if err != nil {
-		return engine.Options{}, err
+		return engine.Options{}, tierBSeed{}, err
+	}
+	if company == nil {
+		// AN EMPTY STORE, which a bootstrap seed is about to fill.
+		return opts, seed, nil
 	}
 	opts.Company, opts.ActivatedAt = company, activatedAt
-	return opts, nil
+	return opts, seed, nil
 }
 
 // refuseScratchStore refuses an OFFLINE command against a node whose store is

@@ -1012,7 +1012,6 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	if loadErr != nil {
 		return loadErr
 	}
-	company := seed.Company
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually
@@ -1084,11 +1083,13 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON, and the instant it was activated at:
-	// see [bootOptions], which is where it is decided and what its test
-	// holds. The options go to the engine WHOLE, so no field of them can be
-	// decided there and dropped here.
-	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	// THE EPOCH THIS NODE STARTS ON, the instant it was activated at, and
+	// what the seed is FOR: see [bootOptions], which is where all three are
+	// decided and what its tests hold. The options go to the engine WHOLE,
+	// so no field of them can be decided there and dropped here — and the
+	// decided seed goes to the reconciler, so the import it makes is the one
+	// the engine was booted for.
+	opts, seed, err := bootOptions(ctx, *cfg.bootstrap, boot, seed, log)
 	if err != nil {
 		return err
 	}
