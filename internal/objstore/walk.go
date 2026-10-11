@@ -96,6 +96,11 @@ func (w *tableWalk) Next(ctx context.Context) ([]Reference, bool, error) {
 	}
 	var page []Reference
 	whole, err := w.read(ctx, func(tx *sql.Tx) error {
+		// FROM EMPTY ON EVERY RUN: a read the store found busy runs fn
+		// again (store.DB.Read retries a transient failure), and a page
+		// appended to across two runs hands on the rows the first one read
+		// twice — and, longer than a page, never reads as the last one.
+		page = page[:0]
 		rows, qerr := tx.QueryContext(ctx, query, w.after)
 		if qerr != nil {
 			return fmt.Errorf("read the objects %s names: %w", w.table.Table, qerr)
