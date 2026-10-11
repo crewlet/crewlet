@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -269,7 +270,7 @@ func TestWritingToAReservedContainerIsRefused(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{
-		Reader: kb, Writer: kb, Reserved: []string{"TS", "HOME"},
+		Reader: kb, Writer: kb, Reserved: func() []string { return []string{"TS", "HOME"} },
 	})
 	for _, container := range []string{"TS", "ts", "HOME"} {
 		got := callWork(t, reg, builtin.WritePageTool, map[string]any{
@@ -285,6 +286,40 @@ func TestWritingToAReservedContainerIsRefused(t *testing.T) {
 	}
 	if len(kb.created) != 0 {
 		t.Errorf("a reserved write reached the store: %+v", kb.created)
+	}
+}
+
+// THE RESERVED CONTAINERS ARE ASKED AT EACH WRITE. Both are Tier B, an apply
+// can move them, and the operator's surface is not rebuilt for a new company
+// document — so a write is judged against the containers reserved WHEN IT IS
+// MADE: the one the company moved to is refused, and the one it moved away
+// from is an ordinary container again.
+func TestTheReservedContainersAreAskedAtEachWrite(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	var reserved atomic.Pointer[[]string]
+	reserved.Store(&[]string{"TS"})
+	reg := kbRegistry(t, builtin.PageDeps{
+		Reader: kb, Writer: kb, Reserved: func() []string { return *reserved.Load() },
+	})
+	write := func(container string) tools.Result {
+		t.Helper()
+		return callWork(t, reg, builtin.WritePageTool, map[string]any{
+			"title": "a page in " + container, "body": "x", "container": container,
+		})
+	}
+	if got := write("TS"); !got.Failed {
+		t.Fatal("the premise: TS is reserved and a page was written there")
+	}
+	reserved.Store(&[]string{"SKILLS"})
+	if got := write("SKILLS"); !got.Failed ||
+		!strings.Contains(got.Output, "excluded from every search") {
+		t.Errorf("a page was written into the container the company moved its skills "+
+			"to: %s", got.Output)
+	}
+	if got := write("TS"); got.Failed {
+		t.Errorf("the container the company moved its skills away from is still "+
+			"refused: %s", got.Output)
 	}
 }
 
