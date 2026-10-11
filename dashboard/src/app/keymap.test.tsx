@@ -163,10 +163,10 @@ describe("the table", () => {
 });
 
 describe("the legend", () => {
-  test("renders every row of the table, grouped by where it is live", () => {
+  test("renders every row of the table for an admin, grouped by where it is live", () => {
     render(
       <LayerHost>
-        <KeyLegend onClose={() => {}} />
+        <KeyLegend admin onClose={() => {}} />
       </LayerHost>,
     );
     const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
@@ -184,16 +184,40 @@ describe("the legend", () => {
     }
   });
 
+  // AN ADMIN'S KEYS ARE AN ADMIN'S, in the legend as in the binding: a member
+  // is never promised a key that leads to a refusal.
+  test("lists a member's keys only, for a member", () => {
+    render(
+      <LayerHost>
+        <KeyLegend admin={false} onClose={() => {}} />
+      </LayerHost>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    const drawn = [...dialog.querySelectorAll("[data-key-row]")].map((el) =>
+      el.getAttribute("data-key-row"),
+    );
+    expect(drawn.sort()).toEqual(
+      KEYMAP.filter((r) => !r.admin)
+        .map((r) => r.id)
+        .sort(),
+    );
+    expect(drawn).toContain("go.today");
+    expect(drawn).toContain("handoff");
+    for (const id of ["go.overview", "go.live", "shell.swap", "running"]) {
+      expect(drawn, id).not.toContain(id);
+    }
+  });
+
   test("draws a key in words a screen reader can say", () => {
     render(
       <LayerHost>
-        <KeyLegend onClose={() => {}} />
+        <KeyLegend admin={false} onClose={() => {}} />
       </LayerHost>,
     );
     const palette = document.querySelector('[data-key-row="palette"]')!;
     expect(palette.textContent).toMatch(/(Command|Control) plus K/);
-    const go = document.querySelector('[data-key-row="go.home"]')!;
-    expect(go.textContent).toMatch(/G.*then.*H/);
+    const go = document.querySelector('[data-key-row="go.today"]')!;
+    expect(go.textContent).toMatch(/G.*then.*T/);
   });
 });
 
@@ -351,7 +375,7 @@ describe("a screen's search", () => {
 describe("the table is the only way a key is bound", () => {
   const LISTENERS: Record<string, string> = {
     "lib/keys.ts": "the mechanism useKeymap is built on",
-    "routes/org/builder/Builder.tsx":
+    "routes/admin/org/builder/Builder.tsx":
       "undo and redo, scoped to presses from inside the builder; it reads its keys with matchesRow",
   };
 
@@ -383,7 +407,7 @@ describe("the table is the only way a key is bound", () => {
       });
     }
     expect([...listening].sort()).toEqual(Object.keys(LISTENERS).sort());
-    const builder = modules().find((m) => m.path === "routes/org/builder/Builder.tsx")!;
+    const builder = modules().find((m) => m.path === "routes/admin/org/builder/Builder.tsx")!;
     expect(builder.text).toContain('matchesRow("builder.undo"');
   });
 });

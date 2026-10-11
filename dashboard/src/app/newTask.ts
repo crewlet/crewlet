@@ -3,8 +3,8 @@
  *
  * # One sheet, several doors
  *
- * The sidebar's head `+`, the Projects group's `+`, a screen's own "New task"
- * in the page bar and a board lane's `+` all open the SAME sheet
+ * The person sidebar's Hand off and its key `c`, a screen's own "New task" in
+ * the page bar and a board lane's `+` all open the SAME sheet
  * (`routes/work/NewTask.tsx`), which the frame mounts (`app/Shell.tsx`). Four
  * forms would be four ideas of which fields a task is filed with and which
  * project it lands in, and the first one to learn about a new field would be

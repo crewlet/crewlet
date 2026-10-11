@@ -13,7 +13,7 @@ import (
 // A revision is stored first by the node that served the write, and every
 // other node meets it through the pointer. Those nodes recorded it as written
 // by `peer`, from `fleet`, at the instant it was activated — so one revision
-// had a different author on every node, and Settings › Audit, reading
+// had a different author on every node, and Company › Audit log, reading
 // whichever node served it, could not say an operator had written it. The
 // pointer carries the origin now, and the adoption stores what it carries.
 func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {

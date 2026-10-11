@@ -17,7 +17,8 @@
  *    the item it was on, and the two ways out — raise the ceiling, or hand
  *    the item to somebody else.
  *
- * Shared by Home and My work's Asked of me, which is why it lives here: two
+ * Shared by Today, the Overview and My work's Asked of me, which is why it
+ * lives here: two
  * copies of the rule for which button is primary would disagree the first
  * time it moved.
  *
@@ -69,7 +70,7 @@ export type DecisionSubject =
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
- * The Inbox's Decisions chip — `#/inbox?reason=decisions`, where Home's
+ * The Inbox's Decisions chip — `#/inbox?reason=decisions`, where the Overview's
  * "Review" and "Open inbox" land.
  *
  * NOT ONE OF THE EIGHTEEN NOTICE REASONS: a decision is an open ask, a parked
@@ -143,7 +144,7 @@ export function seatDecisionsFor<T extends { row: AgentRow }>(
 
 /**
  * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first — the order Home's card and the Inbox's "Needs a decision" both draw.
+ * list, newest first — the order the Overview's card and the Inbox's "Needs a decision" both draw.
  */
 export function decisionSubjects(
   answer: DecisionsAnswer | null,

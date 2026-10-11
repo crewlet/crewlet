@@ -190,7 +190,7 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
  * reader's zone moves it to the day before. The label as it came where it is
  * not a date.
  *
- * ONE COPY. Home's completed chart, its projects' target dates and a seat's
+ * ONE COPY. The Overview's completed chart, its projects' target dates and a seat's
  * turns-per-day chart each wrote this privately, which is how three charts
  * come to label one day three ways.
  */
@@ -827,7 +827,8 @@ function historySpan(seconds: number | null | undefined): string | null {
  * of a comment or a question when there is one line to show it in.
  *
  * ONE COPY. It was three: the Inbox's list, its composer (which imported it
- * from the list) and the Home decision row, which kept a private duplicate.
+ * from the list) and the decision row on the screen that was then Home, which
+ * kept a private duplicate.
  */
 export function firstLine(body: string): string {
   return (

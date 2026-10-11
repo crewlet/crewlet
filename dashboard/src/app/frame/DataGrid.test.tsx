@@ -63,7 +63,7 @@ function grid(onRowActivate?: (row: Row) => void) {
       <DataGrid<Row>
         rows={ROWS}
         rowKey={(r) => r.id}
-        rowHref={(r) => `#/live/turns/${r.id}`}
+        rowHref={(r) => `#/admin/live/turns/${r.id}`}
         onRowActivate={onRowActivate}
         columns={[
           { key: "id", header: "Id", cell: (r) => r.id },
@@ -71,7 +71,7 @@ function grid(onRowActivate?: (row: Row) => void) {
             key: "who",
             header: "Who",
             // The shape every linking cell has.
-            cell: (r) => <a href={`#/agents/seats/${r.who}`}>{r.who}</a>,
+            cell: (r) => <a href={`#/team/seats/${r.who}`}>{r.who}</a>,
           },
         ]}
       />
@@ -87,7 +87,7 @@ test("a row's link never contains a cell's link", () => {
   // address" with it.
   const links = container.querySelectorAll<HTMLAnchorElement>("a.row-link");
   expect(links).toHaveLength(ROWS.length);
-  expect(links[0]?.getAttribute("href")).toBe("#/live/turns/one");
+  expect(links[0]?.getAttribute("href")).toBe("#/admin/live/turns/one");
 });
 
 test("the row's link is named by the row, not left unnamed", () => {
@@ -128,22 +128,22 @@ describe("the peeked row", () => {
     );
 
   test("is the row whose link is the peek's page, and it is announced as current", () => {
-    location.hash = "#/live/turns?peek=turn:two";
+    location.hash = "#/admin/live/turns?peek=turn:two";
     const { container } = grid();
-    expect(marked(container)).toEqual(["#/live/turns/two"]);
+    expect(marked(container)).toEqual(["#/admin/live/turns/two"]);
     const links = [...container.querySelectorAll("a.row-link")];
     expect(links.map((a) => a.getAttribute("aria-current"))).toEqual([null, "true"]);
   });
 
   test("is no row when the peek is an object no row links to", () => {
-    location.hash = "#/live/turns?peek=seat:two";
+    location.hash = "#/admin/live/turns?peek=seat:two";
     const { container } = grid();
     expect(marked(container)).toEqual([]);
     expect(container.querySelector("[aria-current]")).toBeNull();
   });
 
   test("is no row when no peek is open", () => {
-    location.hash = "#/live/turns";
+    location.hash = "#/admin/live/turns";
     const { container } = grid();
     expect(marked(container)).toEqual([]);
   });
@@ -176,7 +176,7 @@ test("a row with no page of its own is drawn, and neither links nor activates", 
       <DataGrid<Row>
         rows={ROWS}
         rowKey={(r) => r.id}
-        rowHref={(r) => (r.id === "one" ? undefined : `#/live/turns/${r.id}`)}
+        rowHref={(r) => (r.id === "one" ? undefined : `#/admin/live/turns/${r.id}`)}
         onRowActivate={(r) => seen.push(r.id)}
         columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
       />
@@ -187,7 +187,7 @@ test("a row with no page of its own is drawn, and neither links nor activates", 
   expect(rows[0]!.getAttribute("role")).toBeNull();
   expect(rows[0]!.getAttribute("tabindex")).toBeNull();
   fireEvent.click(rows[0]!);
-  expect(rows[1]!.querySelector("a.row-link")?.getAttribute("href")).toBe("#/live/turns/two");
+  expect(rows[1]!.querySelector("a.row-link")?.getAttribute("href")).toBe("#/admin/live/turns/two");
   fireEvent.keyDown(window, { key: "j" });
   fireEvent.keyDown(window, { key: "Enter" });
   expect(seen).toEqual([]);

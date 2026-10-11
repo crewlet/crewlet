@@ -95,7 +95,7 @@ export type ConfigRefusal =
  */
 export function managedSentence(managedBy: readonly string[]): string {
   const who = managedBy.length > 0 ? managedBy.join(", ") : "another system";
-  return `This company's configuration is managed by ${who} — change it there. An edit made here would be overwritten; a credential it already names can still be rotated from Settings › Integrations.`;
+  return `This company's configuration is managed by ${who} — change it there. An edit made here would be overwritten; a credential it already names can still be rotated from Connect › Integrations.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

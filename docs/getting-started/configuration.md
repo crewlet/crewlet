@@ -333,7 +333,7 @@ providers:
                                         # A NAMED key that resolves to nothing stays
                                         # nothing: the entry never borrows the
                                         # conventional variable in its place.
-                                        # Settings › Models & keys shows each key by
+                                        # Connect › Models & keys shows each key by
                                         # the variable it names, whether it resolves,
                                         # and when a benched one comes back
       cooldowns:                        # optional — TTL when a key is marked exhausted

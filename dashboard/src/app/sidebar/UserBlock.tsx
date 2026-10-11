@@ -92,7 +92,7 @@ export function UserBlock({
   return (
     <div className="user-block">
       {person ? (
-        <a className="user-block-who" href={href(["agents", "seats", viewer.handle])}>
+        <a className="user-block-who" href={href(["team", "seats", viewer.handle])}>
           {identity}
         </a>
       ) : (

@@ -37,7 +37,7 @@ describe("the window a URL asked for", () => {
   });
 
   it("falls back for anything outside the vocabulary", () => {
-    // `#/spend?window=` is produced by a route transition for one render, and
+    // `#/admin/spend?window=` is produced by a route transition for one render, and
     // read as a number it is 0 — a window whose two edges are the same
     // instant, which is half-open and names no rows at all.
     for (const bad of ["", "0", "3", "-7", "all", "NaN", "7", "3h"]) {

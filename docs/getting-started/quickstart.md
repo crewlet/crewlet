@@ -382,23 +382,28 @@ Open the dashboard at <http://localhost:8000/>. **On its first load it asks for
 a key** — paste the value of `$CREWLET_API_TOKEN_FOUNDER`. Without one it can
 show the company's name and chart and nothing more, because nothing your agents
 do is served to a caller with no key; the browser remembers the key, so this is
-once. It lands on **Home**, which is what a person opening this wants first:
-how the company is (who is working, what waits on you, the work in progress and
+once. Your key is an admin's and no seat is linked to it yet, so there is no
+person's day to open on: it lands on the **admin console's Overview** — how the
+company is (who is working, what waits on you, the work in progress and
 finished, the tokens spent), the decisions only you can make — answered right
 there, an option of an agent's question is a button — who is working now, and
-what the company has done. With
-no company activity yet each card says so, and a condition the engine itself
-raised takes over the sentence under the greeting.
+what the company has done. With no company activity yet each card says so, and
+a condition the engine itself raised takes over the sentence under the
+greeting.
 
-The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
-Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
-its page header. `g` then a letter jumps between them, and `?` lists every key.
-While an agent is working, the Live row counts the seats at work and a
-**Running** group under the sidebar's shortcuts (after Projects, Pinned and
-Starred) lists up to four running turns. Press one to watch it — its
-transcript, with the phase it is on open, or the coding run it is parked on
-drawn live above its phases. `g r` does the same for the one running turn, and
-opens Live's *Now running* when several are running (or none).
+The dashboard is two shells, and the address picks one. The **admin console**
+(every address under `#/admin`) is the machine: Overview, Live, Agent setup, Spend, Company,
+Connect and Engine, each with its sections as tabs in its page header. The
+**person shell** is a person's working day: Today, Inbox and My work, then the
+company's Work, Team and Knowledge. The back arrow and your company's name at
+the top of the console's sidebar cross to the person shell, the person sidebar's **Admin console**
+crosses back, and `g .` does either from anywhere, keeping your place. `g` then
+a letter jumps to a workspace, and `?` lists every key. While an agent is
+working, the console's Live row counts the seats at work and a **Running**
+group under its sections lists up to four running turns. Press one to watch it
+— its transcript, with the phase it is on open, or the coding run it is parked
+on drawn live above its phases. `g r` does the same for the one running turn,
+and opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
@@ -422,12 +427,13 @@ hundredth — and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
-**Link your key to your seat** and the personal screens become yours: give a
+**Link your key to your seat** and the person shell becomes yours: give a
 human seat `contact.crewlet_operator_id` matching one of your
-`api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
-person. My work is one tab per claim on somebody's attention — what they hold,
-the order somebody put it in, the questions waiting on them and the ones they
-are waiting on — with every count on the strip, and a band above it naming
+`api.auth.tokens[].id`, and **Today**, **My work** and the **Inbox** answer for
+that person — and the dashboard opens on Today from then on. My work is one tab
+per claim on somebody's attention — what they hold, the order somebody put it
+in, the questions waiting on them, the ones they are waiting on and the work
+they handed off — with every count on the strip, and a band above it naming
 whose day is on screen. The **Queue** is the work list narrowed to that
 person: the same Filter, Display and scope controls, opening grouped by when
 each task is due; read in priority order, its rows are reordered by dragging
@@ -511,12 +517,12 @@ curl -X PUT http://localhost:8000/config \
   --data-binary @company.yaml
 ```
 
-Or create the company from the dashboard: open **Agents** and its **Edit
-org** button (`#/agents/edit`). With no configuration active it opens
+Or create the company from the dashboard: open the console's **Company** and
+its **Edit org** section (`#/admin/company/org`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it needs an admin key — the one you signed in with. The
-dashboard adds no model provider — Settings › Models & keys edits one the
+dashboard adds no model provider — Connect › Models & keys edits one the
 configuration already declares — so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a
 seat waits on its inbox. Add `providers.llm` afterwards with

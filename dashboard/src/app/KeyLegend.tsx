@@ -9,6 +9,10 @@
  * A KEY IS DRAWN AS THE KIT'S `Kbd`, in the platform's own notation — `⌘K` on
  * a Mac, `Ctrl+K` elsewhere — and read as words by a screen reader, for the
  * reason `dashboard-design.md` gives for every hint in the product.
+ *
+ * AN ADMIN'S KEYS ARE LISTED FOR AN ADMIN (`KeyRow.admin`), because the frame
+ * binds them for nobody else: a legend promising a member `g l` would list a
+ * key that does nothing for them.
  */
 
 import { Fragment } from "react";
@@ -45,13 +49,13 @@ function Presses({ row }: { row: KeyRow }) {
   );
 }
 
-export function KeyLegend({ onClose }: { onClose: () => void }) {
+export function KeyLegend({ onClose, admin }: { onClose: () => void; admin: boolean }) {
   return (
     <Modal open title="Keyboard shortcuts" size="lg" onClose={onClose}>
       <div className="key-legend">
         <div className="key-legend-groups">
           {KEY_SCOPES.map(({ scope, title }) => {
-            const rows = KEYMAP.filter((row) => row.scope === scope);
+            const rows = KEYMAP.filter((row) => row.scope === scope && (admin || !row.admin));
             if (rows.length === 0) return null;
             return (
               <section key={scope} className="key-legend-group" aria-labelledby={`keys-${scope}`}>

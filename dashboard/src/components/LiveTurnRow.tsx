@@ -1,7 +1,7 @@
 /**
  * One running turn, as a row: who, what it is doing, how long it has been
  * going, where it is in its turn, and the call it is making — drawn the same
- * way wherever a running turn is listed (Home's Live now, Live › Now running).
+ * way wherever a running turn is listed (the Overview's Live now, Live › Now running).
  *
  * ONE ROW, because two screens that each spell a running turn disagree the
  * first time either moves: Home said "round 7" in the stepper while Live's
@@ -124,7 +124,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   return (
     <li>
       {turnId ? (
-        <a className="live-row" href={href(pathOf({ kind: "turn", id: turnId }))}>
+        <a className="live-row" href={href(pathOf({ kind: "turn", id: turnId }, "admin"))}>
           {body}
         </a>
       ) : (

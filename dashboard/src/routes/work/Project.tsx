@@ -451,7 +451,10 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   </div>
                 );
               })}
-              <a className="t-link" href={href(["work", "history"], { project: detail.key })}>
+              <a
+                className="t-link"
+                href={href(["admin", "company", "changes"], { project: detail.key })}
+              >
                 Every change →
               </a>
             </div>
@@ -543,7 +546,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
  * warning about. The facts were already shared for exactly this reason
  * ([projectFacts]); the ORDER of the parts deserved the same treatment.
  *
- * THE LEDE IS A [PageNote], the way a seat's goal is (`routes/agents/Seat.tsx`):
+ * THE LEDE IS A [PageNote], the way a seat's goal is (`routes/admin/agents/Seat.tsx`):
  * an object's page says what it is for in one sentence under its name, and a
  * project that declares no purpose still has one worth printing — which unit
  * owns it, and whether anything has been filed at all. A hole where the lede

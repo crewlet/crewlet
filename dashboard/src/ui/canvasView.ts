@@ -5,8 +5,8 @@
  *
  * # Two charts, one floor
  *
- * The org chart (`routes/agents/OrgChart.tsx`) and the chart Edit org draws
- * (`routes/org/builder/CanvasView.tsx`) are two drawings of one organization,
+ * The org chart (`routes/team/OrgChart.tsx`) and the chart Edit org draws
+ * (`routes/admin/org/builder/CanvasView.tsx`) are two drawings of one organization,
  * and both are fitted by the kit's canvas on their first layout. A fit goes
  * as far as the company is wide: Nimbus's seven seats put the org chart at
  * 54% beside a peek at 1280 and the builder's chart at 57% at 1440, where a

@@ -77,7 +77,7 @@ describe("Copy link", () => {
 describe("the star", () => {
   test("is offered on an object's page", () => {
     render(<StarPage path={["work", "ENG-42"]} label="ENG-42" workspace="work" />);
-    expect(screen.getByRole("button", { name: "Keep in Starred" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Keep in Favourites" })).toBeTruthy();
   });
 
   // The store drops a kept path that does not resolve, so a star pressed on
@@ -93,7 +93,7 @@ describe("the star", () => {
   // controls moved between two tabs of one workspace.
   test("is drawn on a workspace's own page, unavailable, with the reason", () => {
     render(<StarPage path={["me"]} label="My work" workspace="me" />);
-    const star = screen.getByRole("button", { name: "Keep in Starred" });
+    const star = screen.getByRole("button", { name: "Keep in Favourites" });
     expect(star.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Already in the sidebar")).toBeTruthy();
     fireEvent.click(star);
@@ -106,8 +106,8 @@ describe("the star", () => {
 // that did nothing.
 describe("the breadcrumb", () => {
   const crumbs = [
-    { label: "Live", path: ["live"] },
-    { label: "Turns", path: ["live", "turns"] },
+    { label: "Live", path: ["admin", "live"] },
+    { label: "Turns", path: ["admin", "live", "turns"] },
     { label: "Replied in the thread about the observability pipeline." },
   ];
   const had = {
@@ -230,7 +230,7 @@ describe("the breadcrumb", () => {
   });
 });
 
-// WHO IS WORKING IS HOME'S, the way the Main artboard draws it: the sidebar's
+// WHO IS WORKING IS THE OVERVIEW'S, the way the Main artboard draws it: the console sidebar's
 // Live row carries the count on every other page, and the chip drawn in
 // every bar sat between a task's trail and its actions and pushed a profile's
 // controls past a phone's edge.
@@ -397,19 +397,19 @@ describe("the section tabs fold what does not fit into More", () => {
         (a) => a.querySelector("span")?.textContent,
       );
 
-    // 800 of room: More (70) and six tabs (720) is 790; seven tabs alone are
-    // 840.
-    test("seven tabs in 800 of room draw six and fold the last into More", async () => {
+    // 800 of room: More (70) and six tabs (720) is 790; eight tabs alone are
+    // 960.
+    test("eight tabs in 800 of room draw six and fold the last two into More", async () => {
       lay(800);
       mount(["me"]);
       await waitFor(() => expect(drawn()).toHaveLength(6));
-      expect(drawn().at(-1)).toBe("Watching");
-      // THE FOLDED TAB IS OUT OF REACH on the strip, and in the menu instead.
+      expect(drawn().at(-1)).toBe("Helping on");
+      // THE FOLDED TABS ARE OUT OF REACH on the strip, and in the menu instead.
       const folded = strip().querySelector("a[data-folded]")!;
       expect(folded.getAttribute("aria-hidden")).toBe("true");
-      expect(screen.queryByRole("link", { name: /Checklist/ })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Your checklist items/ })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "More" }));
-      const item = await screen.findByRole("menuitem", { name: /Checklist/ });
+      const item = await screen.findByRole("menuitem", { name: /Your checklist items/ });
       expect(item.textContent).toContain("0");
       fireEvent.click(item);
       await waitFor(() => expect(location.hash).toBe("#/me/checklist"));
@@ -419,41 +419,42 @@ describe("the section tabs fold what does not fit into More", () => {
       lay(800);
       mount(["me", "checklist"]);
       await waitFor(() => expect(drawn()).toHaveLength(6));
-      expect(drawn().at(-1)).toBe("Checklist");
-      expect(drawn()).not.toContain("Watching");
+      expect(drawn().at(-1)).toBe("Your checklist items");
+      expect(drawn()).not.toContain("Helping on");
+      expect(drawn()).not.toContain("Following");
     });
 
     test("a strip with room for every tab draws no More", async () => {
       lay(2000);
       mount(["me"]);
-      await waitFor(() => expect(drawn()).toHaveLength(7));
+      await waitFor(() => expect(drawn()).toHaveLength(8));
       expect(screen.queryByRole("button", { name: "More" })).toBeNull();
     });
   });
 });
 
 // A TAB'S FIGURE IS A PLAIN NUMBER in the tab's quiet ink, as every approved
-// artboard draws it ("Roster 8") — never a pill, which read as a second
-// control inside each tab. And a figure nobody published is not drawn.
+// artboard draws it ("People & agents 8") — never a pill, which read as a
+// second control inside each tab. And a figure nobody published is not drawn.
 test("a section's figure is a plain number beside its name, and only if published", () => {
-  const agents = WORKSPACES.find((w) => w.key === "agents")!;
+  const team = WORKSPACES.find((w) => w.key === "team")!;
   render(
     <Router>
       <SectionTabs
-        row={agents}
-        path={["agents"]}
+        row={team}
+        path={["team"]}
         query={new URLSearchParams()}
-        counts={{ roster: "8", schedules: "6" }}
+        counts={{ people: "8", units: "6" }}
       />
     </Router>,
   );
-  const roster = screen.getByRole("link", { name: /Roster/ });
-  const figure = roster.querySelector(".section-tab-count");
+  const people = screen.getByRole("link", { name: /People & agents/ });
+  const figure = people.querySelector(".section-tab-count");
   expect(figure?.textContent).toBe("8");
-  expect(roster.querySelector(".count-chip")).toBeNull();
-  expect(screen.getByRole("link", { name: /Schedules/ }).textContent).toContain("6");
+  expect(people.querySelector(".count-chip")).toBeNull();
+  expect(screen.getByRole("link", { name: /Units/ }).textContent).toContain("6");
   expect(
-    screen.getByRole("link", { name: /Teams/ }).querySelector(".section-tab-count"),
+    screen.getByRole("link", { name: /About/ }).querySelector(".section-tab-count"),
   ).toBeNull();
 });
 

@@ -154,7 +154,7 @@ schema, same call signature. With nothing recorded, a tool missing because its
 server failed to start reads as a missing builtin, which sends an operator to
 debug the wrong subsystem.
 
-`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › Tools & MCP** screen
+`GET /tools` reports it as each tool's `source`, and the dashboard's **Connect › Tools & MCP** screen
 groups on it:
 
 | `source` | Where the tool came from |
@@ -177,7 +177,7 @@ which, for a server that never started, says it registered none and why.
 
 ### Adding a server from the dashboard
 
-**Add an MCP server** on Settings › Tools & MCP (admin key required) writes
+**Add an MCP server** on Connect › Tools & MCP (admin key required) writes
 the same `mcp_servers` entry you would write in YAML: a name, a command and its
 arguments (stdio) or an address (http), `shared` or one per seat, and the
 environment or headers — values as `${NAME}` pointers into the secret store,

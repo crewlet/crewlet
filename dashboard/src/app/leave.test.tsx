@@ -74,7 +74,7 @@ async function settleOn(hash: string) {
 }
 
 beforeEach(() => {
-  history.replaceState(null, "", "#/agents");
+  history.replaceState(null, "", "#/team");
 });
 
 afterEach(() => {
@@ -86,17 +86,17 @@ afterEach(() => {
 test("a push from code waits for the guard, and leave makes it", () => {
   const probe = holdAll();
   mount(probe.guard);
-  act(() => nav!.to(["agents", "roster"]));
-  expect(probe.asked).toEqual(["#/agents/roster"]);
-  expect(location.hash).toBe("#/agents");
-  expect(shown).toBe("#/agents");
+  act(() => nav!.to(["team", "people"]));
+  expect(probe.asked).toEqual(["#/team/people"]);
+  expect(location.hash).toBe("#/team");
+  expect(shown).toBe("#/team");
   act(() => probe.leave());
-  expect(location.hash).toBe("#/agents/roster");
-  expect(shown).toBe("#/agents/roster");
+  expect(location.hash).toBe("#/team/people");
+  expect(shown).toBe("#/team/people");
   // A section is a push too.
   act(() => nav!.section("view", "table"));
-  expect(probe.asked).toEqual(["#/agents/roster", "#/agents/roster?view=table"]);
-  expect(location.hash).toBe("#/agents/roster");
+  expect(probe.asked).toEqual(["#/team/people", "#/team/people?view=table"]);
+  expect(location.hash).toBe("#/team/people");
 });
 
 test("a replace stays on the entry, so no guard is asked", () => {
@@ -104,29 +104,29 @@ test("a replace stays on the entry, so no guard is asked", () => {
   mount(probe.guard);
   act(() => nav!.filter({ unit: "Sales" }));
   expect(probe.asked).toEqual([]);
-  expect(location.hash).toBe("#/agents?unit=Sales");
+  expect(location.hash).toBe("#/team?unit=Sales");
 });
 
 test("Back and Forward are undone while held, and leave makes each", async () => {
   const view = mount(null);
-  act(() => nav!.to(["agents", "roster"]));
-  act(() => nav!.to(["live", "runs"]));
+  act(() => nav!.to(["team", "people"]));
+  act(() => nav!.to(["admin", "live", "runs"]));
   const probe = holdAll();
   view.rerender(probe.guard);
 
   act(() => history.back());
-  await waitFor(() => expect(probe.asked).toEqual(["#/agents/roster"]));
+  await waitFor(() => expect(probe.asked).toEqual(["#/team/people"]));
   // Undone: the page never showed the entry it was asked about.
-  await settleOn("#/live/runs");
+  await settleOn("#/admin/live/runs");
 
   act(() => probe.leave());
-  await settleOn("#/agents/roster");
+  await settleOn("#/team/people");
 
   act(() => history.forward());
-  await waitFor(() => expect(probe.asked).toEqual(["#/agents/roster", "#/live/runs"]));
-  await settleOn("#/agents/roster");
+  await waitFor(() => expect(probe.asked).toEqual(["#/team/people", "#/admin/live/runs"]));
+  await settleOn("#/team/people");
   act(() => probe.leave());
-  await settleOn("#/live/runs");
+  await settleOn("#/admin/live/runs");
 });
 
 // A link is an entry the browser makes itself, with no place stamped on it:
@@ -135,14 +135,14 @@ test("a link is held and undone, and leave follows it", async () => {
   const probe = holdAll();
   mount(probe.guard);
   const link = document.createElement("a");
-  link.href = "#/settings/integrations";
+  link.href = "#/admin/connect";
   document.body.appendChild(link);
   try {
     fireEvent.click(link);
-    await waitFor(() => expect(probe.asked).toEqual(["#/settings/integrations"]));
-    await settleOn("#/agents");
+    await waitFor(() => expect(probe.asked).toEqual(["#/admin/connect"]));
+    await settleOn("#/team");
     act(() => probe.leave());
-    await settleOn("#/settings/integrations");
+    await settleOn("#/admin/connect");
   } finally {
     link.remove();
   }
@@ -154,13 +154,13 @@ test("a guard that lets a move go is not in its way, and no guard holds nothing"
     asked.push(to.hash);
     return false;
   });
-  act(() => nav!.to(["agents", "roster"]));
-  expect(asked).toEqual(["#/agents/roster"]);
-  expect(shown).toBe("#/agents/roster");
+  act(() => nav!.to(["team", "people"]));
+  expect(asked).toEqual(["#/team/people"]);
+  expect(shown).toBe("#/team/people");
   view.rerender(null);
   act(() => history.back());
-  await settleOn("#/agents");
-  expect(asked).toEqual(["#/agents/roster"]);
+  await settleOn("#/team");
+  expect(asked).toEqual(["#/team/people"]);
 });
 
 // An editor's question is asked over the builder's: the guard that began to
@@ -186,14 +186,14 @@ test("the guard that began to hold last is asked first, and every guard before t
   );
   const view = render(ui(false));
   view.rerender(ui(true));
-  act(() => nav!.to(["agents", "roster"]));
-  expect(inner.asked).toEqual(["#/agents/roster"]);
+  act(() => nav!.to(["team", "people"]));
+  expect(inner.asked).toEqual(["#/team/people"]);
   expect(outer.asked).toEqual([]);
   act(() => inner.leave());
-  expect(outer.asked).toEqual(["#/agents/roster"]);
-  expect(shown).toBe("#/agents");
+  expect(outer.asked).toEqual(["#/team/people"]);
+  expect(shown).toBe("#/team");
   act(() => outer.leave());
-  expect(shown).toBe("#/agents/roster");
+  expect(shown).toBe("#/team/people");
 });
 
 test("a reload or a closed tab asks while a leave or an unload guard holds, and only then", () => {
@@ -244,7 +244,7 @@ test("a move made before the router adopts its entry keeps the entry's place", (
   render(<Router>{null}</Router>);
   cleanup();
 
-  history.replaceState({ crewletIndex: 3 }, "", "#/agents");
+  history.replaceState({ crewletIndex: 3 }, "", "#/team");
   function Early() {
     const navigator = useNavigator();
     useEffect(() => navigator.filter({ unit: "Sales" }), [navigator]);
@@ -256,8 +256,8 @@ test("a move made before the router adopts its entry keeps the entry's place", (
       <Probe guard={null} />
     </Router>,
   );
-  expect(location.hash).toBe("#/agents?unit=Sales");
+  expect(location.hash).toBe("#/team?unit=Sales");
   expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(3);
-  act(() => nav!.to(["agents", "roster"]));
+  act(() => nav!.to(["team", "people"]));
   expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(4);
 });

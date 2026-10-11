@@ -3150,7 +3150,7 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	// THE REASON LAST REPORTED is the other half: a state that has not
 	// changed is not news, and the loop retries for as long as it holds. A
 	// tick that changes nothing says nothing; the register is still
-	// stamped, so Settings › Nodes and the trim see every tick whether or
+	// stamped, so Engine › Nodes and the trim see every tick whether or
 	// not the log does.
 	var reported statelog.SkipReason
 	// streak counts the boot skips in a row the retry is backing off over.

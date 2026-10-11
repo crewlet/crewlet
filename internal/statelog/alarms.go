@@ -808,7 +808,7 @@ var table = []rule{
 		remedy: "Give every node that serves the API the same `api.auth` — the same " +
 			"keys under the same ids, each with the same role and value, and the same " +
 			"`anonymous`, `disabled` and `company_writers` — and restart the nodes " +
-			"that differ. Settings › Nodes and `GET /fleet` show which node holds " +
+			"that differ. Engine › Nodes and `GET /fleet` show which node holds " +
 			"which table against the one answering. Until they agree a key can reach " +
 			"more through one node than through another: a member's key on one node " +
 			"may be an admin's on the next. Mid-way through a rolling key rotation " +

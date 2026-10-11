@@ -1546,12 +1546,13 @@ export const URL_HOMES: Record<string, ControlHome> = {
 /**
  * THE ONE NARROWING A HOST SCREEN FIXES, and each is a person.
  *
- * `#/me`'s Queue is the work one person HOLDS (`assignee`), and its Asked by
- * me is the work one person is WAITING ON an answer for (`asked_by`). One of
- * the two, never both and never neither, which is what the union says: a lock
+ * `#/me`'s Queue is the work one person HOLDS (`assignee`), its Asked by me
+ * the work one person is WAITING ON an answer for (`asked_by`), and its Handed
+ * off the work one person FILED and somebody else holds (`handed_off_by`). One
+ * of them, never two and never none, which is what the union says: a lock
  * naming nobody would be the screen that is not a host, spelled a second way.
  */
-export type ItemsLock = { assignee: string } | { asked_by: string };
+export type ItemsLock = { assignee: string } | { asked_by: string } | { handed_off_by: string };
 
 export function buildItemsParams(args: {
   container: string;
@@ -1589,6 +1590,7 @@ export function buildItemsParams(args: {
   const lock = args.lock;
   if (lock && "assignee" in lock) params.assignee = lock.assignee;
   if (lock && "asked_by" in lock) Object.assign(params, askedByParams(lock.asked_by));
+  if (lock && "handed_off_by" in lock) Object.assign(params, handedOffParams(lock.handed_off_by));
   return params;
 }
 
@@ -1610,6 +1612,19 @@ export function buildItemsParams(args: {
  */
 export function askedByParams(handle: string): { asked_by: string; viewer: string } {
   return { asked_by: handle, viewer: handle };
+}
+
+/**
+ * The work one person handed off — filed, and held by somebody else or by
+ * nobody yet — as `work_items` asks it.
+ *
+ * `viewer` IS THAT PERSON for [askedByParams]' reason: work a founder filed
+ * through their own assistant is reported by the TOKEN, and the engine gives a
+ * `handed_off_by` its second name only for the viewer — at both ends, so a task
+ * their token filed for their seat is their own work rather than a hand-off.
+ */
+export function handedOffParams(handle: string): { handed_off_by: string; viewer: string } {
+  return { handed_off_by: handle, viewer: handle };
 }
 
 /** [buildItemsParams] before its lock, which is every other rule it has. */

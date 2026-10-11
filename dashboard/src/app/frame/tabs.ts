@@ -58,7 +58,7 @@ export function useTab<T extends string>(
   // THE FIRST TAB IS THE FALLBACK, which is also what makes the URL clean:
   // `useParam` drops a parameter equal to its fallback, so landing on an
   // object writes no `tab=` at all and only a reader who moved carries one.
-  // An ADDRESS may name another tab to land on — `#/settings/config/revisions`
+  // An ADDRESS may name another tab to land on — `#/admin/engine/config/revisions`
   // is the configuration's history — and the same rule holds for it: the tab
   // the address lands on is the one the URL does not have to spell, and the
   // tab order (and so the digits) stays the object's own.

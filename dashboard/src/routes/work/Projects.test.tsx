@@ -166,7 +166,7 @@ test("a plain click peeks beside the list rather than leaving it", async () => {
   // peek's `Open ↗` is built from too: a row and the panel it opens can never
   // name different pages.
   const link = container.querySelector<HTMLAnchorElement>("a.row-link");
-  expect(link?.getAttribute("href")).toBe(peekHref({ kind: "project", id: "ENG" }));
+  expect(link?.getAttribute("href")).toBe(peekHref({ kind: "project", id: "ENG" }, "person"));
 
   const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
   link?.dispatchEvent(plain);

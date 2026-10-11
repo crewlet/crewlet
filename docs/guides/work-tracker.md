@@ -1281,8 +1281,8 @@ in each status group at the window's end, and how many were **completed** in it
 is not a completion and moving done work to closed is not a second one. It is
 computed by walking the task history BACKWARD from today's census, undoing each
 status change, create, removal, restore, purge and project move, so what it
-costs is the window's changes rather than the company's whole history. Home's
-"Tasks in progress", "Completed" and "Tasks completed per day" all read it.
+costs is the window's changes rather than the company's whole history. The
+console Overview's "Tasks in progress", "Completed" and "Tasks completed per day" all read it.
 
 **Blocked has no history.** Whether a task is blocked depends on its blockers'
 rows, and nothing records the moment it became so; the answer says
@@ -1303,7 +1303,7 @@ A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
 tick it deliberately skipped (a missed run outside the catch-up window, or one
 that came due while its seat was paused) is not something the company did, so
 the feed leaves it out; it stays in the schedule's own ledger
-(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Agents › Schedules),
+(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Agent setup › Schedules),
 which is where "why did the standup not run" is answered. And runs of one schedule for one runner that nothing else
 falls between are **one row** ("ran 12 times since 02:40"), so a sweep every
 ten minutes is a line rather than every line of the page.
@@ -1423,7 +1423,7 @@ screens rather than one:
   The sentence over the grid is the company's own total, and when the engine
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
-- **History** (`#/work/history`) is the change log over a window you choose,
+- **History** (`#/admin/company/changes`) is the change log over a window you choose,
   narrowed from one bar — the window, then **Kind**, **By** and **Project**
   pickers whose options are what the pages loaded hold, with how many of each
   (said once: the counts are over the changes loaded) — and it says "Showing
@@ -1592,7 +1592,9 @@ seat, and the `has_open_asks` filter finds the items carrying any. The board
 asks the other two ways round: `asked_of=` is whose answer an item's open ask
 is waiting on, and `asked_by=` is whose question it is — and for your own
 handle `asked_by` also matches the token bound to you, because the asks you put
-through your own assistant are authored by the token. Each row
+through your own assistant are authored by the token. `handed_off_by=` is the
+work somebody filed and does not hold — their hand-offs — matched under both of
+their names at both ends for the same reason. Each row
 carries `answer_with`, the literal call that answers it, and `open`.
 
 ### Asking for a decision
@@ -1673,8 +1675,8 @@ expecting an answer otherwise gets silence with nothing to explain it.
 **What waits on a person** is one question (`GET /work/decisions`,
 `decisions`): the open asks put to any of their identities — their seat and the
 token bound to it — beside the coding runs parked on a question to them, with
-how many there are in all and when the longest one began. The dashboard's Home
-answers them in place: each option of a structured ask is a button that sends
+how many there are in all and when the longest one began. The dashboard's
+Today, Inbox and My work answer them in place: each option of a structured ask is a button that sends
 the choice as the answer, and a parked run is answered by its turn.
 
 ### What an answer may weigh
@@ -1944,15 +1946,15 @@ that changes what you should do next. An empty list means *you have not said*,
 never *nothing is primary* — the other reading gives a fresh company an inbox
 whose primary half is blank.
 
-**A person reads theirs at `#/inbox`**, one click from the landing screen:
+**A person reads theirs at `#/inbox`**, one click from Today, where they land:
 the notices `work_inbox` returns, each labelled with the one reason of
 eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by the API key — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
 alphabetically first seat's — and `#/me` is that same person's own work: one
 section per claim on their attention (the Queue, Asked of me, Asked by me,
-Unblocked, Collaborating, Watching, Checklist), each carrying the engine's own
-total on its tab so an unanswered question is visible without opening it. A
+Handed off, Ready to start, Helping on, Following, Your checklist items), each
+carrying the engine's own total on its tab so an unanswered question is visible without opening it. A
 section shows at most twenty rows of its claim, and one that holds fewer than
 its total says which twenty ("the 20 most recently changed of 130"). The
 Queue is read by due date or in the order somebody put it
@@ -1963,7 +1965,7 @@ with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
 **Asked of me is answered where it stands.** Each question put to the person
-is the same row the landing screen's "Needs your decision" draws — who asked,
+is the same row Today's *Needs you* draws — who asked,
 the role they are asked in, what the asker recommends — with its options as
 buttons that send the choice (`comment_on_work_item{answers, choice}`), or a
 Reply for a question with no options. **Asked by me** is the other end: the
@@ -1972,6 +1974,15 @@ work this person asked a question on that is still waiting for its answer
 still one somebody is waiting on). It asks under both of the person's names —
 `viewer=` is the person themselves — so the questions they put through their
 own assistant are there beside the ones they asked from the dashboard.
+
+**Handed off is the work you filed and somebody else holds** — or nobody yet,
+since a task routed to a unit waits for its lead to pick somebody
+(`handed_off_by=`): it opens on the open work, banded by where each piece
+stands and newest change first, because a hand-off that finished comes back to
+you as a notice, and the scope switch brings the finished ones. It is the founder's main verb read back: hand work off,
+then watch it move, in one place rather than a search for your own reports. It
+also asks under both of your names, so a task your token filed for your own
+seat is your work, never a hand-off to yourself.
 
 **Somebody else's day is read, not worked.** An operator can open anybody's
 day with the whose-day picker, and there every change on the page is held,
@@ -2012,9 +2023,8 @@ is the content — it is what somebody decided — so nothing re-sorts it, and t
 place is drawn rather than left for a reader to count. It is a list somebody
 wrote, and it can hold a task a colleague is assigned as well as your own, so
 it is not what the Queue's tab counts: its first line says how many open tasks
-it holds and how many of them are assigned to you, and the Queue's count — the
-same figure the sidebar's My work row carries — is only the work assigned to
-you. **Drag a row to a new
+it holds and how many of them are assigned to you, and the Queue's count is
+only the work assigned to you. **Drag a row to a new
 place**, or press `Alt` with the up or down arrow on a focused row, and the
 dashboard sends `set_priorities` as you, conditional on the version of the
 record it drew: the row is drawn at its new place with a pending mark until the

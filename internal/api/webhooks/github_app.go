@@ -394,7 +394,7 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 			view.Message = "Crewlet picks the installation up on its next " +
 				"reconcile pass, within a minute if this agent was set up " +
 				"just now and up to ten minutes on a surface that has been " +
-				"waiting a while. Press Recheck in Settings › Integrations " +
+				"waiting a while. Press Recheck in Connect › Integrations " +
 				"to look immediately."
 		}
 

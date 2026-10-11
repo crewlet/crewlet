@@ -445,8 +445,13 @@ var TOKEN_KEY = {
 	starred: "crewlet_starred",
 	/** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
 	peekWidth: "crewlet.peek.width",
-	/** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
+	/** An org draft not yet saved (`routes/admin/org/builder/model/persistence.ts`). */
 	orgDraft: "crewlet_org_draft",
+	/**
+	* Whether the person sidebar's Work row shows its projects, where the reader
+	* chose (`app/sidebar/PersonSidebar.tsx`); unset follows the route.
+	*/
+	workProjects: "crewlet.sidebar.work-projects",
 	/** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
 	knowledgeOpen: "crewlet.knowledge.open"
 }.apiToken;
@@ -1517,7 +1522,7 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 * build that cannot import a Go identifier — held to the engine's in both
 * directions by `internal/api`'s `broker_client_test.go` and
 * `objects_test.go`. What is done with them is behaviour, and lives in
-* `protocol/broker.ts` and the Settings screens.
+* `protocol/broker.ts` and the console's Engine screens.
 */
 /**
 * How a node's broker takes part in the fleet's — `placement.BrokerKind`, as

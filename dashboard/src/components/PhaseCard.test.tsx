@@ -561,7 +561,7 @@ describe("the link to the phase's own event", () => {
     screen.queryAllByRole("link", { name: /event/ }).map((a) => a.getAttribute("href"));
 
   test("is not drawn on that event's own page", () => {
-    location.hash = "#/live/events/ev-1";
+    location.hash = "#/admin/live/events/ev-1";
     render(
       <Router>
         <PhaseCard record={phase()} defaultOpen />
@@ -571,13 +571,13 @@ describe("the link to the phase's own event", () => {
   });
 
   test("is drawn everywhere else, at the event log's address", () => {
-    location.hash = "#/live/turns/turn-1";
+    location.hash = "#/admin/live/turns/turn-1";
     render(
       <Router>
         <PhaseCard record={phase()} defaultOpen />
       </Router>,
     );
-    expect(links()).toEqual(["#/live/events/ev-1"]);
+    expect(links()).toEqual(["#/admin/live/events/ev-1"]);
   });
 });
 

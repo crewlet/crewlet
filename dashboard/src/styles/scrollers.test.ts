@@ -151,7 +151,7 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
-  "frame.css .section-column": "the Settings column",
+  "frame.css .section-column": "the Knowledge tree's column",
 };
 
 describe("a box that scrolls inside the page", () => {
@@ -314,9 +314,9 @@ describe("the record ceiling", () => {
 
   /** The blocks that state a ceiling of their own, and why each one differs. */
   const STATES_ITS_OWN: Record<string, string> = {
-    "routes/org/builder/AfterSaveStrip.tsx":
+    "routes/admin/org/builder/AfterSaveStrip.tsx":
       "the YAML dialog: a Modal is portaled outside both scrollers, so the inherited ceiling never reaches it",
-    "routes/live/trace/Waterfall.tsx":
+    "routes/admin/live/trace/Waterfall.tsx":
       "a span's Input and Output, read as a pair: half the ceiling each, derived from it",
   };
 

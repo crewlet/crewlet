@@ -3,7 +3,7 @@
  *
  * THE FEED ITSELF IS GONE FROM HERE. This file opened by saying two readers
  * shared its rows — a project's History lens and the workspace-wide
- * `#/work/history` screen — and both of those render `HistoryView`
+ * `#/admin/company/changes` screen — and both of those render `HistoryView`
  * (`routes/work/History.tsx`) now, which is the sharing that sentence asked
  * for. What was left behind was an `ActivityFeed` with no caller at all, kept
  * alive by one test: a component whose only reader is its own test is

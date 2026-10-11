@@ -24,6 +24,17 @@
  * its epoch and what it holds. So a peek takes an `id` and asks, which is also
  * what lets a peek be opened from a URL that was pasted rather than clicked.
  *
+ * # Each shell has its own peeks
+ *
+ * A peek is drawn by the shell the reader is in, because two kinds have a
+ * body in each: a SEAT, which the person shell previews as a colleague (who,
+ * what they are doing, what they hold) and the console as a runtime (its
+ * model, its node, its budget windows), and the objects only the console has
+ * at all — a turn, a node, a credential — which the person shell has no peek
+ * for and closes rather than fetching the console's code to draw. A member's
+ * `peek=` naming a turn is therefore a closed rail, never a console chunk in
+ * a member's browser.
+ *
  * # What a peek is not
  *
  * Not a second page. It answers the question a reader asks WITHOUT leaving the
@@ -34,6 +45,7 @@
  */
 
 import type { ObjectKind, ObjectRef } from "./objects.ts";
+import type { Shell } from "../nav.ts";
 import { lazyScreen } from "../lazyScreen.ts";
 
 // EACH PEEK LIVES IN ITS WORKSPACE'S CHUNK, beside the screen it previews, and
@@ -42,20 +54,21 @@ import { lazyScreen } from "../lazyScreen.ts";
 // the body inside a suspense and an error boundary of its own.
 const ItemPeek = lazyScreen("work", (m) => m.ItemPeek);
 const ProjectPeek = lazyScreen("work", (m) => m.ProjectPeek);
-const SeatPeek = lazyScreen("agents", (m) => m.SeatPeek);
-const UnitPeek = lazyScreen("agents", (m) => m.UnitPeek);
-const SchedulePeek = lazyScreen("agents", (m) => m.SchedulePeek);
+const SeatPeek = lazyScreen("team", (m) => m.SeatPeek);
+const UnitPeek = lazyScreen("team", (m) => m.UnitPeek);
+const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
+const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
+const SeatSetupPeek = lazyScreen("setup", (m) => m.SeatSetupPeek);
+const SchedulePeek = lazyScreen("setup", (m) => m.SchedulePeek);
 const TurnPeek = lazyScreen("live", (m) => m.TurnPeek);
 const RunPeek = lazyScreen("live", (m) => m.RunPeek);
 const ChannelPeek = lazyScreen("live", (m) => m.ChannelPeek);
 const EventPeek = lazyScreen("live", (m) => m.EventPeek);
-const NodePeek = lazyScreen("settings", (m) => m.NodePeek);
-const ToolPeek = lazyScreen("settings", (m) => m.ToolPeek);
-const IntegrationPeek = lazyScreen("settings", (m) => m.IntegrationPeek);
-const CredentialPeek = lazyScreen("settings", (m) => m.CredentialPeek);
-const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
-const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
-const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
+const NodePeek = lazyScreen("engine", (m) => m.NodePeek);
+const RevisionPeek = lazyScreen("engine", (m) => m.RevisionPeek);
+const ToolPeek = lazyScreen("connect", (m) => m.ToolPeek);
+const IntegrationPeek = lazyScreen("connect", (m) => m.IntegrationPeek);
+const CredentialPeek = lazyScreen("connect", (m) => m.CredentialPeek);
 
 /**
  * What every peek is handed.
@@ -68,38 +81,54 @@ export interface PeekProps {
   id: string;
 }
 
-/**
- * The body for each kind, or `undefined` where a kind has no peek.
- *
- * EIGHTEEN OF `objects.ts`'s NINETEEN, and the missing one is deliberate:
- * `notice` is addressed — an inbox row links to one — and its "peek" IS the
- * Inbox, where the notice is read in place and marked. A rail over it would
- * be the same rows in a narrower column.
- *
- * A KIND WITH NO ENTRY IS NOT AN ERROR. [PeekHost] closes the rail rather
- * than opening it empty, which is also what a `peek=` token naming a kind
- * some future build addresses and this one cannot render must do.
- */
-export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.ReactNode>> = {
+/** One shell's bodies: a kind with no entry has no peek in that shell. */
+type Peeks = Partial<Record<ObjectKind, (props: PeekProps) => React.ReactNode>>;
+
+/** The company's own objects, which both shells peek at alike. */
+const COMPANY: Peeks = {
   item: ({ id }) => <ItemPeek itemKey={id} />,
   project: ({ id }) => <ProjectPeek projectKey={id} />,
   page: ({ id }) => <PagePeek id={id} />,
   container: ({ id }) => <ContainerPeek id={id} />,
-  seat: ({ id }) => <SeatPeek handle={id} />,
   unit: ({ id }) => <UnitPeek id={id} />,
-  turn: ({ id }) => <TurnPeek turnId={id} />,
-  run: ({ id }) => <RunPeek turnId={id} />,
-  channel: ({ id }) => <ChannelPeek id={id} />,
-  event: ({ id }) => <EventPeek eventId={id} />,
-  schedule: ({ id }) => <SchedulePeek scope={id} />,
-  node: ({ id }) => <NodePeek id={id} />,
-  tool: ({ id }) => <ToolPeek name={id} />,
-  integration: ({ id }) => <IntegrationPeek kind={id} />,
-  credential: ({ id }) => <CredentialPeek name={id} />,
-  revision: ({ id }) => <RevisionPeek id={id} />,
 };
 
-/** Whether this kind can be peeked at all. */
-export function peekable(ref: ObjectRef | null): boolean {
-  return Boolean(ref && PEEKS[ref.kind]);
+/**
+ * The body for each kind in each shell, or `undefined` where a kind has no
+ * peek there.
+ *
+ * `notice` has none in either, deliberately: it is addressed — an inbox row
+ * links to one — and its "peek" IS the Inbox, where the notice is read in
+ * place and marked. A rail over it would be the same rows in a narrower
+ * column.
+ *
+ * A KIND WITH NO ENTRY IS NOT AN ERROR. [PeekHost] closes the rail rather
+ * than opening it empty, which is also what a `peek=` token naming a kind
+ * some future build addresses and this one cannot render must do — and what
+ * the person shell does with a console object's token.
+ */
+export const PEEKS: Record<Shell, Peeks> = {
+  person: {
+    ...COMPANY,
+    seat: ({ id }) => <SeatPeek handle={id} />,
+  },
+  admin: {
+    ...COMPANY,
+    seat: ({ id }) => <SeatSetupPeek handle={id} />,
+    turn: ({ id }) => <TurnPeek turnId={id} />,
+    run: ({ id }) => <RunPeek turnId={id} />,
+    channel: ({ id }) => <ChannelPeek id={id} />,
+    event: ({ id }) => <EventPeek eventId={id} />,
+    schedule: ({ id }) => <SchedulePeek scope={id} />,
+    node: ({ id }) => <NodePeek id={id} />,
+    tool: ({ id }) => <ToolPeek name={id} />,
+    integration: ({ id }) => <IntegrationPeek kind={id} />,
+    credential: ({ id }) => <CredentialPeek name={id} />,
+    revision: ({ id }) => <RevisionPeek id={id} />,
+  },
+};
+
+/** Whether this kind can be peeked at all, in this shell. */
+export function peekable(ref: ObjectRef | null, shell: Shell): boolean {
+  return Boolean(ref && PEEKS[shell][ref.kind]);
 }

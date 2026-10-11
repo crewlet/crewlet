@@ -25,7 +25,7 @@
  *
  * `configTransport` is the same requests at their lowest level, for the org
  * builder, whose model builds its own requests and settles its own unknown
- * saves (`routes/org/builder/model/`).
+ * saves (`routes/admin/org/builder/model/`).
  */
 
 import { classifyConfigRefusal, type ConfigAnswer, type ConfigRefusal } from "./configAnswer.ts";

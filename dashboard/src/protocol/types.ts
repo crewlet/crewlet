@@ -741,7 +741,7 @@ export interface Bucket {
    * `cache_read_tokens / input_tokens` and adding the two double-counts the
    * prefix (`tokens.Bucket`). Both are zero where no backend reported a
    * cache, which is not the same as "nothing was cached" — see
-   * `routes/spend/model.ts`' `cacheShare`.
+   * `routes/admin/spend/model.ts`' `cacheShare`.
    */
   cache_read_tokens?: number;
   cache_write_tokens?: number;

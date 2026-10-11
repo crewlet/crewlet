@@ -206,7 +206,7 @@ describe("the rail's shape", () => {
         groups={[
           {
             properties: [
-              { label: "Turn", value: "t-1", path: ["live", "turns", "t-1"] },
+              { label: "Turn", value: "t-1", path: ["admin", "live", "turns", "t-1"] },
               { label: "Points", value: 3 },
             ],
           },

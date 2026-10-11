@@ -251,8 +251,16 @@ describe("the engine's hierarchy", () => {
   // A SEAT'S ADDRESS IS THE HANDLE THE ENGINE DERIVED, even for a document
   // entry that declares none: the page resolves a handle and nothing else.
   test("a seat is addressed by its handle, never by its name", () => {
-    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
+    expect(seatPath(index.byName.get("Dev A")!, "person")).toEqual(["team", "seats", "dev-a"]);
     expect(index.byHandle.get("Dev A")).toBeUndefined();
+  });
+
+  // A SEAT HAS A PAGE IN EACH SHELL, and the link is to the one the reader is
+  // in: a teammate's profile, or the same seat's setup in the console.
+  test("a seat's address is its page in the shell it is drawn in", () => {
+    const seat = index.byName.get("Dev A")!;
+    expect(seatPath(seat, "admin")).toEqual(["admin", "agents", "seats", "dev-a"]);
+    expect(seatPath({ handle: "ceo" }, "person")).toEqual(["team", "seats", "ceo"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer

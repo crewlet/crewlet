@@ -21,7 +21,7 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 
 ## Setting it up from the dashboard
 
-**Connect** on the Atlassian tile in Settings › Integrations collects the
+**Connect** on the Atlassian tile in Connect › Integrations collects the
 account email and the API token the integration's own calls authenticate
 with — plus, on Data Center, the site address, which on Cloud is discovered
 from the organization instead and never typed — and generates whichever

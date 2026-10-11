@@ -11,7 +11,7 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS } from "../nav.ts";
+import { DESTINATIONS, type Shell } from "../nav.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
@@ -191,13 +191,21 @@ export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
   }));
 }
 
-/** The screens, matched by name. */
-export function destinationHits(query: string, nav: Navigator, cap: number): Hit[] {
-  return ranked(DESTINATIONS, query, (d) => [d.label], cap).map((d) => ({
+/**
+ * One shell's screens, matched by name.
+ *
+ * PER SHELL, because the palette draws them as two groups: Go to for the
+ * person shell, and Admin — offered to an admin only — for the console, whose
+ * rows cross the door. A member is never offered a screen their key does not
+ * reach.
+ */
+export function destinationHits(query: string, nav: Navigator, cap: number, shell: Shell): Hit[] {
+  const here = DESTINATIONS.filter((d) => d.shell === shell);
+  return ranked(here, query, (d) => [d.label], cap).map((d) => ({
     id: `nav-${d.key}`,
     icon: d.icon,
     label: d.label,
-    hint: d.guarded ? `${d.hint} · needs a token` : d.hint,
+    hint: d.hint,
     go: () => nav.to(d.path),
   }));
 }
@@ -216,7 +224,7 @@ export function idHits(term: string, nav: Navigator): Hit[] {
       icon: "file-text",
       label: id,
       hint: "as an event",
-      go: () => nav.to(["live", "events", id]),
+      go: () => nav.to(["admin", "live", "events", id]),
     },
     {
       id: `trace-${id}`,
@@ -226,14 +234,14 @@ export function idHits(term: string, nav: Navigator): Hit[] {
       // THE TRACE PAGE, which is the only screen that assembles one. This
       // pointed at the event log with `?trace=` once, a parameter that screen
       // did not read, and the reader landed on the whole log.
-      go: () => nav.to(["live", "traces", id]),
+      go: () => nav.to(["admin", "live", "traces", id]),
     },
     {
       id: `turn-${id}`,
       icon: "layers",
       label: id,
       hint: "as a turn",
-      go: () => nav.to(["live", "turns", id]),
+      go: () => nav.to(["admin", "live", "turns", id]),
     },
   ];
 }
@@ -270,7 +278,7 @@ export function toolHits(
     icon: "wrench",
     label: tool.name,
     hint: tool.source,
-    go: () => nav.to(["settings", "tools"], { q: tool.name }),
+    go: () => nav.to(["admin", "connect", "tools"], { q: tool.name }),
   }));
 }
 
@@ -283,7 +291,7 @@ export function searchHits(term: string, nav: Navigator): Hit[] {
       icon: "chart-no-axes-gantt",
       label: `Events mentioning “${term}”`,
       hint: "the event log, filtered",
-      go: () => nav.to(["live", "events"], { q: term }),
+      go: () => nav.to(["admin", "live", "events"], { q: term }),
     },
     {
       id: "search-knowledge",

@@ -46,8 +46,13 @@ export const STORAGE_KEYS = {
   starred: "crewlet_starred",
   /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
   peekWidth: "crewlet.peek.width",
-  /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
+  /** An org draft not yet saved (`routes/admin/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
+  /**
+   * Whether the person sidebar's Work row shows its projects, where the reader
+   * chose (`app/sidebar/PersonSidebar.tsx`); unset follows the route.
+   */
+  workProjects: "crewlet.sidebar.work-projects",
   /** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
   knowledgeOpen: "crewlet.knowledge.open",
 } as const;

@@ -87,14 +87,16 @@ test("a turn parked on its coding run says so", () => {
 // on is open — and both spellings of it are one address.
 test("a watch link is the turn's page on its transcript, as a path and as an href", () => {
   expect(watchLink("t-7")).toEqual({
-    path: ["live", "turns", "t-7"],
+    path: ["admin", "live", "turns", "t-7"],
     query: { tab: "transcript" },
   });
-  expect(watchHref("t-7")).toBe(buildHash(["live", "turns", "t-7"], { tab: "transcript" }));
+  expect(watchHref("t-7")).toBe(
+    buildHash(["admin", "live", "turns", "t-7"], { tab: "transcript" }),
+  );
 });
 
 // THE TURN RECORD FIRST, as `seatOnTurn` reads it, and nothing — never a link
-// to `#/live/turns/` — while the overlay names no turn yet.
+// to `#/admin/live/turns/` — while the overlay names no turn yet.
 test("the turn a seat is on is its turn record's, then its call's, else none", () => {
   expect(turnIdOf(seat())).toBe("t-7");
   expect(turnIdOf(seat({ turn: null }))).toBe("t-7");
@@ -117,13 +119,13 @@ test("the running target is the one turn's watch link, else Now running", () => 
   expect(runningTarget([working(), seat({ id: "b", activity: "needs" })])).toEqual(
     watchLink("t-7"),
   );
-  const live = { path: ["live"], query: {} };
+  const live = { path: ["admin", "live"], query: {} };
   expect(runningTarget([])).toEqual(live);
   expect(runningTarget([working(), working({ id: "b" })])).toEqual(live);
   expect(runningTarget([working({ turn: null, live_call: null })])).toEqual(live);
 });
 
-// THE SHORT LIST — Home's Live now and the sidebar's Running group — FILTERS
+// THE SHORT LIST — the Overview's Live now and the console sidebar's Running group — FILTERS
 // BEFORE IT CAPS: a seat whose turn has no id is never one of the rows, takes
 // none of the four places, and is still counted.
 test("the short list of running turns skips a seat with no turn id, then takes four", () => {

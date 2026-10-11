@@ -86,7 +86,7 @@ func (e RawWebhook) SummaryFor(actor string) string {
 }
 
 // InboundDelivery is the RECORD that one inbound delivery reached this
-// company: the row Settings › Integrations counts and lists as a surface's
+// company: the row Connect › Integrations counts and lists as a surface's
 // deliveries. [RawWebhook] is the wake; this is its audit row, and they are
 // separate events because the wake is not stored (internal/events says why)
 // while every delivery is.

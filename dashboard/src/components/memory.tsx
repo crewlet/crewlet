@@ -1,6 +1,6 @@
 /**
  * A seat's diary and its episodes, as two cards — drawn on the seat's Memory
- * tab and on its page under Knowledge › Agent diaries.
+ * tab and on its page under Agent setup › Memory.
  *
  * ONE DRAWING FOR ONE ANSWER. Both screens render the same `agent_memory`
  * answer, and two copies of the cards would disagree about the first thing a

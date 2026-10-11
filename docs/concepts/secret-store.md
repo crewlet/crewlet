@@ -128,18 +128,18 @@ Every other command reads the **Tier A** config for its keyring, never the compa
 
 ### From the dashboard
 
-Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same admin routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding an admin key can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
+Settings › **Secrets** (`#/admin/connect/secrets`) lists what the fleet holds and can store, rotate and remove a row, over the same admin routes the CLI uses. It never shows a value: the one route that returns one is break-glass on both sides, and putting that behind a click in a page anyone holding an admin key can open is not a trade worth making. `crewlet secrets get -reveal` stays the deliberate path, and a rotation asks for the new credential rather than editing the old one.
 
 Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-admin) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
 
 The API's own keys are NOT in this store: they are Tier A
 (`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
-› **People & access** (`#/settings/people`) lists their labels — never a value
+› **People & access** (`#/admin/company/people`) lists their labels — never a value
 — beside each one's role and the person it acts as, read from
 [`GET /access`](../reference/api-endpoints.md#get-access).
 
 A model's keys are `${VAR}` pointers into this store too. Settings › **Models &
-keys** (`#/settings/models`) lists each model's keys by the variable they name
+keys** (`#/admin/connect/models`) lists each model's keys by the variable they name
 and says, per key, whether it resolves on the node that answered (*Not set*
 when neither this store nor the environment holds it), whether a vendor is
 refusing it and until when, read from

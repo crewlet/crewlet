@@ -270,7 +270,7 @@ function Results({
                     // route, so ⌘-click and the middle button open it.
                     <a
                       className="hit-title"
-                      href={peekHref({ kind: "page", id: hit.id })}
+                      href={peekHref({ kind: "page", id: hit.id }, "person")}
                       onClick={rowPeekHandler(() => openPeek({ kind: "page", id: hit.id }))}
                     >
                       {hit.title}
@@ -465,7 +465,7 @@ function containerFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
+      path: units.length === 1 && lead ? ["team", "units", lead.name] : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];

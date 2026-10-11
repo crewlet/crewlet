@@ -94,7 +94,7 @@ test("a seat's place is its unit path, or above every unit", () => {
 // document somebody is editing; a chart that shared it could draw a seat
 // nobody saved as if it ran. The boundary is an import this module never makes.
 test("the live chart never reads the builder's draft model", () => {
-  for (const file of ["src/lib/orgchart.ts", "src/routes/agents/OrgChart.tsx"]) {
+  for (const file of ["src/lib/orgchart.ts", "src/routes/team/OrgChart.tsx"]) {
     const source = readFileSync(join(process.cwd(), file), "utf8");
     // THE IMPORTS, not the prose: the doc comment names the module it keeps
     // away from. The one builder file the chart does import is the note that

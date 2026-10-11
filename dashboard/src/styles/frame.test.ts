@@ -310,7 +310,7 @@ describe("the frame's layout", () => {
       new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
     );
     // The screen's padding: the kit's content column, and the section body
-    // beside Settings' column, which takes the kit's back and gives the same.
+    // beside Knowledge's tree, which takes the kit's back and gives the same.
     expect(block(kit, ".crewlet-app-shell__content")).toMatch(
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );
@@ -319,19 +319,18 @@ describe("the frame's layout", () => {
     );
     expect(CONTENT_PADDING).toBe(20);
     // The column inside the screen is as wide as the shell says — the number
-    // the arithmetic below counted — and Settings' is one sidebar wide.
+    // the arithmetic below counted — and the tree is the one there is.
     expect(block(ours, ".section-frame")).toMatch(
       /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
     );
-    expect(columnWidth("column")).toBe(Number.parseFloat(size.shell.rail));
     expect(columnWidth("tree")).toBe(TREE_COLUMN);
     expect(columnWidth("tabs")).toBe(0);
+    expect(columnWidth("none")).toBe(0);
 
     // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
-    // 236 more beside Settings' column and 256 beside Knowledge's tree.
+    // and 256 more beside Knowledge's tree.
     const normal = densityScale("normal");
     expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
-    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
     expect(peekColumnMin({ column: columnWidth("tree"), scale: normal })).toBe(1416);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
@@ -340,7 +339,7 @@ describe("the frame's layout", () => {
     // least the floor, and one pixel narrower it would not be.
     for (const choice of Object.keys(density) as (keyof typeof density)[]) {
       const scale = densityScale(choice);
-      for (const column of [0, columnWidth("column"), columnWidth("tree")]) {
+      for (const column of [0, columnWidth("tree")]) {
         const at = peekColumnMin({ column, scale });
         const list = (window: number) =>
           window -
@@ -451,21 +450,16 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
-  // THE SETTINGS COLUMN IS ONE ROW ON A PHONE. Stacked whole above the section
-  // it took about 520px, and Nodes' and Secrets' own content began below the
-  // fold. Below the breakpoint the list folds behind the toggle naming the
-  // section; at every other width the toggle is not drawn at all, so the
-  // column beside a section is never a second, collapsed copy of itself.
-  test("the Settings column folds to a picker below the phone breakpoint, and only there", () => {
+  // KNOWLEDGE'S TREE IS PART OF THE PAGE ON A PHONE: sticky and as tall as the
+  // view beside the page everywhere wider, and in the flow, above the page,
+  // below the breakpoint — a pane of its own on a 390px screen is a third of
+  // the phone holding a list beside a sliver of page.
+  test("the tree column sticks beside the page, and is in the flow on a phone", () => {
     const css = sheet("frame.css");
     const wide = css.split(PHONE)[0]!;
     const narrow = css.slice(css.indexOf(PHONE));
-    expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
-    expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
-    expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
-    expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
-      /display:\s*none/,
-    );
+    expect(block(wide, ".section-column")).toMatch(/position:\s*sticky/);
+    expect(block(narrow, ".section-column")).toMatch(/position:\s*static/);
   });
 
   // THE COLUMN IS AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves
@@ -474,7 +468,7 @@ describe("the frame's layout", () => {
   // rule) the column was exactly as tall as the section, so it never stuck and
   // a wheel over Nodes carried Company and Connect off the top. Its measure is
   // the scroller's view, which only a size container can hand a descendant.
-  test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
+  test("the tree column is the scroller's height, so it stays put while the page scrolls", () => {
     const css = sheet("frame.css");
     const wide = css.split(PHONE)[0]!;
     const column = block(wide, ".section-column");
@@ -589,19 +583,6 @@ describe("the frame's layout", () => {
     for (const { sel, body } of elsewhere) {
       expect(body, `${sel} takes the note's wrap back`).not.toMatch(/text-wrap/);
     }
-  });
-
-  // A STATE WAITING ON THE READER IS THE WARNING PILL, as the approved
-  // Settings artboard draws Integrations' figure; the kit fills its one badge
-  // with the accent because its badge is an unread count, and a state in that
-  // fill read as a second inbox. The repaint has to reach the kit's own pill.
-  test("the Settings column's attention figure is the kit's pill in the warning pair", () => {
-    expect(kitSheet()).toMatch(
-      /\.crewlet-nav-item__badge\s*\{[^}]*background:\s*var\(--color-brand-accent\)/,
-    );
-    const pill = block(sheet("frame.css"), ".section-row-attention .crewlet-nav-item__badge");
-    expect(pill).toMatch(/background:\s*var\(--color-feedback-warning-soft\)/);
-    expect(pill).toMatch(/(^|[\s;])color:\s*var\(--color-feedback-warning-ink\)/);
   });
 
   test("a grid becomes labelled cards below the phone breakpoint", () => {
@@ -1697,7 +1678,7 @@ test("the spend chart's subtitle asks for no width of its own", () => {
  * `repeat(auto-fit, minmax(420px, 1fr))` on a 390px phone (a ~358px content
  * box) is one track 62px wider than its card, and the shell's main is
  * `overflow-x: hidden`, so that overhang is clipped rather than scrolled: on
- * Settings › Nodes it was the Since and Lease columns of both lease tables.
+ * Engine › Nodes it was the Since and Lease columns of both lease tables.
  * jsdom computes no layout, so the only place this can be held is the text:
  * every `auto-fit`/`auto-fill` floor in our sheets is `min(<floor>, 100%)`.
  */

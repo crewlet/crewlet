@@ -1567,7 +1567,7 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* TODAY'S COLUMN IN THE ACCENT, as Home's chart draws it: one series, and the
+/* TODAY'S COLUMN IN THE ACCENT, as the Overview's chart draws it: one series, and the
    last column is always today. */
 .prof-chart-body {
   padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
@@ -1937,11 +1937,11 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder --------------------------------------------------------
-   Agents › Edit org (`routes/org/builder/`, at `#/agents/edit`), the one
+   Company › Edit org (`routes/admin/org/builder/`, at `#/admin/company/org`), the one
    screen that WRITES the org. Its recipes live here beside the chart's
    because it draws the same chart, and the two must read as one.
 
-   Read `routes/org/builder/builderStyles.test.ts` before changing anything
+   Read `routes/admin/org/builder/builderStyles.test.ts` before changing anything
    below — it reads these rules as text and states what each one buys. */
 
 /* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
@@ -2039,7 +2039,7 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder: canvas ------------------------------------------------
-   The builder's charts (`routes/org/builder/CanvasView.tsx`).
+   The builder's charts (`routes/admin/org/builder/CanvasView.tsx`).
 
    THE CHART IS THE DESIGN SYSTEM'S `TreeCanvas`, so almost nothing about it is
    here. The card's surface, boundary, radius and lift, the inset on each node, the focus ring, the accent ring on the
@@ -2107,7 +2107,7 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder: table -------------------------------------------------
-   The builder's table (`routes/org/builder/TableView.tsx`).
+   The builder's table (`routes/admin/org/builder/TableView.tsx`).
 
    THE TABLE IS THE DESIGN SYSTEM'S `OrgTable`, over its `TreeGrid`, so the
    rows, the cells, the column template, the tree's wires, the two-line name
@@ -2141,7 +2141,7 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
-   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
+   `routes/admin/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
    kind dialogs. A drawer's body is a column of fields; a section separates a
    group of them (reports, a tool, what the document configures) with a rule
    and a heading, so a long seat form reads as parts rather than one list. */
@@ -2277,7 +2277,7 @@ a.prof-row:hover {
   min-width: 0;
 }
 
-/* ONE EVENT OF A TRACE (routes/live/Trace.tsx): the feed's time, actor and
+/* ONE EVENT OF A TRACE (routes/admin/live/Trace.tsx): the feed's time, actor and
    sentence, plus a LANE — the trace's own window, on which the event's
    position is a mark. The mark used to be a tick under the sentence, set
    back by the offset alone with no rail to read it against, so in a trace
@@ -2783,21 +2783,6 @@ a.prof-row:hover {
     calc(
       var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
     );
-}
-
-/* THE TREE'S SECTIONS under the spaces (Agent skills), a hairline above them
-   as the artboard draws, and the section's count at the row's end. */
-.ktree-sections {
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-}
-
-.ktree-count {
-  flex: none;
-  margin-left: auto;
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
 }
 
 /* ---- A knowledge page (routes/knowledge/page/) -----------------------------
@@ -3833,8 +3818,8 @@ textarea.kpage-editor-body {
    stretches them), and the sentence reserves two lines so a tile saying what
    the tool does and one saying what is owed keep their feet aligned.
 
-   The columns come from the width a tile needs rather than from a breakpoint:
-   three at 1440 beside the Settings column, two at 1280, one on a phone. */
+   The columns come from the width a tile needs rather than from a breakpoint,
+   so the count follows the room the screen has — and is one on a phone. */
 .int-bar {
   display: flex;
   align-items: flex-end;
@@ -5903,9 +5888,9 @@ span.list-position-step {
 
 /* ---- My work ------------------------------------------------------------ */
 
-/* THE QUESTIONS PUT TO ONE PERSON, as the rows Home's decisions card draws —
+/* THE QUESTIONS PUT TO ONE PERSON, as the rows the Overview's decisions card draws —
    on the same raised panel as every other embedded list here, so a section of
-   asks reads as one of My work's lists rather than as Home's card moved. */
+   asks reads as one of My work's lists rather than as the Overview's card moved. */
 .me-asks {
   background: var(--color-surface-subtle);
   border: 1px solid var(--color-border-default);
@@ -7711,7 +7696,7 @@ a.work-cal-chip {
   color: var(--color-text-secondary);
 }
 
-/* ---- Home --------------------------------------------------------------- */
+/* ---- Overview ------------------------------------------------------------ */
 
 /* THE LANDING SCREEN, the design's Main board: a head, five figures, the
    decisions beside who is working, three cards of how the work is going, and
@@ -7868,6 +7853,41 @@ a.work-cal-chip {
   border-top: 1px solid var(--color-border-default);
 }
 
+/* ---- Today --------------------------------------------------------------
+   A person's own first screen (`routes/today/Today.tsx`). Its cards are the
+   Overview's (`.home-card`); what is its own is the list of what reached the
+   reader — one line a notice, leading to the task it is about. */
+.today-notices {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border-default);
+}
+.today-notices > li + li {
+  border-top: 1px solid var(--color-border-default);
+}
+.today-notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-2) var(--spacing-4);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+}
+.today-notice > .truncate {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+a.today-notice:hover {
+  background: var(--color-surface-hover);
+}
+a.today-notice:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
 /* ---- A decision -------------------------------------------------------- */
 
 .decision-list,
@@ -7926,7 +7946,7 @@ a.work-cal-chip {
   gap: 6px;
   max-width: 50%;
 }
-/* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
+/* A PARKED RUN'S BANNER (routes/admin/live/Runs.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one
    caption line of 180 characters is a line nobody finds the end of. */
@@ -7951,7 +7971,7 @@ a.work-cal-chip {
 }
 
 /* A NARROW LIST STACKS the buttons under the words, which keep the whole
-   width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
+   width. KEYED ON THE LIST, not the page: the same row sits in the Overview's half-
    width card and in the Inbox's list column beside its pane, and a page
    query left the Inbox's question a hundred and fifty pixels wide beside two
    buttons on a page that was nowhere near a phone. */
@@ -8254,7 +8274,7 @@ a.live-row:focus-visible {
 /* ---- The Inbox ---------------------------------------------------------- */
 
 /* FLUSH WITH THE SHEET: the list is a column with its own hairline and the
-   pane beside it runs to the sheet's edges, as the Settings column does. The
+   pane beside it runs to the sheet's edges, as the Knowledge tree's column does. The
    kit's content padding is taken back for this one screen, and each column
    pads itself. */
 .app .crewlet-app-shell__content:has(> .inbox-frame) {
@@ -8973,7 +8993,7 @@ a.live-row:focus-visible {
   gap: 6px;
 }
 
-/* ---- The turn trace (`routes/live/Turn.tsx`, `routes/live/trace/`) --------
+/* ---- The turn trace (`routes/admin/live/Turn.tsx`, `routes/admin/live/trace/`) --
    The header and its tabs are one block with the rule under the tabs, as a
    seat's profile draws them; the tab's panel follows at the page's own gap.
 
@@ -9737,7 +9757,7 @@ a.live-row:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
-/* BY MODEL'S WORDS TAKE HALF THE ROW, not the kit's 128px Home column: under
+/* BY MODEL'S WORDS TAKE HALF THE ROW, not the kit's 128px column the Overview draws: under
    each entry's key is who used it, and at 128px "Agent PM, Agent SWE, Agent AI
    Systems Engineer" was cut to its first name. The bar is a share of the
    card's one total, and half a card still draws it. Two classes, so this wins
@@ -9927,7 +9947,7 @@ a.live-row:focus-visible {
 .entity-pick-list {
   padding: var(--spacing-1);
 }
-/* ONE ROW PER HANDLE, drawn as the Settings column draws its rows: no ground
+/* ONE ROW PER HANDLE, drawn as the sidebar draws its rows: no ground
    at rest, the hover overlay under the pointer, and the picked row on the
    neutral raised surface with its hairline and the primary ink — declared
    after `:hover`, at the same weight, so a picked row keeps its lift under
@@ -10060,7 +10080,7 @@ a.live-row:focus-visible {
   color: var(--color-text-secondary);
 }
 
-/* ---- Settings › Models & keys ------------------------------------------ */
+/* ---- Connect › Models & keys ------------------------------------------ */
 
 /* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the vendor id under it:
    the key is what a seat's `llm:` names, the id is what the vendor bills. The

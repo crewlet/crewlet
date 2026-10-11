@@ -1,16 +1,18 @@
 /**
- * The one thing a guarded section says to a reader whose key does not reach
+ * The one thing a console address says to a reader whose key does not reach
  * it.
  *
- * EVERY GUARDED SECTION IS AN ADMIN'S (ADR-0031): what the machine processed
- * and how it is run — nodes, keys, secrets, integrations, the configuration.
+ * EVERY CONSOLE ADDRESS IS AN ADMIN'S (ADR-0031): what the machine processed
+ * and how it is run — nodes, keys, secrets, integrations, the configuration —
+ * and it is answered as one rather than as Not Found, because the address is
+ * right and it is the reader's key that does not reach it.
  * DRAWN BY THE FRAME, IN PLACE OF THE SCREEN, once the engine has SAID this
  * viewer does not reach it (`viewer.admin` false, and the viewer answered —
  * see `lib/viewer.ts`). Every guarded screen used to mount anyway, ask its
  * guarded questions, be refused, and draw the refusal as data: Nodes read
  * "0 nodes" in its header, four stat tiles of 0, "No nodes are reporting" and
  * a banner calling the refusal "the last reading that succeeded", while the
- * Settings column beside it said 1 node. A refused read is UNKNOWN, and a
+ * navigation beside it counted 1 node. A refused read is UNKNOWN, and a
  * screen that draws unknown as zero is the failure this engine's whole
  * three-valued doctrine exists to prevent. So nothing is drawn but what is
  * true: this section is for admins, and here is what changes that.
@@ -22,7 +24,7 @@
  *
  * A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT REFUSED. `loading` covers a
  * viewer read that failed as well as one in flight, and treating either as
- * "not an admin" would lock an admin out of every guarded section until the
+ * "not an admin" would lock an admin out of the whole console until the
  * next poll. The frame waits out the FIRST read (`asking`) with a skeleton,
  * since the section's own reads would only be refused; after a read that
  * FAILED the screen mounts, and its own reads say what they find.

@@ -1,6 +1,6 @@
 /**
  * The router's rules, which are invisible in a URL — and the NAVIGATION
- * GRAMMAR and the ROUTE TABLE, which are invisible everywhere.
+ * GRAMMAR, the TWO SHELLS and the ROUTE TABLE, which are invisible everywhere.
  *
  * Both of the router's rules shipped wrong once and neither shows up in an
  * address bar: Back from a screen's fourth lens left the screen entirely, and
@@ -9,9 +9,12 @@
  * The grammar is the half that decays: a sidebar row is a workspace or a kept
  * object, a section is a PATH inside a workspace, an object tab is a `tab=` on
  * an object's own page. Nothing is two of those, and it is lost one pull
- * request at a time. The route table is the half nothing compiles: the design
- * doc's `### The routes` is held against `routes.ts`'s resolver in both
- * directions.
+ * request at a time. The shells are the half a reader feels first: the
+ * address picks one by its FIRST SEGMENT, the chords are one namespace across
+ * both, the doors between them keep the reader's place in both directions,
+ * and where `#/` lands is one function of who is reading. The route table is
+ * the half nothing compiles: the design doc's `### The routes` is held
+ * against `routes.ts`'s resolver in both directions.
  */
 
 // @vitest-environment node
@@ -21,13 +24,23 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
 import {
+  ADMIN_HEAD,
   DESTINATIONS,
   RESERVED_SEGMENTS,
   WORKSPACES,
+  adminPathOf,
+  landingFor,
+  personPathOf,
+  phoneMore,
+  phoneTabs,
   sectionOf,
+  shellOf,
   workspaceOf,
   workspaceRow,
+  workspacesOf,
+  type LandingViewer,
 } from "./nav.ts";
+import { KEYMAP } from "./keymap.ts";
 import { crumbsFor, titleOf } from "./crumbs.ts";
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { segmentsOf } from "~/test/routes.ts";
@@ -60,7 +73,7 @@ describe("parsing", () => {
   test("an empty query value is omitted rather than written as a bare key", () => {
     // A filter cleared to "" means "no filter", and `?actor=` in a URL is a
     // filter for the empty actor.
-    expect(buildHash(["live"], { actor: "" })).toBe("#/live");
+    expect(buildHash(["admin", "live"], { actor: "" })).toBe("#/admin/live");
   });
 });
 
@@ -69,20 +82,39 @@ describe("navigation identity", () => {
   // event loses the mark on the workspace you came from, which reads as
   // having navigated somewhere unrelated.
   test("a detail resolves to the workspace that holds it", () => {
-    expect(workspaceOf(["agents", "seats", "pm"])).toBe("agents");
-    expect(workspaceOf(["live", "turns", "abc"])).toBe("live");
-    expect(workspaceOf(["settings", "backups", "tracker"])).toBe("settings");
+    expect(workspaceOf(["team", "seats", "pm"])).toBe("team");
+    expect(workspaceOf(["admin", "agents", "seats", "pm"])).toBe("setup");
+    expect(workspaceOf(["admin", "live", "turns", "abc"])).toBe("live");
+    expect(workspaceOf(["admin", "engine", "backups", "tracker"])).toBe("engine");
     expect(workspaceOf(["work", "ENG-42"])).toBe("work");
-    // THE EMPTY FRAGMENT IS HOME, the landing screen.
-    expect(workspaceOf([])).toBe("home");
+    // THE CONSOLE'S OWN HEAD IS ITS OVERVIEW, and only alone.
+    expect(workspaceOf(["admin"])).toBe("overview");
+    // THE EMPTY FRAGMENT IS NO WORKSPACE: it is the landing, which
+    // `landingFor` turns into one.
+    expect(workspaceOf([])).toBe("");
   });
 
   // A ROUTE NOTHING OWNS RESOLVES TO NOTHING rather than to the first row: a
   // sidebar that marked a workspace for a path it does not hold would tell the
-  // reader they are somewhere they are not — whatever the head is.
+  // reader they are somewhere they are not — whatever the head is, the
+  // retired ones included, and whatever follows the console's head.
   test("an unowned route marks no workspace, whatever its head", () => {
-    for (const head of ["nowhere", "company", "activity", "cost", "admin", "pages"]) {
+    for (const head of [
+      "nowhere",
+      "company",
+      "activity",
+      "cost",
+      "pages",
+      "home",
+      "agents",
+      "live",
+      "spend",
+      "settings",
+    ]) {
       expect(workspaceOf([head]), head).toBe("");
+    }
+    for (const second of ["nowhere", "settings", "today", "team"]) {
+      expect(workspaceOf([ADMIN_HEAD, second]), `admin/${second}`).toBe("");
     }
   });
 
@@ -94,22 +126,47 @@ describe("navigation identity", () => {
     }
   });
 
-  test("every workspace has its own jump chord, and they are the documented ones", () => {
-    // `g` then a letter. Two rows sharing one makes the second unreachable
-    // by keyboard, silently.
+  // ONE NAMESPACE ACROSS BOTH SHELLS: an admin presses the console's chords
+  // from the person shell and the person shell's from the console, and one
+  // letter meaning two places by which shell you stood in is a key nobody
+  // could learn. Nor may a workspace take a letter another `g` sequence has.
+  test("every workspace has its own jump chord across both shells, and they are the documented ones", () => {
     const chords = WORKSPACES.map((r) => r.chord);
     expect(new Set(chords).size).toBe(chords.length);
+    const others = KEYMAP.filter((row) => !row.id.startsWith("go."))
+      .flatMap((row) => row.presses)
+      .filter((p) => p.after === "g")
+      .map((p) => p.key);
+    expect(others.length, "the swap and the running turn are `g` sequences too").toBeGreaterThan(1);
+    for (const chord of chords) expect(others, `g ${chord}`).not.toContain(chord);
     expect(Object.fromEntries(WORKSPACES.map((r) => [r.key, r.chord]))).toEqual({
-      home: "h",
+      today: "t",
       inbox: "i",
       me: "m",
       work: "w",
-      agents: "a",
-      live: "l",
+      team: "p",
       knowledge: "k",
-      spend: "t",
-      settings: "s",
+      overview: "o",
+      live: "l",
+      setup: "u",
+      spend: "s",
+      company: "c",
+      connect: "n",
+      engine: "e",
     });
+  });
+
+  // A CONSOLE CHORD IS AN ADMIN'S: bound for an admin only, and listed in the
+  // legend for an admin only, because for a member it leads to a refusal.
+  test("a console chord, the swap and the running turn are an admin's keys", () => {
+    for (const ws of WORKSPACES) {
+      const row = KEYMAP.find((r) => r.id === `go.${ws.key}`)!;
+      expect(Boolean(row.admin), ws.key).toBe(ws.shell === "admin");
+    }
+    expect(KEYMAP.find((r) => r.id === "shell.swap")?.admin).toBe(true);
+    expect(KEYMAP.find((r) => r.id === "running")?.admin).toBe(true);
+    // AND HANDING WORK OFF IS EVERYBODY'S.
+    expect(KEYMAP.find((r) => r.id === "handoff")?.admin).toBeFalsy();
   });
 });
 
@@ -121,25 +178,38 @@ describe("am I already here", () => {
   // they learn is that the control was a lie.
 
   test("the same page is the same page", () => {
-    expect(samePath(parseHash("#/live/events/abc").path, ["live", "events", "abc"])).toBe(true);
+    expect(
+      samePath(parseHash("#/admin/live/events/abc").path, ["admin", "live", "events", "abc"]),
+    ).toBe(true);
   });
 
   test("a different id is a different page", () => {
-    expect(samePath(parseHash("#/live/events/abc").path, ["live", "events", "def"])).toBe(false);
+    expect(
+      samePath(parseHash("#/admin/live/events/abc").path, ["admin", "live", "events", "def"]),
+    ).toBe(false);
   });
 
   test("a prefix is not a match", () => {
-    // `#/live/events` lists events; `#/live/events/abc` is one of them. A link from the
+    // `#/admin/live/events` lists events; `#/admin/live/events/abc` is one of them. A link from the
     // list to a row must not be suppressed as a self-link.
-    expect(samePath(parseHash("#/live/events").path, ["live", "events", "abc"])).toBe(false);
-    expect(samePath(parseHash("#/live/events/abc").path, ["live", "events"])).toBe(false);
+    expect(
+      samePath(parseHash("#/admin/live/events").path, ["admin", "live", "events", "abc"]),
+    ).toBe(false);
+    expect(samePath(parseHash("#/admin/live/events/abc").path, ["admin", "live", "events"])).toBe(
+      false,
+    );
   });
 
   test("a query string does not make it a different page", () => {
     // A filter or a tab the reader happens to have on the URL is still the
     // same page, and a self-link is still a loop.
     expect(
-      samePath(parseHash("#/live/events/abc?category=system").path, ["live", "events", "abc"]),
+      samePath(parseHash("#/admin/live/events/abc?category=system").path, [
+        "admin",
+        "live",
+        "events",
+        "abc",
+      ]),
     ).toBe(true);
   });
 
@@ -151,27 +221,48 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // NINE WORKSPACES, and the sidebar draws them and nothing else from the
-  // table: a section that became a sidebar row is a second column of
-  // navigation arriving one row at a time.
-  test("the sidebar's rows are the nine workspaces, in the story's order", () => {
-    expect(WORKSPACES.map((w) => w.key)).toEqual([
-      "home",
+  // EACH SHELL'S SIDEBAR DRAWS ITS OWN WORKSPACES and nothing else from the
+  // table, in the order that is the argument: you, then the company, in the
+  // person shell; the overview, then running, setting up, spending, the
+  // company, its connections and the engine, in the console. A section that
+  // became a sidebar row is a second column of navigation arriving one row at
+  // a time.
+  test("each shell's sidebar rows are its workspaces, in the story's order", () => {
+    expect(workspacesOf("person").map((w) => w.key)).toEqual([
+      "today",
       "inbox",
       "me",
       "work",
-      "agents",
-      "live",
+      "team",
       "knowledge",
-      "spend",
-      "settings",
     ]);
+    expect(workspacesOf("admin").map((w) => w.key)).toEqual([
+      "overview",
+      "live",
+      "setup",
+      "spend",
+      "company",
+      "connect",
+      "engine",
+    ]);
+    // THE PERSON SIDEBAR'S TWO RUNS: what is yours, unlabelled, then the
+    // company under its own name.
+    expect(
+      workspacesOf("person")
+        .filter((w) => w.place === "you")
+        .map((w) => w.key),
+    ).toEqual(["today", "inbox", "me"]);
+    expect(
+      workspacesOf("person")
+        .filter((w) => w.place === "company")
+        .map((w) => w.key),
+    ).toEqual(["work", "team", "knowledge"]);
+    for (const ws of workspacesOf("admin")) expect(ws.place, ws.key).toBe("console");
   });
 
   // A SECTION IS A PATH INSIDE ITS WORKSPACE, never a query and never a row:
-  // it starts with the workspace's own segment, it resolves to a screen, and
-  // the section that path is in is that section. A cross-link is the one row a
-  // renderer draws whose address is another workspace's, and it says so.
+  // it starts with the workspace's own path, it resolves to a screen, and the
+  // section that path is in is that section.
   test("sections are paths, and never sidebar rows", () => {
     let sections = 0;
     for (const ws of WORKSPACES) {
@@ -179,11 +270,11 @@ describe("the navigation grammar", () => {
         sections++;
         expect(s.path.join("/"), `${ws.key}/${s.key} carries a query`).not.toMatch(/[?=]/);
         expect(resolves(s.path), `#/${s.path.join("/")} does not resolve`).toBe(true);
-        if (s.elsewhere) {
-          expect(s.path[0], `${s.key} is a cross-link into its own workspace`).not.toBe(ws.key);
-          continue;
-        }
-        expect(s.path[0], `${ws.key}/${s.key} is not under its workspace`).toBe(ws.key);
+        expect(
+          s.path.slice(0, ws.path.length),
+          `${ws.key}/${s.key} is not under its workspace`,
+        ).toEqual(ws.path);
+        expect(shellOf(s.path), `${ws.key}/${s.key} is in the other shell`).toBe(ws.shell);
         expect(sectionOf(s.path)?.key, `#/${s.path.join("/")}`).toBe(s.key);
         expect(
           WORKSPACES.some((w) => w.key !== ws.key && w.path.join("/") === s.path.join("/")),
@@ -205,6 +296,7 @@ describe("the navigation grammar", () => {
       const where = resolve(d.path);
       expect(where.resolved, `#/${d.path.join("/")}`).toBe(true);
       expect(where.workspace, d.key).toBe(d.workspace);
+      expect(shellOf(d.path), d.key).toBe(d.shell);
     }
   });
 
@@ -222,6 +314,111 @@ describe("the navigation grammar", () => {
     }
   });
 });
+
+describe("the two shells", () => {
+  // THE FIRST SEGMENT, AND NOTHING ELSE: not the role, not a preference, not
+  // where the reader came from. A toggle would put two renderings behind one
+  // URL, so a link pasted to a colleague would open whichever one their
+  // browser last chose.
+  test("the shell is the first segment", () => {
+    expect(shellOf([ADMIN_HEAD])).toBe("admin");
+    expect(shellOf([ADMIN_HEAD, "live", "turns"])).toBe("admin");
+    expect(shellOf([])).toBe("person");
+    expect(shellOf(["today"])).toBe("person");
+    // A LATER SEGMENT SPELLED LIKE THE HEAD IS NOT THE HEAD: a unit or a
+    // handle called `admin` is still the person shell's.
+    expect(shellOf(["team", "units", "admin"])).toBe("person");
+    expect(shellOf(["team", "seats", "admin"])).toBe("person");
+    // AND THE TABLE AGREES: every console row is under the head, at one
+    // segment below it at most, and no person row is.
+    for (const ws of WORKSPACES) {
+      expect(shellOf(ws.path), ws.key).toBe(ws.shell);
+      if (ws.shell === "admin") expect(ws.path.length, ws.key).toBeLessThanOrEqual(2);
+    }
+  });
+
+  // WHERE `#/` LANDS IS ONE FUNCTION OF WHO IS READING — and nothing while
+  // nobody has said, because a guess is a navigation the answer would undo.
+  test.each<[string, LandingViewer, string[] | null]>([
+    ["nobody has answered yet", viewer({ asking: true }), null],
+    ["the read failed", viewer({ loading: true }), ["today"]],
+    ["anonymous: the sign-in panel", viewer({ anonymous: true }), ["today"]],
+    ["a linked member", viewer({ linked: true }), ["today"]],
+    ["a linked admin, who is a person first", viewer({ linked: true, admin: true }), ["today"]],
+    ["an unlinked member key", viewer({}), ["work"]],
+    ["an unlinked admin key, a pipeline's", viewer({ admin: true }), [ADMIN_HEAD]],
+  ])("%s", (_name, who, landing) => {
+    expect(landingFor(who)).toEqual(landing);
+    // EVERY LANDING IS A SCREEN, and never the landing again.
+    if (landing) expect(resolve(landing).resolved).toBe(true);
+  });
+
+  // THE DOORS KEEP THE READER'S PLACE, BOTH WAYS. Each pair is a place and its
+  // twin, and the crossing from either side lands on the other.
+  test.each<[string, string[], { path: string[]; query?: Record<string, string> }]>([
+    ["Today and the Overview", ["today"], { path: [ADMIN_HEAD] }],
+    [
+      "a teammate and their setup",
+      ["team", "seats", "swe"],
+      { path: [ADMIN_HEAD, "agents", "seats", "swe"] },
+    ],
+    ["the people and the seats", ["team", "people"], { path: [ADMIN_HEAD, "agents"] }],
+    ["About and the Charter", ["team", "about"], { path: [ADMIN_HEAD, "company"] }],
+    [
+      "a unit and its node in Edit org",
+      ["team", "units", "Platform"],
+      { path: [ADMIN_HEAD, "company", "org"], query: { unit: "Platform" } },
+    ],
+    ["the chart and Edit org", ["team"], { path: [ADMIN_HEAD, "company", "org"] }],
+    [
+      "a task and its turns",
+      ["work", "ENG-42"],
+      { path: [ADMIN_HEAD, "live", "turns"], query: { item: "ENG-42" } },
+    ],
+  ])("%s are each other's twins", (_name, person, admin) => {
+    expect(adminPathOf(person)).toEqual(admin);
+    expect(personPathOf(admin.path, new URLSearchParams(admin.query))).toEqual({ path: person });
+  });
+
+  // A PLACE WITH NO TWIN CROSSES TO THE OTHER SHELL'S FIRST SCREEN, never to
+  // a screen that would read as being about it — and every crossing, from
+  // every fixed destination of either shell, lands on a screen.
+  test("a place with no twin crosses to the other shell's first screen, and every crossing resolves", () => {
+    expect(adminPathOf(["work", "ENG"])).toEqual({ path: [ADMIN_HEAD] });
+    expect(adminPathOf(["knowledge"])).toEqual({ path: [ADMIN_HEAD] });
+    expect(personPathOf([ADMIN_HEAD, "spend"])).toEqual({ path: ["today"] });
+    expect(personPathOf([ADMIN_HEAD, "live", "turns"])).toEqual({ path: ["today"] });
+    for (const d of DESTINATIONS) {
+      const crossing = d.shell === "admin" ? personPathOf(d.path) : adminPathOf(d.path);
+      expect(resolve(crossing.path).resolved, `#/${d.path.join("/")}`).toBe(true);
+      expect(shellOf(crossing.path), `#/${d.path.join("/")}`).not.toBe(d.shell);
+    }
+  });
+
+  // THE PHONE'S BAR IS THE TABLE'S, not a list beside it: every person-shell
+  // workspace is a tab or a row of More, exactly once, and the console has no
+  // phone bar at all.
+  test("the phone's tab bar and More sheet are derived from the table", () => {
+    expect(phoneTabs().map((w) => w.key)).toEqual(["today", "inbox", "me"]);
+    expect(phoneMore().map((w) => w.key)).toEqual(["work", "team", "knowledge"]);
+    for (const ws of WORKSPACES) {
+      const placed = [...phoneTabs(), ...phoneMore()].filter((w) => w.key === ws.key).length;
+      expect(placed, ws.key).toBe(ws.shell === "person" ? 1 : 0);
+    }
+  });
+});
+
+/** A viewer for [landingFor], every flag off unless named. */
+function viewer(over: Partial<LandingViewer>): LandingViewer {
+  return {
+    asking: false,
+    loading: false,
+    anonymous: false,
+    admin: false,
+    linked: false,
+    ...over,
+  };
+}
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
@@ -247,7 +444,8 @@ describe("the resolver", () => {
 
   // A HEAD NO ROUTE OWNS IS NOT FOUND, and there is no redirect table: a
   // redirect whose path becomes a live route sends every reader of it
-  // somewhere else, permanently.
+  // somewhere else, permanently. The heads the console's arrival retired are
+  // gone outright, as nothing ever shipped them.
   test("an address under a head no route owns is Not Found", () => {
     for (const path of [
       ["company"],
@@ -255,6 +453,12 @@ describe("the resolver", () => {
       ["activity", "turns"],
       ["cost", "budgets"],
       ["admin", "fleet"],
+      ["home"],
+      ["settings", "nodes"],
+      ["agents", "seats", "pm"],
+      ["live", "turns"],
+      ["spend", "budgets"],
+      ["admin", "settings"],
     ]) {
       expect(resolve(path).resolved, `#/${path.join("/")}`).toBe(false);
     }
@@ -263,17 +467,20 @@ describe("the resolver", () => {
   // A TRACE HAS NO LIST, and the bare address says so rather than drawing the
   // turns list under a trail that names traces.
   test("a bare traces address is Not Found, and says a trace is opened from a turn", () => {
-    const bare = resolve(["live", "traces"]);
+    const bare = resolve(["admin", "live", "traces"]);
     expect(bare.resolved).toBe(false);
     expect(bare.resolved ? "" : (bare.hint ?? "")).toMatch(/a trace has no list/);
-    expect(resolve(["live", "traces", "abc"])).toMatchObject({ screen: "trace", id: "abc" });
+    expect(resolve(["admin", "live", "traces", "abc"])).toMatchObject({
+      screen: "trace",
+      id: "abc",
+    });
   });
 
   // THE DISCRIMINANT IS NOT `kind`, because an integration's own parameter is:
-  // spread beside a `kind` discriminant, `#/settings/integrations/github`
+  // spread beside a `kind` discriminant, `#/admin/connect/integrations/github`
   // resolved to an integration called "screen".
   test("an integration's kind survives the resolver's own discriminant", () => {
-    expect(resolve(["settings", "integrations", "github"])).toMatchObject({
+    expect(resolve(["admin", "connect", "integrations", "github"])).toMatchObject({
       screen: "integrations",
       kind: "github",
     });
@@ -283,11 +490,11 @@ describe("the resolver", () => {
   // are told apart by the tail's LENGTH: a tool literally called `servers`
   // keeps its page.
   test("a tool named `servers` keeps its page, and the origin filter keeps its", () => {
-    expect(resolve(["settings", "tools", "servers"])).toMatchObject({
+    expect(resolve(["admin", "connect", "tools", "servers"])).toMatchObject({
       screen: "tools",
       tool: "servers",
     });
-    expect(resolve(["settings", "tools", "servers", "github"])).toMatchObject({
+    expect(resolve(["admin", "connect", "tools", "servers", "github"])).toMatchObject({
       screen: "tools",
       server: "github",
     });
@@ -296,15 +503,19 @@ describe("the resolver", () => {
   // HANDLES LIVE ONLY UNDER `seats/`, domains only under `backups/`: a handle
   // or a domain equal to a reserved word is still that seat or that domain.
   test("a handle or a domain equal to a reserved word keeps its page", () => {
-    expect(resolve(["agents", "seats", "roster"])).toMatchObject({
+    expect(resolve(["team", "seats", "people"])).toMatchObject({
       screen: "seat",
-      handle: "roster",
+      handle: "people",
     });
-    expect(resolve(["settings", "backups", "nodes"])).toMatchObject({
+    expect(resolve(["admin", "agents", "seats", "schedules"])).toMatchObject({
+      screen: "seat-setup",
+      handle: "schedules",
+    });
+    expect(resolve(["admin", "engine", "backups", "nodes"])).toMatchObject({
       screen: "backups",
       domain: "nodes",
     });
-    expect(resolve(["agents", "seats"]).resolved).toBe(false);
+    expect(resolve(["team", "seats"]).resolved).toBe(false);
   });
 
   // A RESERVED WORD THAT IS NOT A WORK SECTION IS NOTHING HERE. Read as an item
@@ -312,41 +523,45 @@ describe("the resolver", () => {
   test("a reserved word under a workspace that does not have it is Not Found", () => {
     expect(resolve(["work", "turns"]).resolved).toBe(false);
     expect(resolve(["knowledge", "budgets"]).resolved).toBe(false);
+    // THE SECTIONS THAT MOVED TO THE CONSOLE are nothing where they were.
+    expect(resolve(["knowledge", "skills"]).resolved).toBe(false);
+    expect(resolve(["knowledge", "diaries"]).resolved).toBe(false);
+    expect(resolve(["work", "history"]).resolved).toBe(false);
   });
 
   // A CONTAINER IS WHAT THE ENGINE KEEPS, and it keeps every key uppercased —
   // so a lowercase segment under Knowledge is a section or nothing, never a
-  // container. Without the shape, `#/knowledge/skills` (a section the plan
-  // gives Knowledge) drew a container screen asking the engine for `skills`.
+  // container. Without the shape, `#/knowledge/skills` drew a container screen
+  // asking the engine for `skills`.
   test("a container is an uppercase key, and a lowercase word is never one", () => {
     expect(resolve(["knowledge", "ENG"])).toMatchObject({ screen: "container", key: "ENG" });
     expect(resolve(["knowledge", "2026-OFFSITE"])).toMatchObject({
       screen: "container",
       key: "2026-OFFSITE",
     });
-    // `skills` is the section it was reserved for, and never a container.
-    expect(resolve(["knowledge", "skills"])).toMatchObject({ screen: "skills" });
-    // `diaries` is the other, and a handle under it is one agent's diary —
-    // a handle lives there as it does under `seats/`, so a reserved word is one.
-    expect(resolve(["knowledge", "diaries"])).toMatchObject({ screen: "diaries" });
-    expect(resolve(["knowledge", "diaries", "swe"])).toMatchObject({
+    // `skills` is Agent setup's section, and never a container.
+    expect(resolve(["admin", "agents", "skills"])).toMatchObject({ screen: "skills" });
+    // `memory` is the other, and a handle under it is one agent's diary — a
+    // handle lives there as it does under `seats/`, so a reserved word is one.
+    expect(resolve(["admin", "agents", "memory"])).toMatchObject({ screen: "memory" });
+    expect(resolve(["admin", "agents", "memory", "swe"])).toMatchObject({
       screen: "diary",
       handle: "swe",
     });
-    expect(resolve(["knowledge", "diaries", "skills"])).toMatchObject({
+    expect(resolve(["admin", "agents", "memory", "skills"])).toMatchObject({
       screen: "diary",
       handle: "skills",
     });
-    expect(resolve(["knowledge", "diaries", "swe", "x"]).resolved).toBe(false);
+    expect(resolve(["admin", "agents", "memory", "swe", "x"]).resolved).toBe(false);
     for (const word of ["diary", "eng", "Eng"]) {
       expect(resolve(["knowledge", word]).resolved, word).toBe(false);
     }
   });
 
   test("a closed set refuses the obvious typo rather than drawing the list", () => {
-    expect(resolve(["spend", "budget"]).resolved).toBe(false);
-    expect(resolve(["settings", "config", "revision"]).resolved).toBe(false);
-    expect(resolve(["settings", "audit", "x"]).resolved).toBe(false);
+    expect(resolve(["admin", "spend", "budget"]).resolved).toBe(false);
+    expect(resolve(["admin", "engine", "config", "revision"]).resolved).toBe(false);
+    expect(resolve(["admin", "company", "audit", "x"]).resolved).toBe(false);
   });
 });
 
@@ -361,17 +576,17 @@ describe("the breadcrumb", () => {
       ["work"],
       ["work", "ENG"],
       ["work", "ENG-42"],
-      ["agents", "seats", "ada"],
-      ["agents", "teams", "Platform"],
+      ["team", "seats", "ada"],
+      ["team", "units", "Platform"],
       ["knowledge", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
-      ["live", "turns", "t-1"],
-      ["settings", "config", "revisions", "r-1"],
-      ["settings", "backups", "tracker"],
+      ["admin", "live", "turns", "t-1"],
+      ["admin", "engine", "config", "revisions", "r-1"],
+      ["admin", "engine", "backups", "tracker"],
       // THE TWO-SEGMENT FORMS, which are live addresses and were the ones
       // with the blank crumb: the list of revisions, and the page of a tool
       // that happens to be called `servers`.
-      ["settings", "config", "revisions"],
-      ["settings", "tools", "servers"],
+      ["admin", "engine", "config", "revisions"],
+      ["admin", "connect", "tools", "servers"],
       ["company", "people"],
     ]) {
       const crumbs = crumbsFor(path);
@@ -397,27 +612,33 @@ describe("the breadcrumb", () => {
   });
 
   // A SECTION FOLLOWS ITS WORKSPACE, unless it IS the landing page: the chart
-  // is "Agents", the roster "Agents › Roster".
+  // is "Team", the people "Team › People & agents" — and the console's the
+  // same, so the Charter is "Company" and Audit log "Company › Audit log".
   test("a section is named after its workspace, and the landing section is not", () => {
-    expect(crumbsFor(["agents"]).map((c) => c.label)).toEqual(["Agents"]);
-    expect(crumbsFor(["agents", "roster"]).map((c) => c.label)).toEqual(["Agents", "Roster"]);
-    expect(crumbsFor(["settings", "integrations"]).map((c) => c.label)).toEqual([
-      "Settings",
-      "Integrations",
+    expect(crumbsFor(["team"]).map((c) => c.label)).toEqual(["Team"]);
+    expect(crumbsFor(["team", "people"]).map((c) => c.label)).toEqual(["Team", "People & agents"]);
+    expect(crumbsFor(["admin", "connect"]).map((c) => c.label)).toEqual(["Connect"]);
+    expect(crumbsFor(["admin", "company", "audit"]).map((c) => c.label)).toEqual([
+      "Company",
+      "Audit log",
     ]);
   });
 
-  // EXCEPT SETTINGS', whose landing is one of the column's sections: the
-  // charter's page said only "Settings", and nothing but the column's selected
-  // row said it was General.
-  test("Settings' landing is named General in the trail", () => {
-    const crumbs = crumbsFor(["settings"]);
-    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "General"]);
-    expect(titleOf(crumbs)).toBe("General");
+  // A SEAT IS FILED UNDER ITS OWN SHELL: a teammate under Team, and the same
+  // seat's setup under Agent setup — never a crumb that crosses the door.
+  test("a seat's trail stays in the shell its page is in", () => {
+    expect(crumbsFor(["team", "seats", "swe"])[0]?.label).toBe("Team");
+    const setup = crumbsFor([ADMIN_HEAD, "agents", "seats", "swe"]);
+    expect(setup.map((c) => c.label)).toEqual(["Agent setup", "swe"]);
+    for (const crumb of setup.slice(0, -1))
+      expect(shellOf(crumb.path ?? []), crumb.label).toBe("admin");
   });
 
   test("a path the table does not have is named Not Found, under its workspace if any", () => {
-    expect(crumbsFor(["live", "traces"]).map((c) => c.label)).toEqual(["Live", "Not found"]);
+    expect(crumbsFor(["admin", "live", "traces"]).map((c) => c.label)).toEqual([
+      "Live",
+      "Not found",
+    ]);
     expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Not found"]);
   });
 
@@ -438,15 +659,15 @@ describe("the breadcrumb", () => {
   // handle is drawn in the mono face and a resolved name is not. A unit's
   // segment IS its name, so that one is deliberately not mono.
   test("a seat's crumb is its name, and an unnamed handle is an identifier", () => {
-    const raw = crumbsFor(["agents", "seats", "agent-cto"]);
+    const raw = crumbsFor(["team", "seats", "agent-cto"]);
     expect(raw[raw.length - 1]?.label).toBe("agent-cto");
     expect(raw[raw.length - 1]?.mono, "a slug drawn as prose reads as a name").toBe(true);
-    const named = crumbsFor(["agents", "seats", "agent-cto"], {
+    const named = crumbsFor(["team", "seats", "agent-cto"], {
       "agent-cto": "Chief Technology Officer",
     });
     expect(named[named.length - 1]?.label).toBe("Chief Technology Officer");
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
-    const unit = crumbsFor(["agents", "teams", "Platform"]);
+    const unit = crumbsFor(["team", "units", "Platform"]);
     expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
   });
 
@@ -457,11 +678,11 @@ describe("the breadcrumb", () => {
   // crumb printed `harness-0` in one face over a title in another.
   test("a node, a secret, a server, a domain and a model are named in the trail as their pages title them", () => {
     for (const path of [
-      ["settings", "nodes", "harness-0"],
-      ["settings", "secrets", "GITHUB_TOKEN"],
-      ["settings", "tools", "servers", "github"],
-      ["settings", "backups", "tracker"],
-      ["settings", "models", "claude-opus"],
+      ["admin", "engine", "nodes", "harness-0"],
+      ["admin", "connect", "secrets", "GITHUB_TOKEN"],
+      ["admin", "connect", "tools", "servers", "github"],
+      ["admin", "engine", "backups", "tracker"],
+      ["admin", "connect", "models", "claude-opus"],
     ]) {
       const crumbs = crumbsFor(path);
       const last = crumbs[crumbs.length - 1];
@@ -476,27 +697,18 @@ describe("the breadcrumb", () => {
     expect(titleOf(crumbsFor(["work", "ENG-42"], { "ENG-42": "Fix the applier" }))).toBe(
       "Fix the applier",
     );
-    expect(titleOf(crumbsFor(["live", "turns"]))).toBe("Turns");
+    expect(titleOf(crumbsFor(["admin", "live", "turns"]))).toBe("Turns");
   });
 });
 
 // EVERY FIXED DESTINATION NAMES ITSELF IN THE TRAIL, from the one table — a
 // section that fell through to an object branch read as "Work / Item /
 // search", a trail naming a page that does not exist.
-//
-// A COLUMN'S LANDING NAMES ITS SECTION: Settings draws General as a row of its
-// column like any other, so its page is "Settings › General" while the
-// palette's destination is still the workspace.
 test("every fixed destination names itself rather than reading as a key", () => {
   for (const dest of DESTINATIONS) {
     const crumbs = crumbsFor(dest.path);
     const last = crumbs[crumbs.length - 1];
-    const row = workspaceRow(dest.workspace)!;
-    const landing =
-      row.renderer === "column" && samePath(dest.path, row.path)
-        ? row.sections.find((s) => samePath(s.path, row.path))
-        : undefined;
-    expect(last?.label, `#/${dest.path.join("/")}`).toBe(landing?.label ?? dest.label);
+    expect(last?.label, `#/${dest.path.join("/")}`).toBe(dest.label);
     expect(last?.path, `#/${dest.path.join("/")} links to itself`).toBeUndefined();
   }
 });
@@ -510,12 +722,12 @@ test("every fixed destination names itself rather than reading as a key", () => 
 test("three fixed ancestors is the deepest trail the route table produces", () => {
   const three: [string[], string[]][] = [
     [
-      ["settings", "config", "revisions", "01JCFG"],
-      ["Settings", "Configuration", "Revisions"],
+      ["admin", "engine", "config", "revisions", "01JCFG"],
+      ["Engine", "Configuration", "Revisions"],
     ],
     [
-      ["settings", "tools", "servers", "github"],
-      ["Settings", "Tools & MCP", "Servers"],
+      ["admin", "connect", "tools", "servers", "github"],
+      ["Connect", "Tools & MCP", "Servers"],
     ],
   ];
   for (const [path, ancestry] of three) {
@@ -611,7 +823,7 @@ describe("the information architecture", () => {
     const routes = new Set(documented().map((r) => r.replace(/^#\/$/, "#/")));
     const paths = [
       ...WORKSPACES.map((w) => w.path),
-      ...WORKSPACES.flatMap((w) => w.sections.filter((s) => !s.elsewhere).map((s) => s.path)),
+      ...WORKSPACES.flatMap((w) => w.sections.map((s) => s.path)),
       ...DESTINATIONS.map((d) => d.path),
     ];
     for (const path of paths) {

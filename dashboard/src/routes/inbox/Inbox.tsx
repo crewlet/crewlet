@@ -21,7 +21,7 @@
  * # What is where
  *
  * The ENGINE's own conditions (no configuration, a draining node, a refused
- * token) are the sidebar's health card and Home's sentence, on every screen,
+ * token) are the console's health card and the Overview's sentence,
  * and a stalled round or the company's parked runs are Live's; this list
  * holds only what a person decides (`WHERE_OF`). The scope is a question to
  * the engine (Unread, All, Snoozed — `snoozed=exclude|include|only`), and the
@@ -144,7 +144,7 @@ export function Inbox() {
       inboxRows({
         scope,
         // EVERY SEAT STOPPED ON ITS BUDGET, not only the ones this reader can
-        // raise or hand on: Home counts the rest as conditions that need a
+        // raise or hand on: the Overview counts the rest as conditions that need a
         // look and sends the reader here, and a list that dropped them would
         // be the one place that count is not drawn. The row's own controls
         // say why a reader who cannot act cannot.

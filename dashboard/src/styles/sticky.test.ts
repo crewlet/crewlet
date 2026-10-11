@@ -69,7 +69,7 @@ test("the toolbar owns the top of the scroller and publishes where it ends", () 
  * with a toolbar: each names why, and each must still stick at 0.
  */
 const BESIDE: Record<string, string> = {
-  // The Settings column is the first track of `.section-frame` and a screen's
+  // The tree column is the first track of `.section-frame` and a screen's
   // toolbar is inside the SECOND, `.section-body` — so the two never overlap,
   // and an offset would park the column a toolbar's height down for nothing.
   "frame.css .section-column": "beside the section body, never under its toolbar",

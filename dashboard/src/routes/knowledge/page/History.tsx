@@ -284,7 +284,10 @@ export function PageChanges({
                 )}
                 <span className="spacer" />
                 {change.turn_id && (
-                  <a className="t-link t-caption" href={href(["live", "turns", change.turn_id])}>
+                  <a
+                    className="t-link t-caption"
+                    href={href(["admin", "live", "turns", change.turn_id])}
+                  >
                     turn →
                   </a>
                 )}

@@ -44,7 +44,7 @@ export function scopeOf(raw: string): Scope {
  * NOT THE EIGHTEEN REASONS. Every notice still says its own reason on its row
  * (`contract/reasons.ts`), and the chips are the four questions a person asks
  * of the list: what needs my decision, what needs my sign-off, who mentioned
- * me, what was handed to me. `decisions` is Home's `DECISIONS_VIEW`, so its
+ * me, what was handed to me. `decisions` is the Overview's `DECISIONS_VIEW`, so its
  * "Review" lands on this chip.
  */
 export const CHIPS = [

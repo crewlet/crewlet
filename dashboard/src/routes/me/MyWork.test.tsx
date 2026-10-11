@@ -35,7 +35,7 @@ import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
+import { queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
@@ -222,16 +222,13 @@ function task(over: Partial<WorkSummary> = {}): WorkSummary {
 }
 
 /** Mount one section, the way the router's resolver hands it over — inside
- *  the two frame readings it reads: who the viewer is, and their own Queue
- *  count. */
+ *  the frame reading it reads: who the viewer is. */
 function mount(section: MeSection = "queue") {
   return render(
     <ViewerProvider>
-      <QueueCountProvider>
-        <Router>
-          <MyWork section={section} />
-        </Router>
-      </QueueCountProvider>
+      <Router>
+        <MyWork section={section} />
+      </Router>
     </ViewerProvider>,
   );
 }
@@ -344,7 +341,7 @@ test("the banner names whose day it is and links to their seat", async () => {
   });
   mount();
   const chip = await screen.findByRole("link", { name: /Rui Santos/ });
-  expect(chip.getAttribute("href")).toBe("#/agents/seats/rui");
+  expect(chip.getAttribute("href")).toBe("#/team/seats/rui");
   expect(screen.getByText("rui")).toBeTruthy();
   expect(screen.getByText("their day")).toBeTruthy();
 });
@@ -361,9 +358,13 @@ test("the banner names whose day it is and links to their seat", async () => {
 test("every claim is a section, and its count is published unopened", async () => {
   serving({
     viewer: ada,
-    // THE TWO LIST SECTIONS ARE THE TRACKER'S OWN COUNTS, each its own
-    // question: the work held, and the work a question is waiting on.
-    work_items: (p: Record<string, unknown>) => ({ ...noWork, total_hint: p.asked_by ? 3 : 7 }),
+    // THE THREE LIST SECTIONS ARE THE TRACKER'S OWN COUNTS, each its own
+    // question: the work held, the work a question is waiting on, and the
+    // work this person handed to somebody else.
+    work_items: (p: Record<string, unknown>) => ({
+      ...noWork,
+      total_hint: p.asked_by ? 3 : p.handed_off_by ? 4 : 7,
+    }),
     work_my_work: {
       ...emptyDay,
       asked_of_me: [
@@ -389,13 +390,15 @@ test("every claim is a section, and its count is published unopened", async () =
   mount();
   await waitFor(async () => expect((await counts()).queue).toBe("7"));
   await waitFor(async () => expect((await counts())["asked-by-me"]).toBe("3"));
+  await waitFor(async () => expect((await counts())["handed-off"]).toBe("4"));
   expect(await counts()).toEqual({
     queue: "7",
     "asked-of-me": "1",
     "asked-by-me": "3",
-    unblocked: "0",
-    collaborating: "0",
-    watching: "2",
+    "handed-off": "4",
+    ready: "0",
+    helping: "0",
+    following: "2",
     checklist: "0",
   });
 });
@@ -415,7 +418,7 @@ test("a claim's count is the engine's total, not the length of its page", async 
     },
   });
   mount();
-  expect((await counts()).collaborating).toBe("130");
+  expect((await counts()).helping).toBe("130");
 });
 
 // AND A `+` ONLY WHERE THE ENGINE'S OWN COUNT STOPPED: a capped total is a
@@ -430,7 +433,7 @@ test("a capped claim total says it is a floor", async () => {
     },
   });
   mount();
-  expect((await counts()).watching).toBe(`${(10000).toLocaleString()}+`);
+  expect((await counts()).following).toBe(`${(10000).toLocaleString()}+`);
 });
 
 // AND ASSIGNED ESCAPES IT, by asking the tracker's own question: `total_hint`
@@ -458,11 +461,10 @@ test("a capped assignment count says it is a floor", async () => {
   await waitFor(async () => expect((await counts()).queue).toBe(`${(10000).toLocaleString()}+`));
 });
 
-// ONE FIGURE, ONE READ. On the reader's own day the Queue's count is the
-// frame's reading — the one the sidebar's My work row draws — so the tab and
-// the row cannot name two numbers after a change; this screen asks its own
-// only for somebody else's day. Two reads of one question poll on two clocks.
-test("on your own day the Queue's count is the sidebar's reading, not a second one", async () => {
+// ONE FIGURE, ONE READ. The Queue's count is asked once, by this screen, for
+// the day on it: two reads of one question poll on two clocks and name two
+// numbers for most of a minute after a change.
+test("on your own day the Queue's count is one read of your own work", async () => {
   const query = serving({
     viewer: ada,
     work_my_work: emptyDay,
@@ -499,8 +501,9 @@ test("on somebody else's day the Queue counts their work, with its own read", as
         (c[1] as Record<string, unknown>)?.assignee,
     )
     .map((c) => (c[1] as Record<string, unknown>).assignee);
-  // THE FRAME'S READ IS THE VIEWER'S, whatever day is on screen.
-  expect(new Set(assignees)).toEqual(new Set(["ada", "rui"]));
+  // THE DAY ON SCREEN IS THE ONE COUNTED — nothing reads the viewer's own
+  // queue beside it, since nothing outside My work draws that figure.
+  expect(new Set(assignees)).toEqual(new Set(["rui"]));
 });
 
 // NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the section a
@@ -528,7 +531,7 @@ test("the queue claims no count until the tracker answers", async () => {
   // ABSENT, not an empty string the header has to know to skip: the other
   // sections answered, and the queue is simply not among them.
   const figures = await counts();
-  expect(figures.watching).toBe("0");
+  expect(figures.following).toBe("0");
   expect(figures).not.toHaveProperty("queue");
 });
 
@@ -604,14 +607,16 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
   });
   mount();
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
-  // EVERY READ OF THE QUEUE — the list and its count; Asked by me's own
-  // count is a different question, held to the asker instead, and the frame's
-  // count of the VIEWER's own queue is the sidebar's, whatever day is open.
+  // EVERY READ OF THE QUEUE — the list and its count; Asked by me's and
+  // Handed off's own counts are different questions, held to the asker and to
+  // the person who filed, and the frame's count of the VIEWER's own queue is
+  // the frame's, whatever day is open.
   const frames = JSON.stringify(queueCountParams("ada"));
   const items = query.mock.calls.filter(
     (c) =>
       c[0] === "work_items" &&
       !(c[1] as Record<string, unknown>).asked_by &&
+      !(c[1] as Record<string, unknown>).handed_off_by &&
       JSON.stringify(c[1]) !== frames,
   );
   expect(items.length).toBeGreaterThan(0);
@@ -645,9 +650,9 @@ test("the hosted list draws no saved-view strip and asks for none", async () => 
 // product does not have that" — which a section cannot do, because its tab is
 // still in the header.
 test("an empty claim says what would be in it", async () => {
-  location.hash = "#/me/unblocked";
+  location.hash = "#/me/ready";
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
-  mount("unblocked");
+  mount("ready");
   await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
   expect(screen.getByText(/has become workable for you/)).toBeTruthy();
 });
@@ -697,7 +702,7 @@ const adaActs = {
   acts: ["comment_on_work_item", "set_priorities", "update_work_item", "place_work_item"],
 };
 
-// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND — the row Home
+// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND — the row Today
 // draws, with the options as the answer. The literal tool call this section
 // once printed was the gesture a person's assistant makes; the dashboard makes
 // it itself now, as the person (ADR-0024).
@@ -831,6 +836,60 @@ test("asked by me opens on every status", async () => {
   expect(list.status_group).toBeUndefined();
   expect(list.show_closed).toBe("true");
   await waitFor(() => expect(screen.getByText("You are not waiting on an answer")).toBeTruthy());
+});
+
+// ---------------------------------------------------------------------------
+// Handed off
+// ---------------------------------------------------------------------------
+
+// WHAT THIS PERSON HANDED OFF is the work list held to `handed_off_by` — the
+// work they filed and somebody else holds, or nobody yet — with the person as
+// the viewer, for the reason Asked by me gives: work they filed through their
+// own credential is reported by the TOKEN, and the engine counts it as theirs
+// only for the viewer it knows both names of.
+test("handed off lists the work the person filed for somebody else, under both names", async () => {
+  location.hash = "#/me/handed-off?handle=rui";
+  const query = serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, handle: "rui" },
+    work_items: (p: Record<string, unknown>) =>
+      p.handed_off_by === "rui" && p.viewer === "rui"
+        ? {
+            ...noWork,
+            items: [task({ key: "ENG-78", title: "Handed to the CTO" })],
+            total_hint: 1,
+          }
+        : noWork,
+  });
+  mount("handed-off");
+  await waitFor(() => expect(screen.getByText("Handed to the CTO")).toBeTruthy());
+  const asked = query.mock.calls
+    .filter((c) => c[0] === "work_items" && (c[1] as Record<string, unknown>).handed_off_by)
+    .map((c) => c[1] as Record<string, unknown>);
+  // THE LIST AND ITS COUNT, both held to the person.
+  expect(asked.some((p) => p.limit === 1)).toBe(true);
+  expect(asked.some((p) => p.limit !== 1)).toBe(true);
+  for (const params of asked) {
+    expect(params.handed_off_by).toBe("rui");
+    expect(params.viewer).toBe("rui");
+    expect(params.asked_by).toBeUndefined();
+  }
+  expect((await counts())["handed-off"]).toBe("1");
+  // THE LIST OPENS ON WHERE EACH PIECE STANDS, and on the open work.
+  const list = asked.find((p) => p.limit !== 1)!;
+  expect(list.group_by).toBe("status_group");
+  expect(list.show_closed).toBeUndefined();
+  // NOT A CHIP AND NOT A KEY: the person is what the section IS.
+  expect(location.hash).not.toContain("handed_off_by=");
+});
+
+// AN EMPTY HAND-OFF LIST NAMES HOW IT FILLS, in the reader's own voice.
+test("an empty handed off says what would be in it", async () => {
+  location.hash = "#/me/handed-off";
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount("handed-off");
+  await waitFor(() => expect(screen.getByText("Nothing you handed off is open")).toBeTruthy());
+  expect(screen.getByText(/Hand off puts the first piece here/)).toBeTruthy();
 });
 
 /** One day whose queue somebody else put in order. */
@@ -1159,7 +1218,7 @@ test("an unbound key gets the binding sentence, not a menu of refusals", async (
 
 // THE ORDER IS THE CONTENT, so it is DRAWN. Every other panel on this screen is
 // a set somebody has a claim on; Priorities is a sequence somebody decided,
-// and as an ordinary run of rows it reads exactly like the Watching list
+// and as an ordinary run of rows it reads exactly like the Following list
 // beside it — the one thing the tab is about, invisible.
 test("the priorities are numbered in the order they were stored", async () => {
   location.hash = "#/me?order=priorities";
@@ -1219,13 +1278,13 @@ test("the priorities say how many they hold and how many are the person's own", 
 // AND NO OTHER CLAIM IS NUMBERED. A place on a list that nobody arranged is a
 // rank the engine never stored, read as one somebody did.
 test("a claim that is a set rather than a sequence draws no places", async () => {
-  location.hash = "#/me/watching";
+  location.hash = "#/me/following";
   serving({
     viewer: ada,
     work_items: noWork,
     work_my_work: { ...emptyDay, watching_recent: [task({ key: "ENG-3" })] },
   });
-  const { container } = mount("watching");
+  const { container } = mount("following");
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
   expect(container.querySelector(".work-cell-ord")).toBeNull();
 });

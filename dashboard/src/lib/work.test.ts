@@ -1670,6 +1670,31 @@ test("an asker's lock carries the asker and the same person as the viewer, on ev
   }
 });
 
+// A HAND-OFF LOCK IS THE ASKER'S, read at the other end: the person who filed
+// the work, and the same person as the viewer, on every shape — the engine
+// gives a `handed_off_by` its second name only for the viewer, and a branch
+// that dropped it counted a founder's own work filed through their assistant
+// as a hand-off.
+test("a hand-off lock carries the person and the same person as the viewer, on every shape", () => {
+  const shapes: Shape[] = ["list", "table", "board", "calendar", "timeline"];
+  for (const shape of shapes) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape,
+      view: { handed_off_by: "rui", viewer: "rui" },
+      filters: { ...NO_FILTERS, assignee: "cto" },
+      range: shape === "calendar" ? { from: "2026-03-01", to: "2026-04-05" } : undefined,
+      lock: { handed_off_by: "ada" },
+    });
+    expect(params.handed_off_by, shape).toBe("ada");
+    expect(params.viewer, shape).toBe("ada");
+    expect(params.asked_by, shape).toBeUndefined();
+    // WHO HOLDS IT stays the reader's own filter: "which of my hand-offs is
+    // with the CTO" is a question somebody asks.
+    expect(params.assignee, shape).toBe("cto");
+  }
+});
+
 // AND NO LOCK LEAVES THE KEY ALONE, which is what keeps `#/work` the screen it
 // was: the assignee filter there is a chip a reader added and can take off.
 test("without a lock the assignee is whatever the reader and the view said", () => {

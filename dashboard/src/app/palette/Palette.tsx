@@ -72,7 +72,7 @@ import {
   UsersGlyph,
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator, useRoute } from "../router.tsx";
+import { useNavigator, useRoute, useShell } from "../router.tsx";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -88,6 +88,7 @@ import {
   labelOf,
   nameOfIn,
   ringOf,
+  seatPath,
   stateLine,
   workingLongestFirst,
   type Seat,
@@ -170,6 +171,7 @@ export function CommandPalette({
   onShowKeys: () => void;
 }) {
   const nav = useNavigator();
+  const shell = useShell();
   const route = useRoute();
   const viewer = useViewer();
   const prefs = useViewerPrefs();
@@ -648,7 +650,7 @@ export function CommandPalette({
     }
     const local = matchingSeats(index, lower, Infinity).filter((s) => !why.has(s.handle));
     const seats = [...byEngine, ...local];
-    const open = (seat: Seat) => () => nav.to(["agents", "seats", seat.handle]);
+    const open = (seat: Seat) => () => nav.to(seatPath(seat, shell));
     const agentsRows = seats
       .filter((s) => s.kind === "agent")
       .slice(0, cap)
@@ -672,7 +674,7 @@ export function CommandPalette({
           hint: `${unit.type || "team"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
           // BY NAME: a unit's `id:` is part of the guarded configuration,
           // not the public projection, so no link built here carries one.
-          onSelect: () => nav.to(["agents", "teams", unit.name]),
+          onSelect: () => nav.to(["team", "units", unit.name]),
         })),
       });
     }
@@ -798,15 +800,25 @@ export function CommandPalette({
   } else if (scope === "all") {
     if (!term) {
       push("recent", "Recent", asItems(recentHits(recents, nav)));
-      push("running", "Running now", runningRows());
-      push("go", "Go to", asItems(destinationHits("", nav, Infinity)));
+      if (viewer.admin) push("running", "Running now", runningRows());
+      push("go", "Go to", asItems(destinationHits("", nav, Infinity, "person")));
+      // THE CONSOLE'S SCREENS, an admin's and nobody else's: their rows cross
+      // the door, and a member is never offered an address their key does
+      // not reach.
+      if (viewer.admin)
+        push("admin", "Admin", asItems(destinationHits("", nav, Infinity, "admin")));
     } else {
-      push("ids", "Open by id", asItems(idHits(term, nav)));
-      push("go", "Go to", asItems(destinationHits(lower, nav, GO_TO_ROWS)));
+      // A PASTED ID OPENS AS AN EVENT OR A TRACE, which are the console's.
+      if (viewer.admin) push("ids", "Open by id", asItems(idHits(term, nav)));
+      push("go", "Go to", asItems(destinationHits(lower, nav, GO_TO_ROWS, "person")));
+      if (viewer.admin) {
+        push("admin", "Admin", asItems(destinationHits(lower, nav, GO_TO_ROWS, "admin")));
+      }
       push("tasks", "Tasks", taskRows(allRows));
       push("pages", "Pages", pageRows(allRows));
       for (const g of agentGroups(ALL_ROWS, true)) push(g.id, g.label, g.items);
-      push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
+      // THE TOOL CATALOGUE IS THE CONSOLE'S (the `tools` push is an admin's).
+      if (viewer.admin) push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
       push("actions", "Actions", actionRows());
       const drawn = new Set([
         ...(taskAnswer.data?.hits ?? []).slice(0, allRows).map((h) => `task:${h.key}`),

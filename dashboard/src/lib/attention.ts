@@ -61,10 +61,10 @@ export const SUBJECTS: Record<Subject, string> = {
  * WHERE A CONDITION IS SHOWN — one home per subject, so no condition is drawn
  * twice and none is drawn nowhere.
  *
- *  - `seat`: the Inbox's "Needs a decision" group and Home's count of
+ *  - `seat`: the Inbox's "Needs a decision" group and the Overview's count of
  *    conditions that need a look. A person decides these — raise a ceiling,
  *    resume a paused seat, look at one that failed.
- *  - `engine`: the sidebar's health card and Home's status sentence, which
+ *  - `engine`: the console's health card and the Overview's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
  *    about the product they are looking at, not an item in anybody's queue.
  *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
@@ -97,7 +97,7 @@ export function watchedIn(where: Where): string {
 
 /**
  * The conditions a PERSON decides — the Inbox's "Needs a decision" rows beside
- * the asks and runs, and what Home counts as needing a look.
+ * the asks and runs, and what the Overview counts as needing a look.
  *
  * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
  * stopped for it is already a decision row of its own
@@ -191,7 +191,7 @@ const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
  * (`OrgIndex.byHandle`).
  */
 function seatPage(agent: AgentRow): Pick<Attention, "path"> {
-  return { path: ["agents", "seats", agent.handle] };
+  return { path: ["admin", "agents", "seats", agent.handle] };
 }
 
 export function attentionQueue(input: AttentionInput): Attention[] {
@@ -236,7 +236,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
-      path: ["settings", "config"],
+      path: ["admin", "engine", "config"],
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
@@ -250,7 +250,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         engine.posture === "shed"
           ? "It has released its seats because it could not reach the configuration it is supposed to run."
           : "It cannot converge on the fleet's active configuration.",
-      path: ["settings", "nodes"],
+      path: ["admin", "engine"],
     });
   }
   if (engine?.shutting_down) {
@@ -261,7 +261,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "power",
       title: "This node is draining",
       detail: `${plural(engine.in_flight ?? 0, "turn")} still in flight. Seats are released as each finishes.`,
-      path: ["settings", "nodes"],
+      path: ["admin", "engine"],
     });
   }
 
@@ -285,7 +285,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
       detail: `${refusalWords(orgRefusing, now)} ${wayOut("the company's", orgRefusing, zone)}`,
-      path: ["spend"],
+      path: ["admin", "spend"],
       at: orgRefusing.refused_at,
     });
   } else if (orgNear) {
@@ -296,7 +296,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
       detail: `${spentWords(orgNear)} ${wayOut("the company's", orgNear, zone)}`,
-      path: ["spend"],
+      path: ["admin", "spend"],
     });
   }
 
@@ -315,9 +315,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
+      // THE RUN'S OWN PATH. It was `#/admin/live/runs?run=`, which the runs
       // screen stopped reading when a run became an object with an address.
-      path: ["live", "runs", run.turn_id],
+      path: ["admin", "live", "runs", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.

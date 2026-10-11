@@ -30,10 +30,10 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { Rollup } from "~/protocol/index.ts";
-import { TurnScreen } from "~/routes/live/Turn.tsx";
-import { SeatScreen } from "~/routes/agents/Seat.tsx";
-import { Spend } from "~/routes/spend/Spend.tsx";
-import { Home } from "~/routes/home/Home.tsx";
+import { TurnScreen } from "~/routes/admin/live/Turn.tsx";
+import { SeatScreen } from "~/routes/admin/agents/Seat.tsx";
+import { Spend } from "~/routes/admin/spend/Spend.tsx";
+import { Overview } from "~/routes/admin/overview/Overview.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -516,8 +516,8 @@ describe("the screens", () => {
   // Each case waits for the fixture's TOKEN count first: a screen that never
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
-    ["the landing screen", "#/home", <Home />, { token_series: series() }],
-    ["spend", "#/spend", <Spend />, { token_series: series(), tokens: rollup() }],
+    ["the console's Overview", "#/admin", <Overview />, { token_series: series() }],
+    ["Spend", "#/admin/spend", <Spend />, { token_series: series(), tokens: rollup() }],
     [
       "the task page",
       "#/work/ENG-42",
@@ -541,15 +541,15 @@ describe("the screens", () => {
     ],
     [
       // WHERE ITS TOKENS GO: the week's rollup, by phase and by model.
-      "the profile's turns",
-      "#/agents/seats/ceo?tab=turns",
+      "the seat's setup, on its turns",
+      "#/admin/agents/seats/ceo?tab=turns",
       <SeatScreen handle="ceo" />,
       { tokens: rollup(), turns: { turns: [], next: null } },
     ],
     [
       // THE WEEK'S TILE, from the usage domain's own row.
-      "the profile",
-      "#/agents/seats/ceo",
+      "the seat's setup",
+      "#/admin/agents/seats/ceo",
       <SeatScreen handle="ceo" />,
       {
         seat_activity: {
@@ -592,7 +592,7 @@ describe("the screens", () => {
       // THE TRANSCRIPT TAB, where the phase's own record — the one carrying
       // every name a price travels under — is drawn as its card.
       "the trace",
-      "#/live/turns/t-1?tab=transcript",
+      "#/admin/live/turns/t-1?tab=transcript",
       <TurnScreen turnId="t-1" />,
       {
         turn: {

@@ -1,5 +1,5 @@
 /**
- * The one reading of where a running turn is — shared by Home's Live now and a
+ * The one reading of where a running turn is — shared by the Overview's Live now and a
  * seat's Current turn card, so two rows can never disagree about one seat.
  */
 

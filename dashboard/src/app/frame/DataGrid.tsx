@@ -35,7 +35,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useParam } from "../router.tsx";
+import { useParam, useShell } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
 import { Button, EmptyState, cx } from "@crewlethq/ui";
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
@@ -633,7 +633,8 @@ export function DataGrid<T>({
   // peek beside it describes. `isSelected` stays for a mark that is not the
   // peek — the credential a path addresses, the revision the Diff lens reads.
   const peek = usePeek();
-  const peeked = peek ? peekHref(peek) : "";
+  const shell = useShell();
+  const peeked = peek ? peekHref(peek, shell) : "";
   const shownKeys = shownColumns.map((c) => c.key).join(",");
   const [fit, setFit] = useState<Fit>(NO_FIT);
   const dropped = !phone && fit.set === shownKeys ? fit.dropped : NO_DROPS;

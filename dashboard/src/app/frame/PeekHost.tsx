@@ -36,6 +36,7 @@ import {
 } from "react";
 
 import { DetailRail, usePeek, usePeekControls } from "./DetailRail.tsx";
+import { useShell } from "../router.tsx";
 import { PEEKS } from "./peeks.tsx";
 import { PeekBoundary } from "../boundaries.tsx";
 import { refToken, type ObjectRef } from "./objects.ts";
@@ -119,6 +120,7 @@ export function usePeekStep(): ((delta: -1 | 1) => void) | undefined {
 
 export function PeekHost() {
   const object = usePeek();
+  const shell = useShell();
   const { close } = usePeekControls();
   const host = useContext(NeighbourContext);
   const refs = host?.refs ?? [];
@@ -127,7 +129,7 @@ export function PeekHost() {
   // A KIND WITH NO BODY CLOSES THE RAIL rather than opening it empty. A
   // `peek=` naming a kind this build cannot render is a hand-edited or
   // out-of-date URL, and an empty panel over the list says less than no panel.
-  const body = object ? PEEKS[object.kind] : undefined;
+  const body = object ? PEEKS[shell][object.kind] : undefined;
   useEffect(() => {
     if (object && !body) close();
   }, [object, body, close]);

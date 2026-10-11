@@ -447,39 +447,27 @@ test("above a phone the spaces are always drawn", async () => {
   }
 });
 
-// THE AGENT SKILLS ROW COUNTS WHAT THE ENGINE COUNTS: the listing's total of
-// published tool skills, never the length of a window.
-test("the Agent skills row carries the engine's total of tool skills", async () => {
+// THE TREE IS THE COMPANY'S KNOWLEDGE AND NOTHING ELSE. Its two rows under the
+// spaces — the tool skills and the agents' diaries — were how the machine runs
+// its agents, and they are the console's: a row here was a link out of the
+// person shell into an address a member's key does not reach, and a
+// `memory_overview` on every Knowledge screen was a question about the machine.
+test("the tree links into no console section and asks nothing about the agents' memory", async () => {
   const asked = mount({
     knowledge: everyMode,
-    containers: () => ({ containers: [] }),
-    pages: (params) =>
-      params.skills ? { pages: [], limit: 1, total: 42 } : { pages: [], limit: 500, total: 0 },
+    containers: () => ({
+      containers: [{ key: "ENG", name: "Engineering", pages: 3, owners: [] }],
+    }),
+    pages: () => ({ pages: [], limit: 500, total: 0 }),
+    memory_overview: () => ({
+      seats: [{ handle: "swe" }],
+      coverage: { nodes: [], complete: true },
+    }),
   });
-  const row = await screen.findByRole("link", { name: /Agent skills/ });
-  await waitFor(() => expect(row.textContent).toContain("42"));
-  expect(row.getAttribute("href")).toBe("#/knowledge/skills");
-  expect(asked.find((a) => a.what === "pages" && a.params.skills)?.params).toMatchObject({
-    skills: true,
-    status: "published",
-    limit: 1,
-  });
-});
-
-// THE AGENT DIARIES ROW COUNTS THE AGENTS `memory_overview` LISTS — every agent
-// seat in the chart, which is what its screen draws — and it is current on one
-// agent's diary as on the list.
-test("the Agent diaries row counts every agent the overview lists", async () => {
-  location.hash = "#/knowledge/diaries/swe";
-  const seats = Array.from({ length: 15 }, (_, i) => ({ handle: `agent-${i}` }));
-  mount({
-    knowledge: everyMode,
-    containers: () => ({ containers: [] }),
-    pages: () => ({ pages: [], limit: 1, total: 0 }),
-    memory_overview: () => ({ seats, coverage: { nodes: [], complete: true } }),
-  });
-  const row = await screen.findByRole("link", { name: /Agent diaries/ });
-  await waitFor(() => expect(row.textContent).toContain("15"));
-  expect(row.getAttribute("href")).toBe("#/knowledge/diaries");
-  expect(row.getAttribute("aria-current")).toBe("page");
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const tree = screen.getByRole("navigation", { name: "Knowledge" });
+  expect(tree.querySelector('a[href^="#/admin"]')).toBeNull();
+  expect(screen.queryByRole("link", { name: /Agent skills|Agent diaries/ })).toBeNull();
+  expect(asked.some((a) => a.what === "memory_overview")).toBe(false);
+  expect(asked.some((a) => a.what === "pages" && a.params.skills === true)).toBe(false);
 });

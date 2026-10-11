@@ -183,7 +183,7 @@ export function HealthCard({
     );
   }
   return (
-    <a className="health-card" data-tone={reading.tone} href={href(["settings", "nodes"])}>
+    <a className="health-card" data-tone={reading.tone} href={href(["admin", "engine"])}>
       {body}
     </a>
   );

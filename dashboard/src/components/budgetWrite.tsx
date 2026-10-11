@@ -7,7 +7,7 @@
  *    screen: the ceiling is the figure beside the bar, and the pencil beside
  *    it turns that figure into a field;
  *  - [RaiseBudgetDialog] — ONE SCOPE's three windows at once, opened from
- *    where a stopped seat is reported (Home, the Inbox) with the window it is
+ *    where a stopped seat is reported (the Overview, the Inbox) with the window it is
  *    stopped in focused, because the person answering "raise it" should not
  *    have to find the seat on another screen first.
  *

@@ -585,7 +585,7 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	// nil slice here encodes as `"projects": null` and the only client of
 	// this answer reads `projects?.length === 0` to decide whether the
 	// company has any. On a company with none that test was `undefined ===
-	// 0` — false — so the landing screen drew the ordinary list instead of
+	// 0` — false — so the work screen drew the ordinary list instead of
 	// the panel that says where a project comes from, and did it on exactly
 	// the day-one state the panel exists for. Every fixture said `[]`,
 	// because a fixture is written by somebody who knows the answer.

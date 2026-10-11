@@ -107,7 +107,7 @@ func everySeam(t *testing.T) queries.Sources {
 		WorkSearch: emptyWork{},
 		// A PROJECT'S FILES, their own seam for the same reason.
 		Files: emptyFiles{},
-		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
+		// THE RETENTION DOCUMENT, which Engine › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.

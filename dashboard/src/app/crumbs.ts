@@ -10,8 +10,8 @@
  *
  * The first crumb is the WORKSPACE, with its glyph — the one mark of where
  * the reader is that survives a sidebar folded into a drawer. A SECTION
- * follows it unless the section IS the workspace's landing page ("Agents"
- * alone on the chart, "Agents › Roster" on the roster): the tab under the bar
+ * follows it unless the section IS the workspace's landing page ("Team"
+ * alone on the chart, "Team › People & agents" on the people): the tab under the bar
  * says the same, but the trail is what titles the browser tab and what is
  * left on a phone where the tabs have scrolled away. The last crumb is the
  * OBJECT and carries no link: a trail whose final crumb links to the page you
@@ -123,10 +123,15 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   if (!where.resolved) {
     return row ? [root(row, true), { label: "Not found" }] : [{ label: "Not found" }];
   }
+  // THE LANDING IS NOBODY'S YET: it is replaced by the reader's own first
+  // screen the moment the viewer answers (`landingFor`), and until then the
+  // trail names the product rather than a workspace it is about to leave.
+  if (where.screen === "landing") return [{ label: "Crewlet" }];
   if (!row) return [{ label: "Not found" }];
 
   // A SECTION'S OWN PAGE: the workspace, then the section unless it IS the
-  // workspace's landing page — Agents › Roster, but Agents alone for the chart.
+  // workspace's landing page — Team › People & agents, but Team alone for the
+  // chart.
   const section = (key: string): Section | undefined => row.sections.find((s) => s.key === key);
   const sectionPage = (key: string): Crumb[] => {
     const s = section(key);
@@ -140,29 +145,41 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     if (!s || s.path.length === row.path.length) return [root(row, true), object];
     return [root(row, true), { label: s.label, path: s.path }, object];
   };
+  // A SEAT'S OWN CRUMB: its name, and its kind as the badge's outline, once
+  // the page has said them.
+  const seatCrumb = (handle: string): Crumb => {
+    const kind = labels[seatKindKey(handle)];
+    const seat = named(labels, handle);
+    return !seat.mono && (kind === "agent" || kind === "human")
+      ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human" } }
+      : seat;
+  };
 
   switch (where.screen) {
-    case "home":
+    case "today":
     case "inbox":
     case "work":
     case "org-chart":
-    case "live":
     case "knowledge":
+    case "overview":
+    case "live":
+    case "seats":
     case "spend":
+    case "charter":
+    case "integrations":
+    case "nodes":
+      // A LANDING, or an object under one whose section IS the landing.
+      if (where.screen === "integrations" && where.kind) {
+        return inside("integrations", { label: labels[where.kind] ?? where.kind });
+      }
+      if (where.screen === "nodes" && where.node) {
+        return inside("nodes", ownName(labels, where.node));
+      }
       return [root(row, false)];
-    case "general":
-      // SETTINGS' LANDING IS ONE OF ITS SECTIONS, unlike every other
-      // workspace's: the column beside it lists General as a row like any
-      // other, so the trail names it. "Settings" alone was the page's `h1`
-      // over the company's charter, and nothing on screen but the selected
-      // row said which section it was.
-      return [root(row, true), { label: section("general")?.label ?? "General" }];
     case "me":
       return sectionPage(where.section);
     case "work-projects":
       return sectionPage("projects");
-    case "work-history":
-      return sectionPage("history");
     case "work-search":
       return sectionPage("search");
     case "work-views":
@@ -178,70 +195,29 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         ? [root(row, true), { ...projectCrumb(labels, project), path: ["work", project] }, item]
         : [root(row, true), item];
     }
-    case "roster":
-      return sectionPage("roster");
-    case "teams":
+    case "people":
+      return sectionPage("people");
+    case "units":
       // A UNIT'S SEGMENT IS ITS NAME, so there is no identifier to mark.
-      return where.unit ? inside("teams", ownName(labels, where.unit)) : sectionPage("teams");
-    case "schedules": {
-      if (where.scope.length === 0) return sectionPage("schedules");
-      // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
-      // / standup` in the trail would read as three pages that do not exist.
-      const id = where.scope.join("/");
-      return inside("schedules", { label: labels[id] ?? where.scope.join(" · ") });
-    }
-    case "org-edit":
-      return [root(row, true), { label: section("edit")?.label ?? "Edit org" }];
+      return where.unit ? inside("units", ownName(labels, where.unit)) : sectionPage("units");
+    case "about":
+      return sectionPage("about");
     case "seat": {
-      // WHERE THE SEAT SITS, as a way to its unit — "Agents › Engineering ·
+      // WHERE THE SEAT SITS, as a way to its unit — "Team › Engineering ·
       // Core › SWE" — once the page has said; a seat above every unit, or one
       // the page has not resolved yet, goes straight from the workspace.
       const unit = labels[seatUnitKey(where.handle)];
       const place = labels[seatPlaceKey(where.handle)];
-      const kind = labels[seatKindKey(where.handle)];
-      const seat = named(labels, where.handle);
-      const object: Crumb =
-        !seat.mono && (kind === "agent" || kind === "human")
-          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human" } }
-          : seat;
+      const object = seatCrumb(where.handle);
       return unit
-        ? [root(row, true), { label: place || unit, path: ["agents", "teams", unit] }, object]
+        ? [root(row, true), { label: place || unit, path: ["team", "units", unit] }, object]
         : [root(row, true), object];
     }
-    case "turns":
-      return sectionPage("turns");
-    case "turn": {
-      // THE SEAT, where the page has said which: the trail reads Live ›
-      // {agent} › Turn n, and the agent crumb is what is running for that
-      // seat now. Until the page knows, the Turns section stands in, as it
-      // always did.
-      const seat = labels[turnSeatKey(where.id)];
-      const handle = labels[turnHandleKey(where.id)];
-      if (!seat) return inside("turns", named(labels, where.id));
-      return [
-        root(row, true),
-        {
-          label: seat,
-          path: ["live"],
-          ...(handle ? { query: { seat: handle } } : {}),
-          seat: { name: seat, kind: "agent" },
-        },
-        named(labels, where.id),
-      ];
-    }
-    case "runs":
-      return where.id ? inside("runs", named(labels, where.id)) : sectionPage("runs");
-    case "a2a":
-      return where.id ? inside("a2a", named(labels, where.id)) : sectionPage("a2a");
-    case "trace":
-      // A TRACE HAS NO LIST, so its parent is the workspace itself: the reader
-      // who clicks up lands on what is running rather than on a segment named
-      // after a route with no page.
-      return [root(row, true), named(labels, where.id)];
-    case "events":
-      return sectionPage("events");
-    case "event":
-      return inside("events", named(labels, where.id));
+    case "seat-setup":
+      // THE CONSOLE'S SEAT is filed under the seats it is one of, never under
+      // its unit: units are the person shell's, and a crumb here that crossed
+      // into it would take an admin out of the console from its own trail.
+      return [root(row, true), seatCrumb(where.handle)];
     case "container":
       return [root(row, true), named(labels, where.key)];
     case "page": {
@@ -262,27 +238,70 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         named(labels, where.id),
       ];
     }
+    case "turns":
+      return sectionPage("turns");
+    case "turn": {
+      // THE SEAT, where the page has said which: the trail reads Live ›
+      // {agent} › Turn n, and the agent crumb is what is running for that
+      // seat now. Until the page knows, the Turns section stands in, as it
+      // always did.
+      const seat = labels[turnSeatKey(where.id)];
+      const handle = labels[turnHandleKey(where.id)];
+      if (!seat) return inside("turns", named(labels, where.id));
+      return [
+        root(row, true),
+        {
+          label: seat,
+          path: ["admin", "live"],
+          ...(handle ? { query: { seat: handle } } : {}),
+          seat: { name: seat, kind: "agent" },
+        },
+        named(labels, where.id),
+      ];
+    }
+    case "runs":
+      return where.id ? inside("runs", named(labels, where.id)) : sectionPage("runs");
+    case "a2a":
+      return where.id ? inside("a2a", named(labels, where.id)) : sectionPage("a2a");
+    case "trace":
+      // A TRACE HAS NO LIST, so its parent is the workspace itself: the reader
+      // who clicks up lands on what is running rather than on a segment named
+      // after a route with no page.
+      return [root(row, true), named(labels, where.id)];
+    case "events":
+      return sectionPage("events");
+    case "event":
+      return inside("events", named(labels, where.id));
+    case "schedules": {
+      if (where.scope.length === 0) return sectionPage("schedules");
+      // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
+      // / standup` in the trail would read as three pages that do not exist.
+      const id = where.scope.join("/");
+      return inside("schedules", { label: labels[id] ?? where.scope.join(" · ") });
+    }
     case "skills":
       return sectionPage("skills");
-    case "diaries":
-      return sectionPage("diaries");
+    case "memory":
+      return sectionPage("memory");
     case "diary":
-      return inside("diaries", named(labels, where.handle));
+      return inside("memory", named(labels, where.handle));
     case "budgets":
       return sectionPage("budgets");
     case "spend-tasks":
       return sectionPage("tasks");
-    case "people":
+    case "access":
       return sectionPage("people");
-    case "integrations":
-      return where.kind
-        ? inside("integrations", { label: labels[where.kind] ?? where.kind })
-        : sectionPage("integrations");
+    case "org-edit":
+      return sectionPage("org");
+    case "audit":
+      return sectionPage("audit");
+    case "changes":
+      return sectionPage("changes");
     case "tools":
       if (where.server) {
         return [
           root(row, true),
-          { label: section("tools")?.label ?? "Tools & MCP", path: ["settings", "tools"] },
+          { label: section("tools")?.label ?? "Tools & MCP", path: ["admin", "connect", "tools"] },
           { label: "Servers" },
           ownName(labels, where.server),
         ];
@@ -295,13 +314,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return where.id ? inside("models", ownName(labels, where.id)) : sectionPage("models");
     case "secrets":
       return where.name ? inside("secrets", ownName(labels, where.name)) : sectionPage("secrets");
-    case "nodes":
-      return where.node ? inside("nodes", ownName(labels, where.node)) : sectionPage("nodes");
     case "config": {
       if (!where.revisions) return sectionPage("config");
       const config: Crumb = {
         label: section("config")?.label ?? "Configuration",
-        path: ["settings", "config"],
+        path: ["admin", "engine", "config"],
       };
       // A TRAIL NEVER ENDS IN NOTHING: the list of revisions is a live
       // address, so it is named rather than drawn as a blank last crumb —
@@ -310,7 +327,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return [
         root(row, true),
         config,
-        { label: "Revisions", path: ["settings", "config", "revisions"] },
+        { label: "Revisions", path: ["admin", "engine", "config", "revisions"] },
         named(labels, where.revision),
       ];
     }
@@ -318,8 +335,6 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return where.domain
         ? inside("backups", ownName(labels, where.domain))
         : sectionPage("backups");
-    case "audit":
-      return sectionPage("audit");
   }
 }
 

@@ -108,7 +108,7 @@ export function SetByLine({
               so the arrow landed on a line of its own at EVERY width. A
               `white-space` cannot suppress that — `.t-link` already carries
               one — and only a formatting context of the anchor's own can. */}
-          <a className="t-link setby-turn" href={href(["live", "turns", setBy.turnId])}>
+          <a className="t-link setby-turn" href={href(["admin", "live", "turns", setBy.turnId])}>
             turn <ArrowUpRightGlyph size="xs" />
           </a>
         </>
@@ -264,7 +264,7 @@ export function ObjectHeader({
    * for now: a turn is running, or a retry, or carrying failures, or read to
    * the store's cap, and any two of those can be true at once. They used to
    * be a screen's `PageActions`, in a slot whose subject is what the reader
-   * can DO — see `routes/live/Turn.tsx`'s `turnStatus`.
+   * can DO — see `routes/admin/live/Turn.tsx`'s `turnStatus`.
    */
   status?: ReactNode;
   facts?: Fact[];
@@ -294,7 +294,7 @@ export function ObjectHeader({
       <div className="row wrap">
         {/* TWO LINES, AND THAT IS THE CEILING. Every other object in the
             product heads itself with a NAME — a seat, a work key, a node id, a
-            page title — and a turn has none, so `routes/live/Turn.tsx`
+            page title — and a turn has none, so `routes/admin/live/Turn.tsx`
             heads it with the lead sentence of the reviewer's own prose.
             `lead` bounds the ordinary case; this bounds the one it
             deliberately does not, a summary written as a single unpunctuated

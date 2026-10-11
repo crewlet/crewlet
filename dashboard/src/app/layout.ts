@@ -29,24 +29,22 @@
  *     + 420  the peek
  *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
- *     + 236  Settings' section column, on a screen that draws one —
- *            or 256, Knowledge's tree ([TREE_COLUMN])
+ *     + 256  Knowledge's tree, on the one screen that draws it ([TREE_COLUMN])
  *     + 444  the list
  *
- * = 1160 on a screen, 1396 beside Settings' column and 1416 beside
- * Knowledge's tree, at the normal density.
+ * = 1160 on a screen and 1416 beside Knowledge's tree, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
  * the Work list beside a peek was 396px — under the floor it existed to
- * protect — and on Settings, whose column sits inside the screen, a peek at
- * 1280 left the nodes grid 328px and cut its columns off.
+ * protect — and a screen with a column inside it lost the whole column's
+ * width from its list.
  *
  * # Why the SHELL decides, and not a media query
  *
- * Two of those terms are not the window's to know. The section column is a
+ * Two of those terms are not the window's to know. The tree column is a
  * property of the SCREEN — a media query has one width for every screen, so
- * one right for Work is 236px wrong for Settings — and the padding and the
+ * one right for Work is 256px wrong for Knowledge — and the padding and the
  * inset scale with the reader's DENSITY, which a media query can no more read
  * than it can read a custom property. The last cut wrote its threshold at the
  * widest density for that reason, which was safe and still wrong for the
@@ -116,8 +114,8 @@ export const SCROLLBAR_GUTTER = 10;
 /**
  * What a screen's content keeps on EACH side before the list starts, at the
  * normal density: the kit's `.crewlet-app-shell__content` padding, and
- * `.section-body`'s beside the Settings column, which takes the kit's back
- * and gives the same to the section.
+ * `.section-body`'s beside Knowledge's tree, which takes the kit's back and
+ * gives the same to the screen.
  */
 export const CONTENT_PADDING = px(spacing["5"]);
 
@@ -132,31 +130,23 @@ export function densityScale(choice: keyof typeof density): number {
 /**
  * Knowledge's tree column: the artboard's 256.
  *
- * WIDER THAN SETTINGS' COLUMN, deliberately. Settings lists nine sections at
- * one level; the tree nests a space, a folder and a page under each other,
- * each level indented, with a space's key on the right — and at the sidebar's
- * 236 a third-level title had under 120px before it was cut.
+ * WIDER THAN THE SIDEBAR, deliberately: the tree nests a space, a folder and a
+ * page under each other, each level indented, with a space's key on the right
+ * — and at the sidebar's 236 a third-level title had under 120px before it
+ * was cut.
  */
 export const TREE_COLUMN = 256;
 
 /** How wide the column a workspace draws beside its screens is, if it draws one. */
 export function columnWidth(renderer: SectionRenderer | undefined): number {
-  switch (renderer) {
-    case "column":
-      return px(size.shell.rail);
-    case "tree":
-      return TREE_COLUMN;
-    default:
-      return 0;
-  }
+  return renderer === "tree" ? TREE_COLUMN : 0;
 }
 
 /** Which frame a screen sits in, for the one term that differs. */
 export interface Frame {
   /**
    * The width of the column drawn inside the screen beside the list —
-   * Settings' sections, Knowledge's tree — or 0 where there is none
-   * ([columnWidth]).
+   * Knowledge's tree — or 0 where there is none ([columnWidth]).
    */
   column: number;
   /** The reader's density multiplier ([densityScale]). */
@@ -165,8 +155,8 @@ export interface Frame {
 
 /**
  * Everything the SHEET keeps beside the peek column with the list at its
- * floor: the scroller's gutter, the screen's padding, the section column
- * where there is one, and the list. The peek's track is capped at the sheet
+ * floor: the scroller's gutter, the screen's padding, the tree column where
+ * there is one, and the list. The peek's track is capped at the sheet
  * less this, which is what `--peek-reserve` carries.
  */
 export function listReserve({ column, scale }: Frame): number {

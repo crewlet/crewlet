@@ -39,19 +39,35 @@ let undo: (() => void)[] = [];
 function breakExport(chunk: "spend" | "work", name: string, component: unknown) {
   const real =
     chunk === "spend"
-      ? () => import("~/routes/spend/index.ts")
+      ? () => import("~/routes/admin/spend/index.ts")
       : () => import("~/routes/work/index.ts");
   undo.push(overrideChunkForTest(chunk, async () => ({ ...(await real()), [name]: component })));
 }
 
 /**
- * The application over a socket that answers each query from `answers`.
+ * An admin who is also a person — the reader who sees both shells — so a case
+ * reaches a console screen and the person sidebar alike.
+ */
+const ADMIN = {
+  token_id: "ops",
+  role: "admin",
+  reach: "admin",
+  linked: true,
+  handle: "ada",
+  name: "Ada",
+  kind: "human",
+};
+
+/**
+ * The application over a socket that answers each query from `answers`, and
+ * the viewer as [ADMIN] unless a case says otherwise.
  *
  * AWAITED UNDER ACT, because a case that replaced a chunk has forgotten the
  * real ones and the first render suspends: React retries a suspended render
  * from act's queue, and a synchronous render never sees that retry.
  */
-async function mount(answers: Record<string, unknown> = {}) {
+async function mount(given: Record<string, unknown> = {}) {
+  const answers: Record<string, unknown> = { viewer: ADMIN, ...given };
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
@@ -98,34 +114,36 @@ afterEach(async () => {
 describe("a screen that throws", () => {
   test("leaves the sidebar and ⌘K working", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/admin/spend";
     await mount();
     const alert = await screen.findByText("This screen could not be drawn");
     expect(alert).toBeDefined();
     // The message a report needs is on screen.
     expect(screen.getByText("model is an object, not a string")).toBeDefined();
-    // THE WAY OUT IS STILL THERE: the sidebar's rows, and the palette.
-    const nav = screen.getByRole("navigation", { name: "Navigation" });
-    expect(nav.querySelector('a[href="#/home"]')).not.toBeNull();
+    // THE WAY OUT IS STILL THERE: the sidebar's rows, its door back, and the
+    // palette.
+    const nav = screen.getByRole("navigation", { name: "Admin console" });
+    expect(nav.querySelector('a[href="#/admin/live"]')).not.toBeNull();
+    expect(document.querySelector('a.console-back[href="#/today"]')).not.toBeNull();
     fireEvent.keyDown(document, { key: "k", metaKey: true });
     expect(await screen.findByRole("dialog", { name: "Search" })).toBeDefined();
   });
 
   test("is drawn afresh when the reader goes somewhere else", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/admin/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend/budgets");
+    await go("#/admin/spend/budgets");
     await waitFor(() => expect(screen.queryByText("This screen could not be drawn")).toBeNull());
   });
 
   test("but not by a query string alone, which is the same screen", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/admin/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend?range=7d");
+    await go("#/admin/spend?range=7d");
     expect(screen.getByText("This screen could not be drawn")).toBeDefined();
   });
 });
@@ -136,10 +154,13 @@ describe("a chunk that never arrives", () => {
     undo.push(
       overrideChunkForTest("spend", async () => {
         if (fail) throw new TypeError("Failed to fetch dynamically imported module");
-        return { ...(await import("~/routes/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
+        return {
+          ...(await import("~/routes/admin/spend/index.ts")),
+          Spend: () => <p>spend, loaded</p>,
+        };
       }),
     );
-    location.hash = "#/spend";
+    location.hash = "#/admin/spend";
     await mount();
     expect(await screen.findByText("The Spend screens could not be loaded")).toBeDefined();
     // NOT the render failure's sentence: a reload fixes this, a report does not.
@@ -157,7 +178,7 @@ describe("a chunk that never arrives", () => {
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
     breakExport("work", "ItemPeek", Throws);
-    location.hash = `#/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+    location.hash = `#/admin/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
     expect(await screen.findByText("This preview could not be drawn")).toBeDefined();
     // The rail around the body stands, with its way out…
@@ -172,18 +193,22 @@ describe("a peek that throws", () => {
 
 describe("a sidebar section that throws", () => {
   // A project whose name arrived as an object is a React child React refuses —
-  // the same shape of failure as the per-phase model mapping.
-  test("costs its own list and never the navigation above it", async () => {
-    // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: Home draws a
-    // projects card from the same answer, and its own boundary is the
-    // screen's, which is the case below this one.
-    location.hash = "#/live";
+  // the same shape of failure as the per-phase model mapping. The projects
+  // nest under Work, open while the reader is inside Work, so the Work row is
+  // the section that goes — and the rows above and below it stay.
+  test("costs its own list and never the navigation around it", async () => {
+    // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: the saved views,
+    // inside Work so the projects are drawn, whose own boundary is the
+    // screen's.
+    location.hash = "#/work/views";
     await mount({
       work_projects: {
         projects: [
           {
             key: "ENG",
             name: { en: "Engineering" },
+            lead: { handle: "ada" },
+            unit: { resolved: true },
             task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
           },
         ],
@@ -191,9 +216,10 @@ describe("a sidebar section that throws", () => {
       },
     });
     const failed = await screen.findByText("Could not be drawn.");
-    expect(failed.closest('[role="group"]')?.textContent).toContain("Projects");
+    expect(failed.closest('[role="group"]')?.textContent).toContain("Work");
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(nav.querySelector('a[href="#/inbox"]')).not.toBeNull();
+    expect(nav.querySelector('a[href="#/team"]')).not.toBeNull();
     // And the screen is untouched.
     expect(screen.queryByText("This screen could not be drawn")).toBeNull();
   });

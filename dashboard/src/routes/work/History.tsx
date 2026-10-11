@@ -25,7 +25,7 @@
  *
  * # It is the same component inside a project
  *
- * `#/work/history` is this over the company and a project's History lens is
+ * `#/admin/company/changes` is this over the company and a project's History lens is
  * this over one container. Written twice they would drift, and the drift would
  * be invisible: both draw rows that look right either way.
  *
@@ -505,7 +505,7 @@ export function HistoryView({
  * Hands this screen's answer to the frame, and draws nothing.
  *
  * A COMPONENT RATHER THAN A CALL, because the rule it carries is conditional
- * and a hook may not be: `HistoryView` is a screen on `#/work/history` and a
+ * and a hook may not be: `HistoryView` is a screen on `#/admin/company/changes` and a
  * lens inside `#/work/{KEY}`, and only the first of those owns the frame's one
  * coverage slot. Conditional RENDERING is how React spells a conditional
  * effect.
@@ -666,7 +666,7 @@ function HistoryRow({
           </Tag>
         )}
         {record.turn_id && (
-          <a className="t-link" href={href(["live", "turns", record.turn_id])}>
+          <a className="t-link" href={href(["admin", "live", "turns", record.turn_id])}>
             turn →
           </a>
         )}

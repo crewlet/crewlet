@@ -39,7 +39,7 @@ test("a source that is the actor is not drawn again in the tail", () => {
 test("a card's row is the time and one line: the actor, then what happened", () => {
   const { container } = render(<EventRow event={row()} compact />);
   const link = container.querySelector("a.feed-row.compact")!;
-  expect(link.getAttribute("href")).toBe("#/live/events/e-1");
+  expect(link.getAttribute("href")).toBe("#/admin/live/events/e-1");
   // TWO TRACKS: the clock, and the sentence with its actor inside it.
   expect([...link.children].map((c) => c.className)).toEqual(["feed-time", "feed-what truncate"]);
   expect(link.querySelector(".feed-what")?.textContent).toBe(
