@@ -14,13 +14,12 @@
  */
 
 import { Card, Tag } from "@crewlethq/ui";
-import { InfoGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import {
-  DecisionRow,
+  DecisionList,
   decisionSubjects,
   decisionsHref,
-  subjectKey,
   type SeatCondition,
 } from "~/components/DecisionRow.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
@@ -55,7 +54,6 @@ export function Decisions({
 }) {
   const subjects = decisionSubjects(answer, seatConditions);
   const total = typeof answer?.total === "number" ? answer.total + seatConditions.length : null;
-  const shown = subjects.slice(0, HOME_DECISIONS);
 
   return (
     <Card padding="none" className="home-card">
@@ -82,7 +80,7 @@ export function Decisions({
         </p>
       ) : (
         <QueryState error={error} loading={loading && !answer}>
-          {shown.length === 0 ? (
+          {subjects.length === 0 ? (
             <div className="home-quiet">
               <strong className="t-cell">Nothing needs your decision</strong>
               <span className="t-caption">
@@ -91,25 +89,18 @@ export function Decisions({
               </span>
             </div>
           ) : (
-            <ul className="decision-list">
-              {shown.map((subject) => (
-                <DecisionRow
-                  key={subjectKey(subject)}
-                  subject={subject}
-                  decider={{ handle: viewer.handle }}
-                  now={now}
-                />
-              ))}
-            </ul>
+            <DecisionList
+              subjects={subjects}
+              decider={{ handle: viewer.handle }}
+              now={now}
+              limit={HOME_DECISIONS}
+            />
           )}
         </QueryState>
       )}
       <p className="home-card-foot">
-        <InfoGlyph size="sm" aria-hidden="true" />
-        <span>
-          Agents only reach you for what their own authority cannot decide. Everything else is in
-          the activity below.
-        </span>
+        Agents only bring you what their own authority can't decide. Everything else is in the
+        activity below.
       </p>
     </Card>
   );

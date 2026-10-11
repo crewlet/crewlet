@@ -344,7 +344,6 @@ export function LiveNow() {
                   <DecisionRow
                     key={run.turn_id}
                     subject={{ kind: "run", at: run.paused_at || run.updated_at, run }}
-                    decider={{ handle: viewer.handle }}
                     now={now}
                   />
                 ))}

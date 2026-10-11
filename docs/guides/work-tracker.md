@@ -1940,10 +1940,12 @@ with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
 **Asked of me is answered where it stands.** Each question put to the person
-is the same row the landing screen's "Needs your decision" draws — who asked,
-the role they are asked in, what the asker recommends — with its options as
-buttons that send the choice (`comment_on_work_item{answers, choice}`), or a
-Reply for a question with no options. **Asked by me** is the other end: the
+is drawn as the landing screen's "Needs your decision" draws it: grouped
+under who asked, with the role they are asked in and one line naming what the
+asker recommends. **Accept** sends that option; **Change** opens every option
+with its detail, plus **Something else** for a reply in your own words, and
+**Submit** sends what is chosen (`comment_on_work_item{answers, choice}` or
+`{answers, body}`). A question with no options offers **Reply**. **Asked by me** is the other end: the
 work this person asked a question on that is still waiting for its answer
 (`asked_by=`, every task status, since an open question on finished work is
 still one somebody is waiting on). It asks under both of the person's names —

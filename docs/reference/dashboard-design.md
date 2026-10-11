@@ -1841,21 +1841,32 @@ company did.** Top to bottom:
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
-  PLACE. A structured ask draws each option as a button that sends the choice
-  as the answer (`comment_on_work_item{answers, choice}`), the recommended one
-  primary, with who asked (the person behind a token, never the token), the
-  role the reader is asked in, "reports to you" where the chart says so, and
-  the line saying what the answer sets off — "CTO is woken with your answer and
-  posts it to #releases" when the ask promised a channel, "CTO continues from
-  your answer" when it did not. A coding run parked on a question is answered
+  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head names the
+  asker (the person behind a token, never the token) with their badge, and
+  what every one of their asks shares (the item, the role the reader is asked
+  in, how long ago); what differs between two asks is said on the ask, and so
+  is the channel an ask promised to post its answer to ("answer posted to
+  #releases"). Under each question one line reads "Recommended: Hold release"
+  with **Accept**, which sends that option, and **Change**, which opens every
+  option as a choice with its detail line and the recommended one tagged
+  (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
+  `Composer`, up to 2,000 characters, Command+Enter to send) sends a reply
+  instead of a choice; **Submit** sends what is chosen. While the options are
+  open the recommendation line is hidden, and only one ask's options are open
+  at a time. An ask with no recommendation offers **Answer** in place of
+  Accept and Change. A choice is `comment_on_work_item{answers, choice}` and a
+  reply `{answers, body}`; the engine wakes the asker with either. An answered
+  ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
+  anyway" or "Answered “the reply”", until the card is drawn afresh; there is
+  no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
   by its turn (`answer_run`), with how long its box is still held. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
   window focused (see [Spend › Budgets](#spend--budgets-raised-in-place)) —
   and **Reassign** of the item it was on. An ask with no options is
-  answered in words on its row: **Reply** opens the same dialog a parked run's
-  **Answer** does and sends `comment_on_work_item{answers, body}`. Every
+  answered in words in place: **Reply** opens the field under the question
+  and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. **Open inbox** and **Review** both land on
   `#/inbox?reason=decisions`, which draws every one of them.
@@ -2067,10 +2078,9 @@ list does not step sideways and back. A person's seat page counts the same
 list as **Priorities** in its "Their day" card, never as their Queue: the
 Queue is the open work assigned to them, everywhere it is named.
 
-**Asked of me is the decision row Home draws** (`DecisionRow`): who asked,
-the role, what they recommend, and the options as buttons that send the
-choice. It is shared rather than restated, so the rule for which option is
-primary is one rule.
+**Asked of me is the decision list Home draws** (`DecisionList`): asks
+grouped under who asked, each with its recommendation, Accept and Change. It
+is shared rather than restated, so how an ask is answered is one rule.
 
 The whose-day picker in the page bar lists yours, then your line, then
 anybody, each person on two lines (the name, then the handle and how much is
@@ -2943,7 +2953,7 @@ a tool arrives in it with the control that sends it. The controls
 | Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
 | Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
 | Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
-| An option · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
+| Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 
 A change to the **company document** — a seat, a budget ceiling, an MCP
