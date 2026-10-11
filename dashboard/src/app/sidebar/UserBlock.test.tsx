@@ -237,7 +237,7 @@ describe("the preferences", () => {
 
   // THE ROWS ARE MODE, DENSITY, THEME, in that order, and the two switchers
   // draw one box: the same width, three equal cells each.
-  test("the mode and the density draw one box, and the theme sits below them", () => {
+  test("the mode, the density and the theme are one column of one width", () => {
     open();
     const rows = [...document.querySelectorAll(".preferences-row")].map(
       (row) => row.querySelector(".t-label")?.textContent,
@@ -248,6 +248,9 @@ describe("the preferences", () => {
       expect(group.classList.contains("crewlet-segmented--fill"), name).toBe(true);
       expect(group.parentElement?.className, name).toBe("preferences-switch");
     }
+    // The theme's field sits in the same box, so the three draw one width.
+    const theme = screen.getByRole("combobox", { name: "Theme" });
+    expect(theme.closest(".preferences-switch")).toBeTruthy();
   });
 
   test("the theme lists every theme under its group, applies the pick and keeps it", () => {

@@ -159,7 +159,8 @@ export function Preferences({
       {/* EVERY CONTROL NAMES ITSELF: each switcher is a radio group carrying
           its own label and the select is named Theme, so a second label round
           one would be read twice. The two switchers FILL one box of one width,
-          so a row of glyphs and a row of letters draw the same cells. */}
+          so a row of glyphs and a row of letters draw the same cells, and the
+          theme's field is that width too: three controls, one column. */}
       <div className="preferences-row">
         <span className="t-label" aria-hidden="true">
           Mode
@@ -192,19 +193,21 @@ export function Preferences({
         <span className="t-label" aria-hidden="true">
           Theme
         </span>
-        <Select
-          ariaLabel="Theme"
-          size="sm"
-          menuClassName="preferences-theme-menu"
-          options={THEME_OPTIONS}
-          value={prefs.palette}
-          onChange={(next) => {
-            if (isThemeId(next)) applyTheme(next);
-          }}
-          onHighlight={(option) =>
-            previewPalette(option && isThemeId(option.value) ? option.value : null)
-          }
-        />
+        <div className="preferences-switch">
+          <Select
+            ariaLabel="Theme"
+            size="sm"
+            menuClassName="preferences-theme-menu"
+            options={THEME_OPTIONS}
+            value={prefs.palette}
+            onChange={(next) => {
+              if (isThemeId(next)) applyTheme(next);
+            }}
+            onHighlight={(option) =>
+              previewPalette(option && isThemeId(option.value) ? option.value : null)
+            }
+          />
+        </div>
       </div>
       <Button
         size="small"

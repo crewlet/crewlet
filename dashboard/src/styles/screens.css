@@ -9940,7 +9940,8 @@ a.live-row:focus-visible {
   border-top: 1px solid var(--color-border-default);
 }
 
-/* Three cells of 108px, as the popover's switchers are three of 32px. */
+/* Three cells of 108px. The popover draws the same switchers in one column
+   of 148px, its theme field's width. */
 .appearance-choice {
   width: min(100%, 20.25rem);
 }

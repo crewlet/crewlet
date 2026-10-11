@@ -673,10 +673,10 @@ a.user-block-who:focus-visible {
   padding: var(--spacing-3);
 }
 
-/* A LABEL COLUMN AND A CONTROL COLUMN. The theme select is a field and
-   takes its line; the two switchers share one box of one width, three 32px
-   cells each, which the kit's `fill` divides evenly, so a row of glyphs and a
-   row of letters are the same control twice. */
+/* A LABEL COLUMN AND A CONTROL COLUMN, and the three controls are ONE WIDTH:
+   the two switchers share one box, three cells each, which the kit's `fill`
+   divides evenly, so a row of glyphs and a row of letters are the same
+   control twice, and the theme's field below them is that box's width. */
 .preferences-row {
   display: grid;
   grid-template-columns: 3.875rem minmax(0, 1fr);
@@ -684,15 +684,21 @@ a.user-block-who:focus-visible {
   gap: var(--spacing-2);
 }
 
+/* As wide as the longest theme's field needs at the comfortable density:
+   "High contrast" with its swatch and the chevron is 148px there, and a
+   narrower column cut its name. */
 .preferences-switch {
   justify-self: start;
-  width: 6.75rem;
+  width: 9.25rem;
 }
 
 /* The theme list is wider than its field, which a narrow popover makes
    narrow: a theme is read by its name and its tag together, and a list cut
-   to the field's width cut both. */
+   to the field's width cut both. It is TALL ENOUGH FOR EVERY THEME at once,
+   ten under five headings at any density; the kit still flips and clamps
+   the list to the window, so a short window scrolls it. */
 .preferences-theme-menu {
+  --crewlet-select-menu-max-height: 42rem;
   min-width: 17.25rem;
 }
 
