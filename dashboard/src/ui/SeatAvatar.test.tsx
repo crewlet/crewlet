@@ -101,6 +101,29 @@ describe("an agent drawn as itself", () => {
   });
 });
 
+describe("what a seat is doing", () => {
+  test("is the kit's corner glyph, never a ring, and is said in the name of a badge that names itself", () => {
+    const { container } = render(
+      <>
+        <SeatAvatar name="Agent CTO" kind="agent" status="stopped" />
+        <SeatAvatar name="Agent PM" kind="agent" status="needs" decorative />
+      </>,
+    );
+    expect(container.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
+    expect(container.querySelector(".crewlet-avatar__status--needs")).not.toBeNull();
+    expect(container.innerHTML).not.toContain("ring-");
+    // The whole name, and the state after it; the decorative one says nothing.
+    expect(screen.getAllByRole("img").map((i) => i.getAttribute("aria-label"))).toEqual([
+      "Agent CTO avatar, stopped",
+    ]);
+  });
+
+  test("an idle seat carries no glyph", () => {
+    const { container } = render(<SeatAvatar name="Agent CTO" kind="agent" decorative />);
+    expect(container.querySelector(".crewlet-avatar__status")).toBeNull();
+  });
+});
+
 // ONE PLACE DRAWS A SEAT'S BADGE. The kit's `Avatar` makes initials from
 // whatever name it is handed, so a screen that reached it directly would draw
 // "Agent CTO" as `AC` again — and nothing on that screen would look wrong

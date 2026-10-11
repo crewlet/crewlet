@@ -186,8 +186,9 @@ export function WorkingNow() {
         // here beside `SW` everywhere else the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
+          // NO STATUS ON A MEMBER: each overlaps the one before it, and
+          // the sentence beside the stack already says they are working.
           ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
-          ring: "info" as const,
         }))}
       />
       <span>{plural(working.length, "agent")} working</span>

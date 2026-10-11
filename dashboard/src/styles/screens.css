@@ -834,18 +834,6 @@
 .seat-card:hover {
   border-color: var(--color-border-strong);
 }
-/* The tone is what the seat is DOING, never who it is — `lib/seats.ts`'s
-   `ringOf`, so the card's edge and the badge's ring are one reading. An idle
-   seat takes no tint at all: a glowing tile read as activity. */
-.seat-card[data-tone="info"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-info);
-}
-.seat-card[data-tone="warning"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
-}
-.seat-card[data-tone="danger"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
-}
 .seat-line {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -7901,6 +7889,17 @@ a.work-cal-chip {
 .decision-sub strong {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
+}
+/* The row's state in words, in its own ink: the word the glyph on the
+   badge beside it draws as a shape. */
+.decision-state {
+  font-weight: var(--font-weight-medium);
+}
+.decision-state[data-state="needs"] {
+  color: var(--color-feedback-warning-ink);
+}
+.decision-state[data-state="stopped"] {
+  color: var(--color-feedback-danger-ink);
 }
 .decision-key,
 .home-feed-key {

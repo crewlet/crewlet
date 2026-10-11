@@ -25,6 +25,15 @@
  * no avatar (a seat the chart no longer holds, a name with no seat behind it)
  * keeps the initials, and a person is always drawn as themself.
  *
+ * # What a seat is doing is a glyph on the corner
+ *
+ * `status` (from `lib/seats.ts`' `statusOf`, the engine's own word) draws the
+ * kit's corner badge: a play, a question or a square on the state's fill. It
+ * is never a ring round the badge, which put a second colour round an agent's
+ * own plate. The row the badge stands in says the state in words as well
+ * where it can; a badge drawn alone carries it in the glyph and, where it
+ * names itself, in its accessible name.
+ *
  * # What a reader hears is still the whole name
  *
  * The kit derives a badge's accessible name from the same `name` its initials
@@ -35,7 +44,7 @@
  */
 
 import type { ComponentProps } from "react";
-import { Avatar, type AvatarStackMember } from "@crewlethq/ui";
+import { AVATAR_STATUS_LABELS, Avatar, type AvatarStackMember } from "@crewlethq/ui";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 
 /** The words an agent's name leads with that its squircle already says. */
@@ -63,6 +72,7 @@ export function SeatAvatar({
   name,
   kind,
   avatar,
+  status,
   decorative,
   ...rest
 }: Omit<AvatarProps, "name" | "kind" | "character" | "hue"> & {
@@ -74,14 +84,16 @@ export function SeatAvatar({
     <Avatar
       {...rest}
       {...faceOf(kind, avatar)}
+      status={status}
       name={badgeName(name, kind)}
       kind={kind}
       decorative
     />
   );
   if (decorative) return badge;
+  const spoken = status ? `${name} avatar, ${AVATAR_STATUS_LABELS[status]}` : `${name} avatar`;
   return (
-    <span className="seat-avatar" role="img" aria-label={`${name} avatar`}>
+    <span className="seat-avatar" role="img" aria-label={spoken}>
       {badge}
     </span>
   );

@@ -86,7 +86,7 @@ import {
   handleLabel,
   indexOrg,
   nameOfIn,
-  ringOf,
+  statusOf,
   stateLine,
   stateWord,
   toneOf,
@@ -515,7 +515,7 @@ function SeatRowCell({
 }) {
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const ref = { kind: "seat" as const, id: seat.handle };
   return (
     <span className="oc-row" data-state={state}>
@@ -524,7 +524,7 @@ function SeatRowCell({
         size="sm"
         kind={human ? "human" : "agent"}
         avatar={seat.avatar}
-        {...(ring ? { ring } : {})}
+        status={status}
         decorative
       />
       <span className="oc-row-text">

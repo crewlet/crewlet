@@ -43,6 +43,7 @@
  */
 
 import { useMemo } from "react";
+import type { AvatarStatus } from "@crewlethq/ui";
 import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useQuery } from "./useQuery.ts";
@@ -1022,8 +1023,8 @@ export function kindWithAuthors(
 // library each folding the running-runs panel a different way — and a run
 // parked past a twelve-hour age-out dropped out of every ring at once.
 //
-// So everything below is a MAPPER: the engine's word to a ring tone, a label
-// and a line of prose. Nothing here, and nothing anywhere else, reads a live
+// So everything below is a MAPPER: the engine's word to an avatar status, a
+// pill's tone, a label and a line of prose. Nothing here, and nothing anywhere else, reads a live
 // call's state to decide whether a seat is working — `seats.test.ts` holds
 // that as a source gate over the whole tree.
 
@@ -1104,31 +1105,25 @@ export function awaitingPerson(status: string | undefined): boolean {
   return status === "awaiting_clarification" || status === "reseed";
 }
 
-/** The ring round a seat's badge: the one place a seat's state has a hue. */
-export type SeatRing = "info" | "warning" | "danger";
-
 /**
- * The ring for a state, and NONE for idle.
+ * The status badge on a seat's avatar: the engine's own word, and NONE for an
+ * idle seat or one no row is held for.
  *
- * WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and an idle seat
- * draws no ring at all. An idle seat drawn as a green pill read as activity —
- * the product's own complaint was "when agent is idle it has this blob
- * lighting which feels like it is working" — and the fix for that is not a
- * duller hue, it is none. Amber is reserved for the one state that asks for a
- * person.
+ * THE KIT'S STATUSES ARE THE ENGINE'S WORDS (`working`, `needs`, `stopped`), so
+ * this maps nothing but idle and offline away. The badge is a glyph on the
+ * avatar's corner whose shape says the state (play, a question, a square),
+ * and the row it stands in says the state in words as well; a badge drawn
+ * alone is what the glyph is for. An idle seat carries none: the product's
+ * own complaint about the green it used to wear was "when agent is idle it
+ * has this blob lighting which feels like it is working", and the fix for
+ * that is not a duller mark, it is none.
  */
-export function ringOf(state: SeatState | undefined): SeatRing | undefined {
-  switch (state) {
-    case "working":
-      return "info";
-    case "needs":
-      return "warning";
-    case "stopped":
-      return "danger";
-    default:
-      return undefined;
-  }
+export function statusOf(state: SeatState | undefined): AvatarStatus | undefined {
+  return state === "working" || state === "needs" || state === "stopped" ? state : undefined;
 }
+
+/** The kit tone a state's pill takes. */
+export type SeatTone = "info" | "warning" | "danger";
 
 /**
  * Which node holds a seat's lease, as far as the PUBLIC health push can say.
@@ -1158,9 +1153,22 @@ export function heldBy(
   return "another node";
 }
 
-/** The kit tone a state's pill takes: its ring's, or neutral where it has none. */
-export function toneOf(state: SeatState | undefined): SeatRing | "neutral" {
-  return ringOf(state) ?? "neutral";
+/**
+ * The kit tone a state's pill takes, the same fill its avatar's status badge
+ * stands on: WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and idle
+ * is neutral. Amber is reserved for the one state that asks for a person.
+ */
+export function toneOf(state: SeatState | undefined): SeatTone | "neutral" {
+  switch (state) {
+    case "working":
+      return "info";
+    case "needs":
+      return "warning";
+    case "stopped":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 /** The state in one lowercase word or two, for a pill. */

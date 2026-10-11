@@ -58,7 +58,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { activityOf, indexOrg, ringOf, turnItemKey } from "~/lib/seats.ts";
+import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
 import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
@@ -474,7 +474,7 @@ function StarredSection({ path }: { path: string[] }) {
 
 /**
  * The turns running now, one row per seat the engine says is WORKING: the
- * seat's badge with its ring, its name, the key of the item the turn is
+ * seat's badge with its status, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
  * phase it is on open, or a parked turn's coding run live above its phases.
  *
@@ -524,7 +524,7 @@ function RunningSection({
                 kind="agent"
                 avatar={avatars(row)}
                 size="xs"
-                ring={ringOf(activityOf(row))}
+                status={statusOf(activityOf(row))}
                 decorative
               />
             }

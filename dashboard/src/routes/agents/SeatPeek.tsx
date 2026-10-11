@@ -62,7 +62,7 @@ import {
   heldBy,
   indexOrg,
   nameOfIn,
-  ringOf,
+  statusOf,
   roundOf,
   seatPath,
   stateLine,
@@ -175,7 +175,7 @@ function SeatPeekBody({
   const sandboxes = useSandboxes();
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const item = call?.work_item?.key || turn?.work_item?.key || "";
@@ -212,7 +212,7 @@ function SeatPeekBody({
           size="lg"
           kind={human ? "human" : "agent"}
           avatar={seat.avatar}
-          {...(ring ? { ring } : {})}
+          status={status}
           decorative
         />
         <div className="seat-peek-who">

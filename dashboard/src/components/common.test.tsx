@@ -106,6 +106,18 @@ test("a seat two rounds in reads as its third round", () => {
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
+test("a seat card says its state with the badge's glyph and its pill, and no coloured edge", () => {
+  // A card in a state's colour beside a plate in the agent's own put two hues
+  // on one seat, so the edge stripe is gone and the badge carries the glyph.
+  const { container } = render(
+    <SeatCard seat={seat()} agent={running("execute")} nameOf={(k) => k} />,
+  );
+  const card = container.querySelector("a.seat-card")!;
+  expect(card.getAttribute("data-tone")).toBeNull();
+  expect(card.querySelector(".crewlet-avatar__status--working")).not.toBeNull();
+  expect(card.innerHTML).not.toContain("ring-");
+});
+
 test("a seat card links through seatPath, so an empty handle still reaches a page", () => {
   const { container } = render(
     <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,

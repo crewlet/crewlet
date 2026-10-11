@@ -35,7 +35,6 @@
 
 import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
-import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
@@ -43,7 +42,7 @@ import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
 import type {
@@ -237,27 +236,43 @@ export function AskList({
   );
 }
 
+/**
+ * One decision: the seat it is about, what it is, and the buttons that make it.
+ *
+ * THE ROW'S STATE TWICE, in two forms: the glyph on the seat's badge, and the
+ * same state as the first words of the line under the title. An ask and a
+ * parked run wait on a person (`needs`); a seat refused by its budget has
+ * stopped. The glyph is what a reader scanning the column of badges sees, and
+ * the word is what one reading the row, or one who cannot tell the fills
+ * apart, is told.
+ */
 function Row({
   who,
-  ring,
+  status,
   title,
   sub,
   line,
   actions,
 }: {
   who: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
-  ring: "warning" | "danger";
+  status: "needs" | "stopped";
   title: ReactNode;
-  sub: ReactNode;
+  sub: ReactNode[];
   line?: ReactNode;
   actions: ReactNode;
 }) {
   return (
     <li className="decision-row">
-      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} ring={ring} size="md" />
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} status={status} size="md" />
       <div className="decision-body">
         <span className="decision-title">{title}</span>
-        <span className="decision-sub">{sub}</span>
+        <span className="decision-sub">
+          <span className="decision-state" data-state={status}>
+            {stateWord(status)}
+          </span>
+          {sub.length > 0 && " · "}
+          {sub}
+        </span>
         {line && <span className="decision-line">{line}</span>}
       </div>
       <div className="decision-actions">{actions}</div>
@@ -282,7 +297,7 @@ function Key({ value }: { value: string }) {
   );
 }
 
-function joined(parts: ReactNode[]): ReactNode {
+function joined(parts: ReactNode[]): ReactNode[] {
   const shown = parts.filter((p) => p !== null && p !== undefined && p !== "" && p !== false);
   return shown.map((part, i) => (
     <span key={i}>
@@ -344,7 +359,7 @@ function AskRow({
   return (
     <Row
       who={asker}
-      ring="warning"
+      status="needs"
       title={`${asker.name} asks: ${question}`}
       sub={sub}
       line={line}
@@ -385,7 +400,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   return (
     <Row
       who={who}
-      ring="warning"
+      status="needs"
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
       line={holdLine(run, now)}
@@ -441,9 +456,9 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   return (
     <Row
       who={who}
-      ring="danger"
-      title={`${who.name} stopped — ${period ? `${period} ` : ""}token budget exhausted`}
-      sub={sub || EMPTY_VALUE}
+      status="stopped"
+      title={`${who.name} stopped: ${period ? `${period} ` : ""}token budget exhausted`}
+      sub={sub}
       actions={
         <>
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope

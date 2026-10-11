@@ -37,7 +37,7 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
-import type { SeatRing } from "~/lib/seats.ts";
+import type { AvatarStatus } from "@crewlethq/ui";
 import type { WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
 
@@ -260,7 +260,7 @@ export function Subtasks({
   error,
   chrome,
   parent,
-  ringOf,
+  statusOf,
   peek,
 }: {
   rows: WorkSummary[];
@@ -268,8 +268,8 @@ export function Subtasks({
   chrome: RowChrome;
   /** The task a new sub-task is filed under; absent where none may be added. */
   parent?: WorkItem;
-  /** The ring round a holder's badge — their seat's state. */
-  ringOf?: (handle: string) => SeatRing | undefined;
+  /** The glyph on a holder's badge: their seat's state. */
+  statusOf?: (handle: string) => AvatarStatus | undefined;
   /**
    * Open a child in the rail instead of navigating to it. ABSENT IS A REAL
    * SETTING — the row stays the plain link it already is — and the peek
@@ -342,7 +342,7 @@ export function Subtasks({
             seatName={chrome.seatName}
             seatKind={chrome.seatKind}
             seatAvatar={chrome.seatAvatar}
-            ring={row.assignee ? ringOf?.(row.assignee) : undefined}
+            status={row.assignee ? statusOf?.(row.assignee) : undefined}
           />
         </a>
       ))}

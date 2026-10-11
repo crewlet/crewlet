@@ -68,7 +68,7 @@ import {
   humanize,
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
-import { activityOf, doingWords, ringOf, type OrgIndex } from "~/lib/seats.ts";
+import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
 import {
   changeClauses,
   changeMark,
@@ -758,7 +758,7 @@ function LiveRow({
           kind="agent"
           avatar={chrome.seatAvatar?.(handle)}
           size={28}
-          ring={ringOf(activityOf(row))}
+          status={statusOf(activityOf(row))}
           decorative
         />
       </span>
