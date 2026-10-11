@@ -847,8 +847,9 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	change := Change{
 		V: DocumentVersion, ID: at.record.OpID, PageID: pageID, Kind: kind,
 		Actor: at.record.Actor, ActorKind: at.record.ActorKind,
-		OperatorID: at.record.OperatorID, CommentID: commentID,
-		Excerpt: excerpt, TurnID: at.record.TurnID, Chain: at.record.Chain,
+		OperatorID: at.record.OperatorID, ActorSeat: at.record.ActorSeat,
+		CommentID: commentID, Excerpt: excerpt,
+		TurnID: at.record.TurnID, Chain: at.record.Chain,
 		Quiet: quiet == 1, CreatedAt: at.brokerAt,
 	}
 	document, err := EncodeChange(change)
@@ -857,12 +858,13 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO pages_history
-			(id, page_id, kind, actor, actor_kind, operator_id, comment_id,
-			 excerpt, turn_id, quiet, created_at, broker_at, version, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, page_id, kind, actor, actor_kind, operator_id, actor_seat,
+			 comment_id, excerpt, turn_id, quiet, created_at, broker_at, version,
+			 document)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		change.ID, pageID, string(kind), change.Actor, string(change.ActorKind),
-		change.OperatorID, commentID, excerpt, change.TurnID, quiet,
+		change.OperatorID, change.ActorSeat, commentID, excerpt, change.TurnID, quiet,
 		store.EncodeTime(at.brokerAt), store.EncodeTime(at.brokerAt),
 		at.packed, document)
 	if err != nil {

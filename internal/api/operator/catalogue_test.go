@@ -46,7 +46,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
+			Actor: operator.PageActor(nil, nil),
 		},
 	})
 	if s == nil {
@@ -127,7 +127,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 	t.Parallel()
 	kb := &recordingPages{}
 	s := newSurface(t, operator.Options{
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor(nil, nil)},
 	})
 	if s == nil {
 		t.Fatal("a company on the native knowledge base got no surface")

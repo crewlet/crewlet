@@ -682,6 +682,20 @@ Two properties differ from the vendor path and both are visible:
   names who wrote it — never "the dashboard". A save states the revision it
   edited; one against a stale revision is refused rather than overwriting
   prose somebody else just wrote.
+- **A TOKEN IS THE AUTHOR AND ITS PERSON IS THE SEAT.** A write through an
+  operator's token records the token's own name as its actor, because an
+  author field the writer chooses is not an audit trail, and it carries the
+  seat that token is bound to by `contact.crewlet_operator_id` beside it as
+  `actor_seat`: on the record (pages record version 2) and on the history row
+  it writes. Everything about the PERSON reads the seat. A watch follows the
+  page as the person, since a wake reaches a seat and never a credential; a
+  page they create subscribes them; their own write wakes neither their
+  subscription nor the lead's copy for a space they lead; a page that names no
+  space lands in their team's space, as a seat's own write does; and a history
+  row, a revision and a comment draw them rather than the credential. A token
+  bound to nobody holds no subscription at all. This is the tracker's rule
+  (its history has carried `actor_seat` since replicated migration 0026),
+  applied to the knowledge base.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.

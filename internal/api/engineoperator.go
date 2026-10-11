@@ -271,10 +271,13 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	if pagesReadable && pagesWritable {
 		opts.Pages = builtin.PageDeps{
 			Reader: pageReader, Writer: pageWriter,
-			Actor:    operator.PageActor,
+			Actor:    operator.PageActor(opts.Org, opts.Env),
 			Mentions: engine.LiveMentions(e),
-			Reserved: engineReserved(e),
-			Await:    e.AwaitEstate,
+			// THE PERSON'S OWN TEAM SPACE, for a write that names none, on
+			// the rule a seat's own writes follow ([engine.LiveSeatSpace]).
+			DefaultContainer: engine.LiveSeatSpace(e),
+			Reserved:         engineReserved(e),
+			Await:            e.AwaitEstate,
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:

@@ -130,6 +130,11 @@ type Change struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
+	// ActorSeat is the person an operator's token was bound to when it wrote
+	// this, copied from the record ([MutationRecord.ActorSeat]): who the row
+	// draws, beside the token it records.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
 	CommentID string `json:"comment_id,omitempty"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
@@ -172,7 +177,7 @@ var (
 	revisionFields = fieldSet(Revision{}, "message", "author")
 	commentFields  = fieldSet(Comment{}, "mentions", "reply_to")
 	changeFields   = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
-		"comment_id", "excerpt", "turn_id", "chain", "quiet")
+		"actor_seat", "comment_id", "excerpt", "turn_id", "chain", "quiet")
 )
 
 // EncodeContainer renders a container.

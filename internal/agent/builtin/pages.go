@@ -470,8 +470,10 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		CallKey:   t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if in.Container == "" {
+		// THE PERSON'S TEAM, never the token's: an operator's token names no
+		// seat, and the seat it is bound to does ([pages.Actor.Person]).
 		if t.deps.DefaultContainer != nil {
-			in.Container = t.deps.DefaultContainer(actor.Handle)
+			in.Container = t.deps.DefaultContainer(actor.Person())
 		}
 		if in.Container == "" {
 			return failed("write_page needs a `container`: your team owns none, " +
