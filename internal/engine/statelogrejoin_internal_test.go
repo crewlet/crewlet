@@ -142,6 +142,16 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if ok, domain := e.SeatsServiceable(); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
+	// AND THE NEXT BEAT FINDS THE SAME HISTORY: a running node's heartbeat
+	// compares the record its checkpoint names with the log's record there
+	// every ten seconds, so an adoption the node only keeps until that beat
+	// is no adoption. Run once rather than waited for, as above.
+	e.native.Load().log.publishPositions(t.Context())
+	if !e.NativeHydrated(t.Context()) {
+		t.Fatal("the node withdrew its seats at the first heartbeat after " +
+			"adopting — the adopted checkpoint names another record than the " +
+			"log holds at its sequence")
+	}
 	// AND THE CONSUMER WAS MOVED: nothing below the artefact's position is
 	// pending for the applier to drop.
 	pending, err := running.consumer.Pending(t.Context())
@@ -364,10 +374,23 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 // tracker checkpoint advanced to last — what a peer holds that applied the
 // barriers past at, since a barrier writes no rows — and quiesces it, so the
 // file is self-contained for whatever opens or installs it.
+//
+// THE CHECKPOINT NAMES THE RECORD AT last, by the instant the broker stored it,
+// as a peer's commit of that barrier wrote it. Advancing the sequence alone
+// left it naming the node's own record at at — another record than the log
+// holds at last, which the purge keeps — so the adopter's first heartbeat
+// found the log diverged from the rows it had just installed and took its
+// copy out of service, and a case that read the node before that beat passed
+// on the race.
 func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
 	t.Helper()
+	_, _, storedAt, ok, err := running.log.At(t.Context(), last)
+	if err != nil || !ok {
+		t.Fatalf("read the log's record at %d, which the copy's checkpoint "+
+			"names: found %v, %v", last, ok, err)
+	}
 	if _, err := storetest.ReplicatedDB(t, back.Store.Replicated()).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
@@ -378,12 +401,15 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, ?, ?, 0)
+				(stream, generation, seq, stream_created_at, stored_at, updated_at,
+				 applied_version)
+			VALUES (?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET
-				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
+				seq = excluded.seq, stream_created_at = excluded.stream_created_at,
+				stored_at = excluded.stored_at`,
 			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(time.Now().UTC()))
+			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(storedAt),
+			store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
 		t.Fatalf("advance the copy's checkpoint: %v", err)
