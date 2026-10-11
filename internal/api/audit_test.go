@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -226,6 +227,20 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		status: http.StatusInternalServerError,
 		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
 			fields: map[string]any{"dir": "/var/backups/two"}},
+	}, {
+		// A BACKUP A NEWER BUILD'S RECORD REFUSES ran its copy first, so it
+		// is a failed backup in the history like any other — whatever its
+		// answer says to do about it.
+		name: "a backup a newer build's record refuses",
+		taker: &fakeBackup{err: fmt.Errorf("backup: a record: %w",
+			objstore.ErrRecordUnreadable)},
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := post(t, a, "/backup?dir=/var/backups/four", "founder-secret")
+			return status
+		},
+		status: http.StatusConflict,
+		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
+			fields: map[string]any{"dir": "/var/backups/four"}},
 	}, {
 		// A DESTINATION REFUSAL IS BEFORE THE COPY: nothing was written, so
 		// it is not a failed backup in anybody's history.

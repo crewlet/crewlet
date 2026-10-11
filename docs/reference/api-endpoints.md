@@ -4700,8 +4700,8 @@ Five refusals, each pointing somewhere different:
   backup again. A backup without those objects is refused rather than written,
   because they may well be intact there — and the first object the store still
   does not answer for once it has been asked four times stops the copy, since
-  the backup is refused for it whatever the rest do. An object the store *answered* it does
-  not hold, or holds as bytes other than the ones the file records, is
+  the backup is refused for it whatever the rest do. An object the store
+  *answered* it does not hold, or holds as bytes other than the ones the file records, is
   different — it is lost whatever the backup does — and is listed in the
   manifest's `objects.lost` (each with the file that named it, as
   `{"object", "named_by"}`) rather than refused, so one lost file never stops
@@ -4716,11 +4716,25 @@ Five refusals, each pointing somewhere different:
   each object the backup owes, so the same refusal and the same `lost` list
   apply there too. Either way the backup owes, besides the copy's own, every
   object a record the restore replays from the copy names — a file written
-  while the backup ran — and `objects.replayed` counts those. A record this
-  build cannot read that may write a file refuses the backup with a `500`:
-  take it from a node running the build that wrote it. An object only a
-  [retired](../concepts/object-store.md#live-and-retired-references) row names
-  is neither copied, asked after nor listed.
+  while the backup ran — and `objects.replayed` counts those. An object only
+  a [retired](../concepts/object-store.md#live-and-retired-references) row
+  names is neither copied, asked after nor listed.
+- **409 `record_unreadable`** — a log the backup reads past its store copy
+  holds a record this node's build cannot read that may write a file: a newer
+  build's, during a rolling upgrade. It may name a file the backup would not
+  carry, so the backup is refused rather than guessed: take it from a node
+  running the build that wrote the record, or from this one once it is
+  upgraded. The `hint` says so.
+- **409 `log_recreated`** — this node's store copy is keyed to an earlier
+  instance of a log that has since been recreated, so its position names
+  records on a log that no longer exists. Take the backup once this node has
+  re-keyed to the live log, or from a node that has.
+- **503 `log_gap`** — a log a restore replays from the store copy no longer
+  holds every record between the copy's position and its snapshot: the trim
+  ran past the copy, or the log has a hole in it. Take the backup again — the
+  next copy stands past the gap — and if it is refused the same way, look for
+  `backup_hold_not_renewed` in the node's log: the trim hold did not cover the
+  copy.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
@@ -4729,10 +4743,11 @@ Five refusals, each pointing somewhere different:
 Every backup that began copying leaves a `backup_requested` event naming the
 caller, the node, the directory and whether it finished — a failed one
 included, since it may have left files there. A destination refused with a
-`400`, and a backup refused with a `409` while another runs, wrote nothing and
-leave no event — each is only ever answered before a byte is copied; a refusal
-that arrives with part of the copy already in the
-directory is a failed backup and is recorded as one: see
+`400`, and a backup refused with `409 backup_running` while another runs,
+wrote nothing and leave no event — each is only ever answered before a byte is
+copied; every other refusal — `record_unreadable`, `log_recreated`, `log_gap`
+and `objects_unreachable` among them — arrives with part of the copy already
+in the directory, and is a failed backup recorded as one: see
 [the runtime audit](#the-runtime-audit-sourceoperator).
 
 The request has no deadline of its own on the engine's side, and a client

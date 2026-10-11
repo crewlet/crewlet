@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,9 +187,9 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "b")
 	_, err := service(t, db, nc).Take(t.Context(), dir)
-	if err == nil {
-		t.Fatal("a backup whose store copy names a position the captured log " +
-			"can no longer reach reported success")
+	if !errors.Is(err, backup.ErrLogGap) {
+		t.Fatalf("a backup whose store copy names a position the captured log "+
+			"can no longer reach answered %v; want ErrLogGap", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, backup.ManifestName)); statErr == nil {
 		t.Fatal("a manifest was written over the hole")

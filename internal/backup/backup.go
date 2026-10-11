@@ -212,6 +212,18 @@ var ErrBackupRunning = errors.New("backup: a backup is already running on this n
 	"take this one once it finishes; two at once would share the node's one trim " +
 	"hold, and the first to finish would release the other's pin")
 
+// ErrLogGap refuses a backup whose store copy a restore could not replay to
+// the snapshot: a record the log no longer holds lies between the copy's
+// position and the snapshot's last sequence — the trim ran past the copy
+// (the assertion), or the window a restore replays has a hole in it.
+//
+// ONE NAME FOR BOTH, because they are one fact to whoever reads the refusal —
+// the log a restore needs is missing records — with one remedy: take the
+// backup again, whose copy stands past them, and look at the trim hold if it
+// is refused the same way. Nothing is wrong with the request, and a 500 would
+// send an operator to a node log for a backup the next attempt takes.
+var ErrLogGap = errors.New("backup: the log a restore replays from the copy is missing records")
+
 // Manifest describes one backup: what was captured, from where, and when.
 //
 // It is the artifact a restore reads, so every field here is something a
@@ -1061,14 +1073,14 @@ func assertReplayable(m Manifest) error {
 			return err
 		}
 		if !statelog.Replayable(at.Seq, first) {
-			return fmt.Errorf("backup: the store copy stands at %s sequence %d "+
+			return fmt.Errorf("%w: the store copy stands at %s sequence %d "+
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
 				"prefix with a hole in it and report nothing. The trim hold did "+
 				"not cover the copy; look for backup_hold_not_renewed in this "+
 				"node's log (a hold that misses its renewals is read as "+
 				"abandoned), then take the backup again",
-				artifact.Name, at.Seq, first)
+				ErrLogGap, artifact.Name, at.Seq, first)
 		}
 	}
 	return nil

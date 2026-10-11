@@ -668,6 +668,12 @@ past any plausible duration for that reason.
 
 One backup runs at a time on a node: asked for while another runs there, the
 node answers `409 backup_running` and writes nothing, and the command says so.
+A refusal the fleet's own state causes is printed with the node's hint saying
+what to do: `409 record_unreadable` (a log the backup replays holds a newer
+build's record — take it from a node running that build), `409
+log_recreated` (this node's copy is keyed to a log since recreated — take it
+once the node has re-keyed, or from one that has) and `503 log_gap` or `503
+objects_unreachable` (take it again).
 
 See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
