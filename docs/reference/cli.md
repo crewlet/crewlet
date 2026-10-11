@@ -1239,7 +1239,9 @@ stream's own `created_at`, and which case it is, and refuses**: the
 confirmation means *I looked at the thing I am re-anchoring*, and a verb that
 read the value and fed it straight back would be confirming against its own
 output. Paste the instant back exactly as printed — it is the same one a
-`wrong_stream` refusal names as the broker's.
+`wrong_stream` refusal names as the live stream's: the creation instant
+stamped into its configuration (`crewlet.created_at`), which a snapshot
+restore keeps.
 
 The three cases are where the log is followed **from**:
 

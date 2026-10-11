@@ -181,19 +181,20 @@ type RunnerDeps struct {
 	Checkpoint         Position
 	CheckpointStoredAt time.Time
 
-	// StreamCreatedAt is the broker's own creation instant for this
-	// stream, AS THE BROKER REPORTS IT NOW, stored beside the checkpoint as
-	// the DETECTOR: a recreated stream starts its sequences again, and this
-	// is what notices — the loop compares it against the instant the
-	// checkpoint was committed under and STOPS on a difference, because
-	// every position it holds names a number space that no longer exists.
+	// StreamCreatedAt is this stream's creation instant ([StreamCreatedAt]),
+	// AS A READING OF THE STREAM REPORTS IT NOW — the instant its creator
+	// stamped into its configuration — stored beside the checkpoint as the
+	// DETECTOR: a recreated stream starts its sequences again, and this is
+	// what notices — the loop compares it against the instant the checkpoint
+	// was committed under and STOPS on a difference, because every position it
+	// holds names a number space that no longer exists.
 	//
-	// It must come from the broker, never from the checkpoint row: a
-	// value read back out of the row is compared against itself and
-	// detects nothing, which is exactly what the engine did until the
-	// wiring was tested. The zero value declares no identity at all, which
-	// skips the comparison; the engine never passes it, and a caller that
-	// cannot say which stream it is on is one that should refuse to run.
+	// It must come from a reading of the stream, never from the checkpoint
+	// row: a value read back out of the row is compared against itself and
+	// detects nothing, which is exactly what the engine did until the wiring
+	// was tested. The zero value declares no identity at all, which skips the
+	// comparison; the engine never passes it, and a caller that cannot say
+	// which stream it is on is one that should refuse to run.
 	//
 	// A reanchor re-keys it ([Runner.Reanchored]) to the instant the
 	// operator confirmed, which is the stream the checkpoint then names.
@@ -276,9 +277,9 @@ type Runner struct {
 	mu sync.Mutex
 
 	// created is the creation instant of the stream this runner's positions
-	// are keyed to — the broker's own at construction, and the one a
-	// reanchor confirmed after it. UNDER mu, because a reanchor re-keys it
-	// while the heartbeat compares live readings against it.
+	// are keyed to — the stream's own ([StreamCreatedAt]) at construction, and
+	// the one a reanchor confirmed after it. UNDER mu, because a reanchor
+	// re-keys it while the heartbeat compares live readings against it.
 	created time.Time
 
 	// cursor is the committed checkpoint, and ITS GENERATION IS THE
@@ -610,10 +611,10 @@ func (r *Runner) Stance() Stance {
 }
 
 // StreamCreatedAt is the creation instant of the stream this runner's
-// positions are keyed to: the broker's own when the runner was built, and the
-// one a reanchor confirmed after that. It is what every live reading of the
-// stream is compared against ([Runner.ObserveStream]) and what the checkpoint
-// is loaded against.
+// positions are keyed to: the stream's own ([StreamCreatedAt]) when the runner
+// was built, and the one a reanchor confirmed after that. It is what every
+// live reading of the stream is compared against ([Runner.ObserveStream]) and
+// what the checkpoint is loaded against.
 //
 // THE RUNNER'S, rather than a copy the engine sampled at boot, because a
 // reanchor re-keys it under a running process — and a copy kept elsewhere went
@@ -735,9 +736,9 @@ func (r *Runner) Stopped() error {
 	return r.stopped
 }
 
-// ObserveStream takes one LIVE reading of the broker's creation instant for
-// this applier's stream, and answers true the one time a reading establishes
-// that the stream is not the one this applier started against.
+// ObserveStream takes one LIVE reading of the creation instant of this
+// applier's stream ([StreamCreatedAt]), and answers true the one time a reading
+// establishes that the stream is not the one this applier started against.
 //
 // # Why the applier is told rather than asking
 //
@@ -1981,7 +1982,7 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		r.deferred, r.hasDefer = d, hasDefer
 		// A RECREATED STREAM IS DETECTED HERE and nowhere else, and IT
 		// IS A STOP. The generation is the response and this is what
-		// notices: the broker's own creation instant moving means every
+		// notices: the stream's creation instant moving means every
 		// stored sequence — the checkpoint, every anchor, every version —
 		// is a number in a space it no longer belongs to, and a consumer
 		// resumed from the checkpoint waits for a sequence that never

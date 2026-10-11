@@ -1131,15 +1131,35 @@ waits for you.
 
 ## Re-anchoring a recreated or restored log
 
-If a stream is genuinely recreated — deleted and remade, restored from a
-broker-level backup, rebuilt by hand — its sequences restart at 1. Every
-position the fleet holds then names a number space that no longer exists: a
-stored version, a consumer cursor, an arbitration anchor. Nodes refuse to
-serve, which is correct.
+If a stream is genuinely recreated — deleted and remade, rebuilt by hand, or
+provisioned afresh on a broker that lost its store — its sequences restart at
+1. Every position the fleet holds then names a number space that no longer
+exists: a stored version, a consumer cursor, an arbitration anchor. Nodes
+refuse to serve, which is correct.
 
-The engine detects this from the stream's own **creation instant**, which the
-broker reports and every applier compares at boot against the instant its
-checkpoint was committed under. On a difference the applier **stops** rather
+The engine detects this from the stream's own **creation instant**, which
+every applier compares at boot against the instant its checkpoint was
+committed under. It is the instant the node whose create made the stream
+stamped into the stream's configuration, as the metadata key
+`crewlet.created_at` (`nats stream info` lists it under the stream's
+metadata) — not the broker's own creation time, which a snapshot restore
+resets to the moment of the restore, and which is read only for a stream
+that carries no stamp, one an operator created by hand. A stream restored
+from a snapshot is handed back the configuration it was taken with, stamp
+and all, so it is the **same** stream: it holds every record at its own
+sequence, and is judged exactly as the restored broker below is. A stream
+the engine provisions again after it was lost is stamped anew, which is the
+recreation. A stream deleted and remade from a configuration that still
+carries `crewlet.created_at` — the configuration `nats stream info --json`
+printed, passed to `nats stream add --config`, which is the usual way to
+recreate one identically — is the **same** stream to every node too: the copied
+instant declares it the same history, so it is never refused as recreated and
+is judged only by where it ends and what it holds at each node's checkpoint
+(below). Its re-anchor is then the restored case, followed from its end, so
+records written into it since need `-discard`; as a recreation it would be
+followed from its first surviving record. To make a deliberate rebuild read as
+a recreation, remove that metadata key from the configuration before creating
+the stream. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
 reads and writes refuse `wrong_stream` with that reason, it takes its copy of
 that domain out of service — that domain's operations go to a peer, and its
@@ -1151,7 +1171,10 @@ because a position the log has never reached is a position on another stream.
 **A broker restored from an older copy is the case the instant cannot see.**
 Bringing back the broker's store directory from a disk snapshot — or, for the
 embedded broker, restarting the engine on yesterday's volume — keeps the stream
-it had, creation instant and all, so every identity check passes. What differs
+it had, creation instant and all, and so does restoring its streams from their
+snapshots (a [`crewlet backup`](backup.md#restoring), or `nats stream
+restore`), which hands each one back the configuration that carries its
+instant; so every identity check passes. What differs
 is where the log **ends**: below the checkpoint of a node whose own database is
 newer. Such a node refuses every read and every write of that domain with
 `wrong_stream` from the moment it boots, logs `statelog_ahead_of_log` with both
@@ -1319,7 +1342,8 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00
 ```
 
 The confirmation is the **live** stream's own `created_at` — the instant the
-`wrong_stream` refusals name as the broker's — exactly as the verb prints it,
+`wrong_stream` refusals name as the live stream's, its `crewlet.created_at` —
+exactly as the verb prints it,
 nanoseconds and all. The verb **prints it and refuses** rather than reading it
 and feeding it straight back — otherwise it would be confirming against its own
 output. An instant that differs at the microsecond is another stream, and is

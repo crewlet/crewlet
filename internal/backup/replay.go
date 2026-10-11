@@ -341,7 +341,10 @@ func (p *objectPass) readLog(ctx context.Context, js jetstream.JetStream, l decl
 		return fmt.Errorf("backup: look up %s to read past the copy: %w", l.stream, err)
 	}
 	cursor, keyed := cursors[l.stream]
-	created := stream.CachedInfo().Created
+	created, err := statelog.StreamCreatedAt(stream.CachedInfo())
+	if err != nil {
+		return fmt.Errorf("backup: identify %s to read past the copy: %w", l.stream, err)
+	}
 	if statelog.IdentityOf(cursor.StreamCreatedAt, created, keyed) == statelog.StreamRecreated {
 		return fmt.Errorf("backup: the copy's checkpoint on %s was taken on an earlier "+
 			"instance of the stream (created %s; the live one was created %s), so its "+

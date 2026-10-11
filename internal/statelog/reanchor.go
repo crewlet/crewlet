@@ -626,8 +626,8 @@ type ReanchorStream interface {
 	Appender
 	LogReader
 
-	// CreatedAt is the stream's creation instant as the broker reports it
-	// NOW — read on every call, never cached.
+	// CreatedAt is the stream's creation instant ([StreamCreatedAt]) as a
+	// reading of it reports it NOW — read on every call, never cached.
 	CreatedAt(ctx context.Context) (time.Time, error)
 }
 
