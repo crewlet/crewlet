@@ -52,10 +52,11 @@
 //
 // [OpenNode] and [DB.OpenReplicated] therefore take an advisory OS lock for
 // the life of the handle and answer a second PROCESS with [ErrLocked] — before
-// any driver work, and naming the pid that holds the file. See lock.go for why
-// an OS lock rather than a pid file, and why two handles inside one process share the claim
-// instead. That is what makes the rule above true rather than merely stated:
-// the secret-store CLIs open this database from a second process as their
+// any driver work, and naming the pid that holds the file. The claim is
+// internal/filelock's, whose package doc says why an OS lock rather than a pid
+// file; lock.go says why two handles inside one process share it instead.
+// That is what makes the rule above true rather than merely stated: the
+// secret-store CLIs open this database from a second process as their
 // documented gesture, and before the lock the only defence was this comment.
 //
 // Everything that genuinely needs cross-process coordination — seat leases,

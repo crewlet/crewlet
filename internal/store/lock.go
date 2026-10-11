@@ -3,13 +3,12 @@ package store
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/crewlet/crewlet/internal/filelock"
 )
 
 // Enforcing "one file, one process".
@@ -39,19 +38,17 @@ import (
 // documented gesture. Before this lock the only defence was a printed
 // warning, which is a defence against an operator who reads it.
 //
-// # Why an OS lock rather than a pid file
+// # The mechanism is internal/filelock
 //
-// A pid file has to answer "is that process still alive?", and the portable
-// answer is worse than the question: os.FindProcess succeeds for any pid on
-// Unix, Signal(0) is unsupported on Windows, and pids are reused. A crashed
-// engine would leave a lock nobody could safely clear.
-//
-// An advisory file lock is released by the KERNEL when the holder exits,
-// however it exits. A crash frees it; a kill -9 frees it; a container OOM
-// frees it. There is no stale state to reap and no liveness check to get
-// wrong. The lock is taken on a SIDECAR file rather than the database itself,
-// because the driver opens and closes the database on its own schedule and a
-// lock on a descriptor it owns is a lock we cannot reason about.
+// The claim itself — an advisory flock on a SIDECAR beside the database,
+// non-blocking, stamped with its holder, released by the kernel however the
+// holder exits — is internal/filelock's, and its package doc carries why an
+// OS lock rather than a pid file, why flock rather than fcntl, why the
+// sidecar is never removed and why a lock that is only advisory is still the
+// right one. The sidecar rather than the database file, because the driver
+// opens and closes the database on its own schedule and a lock on a
+// descriptor it owns is a lock we cannot reason about. What this file adds on
+// top is what only the store needs: the refcount below, and the discard.
 //
 // # Cross-PROCESS, not cross-handle
 //
@@ -63,15 +60,6 @@ import (
 // and only the last Close releases it. Refusing in-process would break the
 // legitimate case (a test proving that mutual exclusion lives in a SQL
 // statement rather than in a pool) while catching nothing the real bug does.
-//
-// # Advisory, and honest about it
-//
-// A process that never asks does not notice. That is the correct trade here:
-// every opener of this database is this binary, the lock is taken inside
-// Open, and a foreign tool reading the file is a case no lock in Go would
-// have stopped either. What it guarantees is that two crewlet processes
-// cannot both hold one database — which is every occurrence of the bug that
-// actually exists.
 
 // lockSuffix names the sidecar. Beside the database rather than in a temp
 // directory, so a bind mount or a copied data directory carries the lock with
@@ -90,8 +78,10 @@ var ErrLocked = errors.New("store: the database is open in another process")
 // Shared by every handle this process has open on that path, and freed when
 // the last of them closes — see the refcount note above.
 type fileLock struct {
-	path string
-	file *os.File
+	// dbPath is the key this claim is filed under in locksHeld, so the
+	// last release finds its entry without walking the map.
+	dbPath string
+	claim  *filelock.Claim
 
 	// holds is how many live handles share this claim. Guarded by
 	// locksHeld's mutex, never by a field of its own: the count and the
@@ -160,9 +150,8 @@ func lockStore(dbPath string) (*fileLock, error) {
 // holds the path, and any handle asking while it holds the path is refused in
 // turn.
 //
-// The holder's identity is written into the sidecar AFTER the lock is held,
-// so what a refused opener reads is always a live holder's — never a
-// half-written line from a racing one.
+// A peer process holding the path is [ErrLocked], naming the holder
+// [filelock] read from the sidecar.
 func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// An in-memory database is per-connection by construction: there
@@ -192,25 +181,18 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 			return nil, fmt.Errorf("store: preparing %s: %w", dir, err)
 		}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("store: opening the lock beside %s: %w", dbPath, err)
-	}
-	held, err := tryLock(file)
+	claim, err := filelock.Take(path)
+	var peer *filelock.HeldError
 	switch {
-	case err != nil:
-		_ = file.Close()
-		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
-	case !held:
-		holder := readHolder(file)
-		_ = file.Close()
+	case errors.As(err, &peer):
 		return nil, fmt.Errorf("%w: %s is held by %s. Stop it before running "+
 			"this — the driver does not support two processes on one file, "+
 			"and does not reliably refuse the second one either",
-			ErrLocked, dbPath, holder)
+			ErrLocked, dbPath, peer.Holder)
+	case err != nil:
+		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
 	}
-	stamp(file)
-	lock := &fileLock{path: path, file: file, holds: 1, discarding: discarding}
+	lock := &fileLock{dbPath: dbPath, claim: claim, holds: 1, discarding: discarding}
 	locksHeld.by[dbPath] = lock
 	return lock, nil
 }
@@ -219,7 +201,7 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.
 func (l *fileLock) release() {
-	if l == nil || l.file == nil {
+	if l == nil || l.claim == nil {
 		return
 	}
 	locksHeld.mu.Lock()
@@ -227,78 +209,15 @@ func (l *fileLock) release() {
 	if l.holds--; l.holds > 0 {
 		return
 	}
-	for path, held := range locksHeld.by {
-		if held == l {
-			delete(locksHeld.by, path)
-			break
-		}
+	// The entry is this claim — each handle releases its share once, its
+	// Close being guarded — but compared rather than assumed, so a release
+	// that ever ran twice could not drop a newer claim filed under the path.
+	if locksHeld.by[l.dbPath] == l {
+		delete(locksHeld.by, l.dbPath)
 	}
-	// UNLOCK BEFORE CLOSE even though closing releases it: on a descriptor
-	// this process duplicated (a fork, a test harness), the close of one
-	// copy is not the release of the lock.
-	_ = unlock(l.file)
-	_ = l.file.Close()
-	// The sidecar is deliberately NOT removed. Unlinking it races a peer
-	// that has already opened it and is about to lock: that peer would
-	// take a lock on an unlinked inode and a third process would create a
-	// new file and lock that, so both would believe they hold it. An empty
-	// file is cheap; a lock that excludes nobody is not.
-}
-
-// stamp records who holds the lock, best effort.
-//
-// DIAGNOSTIC ONLY — nothing reads it to make a decision, the kernel's answer
-// is the decision — so a failure to write it must not fail an open that has
-// already succeeded.
-func stamp(file *os.File) {
-	if err := file.Truncate(0); err != nil {
-		return
-	}
-	host, _ := os.Hostname()
-	_, _ = file.WriteAt([]byte(fmt.Sprintf("pid %d on %s since %s\n",
-		os.Getpid(), host, time.Now().UTC().Format(time.RFC3339))), 0)
-	_ = file.Sync()
-}
-
-// maxHolderStamp bounds the sidecar read.
-//
-// Not a truncation of the stamp — stamp() writes one line of well under a
-// kilobyte — but a bound on a file this process does not fully control: the
-// path is operator-supplied, and reading an arbitrary file whole into an error
-// message is how a mistyped store path becomes a gigabyte in the heap. 8 KiB
-// is an order of magnitude past the longest stamp a 253-byte hostname can
-// produce.
-const maxHolderStamp = 8 << 10
-
-// readHolder describes the process holding the lock, for the error message.
-//
-// THE WHOLE STAMP. It used to read into a fixed 256-byte buffer, and stamp()
-// writes "pid N on HOST since TIMESTAMP" — a hostname may be up to 253 bytes,
-// so the one diagnostic an operator gets for a locked store could lose the
-// host, which is the single field telling them WHICH machine to go and look
-// at. The file is one line this process wrote; reading it whole costs nothing.
-func readHolder(file *os.File) string {
-	raw, err := io.ReadAll(io.NewSectionReader(file, 0, maxHolderStamp))
-	if err != nil {
-		return "another crewlet process"
-	}
-	if line := strings.TrimSpace(string(raw)); line != "" {
-		return line
-	}
-	// An empty sidecar is the window between a peer's lock and its stamp,
-	// or a release that left the file behind. Both mean "somebody, and we
-	// cannot say who" — which is more useful than an invented pid.
-	return "another crewlet process"
-}
-
-// pidOf reads the holder's pid from a stamp, for tests and diagnostics.
-func pidOf(stamped string) (int, bool) {
-	fields := strings.Fields(stamped)
-	if len(fields) < 2 || fields[0] != "pid" {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(fields[1])
-	return pid, err == nil
+	// Unlock before close, and the sidecar left in place: both are
+	// filelock's rules, and its package doc says what each prevents.
+	l.claim.Release()
 }
 
 // discard deletes a database and every sidecar beside it, holding the store's
