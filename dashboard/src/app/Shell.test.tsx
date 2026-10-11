@@ -1180,11 +1180,11 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1166);
+    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1167);
     try {
-      expect(win.asked).toContain("(width >= 1167px)");
+      expect(win.asked).toContain("(width >= 1168px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1167);
+      win.set(1168);
       expect(app.getAttribute("data-peek")).toBe("column");
     } finally {
       win.restore();
