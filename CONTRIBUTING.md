@@ -905,8 +905,16 @@ regenerated, never hand-edited.
 ## Documentation
 
 The pages under `docs/` are the source of truth and are published to
-[docs.crewlet.ai](https://docs.crewlet.ai). Keep them plain CommonMark: relative
-`.md` links between pages, figures in `docs/assets/`, one `# Heading` per page.
+[docs.crewlet.ai](https://docs.crewlet.ai/engine/latest/), under the engine's
+own path and a version: `/engine/latest/` is the newest release (until this
+engine's first release, a redirect to `main`'s pages), `/engine/next/` is
+`main`, and `/engine/vX.Y/` an older release line, with `schema/` and
+`skills/` published file for file beside each version's pages. Link
+`/engine/latest/`: a page or file the newest release lacks answers there with
+a redirect to its `/engine/next/` copy. Nothing forwards a path the site no
+longer builds. Keep the pages plain
+CommonMark: relative `.md` links between pages, figures in `docs/assets/`, one
+`# Heading` per page.
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
@@ -917,8 +925,13 @@ it goes red), and on a page under `docs/` that `docs/index.md` does not list.
 The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
 string the engine composes — are held by `dashboard/src/app/links.test.ts`
 against the dashboard's route resolver, along with every pointer at a
-`dashboard-design.md` heading. A link to a page that moved is fixed by pointing
-it at where the subject lives now, never by deleting the gate's view of it.
+`dashboard-design.md` heading. And `internal/docslinks` reads every text file
+in the tree for an absolute `https://docs.crewlet.ai` link, failing on one the
+site does not build — a root-shaped path, or a page, schema or skill under
+`/engine/latest/` or `/engine/next/` that this tree does not have — and on a
+page spelled without its trailing slash, which the site answers with a
+redirect. A link to a page that moved is fixed by pointing it at where the
+subject lives now, never by deleting the gate's view of it.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
