@@ -95,6 +95,26 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// A DECLARED PROJECT GITLAB ANSWERED 404 FOR, one finding each, on the
+	// group's reasoning above and jira's about a project key: GitLab cannot
+	// say whether the path is wrong or the credential's account cannot see
+	// the project, and either way no agent was made a member of it.
+	for _, project := range r.ProjectsNotFound {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: project,
+			Detail: fmt.Sprintf("GitLab answered 404 for the project %s, which "+
+				"provisioning.projects names, so no agent was made a member of it "+
+				"and, where the webhook is registered per project, nothing from "+
+				"it reaches this engine. GitLab answers 404 both for a project "+
+				"that does not exist and for one the credential's account cannot "+
+				"see", project),
+			Remedy: "check the path in integrations.gitlab.provisioning.projects " +
+				"and that the account owning integrations.gitlab.provisioning." +
+				"admin_token can see the project, or remove it from the list",
+		})
+	}
+
 	// A RUN THAT LEFT THE INSTANCE WITH NOWHERE TO DELIVER TO.
 	//
 	// This used to read `r.Hooked != "" && len(r.HookedOn) == 0`, described

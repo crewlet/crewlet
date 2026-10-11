@@ -2534,6 +2534,56 @@ func TestAForbiddenProjectIsNotSilentlySkipped(t *testing.T) {
 	if err == nil {
 		t.Fatal("a forbidden project was treated as merely absent")
 	}
+	// AND AS THE CREDENTIAL REFUSED, which is what a 403 is and what the
+	// group lookup already said about one: a plain fault reads as the
+	// engine working on it, over a refusal every later pass gets too.
+	if !errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a 403 on a declared project was not marked as a refused "+
+			"credential: %v", err)
+	}
+}
+
+// AND A DECLARED PROJECT GITLAB ANSWERED 404 FOR IS REPORTED, not only noted.
+//
+// The note is what `crewlet gitlab provision` prints, and the loop discards
+// notes — so the dashboard reported GitLab ready over a repository no agent
+// had been made a member of. It is the GitLab admin's, for the reason the
+// group's 404 is: GitLab cannot say whether the path is wrong or the
+// credential's account cannot see the project.
+func TestAMissingProjectIsReportedAtGitLab(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.missingProjects = map[string]bool{"nimbus/gone": true}
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/gone"}
+		})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var about []integration.Finding
+	for _, finding := range res.Findings() {
+		if finding.Subject == "nimbus/gone" || finding.Subject == "nimbus/api" {
+			about = append(about, finding)
+		}
+	}
+	if len(about) != 1 || about[0].Subject != "nimbus/gone" {
+		t.Fatalf("findings about the projects = %+v, want exactly the missing one",
+			about)
+	}
+	got := about[0]
+	if got.Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %s, want %s", got.Kind, integration.FindingIngressBlocked)
+	}
+	integrationtest.AssertVendorFault(t, got)
+	if !strings.Contains(got.Detail, "cannot see") {
+		t.Errorf("the detail does not say a 404 is also a project the credential "+
+			"cannot see: %q", got.Detail)
+	}
+	if !strings.Contains(got.Remedy, "integrations.gitlab.provisioning.projects") {
+		t.Errorf("the remedy does not name the list to check: %q", got.Remedy)
+	}
 }
 
 // --- the webhook signing secret -------------------------------------------
