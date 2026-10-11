@@ -170,19 +170,28 @@ type Result struct {
 //     index-pack is given a thread for each.
 //   - core.hooksPath: Cmd.Hooks, or a path that cannot exist, so a
 //     repository's own hooks/ never runs.
+//   - core.attributesFile: a path that cannot exist (ENOTDIR, which git
+//     reads as an absent file without a warning), because git otherwise
+//     reads $HOME/.config/git/attributes — GIT_CONFIG_GLOBAL does not move
+//     it — and a file written into the pool's HOME after New checked it was
+//     empty would steer every process's attributes. Its system twin,
+//     /etc/gitattributes, is the environment's GIT_ATTR_NOSYSTEM (gitproc.go).
 const (
 	keyThreads   = "pack.threads"
 	keyHooksPath = "core.hooksPath"
 	noHooks      = "/dev/null/no-hooks"
+	noAttributes = "/dev/null/no-attributes"
 )
 
-// baseKeys is the base, in order; the values of the last two are per run.
+// baseKeys is the base, in order; pack.threads' and core.hooksPath's values
+// are per run.
 var baseKeys = []KV{
 	{"protocol.allow", "never"},
 	{"gc.auto", "0"},
 	{"maintenance.auto", "false"},
 	{keyThreads, "1"},
 	{keyHooksPath, noHooks},
+	{"core.attributesFile", noAttributes},
 }
 
 // allowedConfig is every key a call site may set, keyed by its lowercase form
@@ -401,9 +410,15 @@ func checkEnv(env []KV) error {
 // legitimate and turns "a repository can configure git" from a hope into a
 // refusal.
 //
-// Not checked, deliberately: info/attributes and info/exclude (attributes
-// steer only pack-objects' delta search, a cost and never an answer; exclude
-// is a work-tree file), hooks/ (never run: core.hooksPath is the pool's), the
+// Not checked, deliberately: info/attributes and info/exclude (a
+// repository's own attributes — that file, and in a bare repository its
+// HEAD's .gitattributes, which git 2.43 reads too — steer only pack-objects'
+// delta search for that one repository, a cost and never an answer; exclude
+// is a work-tree file). The HOST's and the HOME's attributes are another
+// matter and are never read (GIT_ATTR_NOSYSTEM, the base's
+// core.attributesFile): written by whoever administers the machine, for
+// something else, they would apply to every repository the node serves.
+// Also not checked: hooks/ (never run: core.hooksPath is the pool's), the
 // refs and packed-refs (content the engine wrote, not configuration), and the
 // commit-graph and multi-pack-index (written by git itself under the
 // maintainer; a damaged one is classified). info/grafts and shallow are
