@@ -496,11 +496,11 @@ The object half depends on the backend. On **`nats`** there is nothing to do
 apart from the streams: the objects are the `OBJ_crewlet_files` snapshot and
 restore with every other stream below. On **`s3`** the bucket is not part of
 the fleet and usually needs nothing at all — it kept its own copies while the
-fleet was down. If it lost data, or the company is restoring into a new bucket,
-copy the backup's `objects/` directory into the bucket under the configured
-prefix: it is laid out as the bucket is, each object at `files/<key>`, and a
-key never names two different objects, so it is one sync, merged into whatever
-is there —
+fleet was down. If it lost data, or the company is restoring into a
+[new bucket](#restoring-into-a-new-bucket), copy the backup's `objects/`
+directory into the bucket under the configured prefix: it is laid out as the
+bucket is, each object at `files/<key>`, and a key never names two different
+objects, so it is one sync, merged into whatever is there —
 
 ```sh
 aws s3 sync objects/ s3://acme-files/crewlet/
@@ -516,7 +516,9 @@ is never reported: the backup never carried it, nothing is owed it, and the
 row goes once its grace has passed.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
-fresh `stream.store_dir` on a node started for that purpose. Then:
+fresh `stream.store_dir` on a node started for that purpose — every snapshot,
+except the one a restore into a [new bucket](#restoring-into-a-new-bucket)
+leaves out. Then:
 
 - **Restore whole estates together, then cold-start the whole fleet.** The
   fencing epochs and the activation pointer must never move backwards while
@@ -565,6 +567,39 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   ceiling gets the whole allowance back until that window turns over),
   sandbox-run records vanish (a billed box leaks until its own TTL), and the
   completion ledger forgets (bounded duplicate turns).
+
+### Restoring into a new bucket
+
+A restore whose `store.objects.s3` names another store than the backed-up
+fleet did — another endpoint, bucket or prefix — restores every stream
+**except** `KV_crewlet_objects` (`streams/KV_crewlet_objects.snapshot`). That
+coordination bucket records which store the fleet's files are in, and restored
+it names the old one: every node compares its own `store.objects` against it
+at boot and refuses to start against the new one, naming both (see
+[One store per fleet](../concepts/object-store.md#one-store-per-fleet)). Left
+out, the first node to boot records the new store. The bucket's other record,
+the object collector's last report, described the old store and goes with it,
+so the collector's first two passes are a collection and an
+[audit](../concepts/object-store.md#collection-and-audit) of the new one — and
+an object the sync above missed is reported by that audit, as
+`objects_missing`.
+
+Restoring into the **same** bucket — it lost data, or it was emptied —
+restores everything, the record included: it names the store every node is
+configured with.
+
+Two ways of restoring put every stream back at once, with no snapshot to leave
+out:
+
+- **An external cluster restored whole** (`nats account restore`): delete the
+  record after the restore and before any node starts —
+  `nats kv del crewlet_objects backend`, the gesture a
+  [move](../concepts/object-store.md#one-store-per-fleet) makes. The
+  collector's report left beside it names the old store, and the collector
+  sets it aside rather than picking it up.
+- **A cold copy** of an embedded member's `stream.store_dir`: it carries the
+  bucket in the broker's own files rather than as a snapshot to leave out, so
+  a restore into a new bucket is taken from a `crewlet backup` instead.
 
 ## What not to do
 
