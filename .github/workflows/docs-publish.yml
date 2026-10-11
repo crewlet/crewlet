@@ -83,6 +83,10 @@ concurrency:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # In this repository only. A fork has neither the secrets nor a site to
+    # publish, and without this its every docs push would fail below; here a
+    # missing secret fails the run, on purpose.
+    #
     # Only a release run that actually released something is worth a rebuild:
     # a failed one published no version, and every run that is not a push is a
     # goreleaser snapshot — a manual rehearsal or a pull request touching the
@@ -91,14 +95,15 @@ jobs:
     # of `push` is exactly "a version tag was published". Every other trigger
     # of THIS workflow passes through.
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+      github.repository == 'crewlet/crewlet' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
     # Where DOCS_REPO and DOCS_TOKEN live. Its deployment-branch rule must allow
     # main and nothing else: a push to main and a workflow_run run, which runs
     # on the default branch, pass it; a branch's workflow is refused it and
     # never sees the token. An environment nobody created is created bare by
-    # the first run that names it, with no secrets, so the job then skips with
+    # the first run that names it, with no secrets, so the job then fails with
     # the message below.
     environment: docs-publish
     steps:
@@ -118,9 +123,11 @@ jobs:
           DOCS_TOKEN: ${{ secrets.DOCS_TOKEN }}
         run: |
           # Report presence, never the value — echoing a secret would only print
-          # ***, and printing the target is exactly what this must not do.
+          # ***, and printing the target is exactly what this must not do. A
+          # missing one FAILS the run: publishing is the job, and a green run
+          # that asked nothing reads as a site that is up to date.
           if [ -z "${DOCS_REPO}" ] || [ -z "${DOCS_TOKEN}" ]; then
-            echo "Docs publish hook not configured — skipping."
+            echo "::error title=Docs not published::DOCS_REPO and DOCS_TOKEN are not both set in the docs-publish environment, so the documentation site was not asked to rebuild."
             echo "  DOCS_REPO   $([ -n "${DOCS_REPO}" ]  && echo set || echo MISSING)"
             echo "  DOCS_TOKEN  $([ -n "${DOCS_TOKEN}" ] && echo set || echo MISSING)"
             echo
@@ -129,8 +136,8 @@ jobs:
             echo "any branch's workflow can read."
             echo "DOCS_REPO is the docs site repository as owner/name; DOCS_TOKEN needs"
             echo "Contents: read and write on it (repository_dispatch lives under Contents)."
-            echo "Without them the docs site still picks the change up on its hourly poll."
-            exit 0
+            echo "Without them the docs site picks the change up only when something else rebuilds it."
+            exit 1
           fi
           curl --fail-with-body --silent --show-error \
             -X POST \
