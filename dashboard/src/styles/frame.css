@@ -687,11 +687,11 @@ a.user-block-who:focus-visible {
 }
 
 /* As wide as the longest theme's field needs at the comfortable density:
-   "High contrast" with its swatch and the chevron is 148px there, and a
-   narrower column cut its name. */
+   "High contrast" with its swatch and the chevron is just over 148px there,
+   and a narrower column cut its name. */
 .preferences-switch {
   justify-self: start;
-  width: 9.25rem;
+  width: 9.375rem;
 }
 
 /* The theme list is wider than its field, which a narrow popover makes
