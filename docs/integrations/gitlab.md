@@ -203,10 +203,12 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 | `-token-expiry-days N` | Lifetime minted onto each token. `0` sends no expiry and lets the instance policy decide |
 | `-dry-run` | Print what the run would do and touch nothing |
 
-The CLI probes the operator credential with `GET /user` up front and fails fast with the failing endpoint and status if the token or its scopes are wrong. It then runs two **preflights** so common setup gaps surface as one clear message instead of a stack of API errors:
+Before it changes anything, a run reads what everything else hangs off, so a common setup gap stops it with one answer rather than half a reconcile:
 
-- **Service-accounts access.** A single list call to the service-accounts API. A `403` here — even with a valid group-Owner `api` token — is GitLab.com's identity-verification gate, not a scope problem; the run aborts with `Provisioning cannot proceed: …` pointing at [identity verification](#prerequisites-gitlabcom).
+- **The group.** `GET /groups/:path` for `provisioning.group` is the first call. GitLab has no separate credential probe, so this is where a token the instance refuses shows up: a `401` or `403` here fails the run as a refused credential, which the engine reports as [`credential_rejected`](../concepts/integration-reconcile.md#what-a-pass-reports).
 - **Declared projects exist.** Each `provisioning.projects` entry is checked with `GET /projects/:id`. A project that does **not** exist (`404`) is **dropped and named in a report note** rather than aborting the whole reconcile on the first missing one — create it (or remove it from the config) and re-run. The accounts, tokens, and any projects that do exist still reconcile.
+
+There is no separate check of the service-accounts API: the first account the run creates is that check. A `403` there — even with a valid group-Owner `api` token — is usually GitLab.com's identity-verification gate rather than a scope problem (see [Prerequisites](#prerequisites-gitlabcom)), and the run fails at that account with GitLab's own refusal and a sentence naming the group-Owner requirement.
 
 ### What a run does
 
@@ -332,12 +334,12 @@ On the GitLab.com Free tier, **annual token rotation is the norm** — every new
 
 ### Prerequisites (GitLab.com)
 
-Two GitLab.com-specific conditions must hold before the service-accounts API will answer, or provisioning aborts on the first preflight with a `403`:
+Two GitLab.com-specific conditions must hold before the service-accounts API will answer, or the run fails with a `403` at the first service account it creates:
 
 1. **The group Owner's identity is verified.** GitLab.com blocks the service-accounts API until the top-level group Owner (the account whose PAT you pass as the operator credential) has completed [identity verification](https://gitlab.com/-/identity_verification) — adding a credit card and/or phone number (no charge). This is an anti-abuse gate, unrelated to token scope: a brand-new automation account with a valid group-Owner `api` PAT still gets a `403` until it verifies. This is the most common cause of a `403` on an otherwise-correct setup.
 2. **`provisioning.group` is a top-level group.** Service accounts are owned by, and managed from, the **top-level** group (they can then be invited into descendant subgroups and projects). Pointing `provisioning.group` at a personal namespace or a subgroup path yields a `403`. Free tier allows up to 100 service accounts per top-level group.
 
-Both surface as `Provisioning cannot proceed: GitLab denied the service-accounts API for group '…' (403) …` with the fix inline. Service accounts are generally available on the Free tier (GitLab ≥ 18.11).
+Both surface as GitLab's own `403` on `POST /groups/:id/service_accounts`, followed by a sentence saying the token's owner has to be an Owner of `provisioning.group` (or an instance administrator). Service accounts are generally available on the Free tier (GitLab ≥ 18.11).
 
 > **Declared projects must already exist.** The provisioner reconciles seats, tokens, memberships, and webhooks onto projects listed in `provisioning.projects` — it does **not create the projects themselves**. Create each project in the group first (or leave `projects` empty and rely on the group hook + group membership). A listed project that doesn't exist is dropped with a note, not created.
 
