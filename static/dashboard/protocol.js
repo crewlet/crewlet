@@ -1137,11 +1137,14 @@ function offline(err) {
 * went on to finish, holding nothing to finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
-/** A deadline as a person would say it: seconds under two minutes, else
-*  minutes. */
+/** A deadline as a person would say it: seconds under two minutes, minutes
+*  under two hours, else hours — a backup's twelve-hour wait read as "720
+*  minutes" is a number nobody reads at a glance. */
 function waitWords(ms) {
 	const seconds = Math.round(ms / 1e3);
-	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+	if (seconds < 120) return `${seconds} seconds`;
+	const minutes = Math.round(seconds / 60);
+	return minutes < 120 ? `${minutes} minutes` : `${Math.round(minutes / 60)} hours`;
 }
 /** Whether a rejection is the caller's own abort rather than a failure. */
 function isAbort(err) {

@@ -661,7 +661,7 @@ fail the backup: it is listed beneath, as `PROJECT/path` and the object's key,
 to restore from an earlier backup or upload again. The first one the store
 could not answer about at all fails it, and nothing more is asked.
 
-`-wait` (default 30 minutes) bounds how long the command waits for the answer,
+`-wait` (default 12 hours) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires
 leaves a good backup this command has already called a failure. It is set far
 past any plausible duration for that reason.

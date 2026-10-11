@@ -189,14 +189,18 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 
 // backupWait is how long the CLI waits for a copy.
 //
-// Thirty minutes, and the number is a ceiling rather than an expectation: a
-// backup is bounded by the size of the store and the stream estate, which is
-// tens of milliseconds on a company that has just started and minutes on a
-// large one with a full event-retention window. The cost of being too short
-// is the confusing one — the engine finishes and writes a perfectly good
-// backup that this command has already called a failure — so this is set far
-// past any plausible real duration rather than close to it.
-const backupWait = 30 * time.Minute
+// TWELVE HOURS, and the number is a ceiling rather than an expectation. What
+// bounds a backup is the size of the store, the stream estate and — on `s3` —
+// the company's files, which a backup carries too: milliseconds on a company
+// that has just started, and a FIRST copy of a large one's objects is the long
+// one, since every later backup takes what its predecessor holds from disk. The
+// design's large model holds about 1.15 TB of objects, about 2.6 hours over the
+// 1 Gbit/s a modest host has before the store and the streams are counted;
+// twelve hours is more than four times that. The cost of being too short is
+// the confusing one — the engine finishes what it started whatever this
+// command does, so a wait that expires calls a perfectly good backup a failure
+// — so this is set far past any real copy rather than close to it.
+const backupWait = 12 * time.Hour
 
 // humanBytes renders a size an operator is going to eyeball against a disk.
 func humanBytes(n int64) string {
