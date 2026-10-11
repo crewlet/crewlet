@@ -270,10 +270,9 @@ func (e *Engine) Knowledge() knowledge.Searcher {
 	// THE ROUTER'S, ON EVERY NODE RUNNING THE NATIVE KNOWLEDGE BASE: a
 	// node holding the index answers from it, and one holding none
 	// searches through one that does.
-	if native := e.NativeSearcher(); native != nil && e.router != nil {
-		return e.router.Knowledge()
-	}
-	if r := e.remote.Load(); r != nil && r.wiki {
+	// A data node's runtime builds its searcher with the knowledge base's
+	// reader, so running the half is having the searcher there too.
+	if run := e.nativeHalves(); run.wiki && e.router != nil {
 		return e.router.Knowledge()
 	}
 	e.notify.mu.Lock()
