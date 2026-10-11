@@ -2,13 +2,17 @@ package objstore_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // pagedWalk is a walk over references held in memory, handed on page pages at
@@ -172,5 +176,76 @@ func TestEqualKeysFromTwoWalksComeOutAdjacent(t *testing.T) {
 	}
 	if len(got) != len(all)+len(all)/3 {
 		t.Fatalf("the merge handed on %d references, want %d", len(got), len(all)+len(all)/3)
+	}
+}
+
+// walkedTable is a table a walk test declares and creates in a node store.
+var walkedTable = objstore.ReferenceTable{Domain: "files", Table: "walked_objects",
+	Key: "object", Hash: "hash", Size: "size", Owner: []string{"project", "path"},
+	Standing: objstore.Required}
+
+// A READ RUN AGAIN HANDS EACH ROW ON ONCE. store.DB.Read runs its function
+// again when the store answers busy, and a page appended to across two runs
+// carried the first run's rows twice — a duplicate handed to every reader of
+// the walk, and a page longer than a page that never read as the last one.
+func TestAWalkWhoseReadRunsTwiceHandsEachRowOnce(t *testing.T) {
+	t.Parallel()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	all := keys(objstore.WalkPage + 3)
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`CREATE TABLE walked_objects (object TEXT, hash TEXT NOT NULL,
+				size INTEGER NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL)`,
+			`CREATE INDEX walked_objects_object_idx ON walked_objects (object)`,
+		} {
+			if _, err := tx.ExecContext(t.Context(), stmt); err != nil {
+				return err
+			}
+		}
+		for i, k := range all {
+			if _, err := tx.ExecContext(t.Context(), `INSERT INTO walked_objects
+				(object, hash, size, project, path) VALUES (?, ?, ?, ?, ?)`,
+				k.String(), string(objstore.HashOf([]byte(k.String()))), i, "ENG", fmt.Sprintf("%04d.md", i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	twice := func(ctx context.Context, fn func(*sql.Tx) error) (bool, error) {
+		return true, db.Read(ctx, func(tx *sql.Tx) error {
+			if err := fn(tx); err != nil {
+				return err
+			}
+			return fn(tx)
+		})
+	}
+	w := walkedTable.WalkOf(twice)
+	var got []objstore.Reference
+	pages := 0
+	for {
+		page, complete, err := w.Next(t.Context())
+		if err != nil || !complete {
+			t.Fatalf("Next = %v (complete %v)", err, complete)
+		}
+		if len(page) == 0 {
+			break
+		}
+		if len(page) > objstore.WalkPage {
+			t.Fatalf("a page of %d references, past the walk's page of %d", len(page), objstore.WalkPage)
+		}
+		pages++
+		got = append(got, page...)
+	}
+	if len(got) != len(all) || pages != 2 {
+		t.Fatalf("the walk handed on %d references in %d pages; want %d in 2", len(got), pages, len(all))
+	}
+	for i, r := range got {
+		want := fmt.Sprintf("ENG/%04d.md", i)
+		if r.Object.Key != all[i] || r.NamedBy != want || r.Table != walkedTable.Table {
+			t.Fatalf("reference %d = %+v; want %s named by %s in %s", i, r, all[i], want, walkedTable.Table)
+		}
 	}
 }
