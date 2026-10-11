@@ -369,9 +369,10 @@ share does not move.
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
 reader can go — nine **workspaces** — and the few objects they keep coming back
-to: the company's projects, the views they pinned, the pages they starred. A
+to: the views they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
-(Settings draws its eight, and a cross-link to Budgets, as a grouped column),
+(Settings draws its eight, and a cross-link to Budgets, as a grouped column;
+Work draws its as the lenses of the scope its trail names),
 and its objects — a unit, a
 container, a node — are rows on the section that lists them.
 
@@ -384,10 +385,13 @@ list a section of Settings.
 
 ### The grammar, stated once and asserted
 
-- A **sidebar row** is a workspace, or a live shortcut to a project, a pinned
-  view, a starred page or a running turn.
+- A **sidebar row** is a workspace, or a live shortcut to a pinned view, a
+  starred page or a running turn. A project is not one: it is a **scope** of
+  Work, named and switched in Work's trail
+  ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
-  renderer — `tabs` in the page header, or `column` for Settings.
+  renderer: `tabs` in the page header, `lenses` beside Work's scope in the
+  trail, or `column` for Settings.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -627,15 +631,13 @@ what it knows and what it spent, and the machine last.
 | **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
 | **Settings** | `#/settings` | a key mark when no operator credential is presented |
 
-Under the workspaces: **Projects** (every project with its key chip and its
-open work — the engine's maintained `task_counts`, waiting plus started — and a
-`+` that files a new task in the project the reader is in),
+Under the workspaces:
 **Pinned** (the views this reader pinned, asked for WITH the viewer — a pin is a
 person's, and the shared strip has none — and across EVERY container
 (`work_saved_views`), so a view pinned from a project board is here with the
 project's key as its lead; each with the total it selects, counted in the
 view's own container; a
-pinned row RUNS the view, `#/work?view=<key>` or its project's list for a view
+pinned row RUNS the view, `#/work/tasks?view=<key>` or its project's list for a view
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
@@ -667,14 +669,11 @@ these rows say which. At the foot, Settings, the
 **health card** and the **user block**. The head carries the company's lockup,
 alone on its line.
 
-**Every "New task" is one sheet.** The Projects group's `+`, a work screen's
-page-bar New task (Home, Work, a project) and a board lane's `+` all open the
+**Every "New task" is one sheet.** A work screen's
+page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
 frame's single New task sheet (`dashboard/src/routes/work/NewTask.tsx`, mounted
 by the shell out of the Work chunk), each door telling it only what it knows.
-The sidebar's door files into the project the route is in (its page, or the
-project a task key names), asked of the route's own resolver, so `#/work/views`
-and a task opened by its uuid are in no project and its `+` reads "New task in
-a project". A board
+A board
 lane's `+` files INTO its lane (`app/newTask.ts`'s `presetForLane`): it
 presets exactly the value that puts a task there — the lane's status, type,
 priority, project, holder or label, and a status-group lane the group's first
@@ -827,6 +826,64 @@ exactly one seat is working, and opens Live › Now running — every running
 turn — when several are, or none. Every key the dashboard answers is in [one
 table](#the-keys), and `?` shows it.
 
+### Work's scope is named and switched in the trail
+
+Work's pages end their trail in the scope they show: **All projects**, or one
+project, written as its key chip and its name (`Work › FAIR Product and
+Engineering`). That last crumb is the page's `h1` and the kit's `Switcher`
+button at once (`app/header/ProjectSwitcher.tsx`): pressing it, or `g p` from
+anywhere, opens one panel that changes the scope. Beside it sit the scope's
+**lenses**, drawn as the kit's chip `Tabs`: All projects' are Work's own
+sections (Projects, Tasks and History, each a path), and a project's are keys
+on its address (Tasks, About, History and Files). Both draw alike, the lens
+that is on outlined by its own accent hairline, so the bar reads one way in
+either scope, and Work keeps no row of section tabs. Work is plain words on its
+landing, where a link would lead to the page it is on, and the frame's star is
+not drawn on these pages. On a phone the lenses take a row of their own under
+the bar's line, and Work shrinks to its glyph.
+
+**The panel.** A search band, a list that scrolls and a footer that does not.
+**All projects** comes first, with the open work across every active project;
+then a note when the listing was cut at 200 ("200 of 340 listed. Type to
+search all of them."); **Recent**, the last three projects opened with the
+current one aside, once a company has more than eight; **Projects**, the
+active ones with a 52 px key column, the name and the open count, the current
+scope outlined; and the footer's **Browse all projects** and **New project…**,
+which is held with its reason for a viewer without an operator credential.
+Archived projects are never offered: they are listed under Projects, and the
+panel says so where a reader looks. It opens under its button on Work's scope
+pages, centred over the page for `g p` anywhere else (nothing behind it moves
+until a row is chosen), and as a sheet from the bottom edge under 640 px.
+
+**Searching.** Keys and names, ignoring case, with the matched letters bold.
+The order is an exact key, then keys that start with the query, then names
+with a word that starts with it, then keys and names that contain it, ties by
+key (`lib/projectRank.ts`, the order ⌘K uses too). Past the listing's cap the
+engine is asked as well, through the listing's own `q`, once typing rests,
+which also matches a project's purpose. The count is announced politely ("3
+projects", "No project matches"), and a search that matches nothing offers
+**Search tasks for “…”**.
+
+**Keys.** `Enter` opens a row in place and `Mod+Enter` opens it in a new tab; a
+middle or `Mod` click does the same, because every row is a link. The arrows
+wrap and pass over a held row. `Esc` closes the panel and returns focus to the
+button, `Tab` closes it and moves on to the lenses, and after a switch focus
+stays on the button of the page it lands on. `Home` and `End` move the caret in
+the search field, as in every editable combobox the kit draws.
+
+**What a switch keeps** (`app/scope.ts`). Tasks and History carry over, About
+and Files carry between two projects, and every other lens opens the next
+scope's first lens. Only the list's shape travels, and only with Tasks: a saved
+view and the filters belong to the scope they were set in, because a project's
+statuses, labels and fields are its own. The browser tab reads the lens, then
+the scope: "Tasks · All projects", "About · Product and Engineering".
+
+**New project** (`routes/work/NewProject.tsx`) asks for an owner (a team, or a
+seat above every team, that owns no project yet) and a key (`KEY_SHAPE`, and
+no project or node already has it), then continues in Edit org with that
+node's editor open on its Project field holding the key, not yet applied. The
+org is what makes a project: the engine creates it when the change is saved.
+
 ### The routes
 
 Only a route a screen draws is written here, and `router.test.ts` holds this
@@ -840,18 +897,18 @@ a screen, and every workspace and section the code declares is below.
 | `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
-| `#/work` | **Work › Tasks** — every task, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
+| `#/work` | **Work › Projects** — Work's landing, All projects' first lens: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
+| `#/work/tasks` | **Work › Tasks** — All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
+| `#/work/history` | **History** — All projects' History lens: the tracker's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
-| `#/work/{KEY}` | **Project** | `lens=items\|about\|history` · the same view strip and filter grammar, scoped to the project |
+| `#/work/{KEY}` | **Project** — one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside | `unit=` · `seat=` |
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
-| `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
+| `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
@@ -892,7 +949,7 @@ where the product knows why there is nothing there, and offers the way home.
 **An object's segment is decided by its shape, never by a lookup**, so every
 address resolves before any answer arrives. A project or container key is
 uppercase, a task is `KEY-n` or its uuid, and a page is its uuid — so a word in
-one of those positions (`tasks` after `work`, `runbook` after `knowledge/pages`)
+one of those positions (`people` after `work`, `runbook` after `knowledge/pages`)
 is Not Found rather than an object the engine never minted, which would draw its
 refusal under a trail naming a page that does not exist.
 
@@ -1599,7 +1656,7 @@ from inside another screen fought that screen's own answer: on
 whichever polled last won, and switching lenses unmounted the log and cleared the
 slot to nothing over a page still showing the project it had read. A body states
 its own rows' coverage INLINE instead, beside the rows, which is what a peek rail
-and the Items lens already do. The two halves never both apply: a screen
+and the Tasks lens already do. The two halves never both apply: a screen
 publishes and draws none, a body draws and publishes none, and the same component
 serving as both takes that as a prop rather than guessing.
 
@@ -1632,7 +1689,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Work's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -1696,11 +1753,12 @@ other page, and a chip in every bar sat between a task's trail and its actions
 and pushed a profile's controls past a phone's edge), the star, and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
 primary action ("New task") ends the row where the approved designs put it.
-An OBJECT page's lenses (a project's Items, About and History) are portalled
-into a second slot straight after the trail (`PageLenses`): that slot is no
+A SCOPE's lenses (a project's Tasks, About, History and Files, portalled in by
+its page, or All projects' Projects, Tasks and History, drawn by the header)
+sit in a second slot straight after the trail (`PageLenses`): that slot is no
 flex item at all while it is empty, and when it holds lenses it is the lens
 group that takes the line's slack — the trail sizes to its content, capped at
-60% of the bar so a long name ellipsises beside its lenses rather than pushing
+62% of the bar so a long name ellipsises beside its lenses rather than pushing
 them onto a line of their own.
 On a phone the bar keeps ONE action in view — the screen's primary one, which
 leads the line — and folds the rest into **More** (⋯) at the line's end: the
@@ -2695,11 +2753,11 @@ fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; when nothing is typed, recents, then **Running now** — a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
+| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now** — a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
-| **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; set token; clear recents; the key legend) and the three changes; the legend names who they are made as | `>` |
+| **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; set token; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
 `Tab` and `Shift+Tab` walk the tabs from the field, and a sigil typed at the
 start selects its tab and leaves the box, so the tab row — not a character the
@@ -2997,7 +3055,7 @@ a tool arrives in it with the control that sends it. The controls
 | Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
 | A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
-| Create task (the New task sheet) | The Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
+| Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
@@ -3115,8 +3173,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
 
   **And the directory is not the only reader of it.** Every surface that draws
   a conclusion from an empty project listing reads the same census, because
-  every one of them asks the ACTIVE set: the sidebar's Projects group, and
-  the `#/work` landing, which replaces the whole list with "No work has been
+  every one of them asks the ACTIVE set: the project switcher, and the
+  Tasks lens (`#/work/tasks`), which replaces the whole list with "No work has been
   filed yet". Read from the ROWS, each concluded the first state — so a
   company that had archived all four of its projects was told by the sidebar that
   no project had been created and by the landing that nothing could be filed
@@ -3125,7 +3183,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   ever filed. `active + archived === 0` is the only thing that draws the
   first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
   and gives it an empty state naming the count with the way to
-  `#/work/projects?shown=archived` — the same sentence the directory's own
+  `#/work?shown=archived` — the same sentence the directory's own
   Active state writes, because it is the same fact. An answer carrying no
   census concludes neither, on the rule its rows already followed.
 
@@ -4789,14 +4847,15 @@ began as a flat filter row over a plain table beside a "board" that was three
 company does its work. What replaced it is a WORKSPACE, and every part of it
 is one of the rules on this page applied to a tracker.
 
-- **A project is a LEAF, not a shape of it.** The sidebar's Projects are the
-  company's own projects, each with its key and its maintained open count, and
-  a project is where that list stops. Its list, its board and its calendar are
-  ways of drawing the project you are already on, so a sidebar row for each
-  would make "Engineering ▸ Board" a destination competing with Engineering.
-  The counts are the engine's maintained columns rather than an aggregate per
-  poll, which is what lets the sidebar carry a number at all: see
-  [the sidebar](#the-sidebar).
+- **A project is a SCOPE, not a shape of it.** Work's trail names the scope,
+  All projects or one project, and switches it
+  ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)), each
+  project with its key and its maintained open count. Its list, its board and
+  its calendar are ways of drawing the scope you are already on, so a lens for
+  each would make "Engineering ▸ Board" a destination competing with
+  Engineering. The counts are the engine's maintained columns rather than an
+  aggregate per poll, which is what lets the switcher and the lenses carry a
+  number at all.
 - **A SHAPE is a drawing, a VIEW is a query, and only the query was saved by
   anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-says-what-it-is-set-to)
   states the general rule; what is the tracker's own is where the line falls.
@@ -5203,18 +5262,19 @@ is one of the rules on this page applied to a tracker.
   `#/work/history` and a lens inside a project, and the frame holds one
   coverage slot with one setter — so a body publishing from inside another
   screen fought that screen's own answer: on a project's history lens both
-  wrote it, whichever polled last won, and switching back to Items cleared the
+  wrote it, whichever polled last won, and switching back to Tasks cleared the
   slot to nothing over a page still showing a project it had read. The lens
   publishes nothing and states its own rows' coverage inline, which is what the
-  Items lens beside it already does. It is a COMPONENT rather than a bare call
+  Tasks lens beside it already does. It is a COMPONENT rather than a bare call
   because the rule is conditional and a hook may not be: called with nothing,
   the publish writes null over whatever the enclosing screen published, which
   is the same clobber under a quieter name.
-- **A project opens on its work.** The Items lens is the list at the top of
+- **A project opens on its work.** The Tasks lens is the list at the top of
   the page, as the approved Board draws a project: no header about the
   container above the work, and no row of lenses either — the lenses sit on the
-  page bar beside the name they are lenses on (`Work › ENG Core · Items | About
-  | History`, `PageLenses`), controlling the region below by id. A row of their
+  page bar beside the name they are lenses on (`Work › ENG Core · Tasks | About
+  | History | Files`, `PageLenses`, the chips All projects' lenses wear too),
+  controlling the region below by id. A row of their
   own cost the first screenful a line the Board does not spend. What the container IS — who leads it, its unit,
   its target, its census, its vocabulary and its latest changes — is the
   **About** lens; a finding on the project's own record (a unit the chart lost)
@@ -5226,13 +5286,13 @@ is one of the rules on this page applied to a tracker.
   **New task**, filed into this project. A project that declares no purpose
   says so in a sentence for a person ("No purpose is set for it — add one to
   Core in the company configuration…"), not a configuration key in backticks.
-- **A lens keeps its filters.** The three lenses over a project — Items,
-  About, History — are three readings of ONE container, not three screens,
+- **A lens keeps its filters.** The lenses over a project (Tasks, About,
+  History and Files) are readings of ONE container, not separate screens,
   so switching keeps the narrowing AND the arrangement: `lens=` is written
   through the frame's section move, which copies the whole current query and
   sets one key. A lens that built a fresh query would make History a one-way
   trip, with the way back being every chip re-added by hand — and it would fail
-  silently, because each lens renders perfectly on its own. Only Items carries
+  silently, because each lens renders perfectly on its own. Only Tasks carries
   a count, from the project's own maintained census: About is a description
   rather than a collection, and History is PAGED, so a count of the page it
   loaded would read as a count of the lens.
