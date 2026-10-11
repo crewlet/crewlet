@@ -16,7 +16,8 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 )
 
-// MCPPath is the route the MCP transport is mounted at.
+// MCPPath is the path the MCP transport is served at — the address an
+// assistant is configured with. [MCPPattern] is the route mounted at it.
 //
 // UNDER ITS OWN PREFIX rather than under /mcp/, which the auth package exempts
 // wholesale for the sandbox bridge — mounting here would have put a writable
@@ -24,6 +25,15 @@ import (
 // bridge's own `/mcp/{token}` pattern would have made which one answered a
 // question of registration order.
 const MCPPath = "/operator/mcp"
+
+// MCPPattern is the route the MCP transport is mounted at: a POST, because a
+// transport that keeps no session has nothing for the other two verbs of
+// streamable HTTP to do (see [guardedMCP]). A GET, which asks for a
+// server-to-client stream, and a DELETE, which ends a session, are answered
+// the mux's own 405 naming POST — the answer MCP's streamable-HTTP transport
+// gives a client for "this server offers no stream", and one carrying a code
+// like every other refusal this engine writes.
+const MCPPattern = "POST " + MCPPath
 
 // serverName is what an MCP client lists this server as.
 const serverName = "crewlet-operator"
@@ -116,29 +126,66 @@ func handlerFor(s *Server, name string) mcp.ToolHandler {
 	}
 }
 
-// MCPHandler serves the MCP transport at [MCPPath].
+// MCPHandler serves the MCP transport at [MCPPattern].
 //
-// EVERY METHOD, for the reason the sandbox bridge takes every method:
-// streamable HTTP is a GET for the server-to-client stream and a DELETE to
-// end a session, and a pattern naming one verb answers 405 to the others —
-// which an MCP client reports as a transport that does not support streaming
-// rather than as a route registered wrong.
-//
-// THE SAME HANDLER ON EVERY CALL, built once with the server: the
-// streamable-HTTP handler is where the transport's SESSIONS live, so a handler
-// built per call knows none of the sessions an earlier one opened. It was
-// built per call, which cost nothing while the app asked for it once, at
-// assembly — and would have answered every request after an assistant's
-// `initialize` with a 404 for its own session once the app came to ask its
-// surface per request (the api package's OperatorSurface), as it must,
-// because the catalogue a node serves can change after the app is assembled.
+// THE SAME HANDLER ON EVERY CALL, built once with the server: the app asks its
+// surface for the catalogue on every request (the api package's
+// OperatorSurface) and nothing about a request changes how its transport is
+// configured. Nothing the handler holds is a client's — see [guardedMCP] — so
+// which handler answers a request, of which catalogue and on which node, is
+// never something a client can tell.
 func (s *Server) MCPHandler() http.Handler { return s.mcp.handler }
+
+// MCPMaxBody bounds one MCP request's body.
+//
+// The transport reads a request's body whole before it dispatches it, so this
+// is what one request may hold in memory. FOUR MEBIBYTES — the SDK's own
+// default, stated here rather than inherited, since it is a promise this
+// surface makes — because every catalogue call fits far below it: the largest
+// is a page's body, at most twice [pages.MaxBody] once escaped as a JSON
+// string, which [MaxActBody] derives. The one argument it does bound is
+// `write_project_file`'s content, the whole file in one string; a file that
+// does not fit goes up through `PUT /work/files/{project}/{path...}`, which
+// streams its body to the object store instead of holding it.
+const MCPMaxBody = 4 << 20
 
 // guardedMCP is srv's one streamable-HTTP handler, behind a check that the
 // app's guard has run — see [Server.MCPHandler].
+//
+// STATELESS: each request is served by a session made for it and closed when
+// it ends, and nothing — no session, no goroutine, no Mcp-Session-Id — is kept
+// between two of them. The transport's sessions were state this surface never
+// used: a tool call reads its credential off its own request and its
+// arguments off its own body, and nothing here sends a client progress, a log
+// line, a sampling request or an elicitation. Kept, they cost three things.
+// A FLEET'S INGRESS NODES behind a load balancer with no affinity — a shape
+// the fleet guide draws — each answered a session another node had opened
+// with a 404, so of N nodes (N−1)/N of an assistant's requests were refused,
+// and every node kept the session it had opened for a client that would never
+// reach it again. A CATALOGUE THE NODE BUILT AGAIN (the api package's
+// EngineOperators: a first apply, a knowledge backend added or removed, a
+// rename) ended every session opened on the one it replaced. And an ENDED
+// SESSION is the end of the connection for the MCP client this repository
+// ships, which reads that 404 as terminal where MCP's spec has a client open a
+// new session — so each of those was a broken connection to an operator's
+// assistant, as was the expiry any idle bound would have added, while with no
+// bound a client that crashed held its session for the life of the process.
+// Stateless, any node and any catalogue answers any request.
+//
+// What it costs is that per-request session, as the SDK builds one: the body
+// read whole, bounded by [MCPMaxBody]; a JSON-RPC connection over it, which
+// starts three goroutines — its reader, its handler queue and the one running
+// the method — and ends them with the request; and the session registered on
+// the catalogue's server and removed again, each under that server's one
+// mutex, the removal a scan of every session the server holds — every request
+// in flight on it and every stream held open on it. That is a linear term in
+// the listeners parked on one catalogue, which at an operator's scale — a
+// handful of assistants — is a few comparisons beside a tool call that crosses
+// the estate router.
 func guardedMCP(srv *mcp.Server) http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv }, nil)
+		func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{Stateless: true, MaxRequestBodyBytes: MCPMaxBody})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is in
 		// [auth.GuardedPrefixes], so a request that reaches this handler

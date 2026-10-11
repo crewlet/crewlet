@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -203,42 +204,145 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	}
 }
 
-// AN MCP SESSION OUTLIVES THE CALL THAT HANDED OUT ITS HANDLER. The app asks
-// its operator surface on every request and serves each through the server's
-// MCPHandler, so a session opened by one request is continued by a handler
-// fetched again for the next. The streamable-HTTP handler is where the
-// sessions live: one built per call knew none of them, and every request after
-// an assistant's `initialize` was a 404 for its own session.
-func TestAnMCPSessionOutlivesTheCallThatHandedOutItsHandler(t *testing.T) {
+// ANY SERVER OF THE CATALOGUE ANSWERS ANY REQUEST: a client's requests spread
+// over two servers built from the same deps — two ingress nodes behind a load
+// balancer with no affinity, or a catalogue a node built again between two
+// requests — are each answered, and no answer names a session for the client
+// to come back to. The transport kept sessions once, each held by the one
+// handler that opened it: of two nodes, every request reaching the other was
+// refused 404 "session not found", which the MCP client this repository ships
+// reads as the end of its connection.
+func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, operator.Options{
+	opts := operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Actor: operator.WorkActor(nil, nil),
 		},
-	})
-	// EACH REQUEST ASKS FOR THE HANDLER AGAIN, as the app's route does.
+	}
+	nodes := []*operator.Server{newSurface(t, opts), newSurface(t, opts)}
+	var (
+		mu       sync.Mutex
+		served   [2]int
+		sessions []string
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.MCPHandler().ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+		mu.Lock()
+		node := (served[0] + served[1]) % len(nodes)
+		served[node]++
+		mu.Unlock()
+		nodes[node].MCPHandler().ServeHTTP(w,
+			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+		if id := w.Header().Get("Mcp-Session-Id"); id != "" {
+			mu.Lock()
+			sessions = append(sessions, id)
+			mu.Unlock()
+		}
 	}))
 	t.Cleanup(srv.Close)
+	sess := connectOperator(t, srv.URL)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for i := range 4 {
+		if _, err := sess.ListTools(ctx, nil); err != nil {
+			t.Fatalf("listing %d, on whichever node it reached: %v", i, err)
+		}
+		// THE TOOL'S OWN ANSWER, whatever it says — the stub tracker holds
+		// no item, so this one is a refusal — is what being served looks
+		// like; a request no node served is an error on the transport.
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+			Name: tracker.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
+		})
+		if err != nil {
+			t.Fatalf("call %d, on whichever node it reached: %v", i, err)
+		}
+		if textOf(res) == "" {
+			t.Errorf("call %d was answered nothing", i)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if served[0] == 0 || served[1] == 0 {
+		t.Errorf("the requests reached the nodes %v times; the case needs both", served)
+	}
+	if len(sessions) > 0 {
+		t.Errorf("the transport handed the client sessions %v; a session is held by "+
+			"one node, and every other node refuses it", sessions)
+	}
+}
+
+// A CATALOGUE SWAPPED MID-CONVERSATION KEEPS ITS CLIENT. The app asks its
+// operator surface for the catalogue on every request, and a node builds it
+// again when what it serves changes — its first apply, a knowledge backend
+// added or removed, a rename. A client connected before the swap goes on
+// calling through it, and its next listing is the new catalogue's; with
+// sessions, every connection opened on the replaced catalogue ended at its next
+// request.
+func TestACatalogueSwappedMidConversationKeepsItsClient(t *testing.T) {
+	t.Parallel()
+	work := builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)}
+	reads := newSurface(t, operator.Options{Work: work})
+	steers := newSurface(t, operator.Options{
+		Work:  work,
+		Steer: builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil)},
+	})
+	var current atomic.Pointer[operator.Server]
+	current.Store(reads)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current.Load().MCPHandler().ServeHTTP(w,
+			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+	}))
+	t.Cleanup(srv.Close)
+	sess := connectOperator(t, srv.URL)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("before the swap: %v", err)
+	}
+	if hasTool(listed, builtin.SteerTurnTool) {
+		t.Fatalf("the catalogue of reads lists %s", builtin.SteerTurnTool)
+	}
+
+	current.Store(steers)
+	listed, err = sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("the first request after the swap: %v", err)
+	}
+	if !hasTool(listed, builtin.SteerTurnTool) {
+		t.Errorf("after the swap the client was listed the old catalogue, without %s",
+			builtin.SteerTurnTool)
+	}
+	// A CALL AFTER IT, served whatever the tool answers.
+	if _, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: tracker.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
+	}); err != nil {
+		t.Fatalf("a call after the swap: %v", err)
+	}
+}
+
+// hasTool reports whether a listing names a tool.
+func hasTool(listed *mcp.ListToolsResult, name string) bool {
+	return slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool {
+		return tool.Name == name
+	})
+}
+
+// connectOperator connects an MCP client to an operator transport served at
+// base, the way an operator's assistant does.
+func connectOperator(t *testing.T, base string) *mcp.ClientSession {
+	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: srv.URL + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
+		Endpoint: base + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
 	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
-	listed, err := sess.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("a session's second request, through a handler fetched again: %v", err)
-	}
-	if len(listed.Tools) == 0 {
-		t.Error("the session listed no tools")
-	}
+	return sess
 }
 
 // dialOperator connects an MCP client to the surface as one token.
@@ -253,17 +357,7 @@ func dialOperator(t *testing.T, s *operator.Server, token string) *mcp.ClientSes
 		inner.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), token)))
 	}))
 	t.Cleanup(srv.Close)
-	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: srv.URL + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
-	}, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-	return sess
+	return connectOperator(t, srv.URL)
 }
 
 func textOf(res *mcp.CallToolResult) string {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
@@ -95,4 +96,39 @@ func TestTheOperatorSurfaceIsAskedOnEveryRequest(t *testing.T) {
 
 	current.Store(nil)
 	none("after the catalogue went")
+}
+
+// THE OPERATOR'S MCP TRANSPORT IS A POST AND NOTHING ELSE. It keeps no session,
+// so it offers no server-to-client stream for a GET to open and no session for
+// a DELETE to end, and both are answered the mux's own 405 naming POST: the
+// status MCP's streamable-HTTP transport reads as "this server offers no
+// stream", carrying a code like every other refusal the API writes — which the
+// SDK's own 405, in plain text, would not.
+func TestTheOperatorMCPTransportIsAPost(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Operator: operatorSurface(t, operator.Options{
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
+	})})
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		rec := send(t, a, method, operator.MCPPath)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusMethodNotAllowed ||
+			body["error"] != string(httpjson.CodeMethodNotAllowed) {
+			t.Errorf("%s %s answered %d %s, want the mux's own 405 %s",
+				method, operator.MCPPath, rec.Code, rec.Body, httpjson.CodeMethodNotAllowed)
+		}
+		if allow := rec.Header().Get("Allow"); allow != http.MethodPost {
+			t.Errorf("%s %s: Allow = %q, want %s", method, operator.MCPPath, allow,
+				http.MethodPost)
+		}
+	}
+	// AND THE POST REACHES THE TRANSPORT, which answers a body that is no
+	// JSON-RPC message itself.
+	if rec := send(t, a, http.MethodPost, operator.MCPPath); rec.Code == http.StatusNotFound ||
+		rec.Code == http.StatusMethodNotAllowed {
+		t.Errorf("POST %s answered %d %s, want the transport's own answer",
+			operator.MCPPath, rec.Code, rec.Body)
+	}
 }
