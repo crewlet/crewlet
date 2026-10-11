@@ -115,6 +115,17 @@ type retention struct {
 	// store, which is nobody's singleton.
 	claim schedule.DutyFunc
 
+	// giveBack gives the duty back where this node holds it, on a tick that
+	// declines it ([Engine.workerGiveBack]). Nil holds no lease to give.
+	giveBack func(context.Context) (bool, error)
+
+	// copies names the first of the domains given whose copy on this node is
+	// out of service ([Engine.copyOutOfService]), which the trim declines its
+	// duty for ([retention.decidesFrom]); declines remembers whether it is.
+	// Nil judges no copy — every one serves.
+	copies   func(ctx context.Context, domains ...string) (string, bool)
+	declines dutyDecline
+
 	nodeID string
 
 	// backupOwner is `retention.backup_owner` — read here rather than
@@ -228,6 +239,8 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
+		giveBack:    e.workerGiveBack(retentionDutyName),
+		copies:      e.copyOutOfService,
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
@@ -357,6 +370,13 @@ func (r *retention) tick(ctx context.Context) {
 	// reading reads the pool-wait window back.
 	r.capacity(ctx)
 	r.evaluate(ctx)
+	// THEN THE DUTY IS DECLINED, before it is claimed, while this node's
+	// copy of a log whose evictions the trim counts is out of service — and
+	// given back, if this node holds it ([dutyDecline]).
+	if _, out := r.declines.check(ctx, retentionDecline, r.copies, r.decidesFrom()); out {
+		r.declines.giveBack(ctx, retentionDecline, r.giveBack)
+		return
+	}
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
 		if err != nil {
@@ -385,6 +405,23 @@ func (r *retention) tick(ctx context.Context) {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
 		}
 	}
+}
+
+// decidesFrom is every domain whose rows the trim decides from: the logs that
+// claim identity, whose evictions it counts from this node's own rows
+// ([logTombstones]) — in the register's order. Every other term it reads is
+// the fleet's register or the log itself.
+func (r *retention) decidesFrom() []string {
+	if r.state == nil {
+		return nil
+	}
+	var out []string
+	for _, running := range r.state.running() {
+		if running.domain.ClaimsIdentity() {
+			out = append(out, running.domain.Name())
+		}
+	}
+	return out
 }
 
 // evaluate observes this node's alarms against a fresh reading.

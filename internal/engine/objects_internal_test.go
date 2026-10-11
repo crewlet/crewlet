@@ -73,14 +73,15 @@ func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := collect.New(collect.Options{Store: store, References: collect.References{source}})
+	refs := collect.References{source}
+	c, err := collect.New(collect.Options{Store: store, References: refs})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := &Engine{id: "data-a",
 		backends: &Backends{Fleet: fleet, objectsIdentity: "nats"},
 		objects:  &objectStore{store: store}}
-	duty := newCollectorDuty(c)
+	duty := newCollectorDuty(c, copiesNamedBy(refs), nil)
 	e.objects.duty.Store(duty)
 	return e, duty, fleet
 }

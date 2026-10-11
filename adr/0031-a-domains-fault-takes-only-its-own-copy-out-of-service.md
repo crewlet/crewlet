@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongUsageCopyAnswersNoSpendRead`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/estate.TestAPagesBacklinksRunOnlyWhereBothCopiesServe`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
+- **Enforced-by:** `internal/engine.TestEveryDomainsCopyIsJudged`, `internal/engine.TestAWrongUsageCopyAnswersNoSpendRead`, `internal/engine.TestAWrongCopyOfOneDomainLeavesTheOthersInService`, `internal/engine.TestAFaultInADomainThatGatesNoSeatShedsNone`, `internal/engine.TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService`, `internal/engine.TestADeclinedDutysLeaseIsGivenBack`, `internal/estate.TestAFaultInOneDomainRoutesOnlyThatDomainsOperations`, `internal/estate.TestAPagesBacklinksRunOnlyWhereBothCopiesServe`, `internal/search.TestAnOutOfServiceSliceIsCountedMissing`, `internal/search.TestACoordinatorGivenNoRangeStandsInForWhatItsPeersLeftUncovered`, `internal/statelog/statelogtest.TestTheSuiteCatchesADomainThatMisdeclaresItself`
 - **Cost-when-tried:** one declaration (whether a domain's health was a readiness input) answered two questions: does a seat depend on this domain, and is its copy judged at all. The compacted domains answered no, and so escaped the judgement: a vectors or usage copy whose applier stopped, whose rows fell below the log or that held an undecodable record past the grace was served for ever, and nothing said so. The two that answered yes took the WHOLE copy out of service for one log's fault — a knowledge-base applier halted on one page sent every tracker call the node's seats made to a peer, and on a single node refused them all — and a knowledge base that merely lagged its log made every tracker read a last resort. The native code host's design had to choose between gating every seat claim on a busy git log's lag and never judging that log at all.
 - **Tag-status:** unreleased
 
@@ -38,6 +38,18 @@ never every search. A coordinator given no range still scans whatever range
 its peers then leave uncovered, so a broker that fails never empties a search
 it could answer.
 
+A fleet-singleton duty that decides from a domain's rows asks the same verdict
+before it claims, and a node whose copy of any domain the duty decides from is
+out of service declines it, so a node whose copies serve takes it: the trim
+(the evictions the identity-claiming logs' rows hold), the embedding duty (the
+vectors, and the tracker's and the knowledge base's rows it embeds and
+withdraws for) and the object collector (the rows that name objects).
+Declining is not claiming — the conservative direction for each: nothing
+withdrawn, purged or deleted — and a node that declines a duty it holds gives
+its lease back, so a node whose copies serve takes it at its own next tick
+rather than once the lease lapses: the trim's lease is 45 minutes, and the
+fault that made its holder decline does not heal on its own.
+
 ## Why the obvious alternative is wrong
 
 The obvious alternative is the one this replaces: one boolean per domain and one
@@ -64,8 +76,5 @@ did, by answering a question about seats.
 
 WHAT makes a copy wrong: `statelog.Health.Healthy` and the engine's judgement
 own that list, and a lag of any size is still not on it. How a seat's tools
-behave when no data node serves a domain: ADR-0025. How the fleet-singleton
-duties read: they decide from rows through their own read authority or not at
-all, outside the estate's router — every reader a person or a seat is answered
-by, the API's spend and activity reads over the usage domain included, goes
-through it.
+behave when no data node serves a domain: ADR-0025. Which node a declined duty
+lands on: whichever node whose copies serve claims the given-back lease first.

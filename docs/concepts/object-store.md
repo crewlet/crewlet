@@ -379,6 +379,12 @@ judged against the replicated estate the data node holds:
   by object: only what that listing passes over is then asked about by name,
   and a range whose second listing fails too is unanswered, file by file.
 
+A node whose copy of the tracker is out of service does not hold the duty at
+all — its passes would read the rows that name the files through a read that
+copy refuses — and gives the duty back if it holds it, so a node whose copies
+serve takes it at its next minute's turn
+([singleton duties](seat-ownership.md#singleton-duties)).
+
 A pass that fails is tried again ten minutes later. The duty records each pass
 in the coordination store, so every node's [`/fleet`](../reference/api-endpoints.md#get-fleet)
 and `crewlet objects status` show the same report, naming the node that ran it,

@@ -61,6 +61,20 @@ import (
 // two intervals and the renewal after an unanswered one would fall on its end,
 // never asked: one blip would end a half-hour audit.
 //
+// # A duty declined while its work runs
+//
+// A duty that decides from a domain's rows is DECLINED by a node whose copy of
+// one of them is out of service (ADR-0031, [dutyDecline]), and a copy can go
+// out of service while the work runs — a training tick of the embedding duty
+// runs for minutes. So work kept with a decline check
+// ([dutyRenewal.declining]) asks it before every renewal, and when it answers
+// that the node now declines, the work is ENDED with [errDutyDeclined] and the
+// duty is not renewed: renewed, the work would go on deciding from a copy that
+// went wrong after it began. The lease is given back by the work's holder once
+// the work has RETURNED, never by the renewal that ended it, because something
+// the work already sent could otherwise land after another node had taken the
+// duty.
+//
 // Lifted from the embedding duty's own keepClaimed, because written twice the
 // rule is what would differ between the two.
 
@@ -77,6 +91,11 @@ const keptDutyRenewals = 4
 // errDutyLost is the cause work holding a duty is ended with when a renewal
 // answers that another node holds the duty.
 var errDutyLost = errors.New("engine: another node holds the duty now")
+
+// errDutyDeclined is the cause work holding a duty is ended with when this
+// node declines the duty as the work runs: a copy the work decides from has
+// gone out of service ([dutyRenewal.declining], ADR-0031).
+var errDutyDeclined = errors.New("engine: this node declines the duty: a copy it decides from is out of service")
 
 // errDutyUnconfirmed is the cause work holding a duty is ended with when no
 // renewal has confirmed the duty through the window its last confirmation
@@ -123,12 +142,25 @@ type dutyRenewal struct {
 	ttl time.Duration
 	// clock is what renewals are asked and counted on.
 	clock dutyClock
+	// declined, where set, is asked before every renewal whether this node
+	// now declines the duty ([dutyRenewal.declining]). Nil declines nothing.
+	declined func(context.Context) bool
 }
 
 // newDutyRenewal is a renewal of a duty claimed with ttl, on the system's
 // clock.
 func newDutyRenewal(duty string, ttl time.Duration) dutyRenewal {
 	return dutyRenewal{duty: duty, ttl: ttl, clock: systemClock{}}
+}
+
+// declining is r with declined asked before every renewal: when it answers
+// that this node now declines the duty — a copy the work decides from went out
+// of service ([dutyDecline]) — the work is ended with [errDutyDeclined] and the
+// duty is not renewed, and [keptDuty.Stop] says so, for the work's holder to
+// give the lease back once the work has returned.
+func (r dutyRenewal) declining(declined func(context.Context) bool) dutyRenewal {
+	r.declined = declined
+	return r
 }
 
 // every is how often a kept duty is renewed.
@@ -149,8 +181,9 @@ func (r dutyRenewal) through(asked time.Time) time.Time {
 // its duties: the work runs undisturbed and Stop answers held.
 //
 // The work's context ends with ctx, at Stop, or when a renewal ends it — its
-// cause [errDutyLost], or an error wrapping [errDutyUnconfirmed]. Stop MUST be
-// called; it waits for the renewals' goroutine, so none outlives the work.
+// cause [errDutyLost], [errDutyDeclined], or an error wrapping
+// [errDutyUnconfirmed]. Stop MUST be called; it waits for the renewals'
+// goroutine, so none outlives the work.
 func (r dutyRenewal) keep(ctx context.Context, claim schedule.DutyFunc,
 	confirmed time.Time) (context.Context, *keptDuty) {
 
@@ -222,17 +255,24 @@ type keptDuty struct {
 	until time.Time
 	last  error
 	// lost is set when a renewal answered that another node holds the duty,
-	// and ended once a window ran out with no renewal confirming it.
-	lost  bool
-	ended error
+	// declined when this node declined it before a renewal, and ended once a
+	// window ran out with no renewal confirming it.
+	lost, declined bool
+	ended          error
 }
 
 // Stop ends the renewals, waits for their goroutine, ends the work, and
 // answers whether this node holds the duty as the work ends — THREE-VALUED
 // (ADR-0005): (true, nil) confirmed through now; (false, nil) a renewal
-// answered that another node holds it; (false, err) no renewal has confirmed
-// it through its window, err wrapping [errDutyUnconfirmed] and the last
-// renewal's own error. Calling it again answers the same.
+// answered that another node holds it; (false, err) the work did not end
+// holding it as its holder — err is [errDutyDeclined] where this node declined
+// the duty as the work ran, and otherwise no renewal has confirmed it through
+// its window, err wrapping [errDutyUnconfirmed] and the last renewal's own
+// error. Calling it again answers the same.
+//
+// DECLINED IS NOT "NOT HELD": the lease is still this node's until it is given
+// back, so the holder that sees [errDutyDeclined] gives it back
+// ([Engine.workerGiveBack]), and acts on nothing the work found meanwhile.
 func (k *keptDuty) Stop() (bool, error) { return k.stop() }
 
 func (k *keptDuty) finish() (bool, error) {
@@ -247,6 +287,8 @@ func (k *keptDuty) finish() (bool, error) {
 	switch {
 	case k.lost:
 		return false, nil
+	case k.declined:
+		return false, errDutyDeclined
 	case k.ended != nil:
 		return false, k.ended
 	case !k.renewal.clock.Now().Before(k.until):
@@ -260,6 +302,16 @@ func (k *keptDuty) finish() (bool, error) {
 // renew is one renewal, and reports whether the renewals go on.
 func (k *keptDuty) renew(work context.Context, claim schedule.DutyFunc) bool {
 	r := k.renewal
+	if r.declined != nil && r.declined(work) {
+		// DECLINED FIRST, whatever the window says: a node whose copy went
+		// out of service under the work decides nothing more from it, and
+		// a renewal would only keep the duty from a node whose copies serve.
+		k.mu.Lock()
+		k.declined = true
+		k.mu.Unlock()
+		k.end(errDutyDeclined)
+		return false
+	}
 	asked := r.clock.Now()
 	k.mu.Lock()
 	until, last := k.until, k.last
