@@ -181,9 +181,11 @@ The rule table and the colour maths are the package's own,
 `@crewlethq/tokens/test/palette`, so the design system and this application
 cannot come to disagree about what a floor is.
 `dashboard/src/styles/palette.test.ts` runs them over the INSTALLED
-stylesheets in that same import order, in **every theme state** (dark on the
-bare root, light by media query, light by attribute) and over **every
-composited surface a token can land on**, including a hovered row inside a nested panel, which is where a
+stylesheets in that same import order, for **every theme the registry lists**
+(the default, and each named theme over it under the profile its entry
+declares), in **every theme state** (dark on the bare root, light by media
+query, light by attribute) and over **every composited surface a token can
+land on**, including a hovered row inside a nested panel, which is where a
 ramp anchored to the panel fill quietly falls under its floor. The engine
 measures as well as the package because a tokens release that lowered a ratio
 would otherwise arrive here through an auto-merged bump with nothing in `make
@@ -198,13 +200,14 @@ What is measured, and the floor each clears:
 | `--color-text-muted` on a panel | **between 2.8 and 4.5**, because it is decoration, and a step that crept up to 4.5 would invite itself into a table cell |
 | every `-ink` step as TEXT on every surface, and on its own `-soft` tint | 4.5:1 |
 | every fill step as a MARK on the page surfaces it sits on | 3:1 |
-| `--color-text-on-accent` on the accent, and white on danger | 4.5:1 |
+| `--color-text-on-accent` on the accent, `--color-text-on-danger` on the danger fill, `--color-text-on-scrim` on the scrim | 4.5:1 |
 | the focus ring against every surface | 3:1 |
 | the four state hues, pairwise, under normal / protan / deutan vision | ΔE 10 |
 | adjacent data hues, in series order, under all three | ΔE 9, and ΔE 15 under normal vision |
 | every data hue against the reserved danger hue | ΔE 14 normal, 8 dichromat |
 | every other hue against the accent, under all three | ΔE 10 normal, 8 dichromat |
-| the neutral ramp's chroma | ≤ 2.2 |
+| the neutral ramp's chroma | ≤ 2.2, or inside the tint a theme declares, with the accent carrying twice the chroma of its most tinted rung |
+| text, inks, the muted step and the card's hairline in the high-contrast theme | 7:1, 7:1, 4.5:1 and 3:1 |
 
 **A measured token is only as good as where it is spent.**
 `--color-text-muted` clears its floor as decoration, and the dashboard spent it
@@ -225,7 +228,9 @@ the screen this replaces shipped role badges at 1.63:1 — an inline
 `background:` with a hue token in it and the default text colour left on top.
 Only `--color-brand-accent` is ever a fill behind a word, under
 `--color-text-on-accent` (and the danger fill behind a destructive action's
-white label, which the package measures to 4.5:1). A state is a soft tint
+label, `--color-text-on-danger`, which the package measures to 4.5:1; a theme
+whose accent is light labels it dark, so the danger fill and the scrim have
+labels of their own). A state is a soft tint
 carrying its own ink step, never a solid block with a label on it, which is
 also what lets the state fills be light enough to read as marks on a dark
 ground.
@@ -240,6 +245,43 @@ wins in both directions. The package's own suite compares the two light blocks
 key for key. The dashboard adds no theme block of its own — `tokens.css`
 declares no colour at all — so there is nothing here for the two to disagree
 about.
+
+### Mode and theme
+
+**Two choices, never one.** The **mode** is light, dark or the machine's, and
+is the `data-theme` attribute the design system's contract names. The
+**theme** is one of the named palettes `@crewlethq/tokens` ships (Crewlet,
+the default, and nine more in five groups), each a full token set with a dark
+and a light half, and is the root's `data-palette` attribute: the mode chooses
+the half, so a theme never changes the mode and the mode never changes the
+theme. `main.tsx` imports `css/themes/all` after `css/themes`, so every theme
+is in the first sheet and switching needs no request and nothing new for the
+content security policy. The default paints the bare root, so a reader who
+has chosen nothing is drawn exactly as before.
+
+**One id is stored, nothing else.** `lib/prefs.ts` keeps the choice under
+`crewlet_palette` (`lib/storage.ts`), validated against the registry the
+package exports, so an id no build ships (a theme since removed, a hand edit)
+reads as no choice rather than a page no stylesheet answers. A reader who has
+chosen no theme gets the default, or High contrast while their machine asks
+for more contrast (`prefers-contrast: more`); any choice, the default included,
+wins over the machine. `bootTheme()` paints the stored mode, density and theme
+before React mounts, so nobody sees the default flash on the way to their own,
+and a storage event from another tab of the browser applies what that tab
+chose, so two tabs never disagree.
+
+**A list previews; choosing applies.** The preferences popover's theme list
+and the palette's Change theme step repaint the whole frame in the theme their
+highlight comes to rest on (at once for a key, once the pointer has rested on
+a row for 120 ms), through `previewPalette`, which writes nothing; the list
+closing, emptying, its step being left or the pointer leaving it puts back the
+theme in effect, so a preview never outlives the list that started it.
+Settings › Appearance previews in a pane beside its gallery instead, because
+crossing a grid of cards with the pointer would otherwise flash the whole
+window. Every pick, from any of the three, applies through one helper
+(`app/appearance.tsx`), which says "Theme set to Abyss" in a toast with an
+**Undo** that puts back the reader's previous choice, including no choice at
+all.
 
 The dark ground is deliberately **not** `#000`. An operator reads this page for
 hours, and pure black behind near-white text is the specific combination that
@@ -750,11 +792,16 @@ empty one nor a fault. Recolouring the dot for an alarm drew a green title
 beside an amber dot, and a title such as "serving, with alarms" only repeats
 the alarm line. Everything comes off the one health push; nothing polls.
 
-**The user block** is who this browser is — a person (bound: their name and
-seat, linking to it), a token no seat claims (unbound: the token's id, and what
-would bind it), or nobody (anonymous) — beside the theme flip and the
-**preferences**: theme (light, dark, match the system), density, and the
-token. All of them are per browser and none is the company's: every key the
+**The user block** is who this browser is: a person (bound: their name and
+the seat's role, linking to it; a person is never captioned "human seat", and
+a token bound to an agent's seat says it is one), a token no seat claims
+(unbound: the token's id, and what would bind it), or nobody (anonymous). It
+sits beside the mode flip and the **preferences**: the mode (light, match the
+system, dark), the density, the theme, and the token. The two switchers draw
+one box of three equal cells each, so a row of glyphs and a row of letters
+read as the same control; the theme is a select whose options carry each
+theme's two halves as a chip, its name and its tag, and whose list previews
+(see [Mode and theme](#mode-and-theme)). All of them are per browser and none is the company's: every key the
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
 retired and removed at boot, so a stale value does not sit in a reader's
@@ -2644,7 +2691,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
-| **Actions** | the per-browser commands — theme, density, copy link (the one place a page's address is copied from; a refusal is said in a toast), set token, clear recents, the key legend — and the three changes; the legend names who they are made as | `>` |
+| **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; set token; clear recents; the key legend) and the three changes; the legend names who they are made as | `>` |
 
 `Tab` and `Shift+Tab` walk the tabs from the field, and a sigil typed at the
 start selects its tab and leaves the box, so the tab row — not a character the
@@ -2786,7 +2833,7 @@ carries the raw segment — a uuid for a turn — and the second carries the nam
 downgrades a named row to its id. A place nothing has EVER named still stores
 its id, because an object with no name has that and nothing else.
 
-A command that would change nothing is not offered: the list omits the theme
+A command that would change nothing is not offered: the list omits the mode
 and the density already in use, because a control that says
 "switch to dark" while the page is already dark does not know what it is
 looking at.
@@ -3870,8 +3917,8 @@ than they looked:
   selects. A section pushes a history entry, and a row that selected as focus
   moved left one entry per keypress for Back to walk through. Each tab names
   the `TabPanel` it controls.
-- **A setting is a radio group.** The theme and density controls are
-  `SegmentedControl` with `semantics="radio"`: announced as a choice rather than as
+- **A setting is a radio group.** The mode and density controls are
+  `SegmentedControl` with `semantics="radio"`, and so is the theme gallery: announced as a choice rather than as
   tabs with no panel, and the arrows select as they move, because changing a
   setting costs nothing on every keypress. The same applies to a filter that
   replaces the history entry.
