@@ -734,6 +734,16 @@ Two properties differ from the vendor path and both are visible:
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them
   pointing at nothing.
+- **A FOLDER IS A PAGE WITH NOTHING WRITTEN IN IT.** There is no folder type:
+  a page whose body is empty is a folder, a page that only groups the pages
+  filed under it. The mark is derived from the body every time it is read and
+  never stored, so it cannot disagree with the page: write a paragraph into a
+  folder and it is a page with children, empty a page and it is a folder
+  again. `write_page` files one with an empty body.
+- **"Last saved" is a change to what the page says.** A listing names the last
+  create, save or rename (`saved_by`, `saved_at`), each of which writes a
+  revision; a label, a watch or a move updates the page and leaves its last
+  save where it was.
 - **A save's note is the one its writer gave.** The one line `save_page`
   takes as `message` is what the page's activity and each watcher's wake show
   under the saver's name; a save without one shows none. It never falls back

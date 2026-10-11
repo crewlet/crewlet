@@ -150,7 +150,51 @@ type Summary struct {
 	// nothing else. A tree draws an expander off it, and a count that included
 	// a trashed child would draw one that opens onto nothing.
 	Children int `json:"children,omitempty"`
+
+	// Folder marks a page with nothing written in it: its body is EMPTY. A
+	// folder is not a kind of page the engine stores. It is what a page that
+	// only groups pages IS, so the mark cannot disagree with the page: write a
+	// paragraph into one and it is a page with children, empty one and it is
+	// a folder again.
+	Folder bool `json:"folder,omitempty"`
+
+	// AuthorSeat is the PERSON behind [Summary.Author] when the author is an
+	// operator's token: the seat it was bound to when it wrote the create,
+	// off the create's own history row, on the terms a task's reporter seat
+	// is read on in the tracker. The token stays the author, which is the
+	// audit trail; this is who a screen draws.
+	AuthorSeat string `json:"author_seat,omitempty"`
+
+	// SavedBy, SavedBySeat and SavedAt are the last change to what the page
+	// SAYS: its create, a save or a rename, each of which writes a revision.
+	// [Summary.Updated] moves with every change, a label, a watch and a move
+	// included, which is the wrong instant for "last saved". SavedBySeat is
+	// the person behind an operator's token, as [Summary.AuthorSeat] is.
+	SavedBy     string    `json:"saved_by,omitempty"`
+	SavedBySeat string    `json:"saved_by_seat,omitempty"`
+	SavedAt     time.Time `json:"saved_at"`
+
+	// savedID is the history row the three fields above are read from.
+	savedID string
 }
+
+// savedKinds are the changes that write a revision: what "last saved" means.
+const savedKinds = `'created', 'saved', 'renamed'`
+
+// summaryPerson is the two read-time columns every listing row carries beyond
+// its head: the seat behind an operator author, and the history row of the
+// last save, which [Reader.attachSaves] reads in one statement for the page.
+//
+// FROM THE HISTORY because that is the one place the seat is stored: a head,
+// a revision and a comment record the token, and the history row of the same
+// record names the person ([MutationRecord.ActorSeat]).
+const summaryPerson = `
+		       (SELECT a.actor_seat FROM pages_history a
+		         WHERE a.page_id = p.id AND a.kind = 'created' AND a.actor = p.author
+		           AND a.actor_seat <> '' LIMIT 1),
+		       (SELECT h.id FROM pages_history h
+		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
+		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
 
 // Listing is a page listing and what it is true as of.
 //
@@ -387,7 +431,8 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		       p.updated_at, MAX(p.version, p.scoped_through),
 		       (SELECT COUNT(*) FROM pages_heads c
 		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE `+strings.Join(child.where, " AND ")+`)
+		         WHERE `+strings.Join(child.where, " AND ")+`),
+		       p.body = '',`+summaryPerson+`
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+where+`
@@ -401,16 +446,18 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	var out []Summary
 	for rows.Next() {
 		var (
-			s                 Summary
-			skill, onboarding int
-			updated, revision int64
+			s                         Summary
+			skill, onboarding, folder int
+			updated, revision         int64
+			authorSeat, savedID       sql.NullString
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children); err != nil {
+			&s.Children, &folder, &authorSeat, &savedID); err != nil {
 			return listPage{}, fmt.Errorf("pages: scan page: %w", err)
 		}
-		s.Skill, s.Onboarding = skill != 0, onboarding != 0
+		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
+		s.AuthorSeat, s.savedID = authorSeat.String, savedID.String
 		s.Updated = store.DecodeTime(updated)
 		s.Revision = uint64(revision)
 		out = append(out, s)
@@ -424,7 +471,46 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
 	}
 	page.rows = out
-	return page, r.attachLabels(ctx, tx, out)
+	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	return page, r.attachSaves(ctx, tx, out)
+}
+
+// attachSaves fills each row's last save from the history row the listing
+// named for it, in one statement for the whole page of rows.
+func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) error {
+	ids := make([]any, 0, len(items))
+	at := make(map[string]int, len(items))
+	for i, item := range items {
+		if item.savedID == "" {
+			continue
+		}
+		ids = append(ids, item.savedID)
+		at[item.savedID] = i
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, actor, actor_seat, created_at FROM pages_history WHERE id IN (`+
+			placeholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return fmt.Errorf("pages: read who last saved: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, actor, seat string
+		var when int64
+		if err := rows.Scan(&id, &actor, &seat, &when); err != nil {
+			return fmt.Errorf("pages: scan who last saved: %w", err)
+		}
+		if i, ok := at[id]; ok {
+			items[i].SavedBy, items[i].SavedBySeat = actor, seat
+			items[i].SavedAt = store.DecodeTime(when)
+		}
+	}
+	return rows.Err()
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -472,6 +558,20 @@ type Detail struct {
 	Skill      bool `json:"skill"`
 	Onboarding bool `json:"onboarding"`
 
+	// Folder is [Summary.Folder]: the page's body is empty, so it is a page
+	// that only groups pages.
+	Folder bool `json:"folder"`
+
+	// AuthorSeat is [Summary.AuthorSeat], the person behind an operator
+	// author.
+	AuthorSeat string `json:"author_seat,omitempty"`
+
+	// CommentSeats names the person behind each comment an operator's token
+	// wrote, keyed by comment id, off the comment's own history row: a
+	// comment records the token, which is the audit trail, and the thread
+	// draws the person.
+	CommentSeats map[string]string `json:"comment_seats,omitempty"`
+
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
 	Children []Summary         `json:"children,omitempty"`
@@ -502,8 +602,13 @@ type Detail struct {
 // METADATA ONLY, because the projection keeps only that — reading one
 // revision's body is a coordination read, on demand.
 type RevisionSummary struct {
-	Version   int       `json:"version"`
-	Author    string    `json:"author,omitempty"`
+	Version int    `json:"version"`
+	Author  string `json:"author,omitempty"`
+
+	// AuthorSeat is the person behind an operator's token, off the history
+	// row the same record wrote.
+	AuthorSeat string `json:"author_seat,omitempty"`
+
 	Message   string    `json:"message,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -553,7 +658,14 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			return fmt.Errorf("pages: read what %s was derived as: %w", id, serr)
 		}
 		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
+		detail.Folder = page.Body == ""
+		if detail.AuthorSeat, err = authorSeat(ctx, tx, id, page.Author); err != nil {
+			return err
+		}
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
+			return err
+		}
+		if detail.CommentSeats, err = commentSeats(ctx, tx, id); err != nil {
 			return err
 		}
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
@@ -675,10 +787,64 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 	return out, rows.Err()
 }
 
+// authorSeat is the person behind a page's author, off the create's own
+// history row, and empty when the author was not a token bound to somebody.
+//
+// FROM THE CREATE ROW rather than from the chart's CURRENT binding, because a
+// token re-bound since would name somebody who wrote nothing — and only when
+// that row's actor IS the author, which the create sets and nothing rewrites.
+func authorSeat(ctx context.Context, tx *sql.Tx, pageID, author string) (string, error) {
+	if author == "" {
+		return "", nil
+	}
+	var seat string
+	err := tx.QueryRowContext(ctx, `
+		SELECT actor_seat FROM pages_history
+		 WHERE page_id = ? AND kind = 'created' AND actor = ? AND actor_seat <> ''
+		 LIMIT 1`, pageID, author).Scan(&seat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("pages: read who wrote %s: %w", pageID, err)
+	}
+	return seat, nil
+}
+
+// commentSeats is the person behind each comment an operator's token wrote,
+// keyed by comment id, off each comment's own history row.
+func commentSeats(ctx context.Context, tx *sql.Tx, pageID string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT comment_id, actor_seat FROM pages_history
+		 WHERE page_id = ? AND kind = 'comment' AND comment_id <> '' AND actor_seat <> ''`,
+		pageID)
+	if err != nil {
+		return nil, fmt.Errorf("pages: read who commented on %s: %w", pageID, err)
+	}
+	defer rows.Close()
+	var out map[string]string
+	for rows.Next() {
+		var comment, seat string
+		if err := rows.Scan(&comment, &seat); err != nil {
+			return nil, fmt.Errorf("pages: scan who commented: %w", err)
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[comment] = seat
+	}
+	return out, rows.Err()
+}
+
 func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]RevisionSummary, error) {
+	// THE SEAT IS JOINED from the history row the same record wrote: a
+	// revision and its history row share the record's log position.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT edit_version, author, message, created_at FROM pages_revisions
-		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
+		`SELECT r.edit_version, r.author, COALESCE(h.actor_seat, ''), r.message,
+		        r.created_at
+		   FROM pages_revisions r
+		   LEFT JOIN pages_history h ON h.page_id = r.page_id AND h.version = r.version
+		  WHERE r.page_id = ? ORDER BY r.version DESC LIMIT ?`, pageID, RevisionsKept)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the history of %s: %w", pageID, err)
 	}
@@ -687,7 +853,7 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 	for rows.Next() {
 		var s RevisionSummary
 		var at int64
-		if err := rows.Scan(&s.Version, &s.Author, &s.Message, &at); err != nil {
+		if err := rows.Scan(&s.Version, &s.Author, &s.AuthorSeat, &s.Message, &at); err != nil {
 			return nil, fmt.Errorf("pages: scan revision: %w", err)
 		}
 		s.CreatedAt = store.DecodeTime(at)
