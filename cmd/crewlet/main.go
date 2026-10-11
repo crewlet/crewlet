@@ -238,9 +238,10 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A BOOTSTRAP seed: imported only when the store holds no company
-            yet. Once one exists the node serves the store and this file is
-            ignored, so a restart never reverts a live change.
+            A BOOTSTRAP seed: imported only when no company exists yet, in
+            this node's store or in the fleet it joins. Once one exists the
+            node serves it and this file is ignored, so a restart never
+            reverts a live change.
   -import-company
             Tier B to make active NOW, over whatever the fleet is running.
             The deliberate "this file is the company again" gesture.
@@ -266,9 +267,10 @@ Config:
 // document INTO that store, and there are two quite different reasons to want
 // that:
 //
-//	-company        BOOTSTRAP. Imported only when the store holds no active
-//	                revision. Once the company exists, this file is ignored
-//	                and the node boots on what the fleet is running.
+//	-company        BOOTSTRAP. Imported only when neither the store nor the
+//	                fleet holds an active revision. Once the company exists,
+//	                this file is ignored and the node boots on what the fleet
+//	                is running.
 //
 //	-import-company OVERRIDE. Make this file the active revision now, over
 //	                whatever the fleet is running.
@@ -305,10 +307,12 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 }
 
 // companyName is what the boot line calls the company, including when there
-// is not one yet.
+// is not one yet — which is not the same as "no file": a node without `data`
+// boots unconfigured beside its bootstrap seed, and takes its company from the
+// first activation that reaches it ([bootOptions]).
 func companyName(c *config.Company) string {
 	if c == nil {
-		return "(unconfigured — no active revision and no Tier B file)"
+		return "(unconfigured until an activation reaches this node)"
 	}
 	return c.Name
 }

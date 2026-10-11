@@ -159,6 +159,43 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 	}
 }
 
+// A NODE WITHOUT `data` BOOTS UNCONFIGURED WHATEVER ITS BOOTSTRAP SEED, and
+// hands that seed on.
+//
+// Its scratch store is empty at every boot, so whether the seed becomes the
+// company is the fleet's answer, which nothing can read before the engine
+// exists. Booted on the file, a stateless node beside a fleet that already ran
+// a company built its runtime from a document the seed then ignored, at every
+// boot, for ever. An override is still the file: it is about to be activated.
+func TestAScratchStoreBootsUnconfiguredOnABootstrapSeed(t *testing.T) {
+	t.Parallel()
+	boot := &config.Bootstrap{Store: config.Store{Scratch: true}}
+	file := &config.Company{Name: "From a file"}
+	// NO TIER A FILE AT ALL: a scratch store is never opened here.
+	missing := filepath.Join(t.TempDir(), "absent.yaml")
+
+	opts, seed, err := bootOptions(t.Context(), missing, boot, seedOf(file), quiet())
+	if err != nil {
+		t.Fatalf("bootOptions: %v", err)
+	}
+	if opts.Company != nil {
+		t.Errorf("a scratch node boots the engine on %s, want unconfigured: the "+
+			"fleet decides whether the seed is imported", companyName(opts.Company))
+	}
+	if seed.Company != file {
+		t.Error("the bootstrap seed was not handed on: an empty fleet would never " +
+			"get the company this node was started with")
+	}
+
+	if opts, _, err = bootOptions(t.Context(), missing, boot, overrideOf(file), quiet()); err != nil {
+		t.Fatalf("bootOptions with an override: %v", err)
+	}
+	if opts.Company != file {
+		t.Errorf("a scratch node's override boots as %s, want the file it activates",
+			companyName(opts.Company))
+	}
+}
+
 // A RESTART WITH A STALE BOOTSTRAP FILE BOOTS THE ENGINE ON THE STORE'S
 // COMPANY, so what the engine builds once per process is built from what the
 // node serves.

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -378,6 +380,226 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 			"rebuilt its epoch for a file that should have been ignored",
 			pointerBefore.RevisionID, pointerAfter.RevisionID)
 	}
+}
+
+// AN EMPTY STORE IS NOT AN EMPTY COMPANY: a bootstrap seed into a node whose
+// own store holds nothing does not overwrite the company its FLEET runs.
+//
+// Two ordinary nodes have an empty store: a node without `data`, whose scratch
+// store is deleted at every boot, and a data node joining a running fleet. The
+// seed asked only its own store, found nothing, and activated the file over
+// the fleet's pointer — so a stateless node carrying the default
+// ./company.yaml reverted every node's live edits at each of its restarts, and
+// a node added with the quickstart's command reverted them once.
+func TestABootstrapSeedDoesNotOverwriteTheFleetsCompany(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	running := parse(t, companyYAML)
+	document, err := json.Marshal(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "peer-revision", Summary: "edited live", Payload: document,
+		At: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator",
+			Source: "api", CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		t.Fatalf("the fleet's activation: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		file  *config.Company
+		warns bool
+	}{
+		{"a stale file", parse(t, strings.Replace(companyYAML, "name: Acme",
+			"name: Acme Stale", 1)), true},
+		// THE FLEET'S OWN DOCUMENT is nothing to say anything about.
+		{"the fleet's own document", running, false},
+	} {
+		// IN TURN, on the one fleet: the override below must not move the
+		// pointer under a case that is still reading it.
+		t.Run(tc.name, func(t *testing.T) {
+			db := seedStore(t)
+			var logged bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logged, nil))
+			if err := seedCompany(t.Context(), db, fleet, nil, seedOf(tc.file), nil,
+				testNode, log); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			target, _, err := fleet.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target.RevisionID != peer.RevisionID || target.Epoch != peer.Epoch {
+				t.Fatalf("the pointer moved to %s (epoch %d), want the fleet's %s "+
+					"(epoch %d): a node with an empty store overwrote the company "+
+					"its fleet runs", target.RevisionID, target.Epoch,
+					peer.RevisionID, peer.Epoch)
+			}
+			if _, found, _ := db.Configs().Active(t.Context()); found {
+				t.Error("the ignored seed stored a revision: the reconciler adopts " +
+					"the fleet's, and this node would offer its own at its next boot")
+			}
+			said := strings.Contains(logged.String(), "company_seed_ignored") &&
+				strings.Contains(logged.String(), peer.RevisionID)
+			if said != tc.warns {
+				t.Errorf("company_seed_ignored naming the fleet's revision said = %v, "+
+					"want %v: %s", said, tc.warns, logged.String())
+			}
+		})
+	}
+
+	// AN OVERRIDE still replaces it: that is what -import-company is for.
+	db := seedStore(t)
+	if err := seedCompany(t.Context(), db, fleet, nil, overrideOf(parse(t,
+		strings.Replace(companyYAML, "name: Acme", "name: Acme Imported", 1))), nil,
+		testNode, quiet()); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if target, _, _ := fleet.Target(t.Context()); target.RevisionID == peer.RevisionID {
+		t.Error("an -import-company override into an empty store did not replace " +
+			"the fleet's company")
+	}
+}
+
+// AND A PEER THAT ACTIVATES BETWEEN THE READ AND THE WRITE WINS: a bootstrap
+// activates create-only, so the company a peer made exist in the meantime is
+// not replaced, and the boot goes on to converge on it rather than failing.
+//
+// LOSING LEAVES NOTHING BEHIND, either. The seed stores its revision before
+// it asks the fleet, and stored ACTIVE that revision was this node's company
+// whatever the fleet answered: a restart before the reconciler adopted the
+// peer's booted on it and — the seed's instant being the later one — published
+// it over the company the fleet runs, the very overwrite the create-only
+// activation had just refused.
+func TestABootstrapSeedThatLosesTheRaceToAPeerStandsDown(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "peer-revision", Summary: "a peer's bootstrap",
+		Payload: []byte(`{"name":"Peer"}`), At: time.Now().UTC(),
+		Origin: coord.RevisionOrigin{Author: "node-b", AuthorKind: "node",
+			Source: "file", CreatedAt: time.Now().UTC()},
+	})
+	if err != nil {
+		t.Fatalf("the peer's activation: %v", err)
+	}
+	db := seedStore(t)
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	// The pointer read happened before the peer's write landed.
+	if err := seedCompany(t.Context(), db, unreadPointer{fleet}, nil,
+		seedOf(parse(t, companyYAML)), nil, testNode, log); err != nil {
+		t.Fatalf("a bootstrap that lost the race failed the boot: %v", err)
+	}
+	target, _, err := fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.RevisionID != peer.RevisionID {
+		t.Errorf("the pointer names %s, want the peer's %s: a bootstrap replaced a "+
+			"company a peer activated after it looked", target.RevisionID, peer.RevisionID)
+	}
+	if !strings.Contains(logged.String(), "company_seed_ignored") {
+		t.Errorf("the lost race was not said: %s", logged.String())
+	}
+	if active, found, err := db.Configs().Active(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Errorf("this node's active revision is %s after the seed lost the race, "+
+			"want none until the reconciler adopts the fleet's: the node boots on "+
+			"its active revision, and offers it to the fleet whenever it is newer "+
+			"than the pointer", active.ID)
+	}
+
+	// THE RESTART, before any tick adopted the peer's revision.
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
+		nil, testNode, quiet()); err != nil {
+		t.Fatalf("the restart: %v", err)
+	}
+	if after, _, err := fleet.Target(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if after.RevisionID != peer.RevisionID {
+		t.Errorf("the restart moved the pointer to %s, want the peer's %s: a seed "+
+			"that lost the race was published one boot later", after.RevisionID,
+			peer.RevisionID)
+	}
+}
+
+// A SEED THE FLEET DID NOT TAKE IS NOT THIS NODE'S COMPANY, whichever flag
+// carried it. An activation that fails fails the boot, and the revision stored
+// before it is history: marked active, it was what the restart booted on and,
+// found equal to the file, PUBLISHED rather than seeded again — over whatever
+// a peer had activated in between, whenever the seed's instant was the later
+// one, which for a bootstrap is the overwrite its create-only activation
+// exists to refuse.
+func TestASeedTheFleetDidNotTakeIsNotThisNodesCompany(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		seed tierBSeed
+	}{
+		{"a -company bootstrap", seedOf(parse(t, companyYAML))},
+		{"an -import-company override", overrideOf(parse(t, companyYAML))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := seedStore(t)
+			fleet := coordmemory.NewFleet()
+			err := seedCompany(t.Context(), db, unreachableActivation{fleet}, nil,
+				tc.seed, nil, testNode, quiet())
+			if !errors.Is(err, errActivationUnreachable) {
+				t.Fatalf("seed = %v, want the boot failed by the activation's own error", err)
+			}
+			if active, found, err := db.Configs().Active(t.Context()); err != nil {
+				t.Fatal(err)
+			} else if found {
+				t.Fatalf("this node's active revision is %s, which no fleet took: "+
+					"the next boot runs it, and offers it over the pointer", active.ID)
+			}
+			if tc.seed.Override {
+				// The override is unconditional, so its restart replacing
+				// a peer's company is what it is for.
+				return
+			}
+			// A PEER BOOTSTRAPS while this node is down, at an instant
+			// before the seed's own.
+			peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+				RevisionID: "peer-revision", Summary: "a peer's bootstrap",
+				Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(-time.Minute),
+				Origin: coord.RevisionOrigin{Author: "node-b", AuthorKind: "node",
+					Source: "file", CreatedAt: time.Now().Add(-time.Minute)},
+			})
+			if err != nil {
+				t.Fatalf("the peer's activation: %v", err)
+			}
+			if err := seedCompany(t.Context(), db, fleet, nil, tc.seed, nil, testNode,
+				quiet()); err != nil {
+				t.Fatalf("the restart: %v", err)
+			}
+			if after, _, err := fleet.Target(t.Context()); err != nil {
+				t.Fatal(err)
+			} else if after.RevisionID != peer.RevisionID {
+				t.Errorf("the restart moved the pointer to %s, want the peer's %s",
+					after.RevisionID, peer.RevisionID)
+			}
+		})
+	}
+}
+
+// errActivationUnreachable is the activation [unreachableActivation] fails.
+var errActivationUnreachable = errors.New("the coordination store did not answer")
+
+// unreachableActivation is a fleet whose activation fails outright, as one does
+// when the coordination store stops answering between a node's read of the
+// pointer and its write.
+type unreachableActivation struct{ coord.Plane }
+
+func (unreachableActivation) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
+	return coord.Activation{}, errActivationUnreachable
 }
 
 // NO FILE AT ALL IS A NORMAL WAY TO RUN A NODE. The store is authoritative, so
