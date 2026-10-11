@@ -2,6 +2,7 @@ package atlassian_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 )
@@ -39,6 +40,34 @@ func TestAnUnmarkedAccountNamesNoSeat(t *testing.T) {
 	} {
 		if got := atlassian.HandleFrom(name); got != "" {
 			t.Errorf("HandleFrom(%q) = %q, want no seat", name, got)
+		}
+	}
+}
+
+// A TOKEN IS RECOGNISED BY THE LABEL ITS MINT STAMPED, and by nothing looser.
+//
+// The label is what a pass revokes a token nothing holds by, so what this
+// guards is the other direction from the account marker's: a token a person
+// made on the agent's account for their own use, or the token of a seat whose
+// handle merely starts the same way, must never read as this engine's to take.
+func TestATokenLabelNamesOnlyItsOwnSeat(t *testing.T) {
+	t.Parallel()
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1_767_225_600, 0))
+	if !atlassian.MintedFor(minted, "sre-lead") {
+		t.Fatalf("MintedFor(%q, sre-lead) = false for the label its own mint stamped", minted)
+	}
+	for _, c := range []struct{ label, handle string }{
+		{minted, "sre"},
+		{"sre-lead", "sre-lead"},
+		{"sre-lead-", "sre-lead"},
+		{"sre-lead-17672x", "sre-lead"},
+		{"sre-lead-1767225600-copy", "sre-lead"},
+		{"deploy-script", "sre-lead"},
+		{"", "sre-lead"},
+	} {
+		if atlassian.MintedFor(c.label, c.handle) {
+			t.Errorf("MintedFor(%q, %q) = true, want a token this engine did not mint "+
+				"for that seat", c.label, c.handle)
 		}
 	}
 }

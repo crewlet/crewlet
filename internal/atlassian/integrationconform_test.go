@@ -61,7 +61,7 @@ import (
 // GET" would count it, no pass could ever reach zero, and the only way out
 // would be to weaken the clause.
 //
-// So four routes are counted, and they are counted because a person would
+// So five routes are counted, and they are counted because a person would
 // have to undo each one:
 //
 //   - POST …/service-accounts — an identity created at Atlassian.
@@ -69,16 +69,19 @@ import (
 //   - POST /users/{id}/manage/api-tokens — a live credential minted, which
 //     is the write that matters most: Atlassian shows a token once, so
 //     minting rotates the one every running seat is authenticating with.
+//   - DELETE /users/{id}/manage/api-tokens/{token} — a credential revoked.
+//     A pass reaches it only for a token nothing holds, which a converged
+//     world never has, so on the clause below it is a regression made loud.
 //   - POST /users/{id}/manage/lifecycle/delete — an account destroyed. A
 //     teardown route, never reached by a pass, counted so that a regression
 //     that reached it would be loud rather than invisible.
 //
-// The fifth write is not an HTTP call at all: every [provision.TokenSink]
+// The sixth write is not an HTTP call at all: every [provision.TokenSink]
 // Record is counted too. The sealed store is the company's, shared by the
 // whole fleet and stamped with an author and a time, so a pass re-sealing the
 // same address every tick is writing exactly as surely as one that POSTs.
 //
-// And the sixth is a request this fake does NOT serve — see
+// And the seventh is a request this fake does NOT serve — see
 // [atlassianOrg.mutations] for why a route nobody matched counts as a write
 // rather than as a curiosity.
 //
@@ -125,12 +128,12 @@ type serviceAccount struct {
 	Email       string `json:"email"`
 
 	// grants is the product access the invite route applied, and tokens is
-	// how many API tokens the account holds. Both are STATE rather than a
-	// canned answer: the world is converged by running the real pass
-	// against it, so what the second pass reads has to be what the first
-	// pass actually did.
+	// the API tokens the account holds. Both are STATE rather than a canned
+	// answer: the world is converged by running the real pass against it,
+	// so what the second pass reads has to be what the first pass actually
+	// did.
 	grants []atlassian.PermissionRule
-	tokens int
+	tokens []atlassian.APIToken
 }
 
 // atlassianOrg is an Atlassian organization with state, and a counter for
@@ -139,6 +142,9 @@ type atlassianOrg struct {
 	mu       sync.Mutex
 	accounts []*serviceAccount
 	next     int
+	// tokenSeq numbers the tokens this organization mints, apart from the
+	// accounts, so a token's id is never one an account was given.
+	tokenSeq int
 
 	// scopedKey is an organization whose API key was created WITH scopes,
 	// which is the misconfiguration this vendor punishes most quietly.
@@ -222,13 +228,9 @@ func (o *atlassianOrg) serve(w http.ResponseWriter, r *http.Request) {
 			o.refuse(w, r, path)
 			return
 		}
-		tokens := make([]map[string]string, account.tokens)
-		for i := range tokens {
-			tokens[i] = map[string]string{"id": fmt.Sprintf("token-%d", i)}
-		}
-		_ = json.NewEncoder(w).Encode(tokens)
+		_ = json.NewEncoder(w).Encode(account.tokens)
 
-	// ---- the four mutations ------------------------------------------- //
+	// ---- the five mutations ------------------------------------------- //
 
 	case r.Method == http.MethodPost && path == serviceAccounts:
 		if o.scopedKey {
@@ -281,9 +283,36 @@ func (o *atlassianOrg) serve(w http.ResponseWriter, r *http.Request) {
 			o.refuse(w, r, path)
 			return
 		}
+		var body struct {
+			Label string `json:"label"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		o.writes++
-		account.tokens++
-		_, _ = fmt.Fprintf(w, `{"token":"minted-for-%s-%d"}`, account.ID, account.tokens)
+		o.tokenSeq++
+		account.tokens = append(account.tokens, atlassian.APIToken{
+			ID: fmt.Sprintf("token-%d", o.tokenSeq), Label: body.Label,
+		})
+		_, _ = fmt.Fprintf(w, `{"token":"minted-for-%s-%d"}`, account.ID, len(account.tokens))
+
+	case r.Method == http.MethodDelete && strings.Contains(path, "/manage/api-tokens/"):
+		// THE DOCUMENTED REVOCATION, spelled out for the reason
+		// [serviceAccounts] is: the account's id, then the token's own.
+		accountPath, tokenID, _ := strings.Cut(path, "/manage/api-tokens/")
+		account := o.find(strings.TrimPrefix(accountPath, "/users/"))
+		if account == nil {
+			o.refuse(w, r, path)
+			return
+		}
+		at := slices.IndexFunc(account.tokens, func(t atlassian.APIToken) bool {
+			return t.ID == tokenID
+		})
+		if at < 0 {
+			o.refuse(w, r, path)
+			return
+		}
+		o.writes++
+		account.tokens = slices.Delete(account.tokens, at, at+1)
+		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/manage/lifecycle/delete"):
 		o.writes++
@@ -610,9 +639,9 @@ func convergedAtlassian(
 			tb.Fatalf("%s holds %d product grant(s), want %d",
 				account.DisplayName, len(account.grants), len(atlassian.Products))
 		}
-		if account.tokens != 1 {
+		if len(account.tokens) != 1 {
 			tb.Fatalf("%s holds %d API token(s), want exactly one",
-				account.DisplayName, account.tokens)
+				account.DisplayName, len(account.tokens))
 		}
 	}
 	for _, seat := range plan.Seats {

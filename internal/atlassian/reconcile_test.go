@@ -26,9 +26,11 @@ import (
 // would make it unreachable from every test file here.
 type stubOrg struct {
 	mu sync.Mutex
-	// tokens is how many API tokens the account holds. A recreated account
-	// holds none, which is the state this suite is about.
-	tokens int
+	// tokens is the labels of the API tokens the account holds. A recreated
+	// account holds none, which is the state this suite is about. STATE
+	// rather than a canned answer: a mint adds the label it was sent and a
+	// revocation removes one, so what a pass reads back is what it did.
+	tokens []string
 	// listFails makes the token read unanswerable, which is a different
 	// fact from "there are none".
 	listFails bool
@@ -48,11 +50,34 @@ type stubOrg struct {
 	// gets. It is the state that proved the Granted arm was shadowing
 	// every failure after the grant.
 	mintRefused bool
+	// mintEmpty makes the mint answer success with no token in it, having
+	// made one: the account then holds a token whose value nobody has.
+	mintEmpty bool
+	// revokeFails makes the token revocation answer 500.
+	revokeFails bool
+	// mintUnlisted makes a minted token absent from the listing that
+	// follows it — a listing that has not caught up, which reads exactly
+	// like a token that was never made.
+	mintUnlisted bool
+	// listsNoIDs makes the token listing carry labels and no ids, so the
+	// revocation route — the token's id under the account — has nothing to
+	// name.
+	listsNoIDs bool
 
 	minted  int
 	granted int
 	created int
+	// revoked is the labels of the tokens a revocation removed, in order.
+	revoked []string
 }
+
+// tokenID is the id this stub lists a token under. Derived from the label,
+// which Atlassian keeps unique within an account, so the revocation route
+// is the only place an id has to be read back from.
+func tokenID(label string) string { return "id-" + label }
+
+// earlier is a token an earlier pass minted for the stub's one seat.
+var earlier = atlassian.TokenLabel("sre-lead", time.Unix(0, 0))
 
 func (o *stubOrg) server(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -90,7 +115,7 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 				return
 			}
 			_, _ = w.Write([]byte(`{}`))
-		case strings.Contains(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodGet:
+		case strings.HasSuffix(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodGet:
 			if o.onTokenRead != nil {
 				o.onTokenRead()
 			}
@@ -99,19 +124,52 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 				_, _ = w.Write([]byte(`{"message":"unwell"}`))
 				return
 			}
-			out := make([]map[string]string, o.tokens)
-			for i := range out {
-				out[i] = map[string]string{"id": "t"}
+			out := make([]map[string]string, 0, len(o.tokens))
+			for _, label := range o.tokens {
+				token := map[string]string{"id": tokenID(label), "label": label}
+				if o.listsNoIDs {
+					delete(token, "id")
+				}
+				out = append(out, token)
 			}
 			_ = json.NewEncoder(w).Encode(out)
-		case strings.Contains(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodPost:
+		case strings.HasSuffix(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodPost:
 			if o.mintRefused {
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte(`{"detail":"this key may not manage API tokens"}`))
 				return
 			}
+			var body struct {
+				Label string `json:"label"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			o.minted++
+			if !o.mintUnlisted {
+				o.tokens = append(o.tokens, body.Label)
+			}
+			if o.mintEmpty {
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"token":"ATSTT-fresh"}`))
+		case strings.Contains(r.URL.Path, "/manage/api-tokens/") && r.Method == http.MethodDelete:
+			// THE DOCUMENTED REVOCATION: the token's own id under the
+			// account, answered 204.
+			if o.revokeFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"message":"the token service is unwell"}`))
+				return
+			}
+			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			at := slices.IndexFunc(o.tokens, func(label string) bool { return tokenID(label) == id })
+			if at < 0 {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"no such token"}`))
+				return
+			}
+			o.revoked = append(o.revoked, o.tokens[at])
+			o.tokens = slices.Delete(o.tokens, at, at+1)
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			// A FAKE WITH A PERMISSIVE DEFAULT IS HOW THE INVITE POST STAYED
 			// INVISIBLE. This branch answered 200 `{}` to every route nobody
@@ -149,6 +207,11 @@ type sink struct {
 	// failure that is this deployment's own store rather than Atlassian.
 	recordErr error
 
+	// refuse, where it answers an error, is what sealing that one name
+	// answers — for the window a whole-store refusal cannot reach: a node
+	// draining at the instant it seals the token it has just minted.
+	refuse func(name string) error
+
 	// flushes counts the completions, and flushLive records whether the
 	// context the last one was handed was still alive. The second is not a
 	// detail: a completion that inherits the cancellation it is completing
@@ -160,6 +223,11 @@ type sink struct {
 func (s *sink) Record(_ context.Context, name, value string) error {
 	if s.recordErr != nil {
 		return s.recordErr
+	}
+	if s.refuse != nil {
+		if err := s.refuse(name); err != nil {
+			return err
+		}
 	}
 	if s.wrote == nil {
 		s.wrote = map[string]string{}
@@ -239,7 +307,7 @@ func run(t *testing.T, o *stubOrg, s *sink) *atlassian.Result {
 // finished with is in that state, and every freshly created one is.
 func TestATokenForAnAccountThatNoLongerExistsIsMintedOver(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 0}
+	o := &stubOrg{}
 	s := &sink{held: "ATSTT-for-the-deleted-account"}
 
 	res := run(t, o, s)
@@ -261,7 +329,7 @@ func TestATokenForAnAccountThatNoLongerExistsIsMintedOver(t *testing.T) {
 // authenticating with, on the loop's timer.
 func TestAWorkingCredentialIsNotRotatedOnEveryPass(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 1}
+	o := &stubOrg{tokens: []string{earlier}}
 	s := &sink{held: "ATSTT-live"}
 
 	run(t, o, s)
@@ -301,7 +369,7 @@ func TestAnUnreadableAccountDoesNotCostTheSeatItsCredential(t *testing.T) {
 // clause was false for as long as it stood.
 func TestAConvergedSeatIsNotGrantedProductAccessAgainOnEveryPass(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 1}
+	o := &stubOrg{tokens: []string{earlier}}
 	s := &sink{held: "ATSTT-live"}
 
 	run(t, o, s)
@@ -357,7 +425,7 @@ func TestACancelledPassRaisesRatherThanBlamingTheOrganizationCredential(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	res, err := reconcile(ctx, t, &stubOrg{tokens: 1}, &sink{held: "ATSTT-live"})
+	res, err := reconcile(ctx, t, &stubOrg{tokens: []string{earlier}}, &sink{held: "ATSTT-live"})
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Reconcile over a cancelled context = (%+v, %v), want the "+
@@ -386,7 +454,7 @@ func TestAPassCancelledPartWayThroughRaisesRatherThanReportingBrokenSeats(t *tes
 	// Cancelling earlier proves nothing: the listing's own response read
 	// fails, Reconcile raises that, and the test passes with the guard below
 	// removed. It was written that way first and the mutation caught it.
-	o := &stubOrg{tokens: 1, onTokenRead: cancel}
+	o := &stubOrg{tokens: []string{earlier}, onTokenRead: cancel}
 
 	res, err := reconcile(ctx, t, o, &sink{held: "ATSTT-live"})
 
@@ -467,7 +535,7 @@ func TestANodeWithNoKeyringCreatesNoAccountAndNamesTheSetting(t *testing.T) {
 // thing that rebuilds the snapshot is a Record that now never happens.
 func TestAMintIsFollowedByTheCompletionThatAnnouncesIt(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 0}
+	o := &stubOrg{}
 	s := &sink{held: "ATSTT-for-the-deleted-account"}
 
 	run(t, o, s)
@@ -504,7 +572,7 @@ func mintThenFail(t *testing.T, s *sink) (*atlassian.Result, error) {
 			cancel()
 		}
 	}
-	o := &stubOrg{tokens: 0}
+	o := &stubOrg{}
 	res, err := reconcile(ctx, t, o, s)
 	if o.minted != 1 {
 		t.Fatalf("minted %d time(s); this test is about a pass that failed AFTER "+
@@ -661,7 +729,7 @@ func TestASeatAtlassianCannotGrantYetIsPendingRatherThanFailed(t *testing.T) {
 // reconnect creates a new account.
 func TestASeatThisPassGrantedIsReportedAsStillComingUp(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 0}
+	o := &stubOrg{}
 	s := &sink{}
 
 	res := run(t, o, s)
@@ -687,7 +755,7 @@ func TestASeatThisPassGrantedIsReportedAsStillComingUp(t *testing.T) {
 // provider cadence for ever.
 func TestASeatGrantedByAnEarlierPassIsNotReportedAgain(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 1}
+	o := &stubOrg{tokens: []string{earlier}}
 	s := &sink{held: "ATSTT-live"}
 
 	res := run(t, o, s)
@@ -711,7 +779,7 @@ func TestASeatGrantedByAnEarlierPassIsNotReportedAgain(t *testing.T) {
 // with its error string dropped and nobody named.
 func TestASeatGrantedAndThenRefusedReportsTheFailureRatherThanAWait(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 0, mintRefused: true}
+	o := &stubOrg{mintRefused: true}
 	s := &sink{}
 
 	res := run(t, o, s)
@@ -750,7 +818,7 @@ func TestASeatGrantedAndThenRefusedReportsTheFailureRatherThanAWait(t *testing.T
 // the Atlassian admin's, and this one is this deployment's configuration.
 func TestASeatThisEngineCouldNotSealForIsTheCompanyAdmins(t *testing.T) {
 	t.Parallel()
-	o := &stubOrg{tokens: 0}
+	o := &stubOrg{}
 	s := &sink{recordErr: errors.New("seal: keyring unavailable")}
 
 	res := run(t, o, s)
@@ -762,6 +830,286 @@ func TestASeatThisEngineCouldNotSealForIsTheCompanyAdmins(t *testing.T) {
 	integrationtest.AssertConfigFault(t, findings[0])
 	if !strings.Contains(findings[0].Detail, "keyring unavailable") {
 		t.Errorf("detail = %q, want the store's own refusal in it", findings[0].Detail)
+	}
+}
+
+// ---- a token nobody holds ---------------------------------------------- //
+
+// refusingTheToken is a store that already holds the account's address and
+// will not keep anything else, so the first write a pass attempts is the
+// minted token's — the window between a live credential and its only copy.
+func refusingTheToken() *sink {
+	return &sink{
+		recordErr: errors.New("the keyring refused the write"),
+		wrote:     map[string]string{"SEAT_EMAIL": "acct@example.invalid"},
+	}
+}
+
+// A TOKEN THAT COULD NOT BE RECORDED IS REVOKED.
+//
+// Atlassian shows a token's value once, so one this engine minted and then
+// could not keep is a credential that exists, is held by nobody, and that
+// nothing will ever remember to remove — valid for the better part of a year.
+// A store refusing writes left one more of them on the account every pass.
+func TestATokenThatCannotBeRecordedIsRevoked(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{}
+
+	res := run(t, o, refusingTheToken())
+
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1, 0))
+	if !slices.Equal(o.revoked, []string{minted}) {
+		t.Fatalf("revoked %v, want the token this pass minted (%s): it is live at "+
+			"Atlassian and held by nobody", o.revoked, minted)
+	}
+	if len(o.tokens) != 0 {
+		t.Errorf("the account still holds %v", o.tokens)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err == nil || res.Seats[0].TokenMinted {
+		t.Fatalf("seat = %+v, want the failure reported and no mint claimed", res.Seats)
+	}
+	// AND THE ORIGINAL FAILURE SURVIVES. The reason the pass stopped is what
+	// an operator has to fix; a cleanup message replacing it would hide the
+	// cause behind its consequence.
+	if !strings.Contains(res.Seats[0].Err.Error(), "the keyring refused the write") {
+		t.Errorf("the revocation replaced the cause: %v", res.Seats[0].Err)
+	}
+	// AND NOTHING IS LEFT AT ATLASSIAN, so nobody there owes anything: the
+	// store that refused is this deployment's, the company admin's.
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one seat", findings)
+	}
+	integrationtest.AssertConfigFault(t, findings[0])
+}
+
+// AND WHEN THE REVOCATION ALSO FAILS, somebody at Atlassian is told which
+// token — the only case where that instruction is honest, and the one finding
+// here that is an Atlassian admin's.
+func TestATokenThatCannotBeRevokedIsNamedForAnAtlassianAdmin(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{revokeFails: true}
+
+	res := run(t, o, refusingTheToken())
+
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one seat", findings)
+	}
+	got := findings[0]
+	if got.Kind != integration.FindingIdentityFailed {
+		t.Fatalf("kind = %q, want %q: a credential live at Atlassian is only "+
+			"removable there", got.Kind, integration.FindingIdentityFailed)
+	}
+	if _, actor := got.Kind.Verdict(); actor != integration.ActorVendorAdmin {
+		t.Errorf("a token live at Atlassian is owed by %q, want the Atlassian admin", actor)
+	}
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1, 0))
+	// THE TOKEN IS NAMED BEFORE ANY CAUSE, so the sentence's cut at
+	// MaxDetailLength can only ever take a quoted refusal, never the label.
+	if !strings.HasPrefix(got.Detail, fmt.Sprintf("atlassian: the API token labelled %q", minted)) {
+		t.Errorf("detail = %q, want it to open on the token to delete", got.Detail)
+	}
+	for _, cause := range []string{"the keyring refused the write", "the token service is unwell"} {
+		if !strings.Contains(got.Detail, cause) {
+			t.Errorf("detail = %q, want %q in it", got.Detail, cause)
+		}
+	}
+}
+
+// AND A TOKEN THE LISTING DOES NOT SHOW YET IS NOT A TOKEN REVOKED.
+//
+// A token minted moments ago can be missing from the account's listing, and
+// that absence reads exactly like a token that was never made. Only the second
+// reading is safe to report as nothing left at Atlassian, and nothing can tell
+// them apart — so it is a revocation that did not happen, which asks a person
+// to look rather than telling them a live credential is gone.
+func TestATokenTheListingDoesNotShowIsNotReportedRevoked(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{mintUnlisted: true}
+
+	res := run(t, o, refusingTheToken())
+
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the one identity_failed: a token that may be "+
+			"live at Atlassian was reported as taken back", findings)
+	}
+	if !strings.Contains(findings[0].Detail, "carries no token labelled") {
+		t.Errorf("detail = %q, want why the revocation did not happen", findings[0].Detail)
+	}
+}
+
+// AND A TOKEN LISTED WITH NO ID IS NOT REVOKED BY ASKING FOR NOTHING.
+//
+// The revocation is a DELETE on the token's id under the account. With no id
+// it would go to the collection itself, and the 404 that earns reads as a
+// token already gone — the same false "nothing is left" by another route.
+func TestATokenListedWithNoIDIsNotReportedRevoked(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{listsNoIDs: true}
+
+	res := run(t, o, refusingTheToken())
+
+	if len(o.tokens) != 1 {
+		t.Fatalf("the account holds %v, want the one token nobody could revoke", o.tokens)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the one identity_failed", findings)
+	}
+	if !strings.Contains(findings[0].Detail, "no id to revoke it by") {
+		t.Errorf("detail = %q, want why the revocation did not happen", findings[0].Detail)
+	}
+}
+
+// AND A NODE DRAINING AS IT SEALS STILL TAKES THE TOKEN BACK.
+//
+// The failure being cleaned up after is often the cancellation itself, and a
+// revocation that inherited it would fail at its first request — leaving the
+// credential live exactly when nothing is left running to notice. The pass
+// still raises the cancellation, because a node shutting down has observed
+// nothing worth reporting.
+func TestATokenMintedAsTheNodeDrainsIsStillRevoked(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	o := &stubOrg{}
+	s := &sink{refuse: func(name string) error {
+		if name != "SEAT_TOKEN" {
+			return nil
+		}
+		cancel()
+		return context.Canceled
+	}}
+
+	_, err := reconcile(ctx, t, o, s)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reconcile = %v, want the cancellation raised", err)
+	}
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1, 0))
+	if !slices.Equal(o.revoked, []string{minted}) {
+		t.Errorf("revoked %v, want %s: the revocation inherited the cancellation it "+
+			"was cleaning up after, and the token is live with nobody holding it",
+			o.revoked, minted)
+	}
+}
+
+// A MINT THAT ANSWERS WITH NO VALUE IS THE SAME TOKEN FROM THE OTHER SIDE.
+//
+// Atlassian reported success and carried no credential, so the account may
+// hold a token whose value nobody has. It used to be reported and left there.
+// Found by the label this pass stamped, and taken back — and still Atlassian's
+// to look at, because it was Atlassian's answer that came back empty.
+func TestAMintThatReturnsNoTokenIsRevoked(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{mintEmpty: true}
+
+	res := run(t, o, &sink{})
+
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1, 0))
+	if !slices.Equal(o.revoked, []string{minted}) {
+		t.Fatalf("revoked %v, want the token the empty mint made (%s)", o.revoked, minted)
+	}
+	if len(res.Seats) != 1 || !errors.Is(res.Seats[0].Err, atlassian.ErrTokenNotReturned) {
+		t.Fatalf("seat = %+v, want the empty mint reported", res.Seats)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Errorf("findings = %+v, want the one identity_failed", findings)
+	}
+}
+
+// A TOKEN NOTHING HOLDS IS REVOKED BEFORE ANOTHER IS MINTED BESIDE IT.
+//
+// The seat authenticates from its ${VAR}, and the ${VAR} is empty, so a token
+// this engine minted on the account earlier is a value nobody in the company
+// has. The pass mints a working one regardless, and used to leave the earlier
+// one live — so a token stranded by a refused record, an empty mint answer or
+// a failed revocation stayed on the account for good, and the instruction to
+// delete it was undone by the next pass, which minted and reported the seat
+// ready. A token somebody made on the account under a name of their own is
+// not this engine's to take away.
+func TestATokenNothingHoldsIsRevokedBeforeAnotherIsMinted(t *testing.T) {
+	t.Parallel()
+	const theirs = "deploy-script"
+	o := &stubOrg{tokens: []string{earlier, theirs}}
+	s := &sink{}
+
+	res := run(t, o, s)
+
+	if !slices.Equal(o.revoked, []string{earlier}) {
+		t.Fatalf("revoked %v, want only the token this engine minted earlier (%s)",
+			o.revoked, earlier)
+	}
+	minted := atlassian.TokenLabel("sre-lead", time.Unix(1, 0))
+	if !slices.Equal(o.tokens, []string{theirs, minted}) {
+		t.Errorf("the account holds %v, want %q left alone and the fresh %q",
+			o.tokens, theirs, minted)
+	}
+	if s.wrote["SEAT_TOKEN"] != "ATSTT-fresh" || !res.Seats[0].TokenMinted {
+		t.Errorf("the seat was not given a working credential: %+v", res.Seats)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Errorf("findings = %+v, want none: nothing was wrong that this pass left", findings)
+	}
+}
+
+// AND ONE THAT CANNOT BE REVOKED STOPS THE MINT, so the stray is reported
+// rather than buried: minted beside, the account would hold a token the store
+// does hold and every later pass would read the seat as converged.
+func TestATokenNothingHoldsThatCannotBeRevokedIsReportedRatherThanMintedBeside(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: []string{earlier}, revokeFails: true}
+
+	res := run(t, o, &sink{})
+
+	if o.minted != 0 {
+		t.Errorf("minted %d time(s) beside a stray it could not revoke", o.minted)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the one identity_failed", findings)
+	}
+	if !strings.Contains(findings[0].Detail, earlier) {
+		t.Errorf("detail = %q, want the stray's label in it", findings[0].Detail)
+	}
+}
+
+// AND "CANNOT TELL" REVOKES NOTHING. A listing that failed is evidence of no
+// token at all, and the mint goes ahead, which is safe because nothing is held
+// for the seat to be rotated away.
+func TestAnUnreadableAccountRevokesNothing(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: []string{earlier}, listFails: true}
+
+	run(t, o, &sink{})
+
+	if len(o.revoked) != 0 {
+		t.Errorf("revoked %v on an answer Atlassian never gave", o.revoked)
+	}
+	if o.minted != 1 {
+		t.Errorf("minted %d time(s), want one for a seat holding nothing", o.minted)
+	}
+}
+
+// A REVOCATION OF A TOKEN ALREADY GONE SUCCEEDS, because gone is what it asks
+// for and the pass that repeats it must not report a failure over a credential
+// that no longer exists. Anything else Atlassian refuses is still a refusal.
+func TestRevokingATokenAlreadyGoneSucceeds(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{}
+	client := atlassian.NewClient(atlassian.ClientOptions{BaseURL: o.server(t).URL})
+
+	if err := client.RevokeToken(context.Background(), "key", "acct-1", "id-nothing"); err != nil {
+		t.Errorf("revoking a token Atlassian does not have: %v", err)
+	}
+	o.mu.Lock()
+	o.revokeFails = true
+	o.mu.Unlock()
+	if err := client.RevokeToken(context.Background(), "key", "acct-1", "id-nothing"); err == nil {
+		t.Error("a 500 from the revocation was reported as success")
 	}
 }
 

@@ -118,7 +118,8 @@ type SeatResult struct {
 	Err error
 
 	// AtVendor reports an Err a person settles AT ATLASSIAN — a create, a
-	// grant or a mint the organization refused — rather than one this
+	// grant or a mint the organization refused, or a token it minted that
+	// this pass could not keep and could not revoke — rather than one this
 	// engine's own sealed store refused, which is this deployment's.
 	//
 	// SET WHERE THE ERROR IS RAISED, as [datadog.SeatResult.AtVendor] is and
@@ -419,18 +420,184 @@ func reconcileSeat(
 	if held && !orphaned(tokens, seat.Handle) {
 		return out
 	}
-	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, seat.Handle, opts.now())
-	if err != nil {
+	// A SEAT THAT REACHES THE MINT HOLDS NOTHING THAT WORKS: nothing is
+	// sealed for it, or what is sealed has no token behind it because the
+	// account holds none. So whatever this engine minted on the account is
+	// held by nobody, and it goes before another is minted beside it. No
+	// `held` test guards this, because the second case has nothing to
+	// revoke; see [revokeUnheld].
+	if err = revokeUnheld(ctx, opts, out.AccountID, seat.Handle, tokens); err != nil {
+		out.Err, out.AtVendor = err, true
+		return out
+	}
+	label := TokenLabel(seat.Handle, opts.now())
+	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, label, opts.now())
+	switch {
+	case errors.Is(err, ErrTokenNotReturned):
+		// A TOKEN THAT MAY EXIST WITH NO VALUE ANYBODY HOLDS, which is the
+		// failure below reached from the other side: taken back the same way,
+		// and Atlassian's either way, since it was Atlassian's answer that
+		// came back empty.
+		out.AtVendor, out.Err = revoke(ctx, opts, seat, out.AccountID, label, true, err)
+		return out
+	case err != nil:
 		out.Err = fmt.Errorf("atlassian: mint a token for %s: %w", seat.Handle, err)
 		out.AtVendor = true
 		return out
 	}
 	if err := opts.Sink.Record(ctx, seat.TokenVar, token.Token); err != nil {
-		out.Err = fmt.Errorf("atlassian: record %s: %w", seat.TokenVar, err)
+		// THE TOKEN EXISTS AND ITS VALUE IS NOW LOST, so this engine revokes
+		// it rather than leaving it live.
+		//
+		// [provision.TokenSink]'s contract says why in its own words: "a
+		// credential that exists and is not recorded is one nobody can use
+		// and nobody will remember to remove". Atlassian shows a token once,
+		// so nothing can ever read this one back, and every pass that met a
+		// sealed store refusing writes left one more of them on the account,
+		// valid for [TokenLifetime].
+		//
+		// AND A RECORD THAT FAILED AFTER IT LANDED COSTS NOTHING HERE. A
+		// write reported failed may still be durable — a timeout after the
+		// commit — and then the sealed value names a token this revokes. The
+		// next pass finds it held over an account holding none, which is
+		// [orphaned]'s case, and mints over it; the alternative direction is
+		// a live credential on the account for the better part of a year.
+		out.AtVendor, out.Err = revoke(ctx, opts, seat, out.AccountID, label, false,
+			fmt.Errorf("record %s: %w", seat.TokenVar, err))
 		return out
 	}
 	out.TokenMinted = true
 	return out
+}
+
+// revoke takes back a token this pass minted and could not keep.
+//
+// It returns the ORIGINAL failure with the revocation's outcome around it,
+// never in place of it — the rule [datadog]'s own revoke states: the reason
+// the pass stopped is what an operator has to fix, and a cleanup error
+// replacing it would hide the cause behind its consequence. Only when the
+// revocation ALSO fails is anybody asked to delete a token by hand.
+//
+// DETACHED, because the failure is frequently the cancellation itself — a node
+// draining as it sealed — and a revocation inheriting a dead context does
+// nothing at all, which is exactly when the credential most needs taking back.
+//
+// The bool is [SeatResult.AtVendor]: the cause's own owner when the token is
+// gone, and an Atlassian admin's whenever it may not be, because a credential
+// live at Atlassian and held by nobody is the one thing in this failure that
+// only somebody there can remove.
+func revoke(
+	ctx context.Context, opts Options, seat provision.Seat, accountID, label string,
+	causeAtVendor bool, cause error,
+) (bool, error) {
+	if err := revokeLabelled(context.WithoutCancel(ctx), opts, accountID, label); err != nil {
+		// THE INSTRUCTION FIRST and both causes after it, because a
+		// finding's sentence is cut at [integration.MaxDetailLength] and an
+		// Atlassian refusal quoted in the middle would push the one thing a
+		// person can act on past the cut.
+		return true, fmt.Errorf(
+			"atlassian: the API token labelled %q on %s's service account may be "+
+				"live at Atlassian and held by nobody — delete it there; the next "+
+				"pass tries again too. It was minted and could not be kept (%w), and "+
+				"revoking it failed (%w)",
+			label, seat.Handle, cause, err)
+	}
+	return causeAtVendor, fmt.Errorf(
+		"atlassian: minted a token for %s and could not keep it, so it was revoked "+
+			"again — nothing is left at Atlassian and the next pass mints another: %w",
+		seat.Handle, cause)
+}
+
+// revokeLabelled revokes the one token on an account carrying this label.
+//
+// BY THE LABEL, through the documented listing — see [TokenLabel] for why
+// that and not an id off the mint's answer.
+//
+// A LABEL THE LISTING DOES NOT CARRY IS NOT A REVOKED TOKEN. The token was
+// minted moments ago, or its mint answered with no value, and either way the
+// two readings of its absence are a listing that has not caught up and a
+// token that was never made. Only the second is safe to report as nothing
+// left at Atlassian, and nothing here can tell them apart — so it is refused
+// as a revocation that did not happen, the direction that asks a person to
+// look rather than the one that tells them a live credential is gone.
+func revokeLabelled(ctx context.Context, opts Options, accountID, label string) error {
+	tokens, err := opts.Client.ListTokens(ctx, opts.Key, accountID)
+	if err != nil {
+		return fmt.Errorf("list the account's API tokens: %w", err)
+	}
+	for _, token := range tokens {
+		if token.Label != label {
+			continue
+		}
+		return revokeListed(ctx, opts, accountID, token)
+	}
+	return fmt.Errorf("the account's API token listing carries no token labelled %q", label)
+}
+
+// revokeListed revokes one token as the listing described it.
+//
+// AN ID IS REQUIRED, not assumed: the route is the token's id under the
+// account, and a listing that carried none would send the DELETE to the
+// collection itself.
+func revokeListed(ctx context.Context, opts Options, accountID string, token APIToken) error {
+	if token.ID == "" {
+		return fmt.Errorf("the account's API token listing carries the token labelled "+
+			"%q with no id to revoke it by", token.Label)
+	}
+	return opts.Client.RevokeToken(ctx, opts.Key, accountID, token.ID)
+}
+
+// revokeUnheld revokes every token this engine minted on a seat's account,
+// for a seat holding none of them.
+//
+// # Why a token nothing holds is revoked rather than minted beside
+//
+// Atlassian shows a token's value once, so a token on this seat's own account
+// with nothing sealed for the seat is a value NOBODY IN THIS COMPANY HOLDS: the
+// seat authenticates from its ${VAR}, and the ${VAR} is empty. The pass mints
+// a working credential next whatever happens here, and used to leave each one
+// of these where it was — so every token a failed record, an empty mint
+// answer, a refused revocation or a deleted secret stranded stayed live on the
+// account for the [TokenLifetime] it was minted with, and the instruction to
+// delete one by hand was undone by the very next pass, which minted again and
+// reported the seat ready. This is what makes that instruction optional: a
+// stranded token is gone on the pass after the one that stranded it.
+//
+// ITS OWN TOKENS ONLY, by the label every mint here stamps ([MintedFor]). A
+// token somebody made on the account under a name of their own is not this
+// engine's to take away, and the seat is fixed regardless: minting is
+// additive.
+//
+// A FAILED REVOCATION STOPS THE SEAT short of the mint, as [datadog]'s repair
+// does: the next pass tries again, and minting first would bury the stray for
+// good — every later pass would find a token held and the account holding
+// tokens, which is converged as far as anything can establish, and never look
+// at it again.
+//
+// "CANNOT TELL" REVOKES NOTHING, by construction rather than by a check: a
+// listing that failed is a [tokenList] carrying no tokens, which is evidence
+// of none, and the mint goes ahead — safe, because nothing is held for this
+// seat to be rotated away.
+func revokeUnheld(
+	ctx context.Context, opts Options, accountID, handle string, tokens tokenList,
+) error {
+	for _, token := range tokens.tokens {
+		if !MintedFor(token.Label, handle) {
+			continue
+		}
+		if err := revokeListed(ctx, opts, accountID, token); err != nil {
+			return fmt.Errorf(
+				"atlassian: revoke %s's API token labelled %q, which nothing in this "+
+					"company holds, before minting the one that replaces it: %w",
+				handle, token.Label, err)
+		}
+		log.Info("atlassian_unheld_token_revoked", "seat", handle, "label", token.Label,
+			"detail", "this seat's Atlassian account held an API token this engine "+
+				"minted and nothing in this company holds — Atlassian shows a token's "+
+				"value once, and the seat's credential is not sealed. Revoked, and a "+
+				"replacement is minted; nothing has to be done by hand")
+	}
+	return nil
 }
 
 // GrantPropagation is how long Atlassian takes to make a new service
@@ -456,8 +623,8 @@ func reconcileSeat(
 // under "the provider is working on it".
 const GrantPropagation = 5 * time.Minute
 
-// tokenCount is how many API tokens one account holds, or the fact that
-// Atlassian could not say.
+// tokenList is the API tokens one account holds, or the fact that Atlassian
+// could not say.
 //
 // # Three-valued, and the two decisions it settles go opposite ways on the
 // third
@@ -465,7 +632,7 @@ const GrantPropagation = 5 * time.Minute
 // One read answers both of a seat's writes, and "the vendor could not say"
 // means something different to each. Each direction is the safe one for its
 // own write, and the asymmetry is the whole reason this is a type rather
-// than an int:
+// than a slice, whose nil would read as an account holding nothing:
 //
 //   - THE GRANT. Cannot-tell GRANTS. Granting is idempotent, so a redundant
 //     one costs a single request, while a missing one leaves an account that
@@ -481,21 +648,25 @@ const GrantPropagation = 5 * time.Minute
 // layer exists to avoid: held, definitively not held, and "the store could
 // not say" are three different facts, and folding the last into the second
 // is how a healthy company gets torn down over a two-second blip.
-type tokenCount struct {
-	n     int
-	known bool
+//
+// And the revocation of what a seat holding nothing left on its account
+// ([revokeUnheld]) takes the mint's direction, for the mint's reason: a
+// revocation is not idempotent either, so cannot-tell revokes nothing.
+type tokenList struct {
+	tokens []APIToken
+	known  bool
 }
 
 // granted reports an account an earlier pass certainly finished with, which
 // is the only evidence available that its product access was ever applied.
 // See the grant in [reconcileSeat] for why the evidence is this and not a
 // read of the grant itself.
-func (c tokenCount) granted() bool { return c.known && c.n > 0 }
+func (c tokenList) granted() bool { return c.known && len(c.tokens) > 0 }
 
 // none reports an account that definitely holds no API token at all.
-func (c tokenCount) none() bool { return c.known && c.n == 0 }
+func (c tokenList) none() bool { return c.known && len(c.tokens) == 0 }
 
-// heldTokens asks Atlassian how many API tokens one account holds.
+// heldTokens asks Atlassian which API tokens one account holds.
 //
 // AN ACCOUNT THIS PASS JUST CREATED IS NOT ASKED. Atlassian made it seconds
 // ago, so it holds none and the answer is known without a request — which
@@ -504,21 +675,22 @@ func (c tokenCount) none() bool { return c.known && c.n == 0 }
 // An account with no id is UNKNOWN rather than empty: Atlassian answered a
 // create or a listing without one, so there is nothing to read and nothing to
 // conclude, and the two writes downstream take their cannot-tell directions.
-func heldTokens(ctx context.Context, opts Options, seat SeatResult) tokenCount {
+func heldTokens(ctx context.Context, opts Options, seat SeatResult) tokenList {
 	if seat.AccountID == "" {
-		return tokenCount{}
+		return tokenList{}
 	}
 	if seat.Created {
-		return tokenCount{known: true}
+		return tokenList{known: true}
 	}
-	count, err := opts.Client.CountTokens(ctx, opts.Key, seat.AccountID)
+	tokens, err := opts.Client.ListTokens(ctx, opts.Key, seat.AccountID)
 	if err != nil {
 		log.Debug("atlassian_token_check_failed", "seat", seat.Handle, "error", err.Error(),
-			"detail", "the held credential is left alone and the account's product "+
-				"access is granted again; a failed read is evidence of neither")
-		return tokenCount{}
+			"detail", "the held credential is left alone, no token is revoked and "+
+				"the account's product access is granted again; a failed read is "+
+				"evidence of none of them")
+		return tokenList{}
 	}
-	return tokenCount{n: count, known: true}
+	return tokenList{tokens: tokens, known: true}
 }
 
 // recorded reports a sink that already holds exactly this value.
@@ -571,7 +743,7 @@ func recorded(ctx context.Context, opts Options, name, value string) bool {
 // working credential every time Atlassian was briefly unreachable, on a
 // timer. The three-valued rule this engine applies to ownership applies here
 // for the same reason: only a definite answer acts.
-func orphaned(tokens tokenCount, handle string) bool {
+func orphaned(tokens tokenList, handle string) bool {
 	if !tokens.none() {
 		return false
 	}
