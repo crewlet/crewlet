@@ -581,13 +581,13 @@ sequenceDiagram
     alt the reading was read in the last 2 s
         O-->>A: the text after `after`, from the shared reading
     else
-        O->>B: attach without waking; read what each stream grew
+        O->>B: attach without waking, then read what each stream grew
         B-->>O: new complete lines
-        O->>O: decode, settle, redact; append to the reading
+        O->>O: decode, settle and redact, then append to the reading
         O-->>A: the text after `after` — or a reset carrying the last 256 KiB
     end
     A-->>D: {outcome: tail, output: {text, start, end, epoch, digest, reset, held}}
-    D->>D: append (or replace on a reset); trim the front past 256 KiB
+    D->>D: append (or replace on a reset), then trim the front past 256 KiB
 ```
 
 - **It names the job, not only the run.** A turn can launch more than one job, so `sandbox_run_started` carries the job's `launch_id` (the one the run's record holds and its phase record repeats) and the instant the store recorded the launch (`started_at`). A request naming only the turn would show whichever job the record holds now.
