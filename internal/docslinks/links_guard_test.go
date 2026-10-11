@@ -324,8 +324,7 @@ func TestPageMissingSlashReadsPunctuationAsProse(t *testing.T) {
 //   - latest/ is main or a release of this tree, never another program.
 //     Until this engine's first release it is a redirect to next/; from then
 //     it is the newest release, cut from this tree. The one tag older than
-//     that, v0.1.0, predates this engine, and the site publishes it at
-//     /engine/v0.1/ and never at latest/.
+//     that, v0.1.0, predates this engine, and the site does not publish it.
 //   - what the release lacks, latest/ redirects to next/: a page or a
 //     schema/ or skills/ file only main has answers at its latest/ path with
 //     a redirect to its next/ copy.
@@ -436,7 +435,7 @@ func TestUnpublishedKnowsWhatTheSiteBuilds(t *testing.T) {
 		{"/engine/latest/schema/company.schema.json", true},
 		{"/engine/next/schema/bootstrap.schema.json", true},
 		{"/engine/latest/skills/company-architect/SKILL.md", true},
-		{"/engine/v0.1/concepts/anything/", true},
+		{"/engine/v0.2/concepts/anything/", true},
 		{"/operator/latest/anything/", true},
 		{"/operator/next/", true},
 
