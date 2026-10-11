@@ -887,3 +887,34 @@ describe("a document another system manages", () => {
     expect(screen.queryByText(/managed by gitops/)).toBeNull();
   });
 });
+
+// WORK'S NEW PROJECT ARRIVES HERE: the node's editor opens on its Project field
+// holding the key, as a change still to apply, and the address lets go of the
+// key so a reload asks nothing twice.
+test("a link naming a unit and a project opens its editor on the Project field holding the key", async () => {
+  const engine = new Engine(company());
+  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=Engineering&project=ENG" });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  const field = within(editor).getByRole("combobox", { name: /Tracker project/ });
+  expect((field as HTMLInputElement).value).toBe("ENG");
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  // A CHANGE STILL TO APPLY: the editor marks the part holding it as changed.
+  expect(within(editor).getByRole("tab", { name: /^Work/ }).textContent).toContain("Changed");
+  await waitFor(() => expect(location.hash).not.toContain("project="));
+  expect(location.hash).toContain("unit=Engineering");
+});
+
+// A NODE THAT ALREADY OWNS A PROJECT KEEPS IT: the key is offered only where
+// there is none.
+test("a project link to a node that owns one leaves its project as it is", async () => {
+  const doc = company();
+  doc.units![0]!.project = "CORE";
+  const engine = new Engine(doc);
+  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=Engineering&project=ENG" });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  expect(
+    (within(editor).getByRole("combobox", { name: /Tracker project/ }) as HTMLInputElement).value,
+  ).toBe("CORE");
+});

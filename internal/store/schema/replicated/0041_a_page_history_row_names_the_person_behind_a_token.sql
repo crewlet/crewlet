@@ -1,0 +1,23 @@
+-- A page's history row names the seat an operator token was bound to when it
+-- wrote, as the tracker's has since migration 0026.
+--
+-- # What was missing
+--
+-- A person writes to the knowledge base through their own credential, and the
+-- record says so: the actor is the TOKEN's name with actor kind `operator`,
+-- never a seat handle, because a knowledge base whose author field is chosen
+-- by the writer is not an audit trail. Without the seat beside it, every card
+-- and every feed row a person's own page writes produced showed the token's
+-- id, a credential name, where the screen needed the person, and no read could
+-- recover them: the binding is configuration and moves.
+--
+-- # A record-carried value, not a derived one
+--
+-- This column is copied from the record (`actor_seat`, pages record version 2),
+-- like `actor` and `operator_id` beside it. A record without it, which every
+-- record before version 2 is, yields the same empty column on every node.
+--
+-- # No index
+--
+-- It is rendered, never filtered on.
+ALTER TABLE pages_history ADD COLUMN actor_seat TEXT NOT NULL DEFAULT '';

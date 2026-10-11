@@ -650,17 +650,17 @@ Two properties differ from the vendor path and both are visible:
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
-  missing from `GET /containers` and from the Knowledge tree. That is what a
-  space nobody declared looks like.
-- **THE DASHBOARD BROWSES IT AS A TREE**, one level at a time: a space's top
-  (`pages{container, roots: true}`) and one page's children
-  (`pages{parent}`), each read in windows of 500 with the listing's `total`
-  and an `after` cursor, and each page saying how many `children` the same
-  listing would show under it — so an expander never opens onto a folder
-  whose pages are all in the trash. A search there reads THIS NODE'S OWN COPY
-  (the rows, the lexical index and the replicated vectors), and the screen
-  says so: it is as current as this node's place on the pages log. See
-  [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-a-tree-and-search-with-real-modes).
+  missing from `GET /containers` and from the dashboard's row of spaces. That
+  is what a space nobody declared looks like.
+- **THE DASHBOARD BROWSES A SPACE AS AN OUTLINE**, one level at a time: a
+  space's top (`pages{container, roots: true}`) and one page's children
+  (`pages{parent}`), each read when its row opens, in windows of 500 with the
+  listing's `total` and an `after` cursor, and each page saying how many
+  `children` the same listing would show under it, so an expander never opens
+  onto a level whose pages are all in the trash. A search there reads THIS
+  NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
+  the screen says so: it is as current as this node's place on the pages log.
+  See [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-the-spaces-a-landing-and-search-with-real-modes).
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
@@ -682,6 +682,20 @@ Two properties differ from the vendor path and both are visible:
   names who wrote it — never "the dashboard". A save states the revision it
   edited; one against a stale revision is refused rather than overwriting
   prose somebody else just wrote.
+- **A TOKEN IS THE AUTHOR AND ITS PERSON IS THE SEAT.** A write through an
+  operator's token records the token's own name as its actor, because an
+  author field the writer chooses is not an audit trail, and it carries the
+  seat that token is bound to by `contact.crewlet_operator_id` beside it as
+  `actor_seat`: on the record (pages record version 2) and on the history row
+  it writes. Everything about the PERSON reads the seat. A watch follows the
+  page as the person, since a wake reaches a seat and never a credential; a
+  page they create subscribes them; their own write wakes neither their
+  subscription nor the lead's copy for a space they lead; a page that names no
+  space lands in their team's space, as a seat's own write does; and a history
+  row, a revision and a comment draw them rather than the credential. A token
+  bound to nobody holds no subscription at all. This is the tracker's rule
+  (its history has carried `actor_seat` since replicated migration 0026),
+  applied to the knowledge base.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.
@@ -720,6 +734,16 @@ Two properties differ from the vendor path and both are visible:
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them
   pointing at nothing.
+- **A FOLDER IS A PAGE WITH NOTHING WRITTEN IN IT.** There is no folder type:
+  a page whose body is empty is a folder, a page that only groups the pages
+  filed under it. The mark is derived from the body every time it is read and
+  never stored, so it cannot disagree with the page: write a paragraph into a
+  folder and it is a page with children, empty a page and it is a folder
+  again. `write_page` files one with an empty body.
+- **"Last saved" is a change to what the page says.** A listing names the last
+  create, save or rename (`saved_by`, `saved_at`), each of which writes a
+  revision; a label, a watch or a move updates the page and leaves its last
+  save where it was.
 - **A save's note is the one its writer gave.** The one line `save_page`
   takes as `message` is what the page's activity and each watcher's wake show
   under the saver's name; a save without one shows none. It never falls back

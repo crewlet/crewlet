@@ -124,7 +124,7 @@ export function Home() {
   // they cannot act on.
   const conditions =
     raised.length + (waiting ? seats.others.length : seats.mine.length + seats.others.length);
-  // WHERE THEY ARE LISTED: the Inbox's "Needs a decision" group, opened on the
+  // WHERE THEY ARE LISTED: the Inbox's "Needs you" group, opened on the
   // one condition when there is exactly one.
   const conditionsHref =
     conditions === 1 && raised.length === 1

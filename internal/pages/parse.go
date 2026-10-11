@@ -106,7 +106,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return nil, nil
 	}
 	base := p.inbound(record)
-	actor := record.Actor
+	actor := writerOf(record)
 
 	var targets []target
 	for _, handle := range record.Notify.Mentions {
@@ -144,7 +144,26 @@ func LeadWorthy(kind ChangeKind) bool {
 
 type target struct{ handle, via string }
 
-func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
+// writer is who made a change, under every name a recipient list can hold
+// them by.
+type writer struct{ actor, seat string }
+
+// writerOf is the record's writer: the actor it names and, for an operator,
+// the seat their token was bound to ([MutationRecord.ActorSeat]).
+func writerOf(record MutationRecord) writer {
+	return writer{actor: record.Actor, seat: record.ActorSeat}
+}
+
+// is reports whether handle is the writer.
+//
+// UNDER EITHER NAME, because a person's subscription is their SEAT while their
+// writes are recorded under their TOKEN: compared with the actor alone, a
+// founder who watches a page was woken by every save they made to it.
+func (w writer) is(handle string) bool {
+	return handle != "" && (handle == w.actor || handle == w.seat)
+}
+
+func (p *Parser) directed(base notify.Inbound, targets []target, actor writer,
 	at time.Time, reg *notify.Registry) []notify.Routed {
 	var (
 		out     []notify.Routed
@@ -152,7 +171,7 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
 		dropped int
 	)
 	for _, t := range targets {
-		if t.handle == "" || t.handle == actor || seen[t.handle] {
+		if t.handle == "" || actor.is(t.handle) || seen[t.handle] {
 			continue
 		}
 		seen[t.handle] = true
@@ -182,7 +201,7 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
 }
 
 // leadCopy is the fallback: the lead of the unit that owns the container.
-func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
+func (p *Parser) leadCopy(base notify.Inbound, container string, actor writer,
 	at time.Time, reg *notify.Registry) []notify.Routed {
 	if container == "" {
 		return nil
@@ -194,7 +213,7 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 		return nil
 	}
 	// A lead writing in their own container must not wake themselves.
-	if lead == actor {
+	if actor.is(lead) {
 		return nil
 	}
 	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.

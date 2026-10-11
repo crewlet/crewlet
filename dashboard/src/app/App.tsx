@@ -67,6 +67,7 @@ const EventScreen = lazyScreen("live", (m) => m.EventScreen);
 const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
 const Pages = lazyScreen("knowledge", (m) => m.Pages);
 const PageView = lazyScreen("knowledge", (m) => m.PageView);
+const Composer = lazyScreen("knowledge", (m) => m.Composer);
 const Skills = lazyScreen("knowledge", (m) => m.Skills);
 const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
@@ -83,6 +84,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const Audit = lazyScreen("settings", (m) => m.Audit);
+const Appearance = lazyScreen("settings", (m) => m.Appearance);
 
 /** One resolved screen, drawn. */
 export function screenFor(route: Resolved): ReactNode {
@@ -93,10 +95,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Inbox />;
     case "me":
       return <MyWork section={route.section} />;
-    case "work":
-      return <Work />;
     case "work-projects":
       return <Projects />;
+    case "work-tasks":
+      return <Work />;
     case "work-views":
       return route.id ? <SavedViews key={route.id} id={route.id} /> : <SavedViews />;
     case "work-history":
@@ -141,6 +143,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Pages key={route.key} container={route.key} />;
     case "page":
       return <PageView key={route.id} id={route.id} />;
+    case "new-page":
+      return <Composer />;
     case "skills":
       return <Skills />;
     case "diaries":
@@ -185,6 +189,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "audit":
       return <Audit />;
+    case "appearance":
+      return <Appearance />;
   }
 }
 

@@ -712,3 +712,28 @@ describe("emphasis", () => {
     expect(plainText("_a_b_ and **c**")).toBe("a_b and c");
   });
 });
+
+describe("a search's words, marked", () => {
+  it("marks the words a search matched in prose, and never inside code", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("Drain the node, then run `drain-all`.", { highlight: ["drain"] })}
+      </div>,
+    );
+    // THE PROSE ONLY: the code span keeps its own text unmarked.
+    expect([...container.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["Drain"]);
+    expect(container.querySelector("code mark")).toBeNull();
+    // AND NOTHING IS MARKED WHERE NOTHING WAS SEARCHED.
+    expect(draw("Drain the node.").querySelector("mark")).toBeNull();
+  });
+});
+
+describe("a wide table", () => {
+  it("scrolls in a region a keyboard can reach, named by its columns", () => {
+    const root = draw("| Step | Owner |\n|---|---|\n| Drain | SRE |");
+    const region = root.querySelector(".md-table");
+    expect(region?.getAttribute("role")).toBe("region");
+    expect(region?.getAttribute("tabindex")).toBe("0");
+    expect(region?.getAttribute("aria-label")).toBe("Table: Step, Owner");
+  });
+});

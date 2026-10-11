@@ -346,7 +346,7 @@ function SeatPeekBody({
           ) : !workload.data ? (
             <EmptyValue label="Reading the tracker" />
           ) : load && load.open > 0 ? (
-            <a className="t-link" href={href(["work"], { assignee: seat.handle })}>
+            <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
               {plural(load.open, "task")}
               {load.blocked > 0 && ` · ${load.blocked} blocked`}
               {load.overdue > 0 && ` · ${load.overdue} overdue`}

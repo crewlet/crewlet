@@ -664,20 +664,44 @@ a.user-block-who:focus-visible {
   color: var(--color-text-tertiary);
 }
 
+/* AS WIDE AS ITS ROWS, the label column and the one control column, so the
+   token's button under them is no wider than the three controls it ends. */
 .preferences {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  width: 18rem;
+  width: max-content;
   max-width: calc(100vw - 2 * var(--spacing-4));
   padding: var(--spacing-3);
 }
 
+/* A LABEL COLUMN AND A CONTROL COLUMN, and the three controls are ONE WIDTH:
+   the two switchers share one box, three cells each, which the kit's `fill`
+   divides evenly, so a row of glyphs and a row of letters are the same
+   control twice, and the theme's field below them is that box's width. */
 .preferences-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3.875rem minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
+  gap: var(--spacing-2);
+}
+
+/* As wide as the longest theme's field needs at the comfortable density:
+   "High contrast" with its swatch and the chevron is just over 148px there,
+   and a narrower column cut its name. */
+.preferences-switch {
+  justify-self: start;
+  width: 9.375rem;
+}
+
+/* The theme list is wider than its field, which a narrow popover makes
+   narrow: a theme is read by its name and its tag together, and a list cut
+   to the field's width cut both. It is TALL ENOUGH FOR EVERY THEME at once,
+   ten under five headings at any density; the kit still flips and clamps
+   the list to the window, so a short window scrolls it. */
+.preferences-theme-menu {
+  --crewlet-select-menu-max-height: 42rem;
+  min-width: 17.25rem;
 }
 
 /* ---- The page header -----------------------------------------------------
@@ -708,7 +732,8 @@ a.user-block-who:focus-visible {
    IT WRAPS BY WHAT IT HOLDS, NOT AT A WIDTH. A flex container assigns items to
    lines by their UNSHRUNK size, so a wrap over a trail at its content width
    breaks as soon as a long title and the controls exceed the bar, with free
-   space left on the first line. The trail's basis is therefore 0 (`.crumbs`),
+   space left on the first line. The trail's basis is therefore 0 (the kit's
+   `Breadcrumb`, drawn here as `.page-trail`),
    clamped by its floor — the way back out, measured: the line holds the
    floor plus the controls, the break comes only when even the floor cannot
    sit beside them, and the grow factor hands the trail everything the line
@@ -723,148 +748,24 @@ a.user-block-who:focus-visible {
   padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
 }
 
-/* THE TRAIL IS WHAT GIVES WAY, AND IT IS WHAT TAKES THE SLACK.
+/* THE TRAIL IS THE KIT'S `Breadcrumb`, and so are its rules: it gives way
+   first and takes the line's slack, its floor is the way back out (measured,
+   `--crewlet-breadcrumb-floor`), and past the whole bar it scrolls rather than
+   clipping. What is left here is how it shares this bar with the lenses and
+   the controls. */
 
-   `flex-grow: 1` is the spacer this replaces: the trail absorbs the free
-   space, so the controls stay in the right-hand corner without a blank element
-   between them and the breadcrumb. Its BASIS is 0, which is what lets the bar
-   wrap by what it holds (see `.page-bar`). `flex-shrink: 100` is the ordering
-   against the only other things here that can give — the kit's own idiom
-   (`.crewlet-card__subtitle` takes the same factor so a title never gives way
-   first).
-
-   AND ITS FLOOR IS THE WAY BACK OUT, which is the correction to the obvious
-   `min-width: 0`: at zero the trail gives way until the way back out is gone,
-   and the way back out is the one thing on this bar the reader cannot
-   reconstruct from anywhere else. The floor is MEASURED (`--crumb-floor`,
-   written by `Breadcrumb`): the ancestors at their width and the last crumb's
-   stub — at least 20ch, and at most the room beside the drawer toggle (which
-   `Breadcrumb` caps it at) or the whole bar. A fixed 20ch alone let a
-   seat's trail share a phone's line with its one button and cut
-   "Engineering · Co" mid-letter under it; measured, a trail that cannot show
-   its ancestry beside the controls breaks the line instead.
-
-   Past the whole bar the trail SCROLLS rather than clipping as a box: the
-   ancestors never shrink (see below), so once they alone are wider than the
-   bar there is nothing left to ellipsise and a clip lands wherever the pixels
-   ran out. A thumb, a trackpad or a shift-wheel reaches a scroller, and the
-   tab stop in `Breadcrumb` is what reaches it from a keyboard. The scrollbar
-   is not drawn: on a 52px bar it would sit on the baseline the trail is
-   written on. */
-.crumbs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1 100 0;
-  min-width: min(100%, max(20ch, var(--crumb-floor, 0px)));
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  font-size: var(--font-size-sm);
-}
-
-.crumbs::-webkit-scrollbar {
-  display: none;
-}
-
-.crumb-part {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-}
-
-/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out. A bar holding
-   a long final crumb — a turn's uuid, a page title — starved the ancestors
-   with it when every part shrank proportionally. The reader knows which object
-   they are on, because the header below says so; what they cannot
-   reconstruct is the links out of it. So the ancestors keep their width and
-   the last part is the one that ellipsises. */
-.crumb-part:not(:last-child) {
-  flex: 0 0 auto;
-}
-
-.crumb-sep {
-  flex: none;
-  margin: 0 var(--spacing-1);
-  color: var(--color-text-muted);
-}
-
-.crumb-link,
-.crumb-here {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.crumb-link {
-  color: var(--color-text-tertiary);
-}
-
-.crumb-link:hover {
-  color: var(--color-text-primary);
-}
-
-.crumb-glyph,
-.crumb-seat {
-  flex: none;
-}
-
-/* A project's key as a chip before its name ([Crumb.tag]): the chip keeps its
-   own weight and ink whether the crumb is a link or the page's heading. */
-.crumb-tag {
-  font-weight: var(--font-weight-regular);
-  line-height: 1.4;
-}
-
-/* THE LABEL IS THE BOX THAT ELLIPSISES. `.crumb-link` and `.crumb-here` are
-   flex containers (a glyph and a label, one gap), and text straight inside a
-   flex container is an anonymous flex item that `text-overflow` never
-   reaches: the page's h1 was cut mid-word at the bar's edge. A span is a
-   real flex item, blockified, which is what an ellipsis applies to — and its
-   `min-width: 0` is what lets it shrink below its text at all. */
-.crumb-text {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* THE LAST CRUMB IS THE PAGE'S `h1`, so the heading's own margins and size
-   are the bar's, not the document's. */
-.crumb-here {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: inherit;
-  font-weight: var(--font-weight-medium);
-  line-height: inherit;
-}
-
-/* AND THE LAST PART NEVER COLLAPSES TO NOTHING: a floor of a few characters
-   keeps an ellipsised stub, which is what tells a reader the trail has a last
-   part at all. The floor is the last part's alone — an ancestor with no page
-   of its own ("Servers" under Tools) never shrinks, and a floor there would
-   only pad a short word. */
-.crumb-part:last-child > .crumb-here {
-  min-width: 5ch;
-}
-
-/* AN OBJECT'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx):
-   `Work › ENG Core · Items | About | History`. On every page without lenses
-   the slot is empty and is no flex item at all, so it costs the bar no gap.
+/* A SCOPE'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx, and
+   All projects' drawn by the header): `Work › ENG Core · Tasks | About |
+   History | Files`. On every page without lenses the slot is empty and is no
+   flex item at all, so it costs the bar no gap.
 
    WITH LENSES, THE LENSES TAKE THE LINE'S SLACK, not the trail: the trail's
    grow is what keeps the controls in the right-hand corner, and it would push
    the lenses there too — against the controls, away from the name they are
    about. So the trail sizes to its content and still gives way first
-   (`flex-shrink: 100`, down to its floor), capped at 60% of the bar so a
+   (`flex-shrink: 100`, down to its floor), capped at 62% of the bar so a
    long name ellipsises beside its lenses rather than pushing them onto a line
-   of their own; the lens group grows, holding its tabs at its start. */
+   of their own; the lens group grows, holding its chips at its start. */
 .page-lenses {
   display: flex;
   align-items: center;
@@ -876,9 +777,9 @@ a.user-block-who:focus-visible {
   display: none;
 }
 
-.page-bar:has(> .page-lenses:not(:empty)) > .crumbs {
+.page-bar:has(> .page-lenses:not(:empty)) > .page-trail {
   flex: 0 100 auto;
-  max-width: 60%;
+  max-width: 62%;
 }
 
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
@@ -894,7 +795,7 @@ a.user-block-who:focus-visible {
    to it and wraps.
 
    `margin-left: auto` KEEPS IT TO THE RIGHT-HAND EDGE when the bar has broken
-   a line under the trail: the grow on `.crumbs` is what pushes it there on
+   a line under the trail: the trail's grow is what pushes it there on
    one line, and on a line of its own there is no trail beside it to grow. */
 .page-controls {
   display: flex;
@@ -997,6 +898,28 @@ a.user-block-who:focus-visible {
   .page-more {
     display: inline-flex;
     flex: none;
+  }
+
+  /* THE LENSES TAKE A ROW OF THEIR OWN under the bar's line, which keeps the
+     drawer toggle, the trail and the one action: four chips beside them cut
+     a scope's name to a stub. The row scrolls sideways if it must, as the
+     controls do, and the trail takes the line the lenses left. */
+  .page-lenses:not(:empty) {
+    order: 10;
+    flex: 1 0 100%;
+    min-height: calc(var(--size-control-sm) + var(--spacing-4));
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .page-lenses::-webkit-scrollbar {
+    display: none;
+  }
+
+  .page-bar:has(> .page-lenses:not(:empty)) > .page-trail {
+    flex: 1 100 0;
+    max-width: none;
   }
 }
 

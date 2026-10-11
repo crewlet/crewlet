@@ -59,6 +59,11 @@ type PageChange struct {
 	// alone does not say who.
 	OperatorID string `json:"operator_id,omitempty"`
 
+	// ActorSeat is the person an operator's token was bound to when it wrote
+	// this: who a row DRAWS, while Actor stays the token, which is the audit
+	// trail. Empty for every other actor, and for a token bound to nobody.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
 	CommentID string `json:"comment_id,omitempty"`
 	Excerpt   string `json:"excerpt,omitempty"`
 
@@ -232,7 +237,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
-		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
+		       h.actor_seat, h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
 		       h.version, COALESCE(p.title, ''), COALESCE(p.container, '')
 		  FROM pages_history h
 		  LEFT JOIN pages_heads p ON p.id = h.page_id
@@ -258,7 +263,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 		var quiet int
 		var at, version int64
 		if err := rows.Scan(&change.ID, &change.PageID, &kind, &change.Actor,
-			&change.ActorKind, &change.OperatorID, &change.CommentID,
+			&change.ActorKind, &change.OperatorID, &change.ActorSeat, &change.CommentID,
 			&change.Excerpt, &change.TurnID, &quiet, &at, &version,
 			&change.Title, &change.Container); err != nil {
 

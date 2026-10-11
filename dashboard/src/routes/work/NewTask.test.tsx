@@ -431,7 +431,7 @@ test("a text is measured in bytes against the engine's cap, and counts down near
   // 86 characters, 258 bytes: over, though far short of 256 characters.
   const wide = textBudget("日".repeat(86), TASK_TITLE_MAX_BYTES, "a title");
   expect(wide.over).toBe(true);
-  expect(wide.line).toContain("258 bytes — a title holds at most 256");
+  expect(wide.line).toContain("258 bytes, but a title holds at most 256");
   // Far from the cap there is nothing to count.
   expect(textBudget("Fix the race", TASK_TITLE_MAX_BYTES, "a title").line).toBeUndefined();
   // WHAT IS SENT is what is measured: the trimmed title.
@@ -487,7 +487,7 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(description).toContain("600 bytes — a title holds at most 256");
+  expect(description).toContain("600 bytes, but a title holds at most 256");
   const create = screen.getByRole("button", { name: "Create task" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   // THE REASON IS ON THE PAGE, not only in the button's hidden description.

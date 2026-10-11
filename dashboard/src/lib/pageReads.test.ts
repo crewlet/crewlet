@@ -5,7 +5,7 @@
  */
 
 import { expect, test } from "vitest";
-import { loadedBy, readToday, readVia } from "./pageReads.ts";
+import { loadedBy, readVia } from "./pageReads.ts";
 import type { PageReadRow } from "~/contract/pages.ts";
 
 const row = (over: Partial<PageReadRow>): PageReadRow => ({
@@ -26,19 +26,6 @@ test("a direct read names its turn and task; a search names its words", () => {
   expect(readVia(row({ via: "skill_loaded" }))).toBe("loaded as a skill");
   // A WAY THIS BUILD HAS NO WORDS FOR is still said, by its own name.
   expect(readVia(row({ via: "from_the_future" }))).toBe("from_the_future");
-});
-
-test("today's faces are cut on the company's midnight, not the browser's", () => {
-  // 09:00 on the 25th in Tokyo; 00:00 UTC.
-  const now = Date.parse("2026-09-25T00:00:00Z");
-  const readers = [
-    row({ handle: "swe", last_at: "2026-09-24T16:00:00Z" }), // 01:00 on the 25th in Tokyo
-    row({ handle: "cto", last_at: "2026-09-24T14:00:00Z" }), // 23:00 on the 24th in Tokyo
-    row({ handle: "swe", via: "search", last_at: "2026-09-24T17:00:00Z" }),
-  ];
-  expect(readToday(readers, now, "Asia/Tokyo")).toEqual(["swe"]);
-  // On UTC's clock the same reads are all on the 24th — yesterday.
-  expect(readToday(readers, now, "UTC")).toEqual([]);
 });
 
 test("a skill says who loaded it, or who it was offered to when nobody did", () => {

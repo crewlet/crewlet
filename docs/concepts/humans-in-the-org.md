@@ -101,18 +101,17 @@ nobody. A token bound to no seat has no inbox to mark and is refused there;
 what the screen shows is what the engine recorded.
 
 **Answering an agent's decision.** When an agent asks you to choose, the
-question arrives with its options, the one it recommends and why, and the
-evidence it cites. Each option is a card; pressing one sends it as your
-answer, and "Reply with instructions" answers in your own words instead. The
-pane tells you what happens next: *"&lt;asker&gt; is
-woken with your answer and posts it to #&lt;channel&gt;"* when the agent
-promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
-your answer"* when it did not. The first is enforced, not hoped for: the
-agent's turn is held open until it has posted on that chat surface. It is also
-why **your own** asks cannot carry that promise — the engine keeps it by
-holding the asker's turn, and a person has none, so an ask you put through the
-dashboard or your assistant with an `inform` is refused; post the outcome
-yourself.
+question arrives in your Inbox with its options, the one it recommends and
+why, and the evidence it cites. Each option is a button, the recommended one
+first; one press sends it as your answer, and **Something else** answers in
+your own words instead. The agent is woken with your answer either way. Where
+it promised to report the outcome in a channel, the line under the answer says
+*"Your answer is also posted to #&lt;channel&gt;"*, and that is enforced, not
+hoped for: the agent's turn is held open until it has posted on that chat
+surface. It is also why **your own** asks cannot carry that promise. The
+engine keeps it by holding the asker's turn, and a person has none, so an ask
+you put through the dashboard or your assistant with an `inform` is refused;
+post the outcome yourself.
 
 **Your own writes count as yours — and the record still names the token.**
 A work item you file through your assistant is attributed to the **credential**

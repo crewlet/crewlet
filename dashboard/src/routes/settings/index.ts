@@ -1,5 +1,6 @@
 /** The Settings workspace's chunk: its screens and its peeks. See `app/lazyScreen.ts`. */
 
+export { Appearance } from "./Appearance.tsx";
 export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";

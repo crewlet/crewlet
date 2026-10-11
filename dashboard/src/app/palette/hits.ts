@@ -18,6 +18,7 @@ import type { Recent } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
+import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 
 /**
@@ -149,7 +150,11 @@ export interface Hit {
   icon: GlyphName;
   label: string;
   hint: string;
-  go: () => void;
+  /**
+   * Taking the row. The palette closes after it unless it returns `false`,
+   * which a row that leads into a step of the palette (Change theme) does.
+   */
+  go: () => boolean | void;
 }
 
 /** The ranked matches of a list, best first, capped. */
@@ -278,6 +283,15 @@ export function toolHits(
 export function searchHits(term: string, nav: Navigator): Hit[] {
   if (!term) return [];
   return [
+    // THE COMPANY'S WORK FIRST, ranked as an agent ranks it: the full search
+    // with its modes, which the Tasks scope's own rows are the top of.
+    {
+      id: "search-work",
+      icon: "search",
+      label: `Search all work for “${term}”`,
+      hint: "ranked as an agent ranks it",
+      go: () => nav.to(["work", "search"], { q: term }),
+    },
     {
       id: "search-events",
       icon: "chart-no-axes-gantt",
@@ -312,16 +326,34 @@ export function commandHits(
     setToken: () => void;
     clearRecents: () => void;
     showKeys: () => void;
+    /** Step into the list of themes; the palette stays open. */
+    changeTheme: () => void;
+    /** The name of the theme in effect, for the row's hint. */
+    themeName: string;
+    switchProject: () => void;
     hash: string;
   },
 ): Hit[] {
-  const out: Hit[] = [];
+  const out: Hit[] = [
+    {
+      id: "cmd-theme",
+      icon: "palette",
+      label: "Change theme…",
+      hint: `${actions.themeName} is on`,
+      go: () => {
+        actions.changeTheme();
+        return false;
+      },
+    },
+  ];
+  // THE MODE IS ITS OWN CHOICE, named as the interface names it: light, dark
+  // or the machine's, whatever the theme.
   for (const choice of THEMES) {
     if (choice === prefs.theme) continue;
     out.push({
       id: `cmd-theme-${choice}`,
       icon: choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
-      label: `Theme: ${choice === "system" ? "match system" : choice}`,
+      label: `Mode: ${choice === "system" ? "match system" : choice}`,
       hint: choice === "system" ? "follow this machine's setting" : `always ${choice}`,
       go: () => prefs.setTheme(choice),
     });
@@ -367,8 +399,23 @@ export function commandHits(
       hint: "every key, and where it works",
       go: actions.showKeys,
     },
+    switchProjectHit(actions.switchProject),
   );
   return query ? ranked(out, query, (h) => [h.label], out.length) : out;
+}
+
+/**
+ * The switcher, as a row: it opens the panel Work's trail opens, from
+ * wherever the palette was, rather than going anywhere itself.
+ */
+export function switchProjectHit(open: () => void): Hit {
+  return {
+    id: "cmd-switch-project",
+    icon: "columns-3",
+    label: "Switch project…",
+    hint: `or ${sequenceWords("project")}, from anywhere`,
+    go: open,
+  };
 }
 
 /**

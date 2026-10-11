@@ -18,6 +18,7 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
+  ChoiceButtons,
   ChoiceList,
   Combobox,
   Composer,
@@ -25,6 +26,7 @@ import {
   Input,
   Modal,
   Select,
+  Stack,
   Textarea,
   type ComboboxOption,
   type SelectOption,
@@ -630,6 +632,14 @@ const DECISION_REPLY_MAX = 2000;
  *
  * THE OPEN STATE IS THE CALLER'S, so a card that lists several asks keeps one
  * open at a time: opening one closes whichever was.
+ *
+ * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
+ * is one row among others. `buttons` is for a screen where the question is
+ * the whole of what is open (the Inbox's pane): every option is a button that
+ * sends it with one press, the recommended one first and filled, and
+ * "Something else" opens the field in their place. An ask with no options is
+ * answered in that field from the start. Either way the answer goes through
+ * this one write, so the rules above hold for both.
  */
 export function AnswerAsk({
   item,
@@ -640,6 +650,7 @@ export function AnswerAsk({
   open,
   onOpenChange,
   onAnswered,
+  layout = "line",
 }: {
   /** The task's key or id. */
   item: string;
@@ -655,6 +666,8 @@ export function AnswerAsk({
   onOpenChange: (open: boolean) => void;
   /** Called once the engine has the answer. */
   onAnswered: (answer: AskAnswer) => void;
+  /** How the answer is laid out; see above. */
+  layout?: "line" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
   const rec = options.find((o) => o.id === recommended);
@@ -729,6 +742,80 @@ export function AnswerAsk({
       autoFocus
     />
   );
+
+  if (layout === "buttons") {
+    // THE FIELD IN THE OPTIONS' PLACE, once "Something else" opened it, and
+    // from the start for an ask that offers none. It takes the focus only
+    // when a press opened it: stepping onto an ask with j or k must not drop
+    // the reader into a field.
+    if (words || open) {
+      return (
+        <Stack gap={2}>
+          <Composer
+            label={`Reply to ${asker}`}
+            value={text}
+            onChange={setText}
+            onSubmit={submit}
+            maxLength={DECISION_REPLY_MAX}
+            placeholder={`Tell ${asker} what you want`}
+            disabled={!write.access.can || write.busy}
+            autoFocus={!words}
+            actions={
+              <>
+                {!words && (
+                  <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+                    Cancel
+                  </Button>
+                )}
+                <WriteButton
+                  write={write}
+                  size="small"
+                  variant="primary"
+                  blocked={text.trim() ? undefined : "Write the reply first."}
+                  showRefusal={false}
+                  onPress={submit}
+                >
+                  Send
+                </WriteButton>
+              </>
+            }
+          />
+          <RefusalNote write={write} />
+        </Stack>
+      );
+    }
+    return (
+      <Stack gap={2}>
+        <ChoiceButtons
+          label="Answers"
+          options={options.map((o) => ({ value: o.id, label: o.label, detail: o.detail }))}
+          recommended={recommended}
+          pending={write.busy ? chosen : null}
+          disabledReason={write.access.can ? undefined : write.access.reason}
+          onChoose={(choice) => {
+            if (!pressable(write)) return;
+            setChosen(choice);
+            void send(choice);
+          }}
+        />
+        <WriteButton
+          write={write}
+          size="small"
+          variant="ghost"
+          pressing={false}
+          showRefusal={false}
+          blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+          onPress={() => {
+            setChosen(OTHER);
+            onOpenChange(true);
+          }}
+        >
+          Something else
+        </WriteButton>
+        <RefusalNote write={write} />
+      </Stack>
+    );
+  }
 
   if (!open) {
     return (

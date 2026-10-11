@@ -3,8 +3,8 @@
  *
  * # One machine, three frames
  *
- * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
- * over one project, and `#/me`'s Queue and Asked by me are this over one
+ * `#/work/tasks` is this over the whole company, `#/work/{KEY}`'s Tasks lens is
+ * this over one project, and `#/me`'s Queue and Asked by me are this over one
  * person. They
  * ask the same question with one parameter different, so they are one
  * component: written twice, the second copy is the one that quietly falls
@@ -165,7 +165,7 @@ function useFieldFilters(): Record<string, string> {
 /**
  * What a HOST screen fixes about this list, where one is holding it.
  *
- * Absent, this IS the screen — `#/work` and the project's Items lens — and
+ * Absent, this IS the screen (`#/work/tasks` and the project's Tasks lens), and
  * everything below is the reader's. Present, the list is a panel inside
  * somebody else's tabs and three things belong to that screen rather than to
  * the reader. The type has no optional field for that reason: a host that
@@ -805,7 +805,9 @@ export function ItemsView({
             <ViewTabs
               views={saved}
               chosen={chosenView}
-              containerLabel={project ? "All in this project" : "All work"}
+              // THE TRAIL NAMES THE SCOPE, so the container's own list
+              // reads one way in either: All tasks.
+              containerLabel="All tasks"
               onView={(key) => applyView(key, saved, setViewKey)}
             />
             {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
@@ -1252,9 +1254,9 @@ function EmptyList({
             {archivedProjects === 1
               ? "The company’s one project has been archived"
               : `All ${archivedProjects} of the company’s projects have been archived`}
-            , so nothing is listed here — an archived project keeps its work and stops taking new
+            , so nothing is listed here. An archived project keeps its work and stops taking new
             items.{" "}
-            <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
+            <a className="prose-link" href={href(["work"], { shown: "archived" })}>
               See them under Archived
             </a>
             .
@@ -1331,7 +1333,7 @@ export function NoWorkYet() {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
+      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item. An inbound webhook or a schedule is usually what starts them."
     />
   );
 }

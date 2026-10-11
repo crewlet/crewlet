@@ -69,21 +69,13 @@ export type DecisionSubject =
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
- * The Inbox's Decisions chip — `#/inbox?reason=decisions`, where Home's
- * "Review" and "Open inbox" land.
- *
- * NOT ONE OF THE EIGHTEEN NOTICE REASONS: a decision is an open ask, a parked
- * run, a stopped seat or a condition a person decides, which the `decisions`
- * read and the engine's conditions answer, so the chip narrows the list to
- * those rows rather than filtering notices on a reason none carries — which
- * once drew an empty list under a Home figure that had just said one was
- * waiting.
+ * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
+ * opens with Needs you, every decision this one counted. There is no narrower
+ * view to land on: the Inbox has no filter bar, and a decision is never
+ * listed below an update.
  */
-export const DECISIONS_VIEW = "decisions";
-
-/** Where "Review" and "Open inbox" take a reader: the view above. */
 export function decisionsHref(): string {
-  return href(["inbox"], { reason: DECISIONS_VIEW });
+  return href(["inbox"]);
 }
 
 /**
@@ -143,7 +135,7 @@ export function seatDecisionsFor<T extends { row: AgentRow }>(
 
 /**
  * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first — the order Home's card and the Inbox's "Needs a decision" both draw.
+ * list, newest first: the order Home's card and the Inbox's "Needs you" both draw.
  */
 export function decisionSubjects(
   answer: DecisionsAnswer | null,

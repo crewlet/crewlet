@@ -2,15 +2,12 @@
  * Writing on a task as the person the token is bound to (ADR-0024): from the
  * Inbox's pane, and from the task's own page.
  *
- * THREE MODES, and the difference is whether an ask CLOSES or OPENS:
+ * TWO MODES, and neither closes an ask (an answer is `AnswerAsk`'s, the one
+ * write every surface answers an ask with):
  *
  *  - a REPLY (`comment_on_work_item{item, body, reply_to}`) is said in a
  *    thread and answers nothing — a person asking the asker a question back
  *    leaves the question open;
- *  - an ANSWER (`{item, body, answers}`) is what "Reply with instructions"
- *    turns the Inbox's composer into: it closes the ask and wakes the asker
- *    with the words, and where the ask promised a channel the line beside Send
- *    says so;
  *  - a COMMENT is the task page's: said on the task, or — through "Ask" — put
  *    to one seat as a question it owes an answer to (`ask`), optionally with
  *    the options it is to choose between (`decision`). An ask does not hand the
@@ -62,17 +59,11 @@ import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 
 /** How the composer posts. */
-export type ComposeMode =
-  | { kind: "reply"; replyTo?: string }
-  | { kind: "answer"; answers: string; inform?: { surface: string; channel: string } }
-  | { kind: "comment" };
+export type ComposeMode = { kind: "reply"; replyTo?: string } | { kind: "comment" };
 
 export interface ComposerHandle {
   focus: () => void;
 }
-
-/** The chat surface as its product writes its name. */
-const SURFACE: Record<string, string> = { slack: "Slack", mattermost: "Mattermost" };
 
 /** How many seats the `@` picker offers at once. */
 const MENTION_CHOICES = 6;
@@ -83,15 +74,15 @@ export const Composer = forwardRef<
     /** The task's key or id. */
     item: string;
     mode: ComposeMode;
-    /** Whose words the reader is answering, for the placeholder. */
+    /** Whose words the reader is replying to, for the placeholder. */
     to: string;
     index: OrgIndex;
-    /** Back to a plain reply, from answer mode. */
-    onReply?: () => void;
     /** What the empty field says, where the mode's own wording does not fit. */
     placeholder?: string;
+    /** Told once what was written has been posted, so a reply target can close. */
+    onSent?: () => void;
   }
->(function Composer({ item, mode, to, index, onReply, placeholder: said }, ref) {
+>(function Composer({ item, mode, to, index, placeholder: said, onSent }, ref) {
   const write = useAct("comment_on_work_item");
   const [text, setText] = useState("");
   const [picker, setPicker] = useState<"link" | "page" | "ask" | null>(null);
@@ -132,53 +123,27 @@ export const Composer = forwardRef<
     if (!pressable(write, blocked)) return;
     const body = text.trim();
     const args =
-      mode.kind === "answer"
-        ? { item, body, answers: mode.answers }
-        : mode.kind === "reply"
-          ? { item, body, ...(mode.replyTo ? { reply_to: mode.replyTo } : {}) }
-          : { item, body };
+      mode.kind === "reply"
+        ? { item, body, ...(mode.replyTo ? { reply_to: mode.replyTo } : {}) }
+        : { item, body };
     const result = await write.run(args, {
-      done:
-        mode.kind === "answer"
-          ? `Answered ${to} on ${item}`
-          : mode.kind === "reply"
-            ? `Replied on ${item}`
-            : `Commented on ${item}`,
+      done: mode.kind === "reply" ? `Replied on ${item}` : `Commented on ${item}`,
     });
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       setText("");
-      if (mode.kind === "answer") onReply?.();
+      onSent?.();
     }
   };
 
   const placeholder =
     said ??
-    (mode.kind === "answer"
-      ? `Tell ${to} what to do instead… @mention to bring someone in`
-      : mode.kind === "reply"
-        ? `Reply to ${to}… @mention to bring someone in`
-        : `Leave a comment… @mention to bring someone in`);
-  const fieldLabel =
-    mode.kind === "answer"
-      ? `Answer ${to}`
-      : mode.kind === "reply"
-        ? `Reply to ${to}`
-        : `Comment on ${item}`;
-  const inform =
-    mode.kind === "answer" && mode.inform
-      ? `Also posts to ${SURFACE[mode.inform.surface] ?? mode.inform.surface} #${mode.inform.channel}`
-      : "";
+    (mode.kind === "reply"
+      ? `Reply to ${to}… @mention to bring someone in`
+      : `Leave a comment… @mention to bring someone in`);
+  const fieldLabel = mode.kind === "reply" ? `Reply to ${to}` : `Comment on ${item}`;
 
   return (
     <div className="composer" data-mode={mode.kind}>
-      {mode.kind === "answer" && (
-        <div className="composer-mode">
-          <span>{`Answering ${to} — this closes the question.`}</span>
-          <Button size="small" variant="ghost" onClick={onReply}>
-            Reply without answering
-          </Button>
-        </div>
-      )}
       <div className="composer-field">
         <Textarea
           ref={field}
@@ -281,7 +246,6 @@ export const Composer = forwardRef<
           </WriteButton>
         )}
         <span className="spacer" />
-        {inform && <span className="t-caption">{inform}</span>}
         <WriteButton
           write={write}
           size="small"
@@ -295,7 +259,7 @@ export const Composer = forwardRef<
           blocked={blocked}
           onPress={() => void send()}
         >
-          {mode.kind === "answer" ? "Send answer" : mode.kind === "comment" ? "Comment" : "Send"}
+          {mode.kind === "comment" ? "Comment" : "Send"}
         </WriteButton>
       </div>
       <RefusalNote write={write} />

@@ -138,7 +138,7 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
+			Actor: operator.PageActor(nil, nil),
 		},
 		Org: boundChart,
 	})
@@ -401,7 +401,7 @@ func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
 			Actor:         operator.WorkActor(boundChart, nil),
 		},
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor(nil, nil)},
 		Org:   boundChart,
 	})
 	h := guarded(s, false)
@@ -726,7 +726,7 @@ func TestAPageWriteStatesItsOutcomeAndPosition(t *testing.T) {
 	t.Parallel()
 	kb := &positionedPages{}
 	s := newSurface(t, operator.Options{
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor(nil, nil)},
 		Org:   boundChart,
 	})
 	body := `{"request_id":"` + requestA + `","args":{"page":"Runbook","body":"the step is wrong"}}`

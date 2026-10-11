@@ -110,3 +110,40 @@ export const PAGE_TITLE_MAX_BYTES = 256;
  * gate.
  */
 export const PAGE_MESSAGE_MAX_BYTES = 256;
+
+/**
+ * The most a page's BODY holds, in UTF-8 bytes: `internal/pages`' `MaxBody`.
+ * The composer counts against it and holds Publish past it, because the
+ * engine refuses a body past the cap rather than cutting it.
+ */
+export const PAGE_BODY_MAX_BYTES = 524288;
+
+/** The most labels a page carries: `internal/pages`' `MaxLabels`. */
+export const PAGE_LABELS_MAX = 32;
+
+/** The most one label holds, in UTF-8 bytes: `internal/pages`' `MaxLabelLength`. */
+export const PAGE_LABEL_MAX_BYTES = 64;
+
+/**
+ * What each change to a page reads as, in the two places a change is drawn:
+ * `verb` before the page's title on the company's feed ("Ana saved Deploy
+ * runbook"), and `phrase` on the page's own history, where the page goes
+ * without saying ("Ana saved it").
+ *
+ * ONE DECLARATION, held against `pages.ChangeKinds` by
+ * `internal/pages/client_gate_test.go`: a kind the engine writes and this list
+ * does not name reads as the bare kind after the writer's name, silently, and
+ * a kind named here the engine never writes is a sentence nothing reaches.
+ */
+export const PAGE_CHANGES = [
+  { kind: "created", verb: "wrote", phrase: "wrote it" },
+  { kind: "saved", verb: "saved", phrase: "saved it" },
+  { kind: "renamed", verb: "renamed", phrase: "renamed it" },
+  { kind: "moved", verb: "moved", phrase: "moved it" },
+  { kind: "status", verb: "changed the status of", phrase: "changed its status" },
+  { kind: "comment", verb: "commented on", phrase: "commented" },
+  { kind: "comment_edited", verb: "edited a comment on", phrase: "edited a comment" },
+  { kind: "labels", verb: "changed the labels of", phrase: "changed its labels" },
+  { kind: "watchers", verb: "changed who watches", phrase: "changed who watches it" },
+  { kind: "removed", verb: "removed", phrase: "removed it" },
+] as const;

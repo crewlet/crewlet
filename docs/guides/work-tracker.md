@@ -1294,10 +1294,18 @@ ten minutes is a line rather than every line of the page.
 ## What a person can do
 
 **The dashboard** renders the same queries a seat's tools use, against this
-node's own copy, and every answer says how far behind that copy is. It is four
-screens rather than one:
+node's own copy, and every answer says how far behind that copy is. Work's trail
+names its **scope**, All projects or one project, and that crumb is a button:
+press it, or **G** then **P** from any screen, to switch to another project, with
+the keys first and the start of a word in a name matching what you type.
+Beside the scope sit its **lenses**: All projects' are Projects, Tasks and
+History, and a project's are Tasks, About, History and Files. A switch keeps
+Tasks and History open, and keeps a list's shape (list, board, timeline,
+calendar or table); a saved view and filters stay with the scope they were set
+in. **New project** (on the Projects lens and in the switcher) takes an owner
+and a key and continues in Edit org, where saving the key creates the project.
 
-- **Tasks** (`#/work`) is the list, and it opens as one: a container nobody
+- **Tasks** (`#/work/tasks`) is the list, and it opens as one: a container nobody
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
@@ -1368,8 +1376,8 @@ screens rather than one:
   who won it; a checklist tick and following are gestures applied to the task
   as it is when they land, so they never lose a race that was not one. A reader
   who cannot act sees every control, disabled with the sentence that says why.
-- **New task** — beside the sidebar's Projects heading, at the end of every
-  work screen's bar and on a board lane — opens one sheet that
+- **New task**, at the end of every work screen's bar and on a board
+  lane, opens one sheet that
   files a whole task in one `create_work_item`: its project, title and
   description, type, the status it starts in, who holds it, its priority, due
   date and labels. A lane's **+** files into that lane: it presets the lane's
@@ -1397,7 +1405,7 @@ screens rather than one:
   and the sizes (`` `title` is 600 bytes and a task's title holds at most 256
   ``) — for a model and for a person alike, and without quoting the id minted
   for a task that was never filed.
-- **Projects** (`#/work/projects`) is the directory: every project with its
+- **Projects** (`#/work`, where Work opens) is the directory: every project with its
   lead, the unit that owns it, its maintained counts, how far along its work is
   — one bar split into done, active and still to do, over exactly those counts
   — its lead's **target date**, and when that work last changed. A row opens the project
@@ -1407,8 +1415,8 @@ screens rather than one:
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
-  narrowed from one bar — the window, then **Kind**, **By** and **Project**
-  pickers whose options are what the pages loaded hold, with how many of each
+  narrowed from one bar: the window, then **Kind** and **By** pickers whose
+  options are what the pages loaded hold, with how many of each
   (said once: the counts are over the changes loaded) — and it says "Showing
   the latest N" beside **Load older**. A config activation re-declaring the
   org chart's projects is engine bookkeeping, not somebody's change: a run of them
@@ -1418,12 +1426,11 @@ screens rather than one:
   answers, so the two are different limits: **Load older changes** fetches the
   next page back rather than asking you to move the window, and the pages you
   have loaded are held still while you page through them — change the window or
-  a facet to pick up what has landed since. A project facet narrows to one
-  project's changes, which is the same narrowing a project's own History lens
-  is.
-- **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
+  a facet to pick up what has landed since. One project's changes are that
+  project's own History lens, a switch away in the trail.
+- **A project** (`#/work/{KEY}`) opens on its work (the **Tasks** lens, which
   says how many are open, is the page's first content, with the lenses on the
-  page bar beside the project's name — with an
+  page bar beside the project's name), with an
   **About** lens for the container itself (who leads it, the unit that owns it,
   its target, its census and what it declares: its statuses, its types, its
   labels and its fields) and a **History** lens narrowed to it. About's first
@@ -1808,7 +1815,7 @@ person actually says about their inbox, naming each notice by the `record_id`
 
 | Argument | What it does |
 |---|---|
-| `read` | Marks notices read — the inbox's *Done*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
+| `read` | Marks notices read: the Inbox's *Mark as read*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
 | `unread` | Marks notices unread again, including one you have already read past. |
 | `snooze` | `[{record_id, until}]` — puts notices off until an instant: in the future, and at most a year away, because a snooze past the horizon is a delete that does not say so. |
 | `unsnooze` | Brings snoozed notices back now. |
@@ -1823,16 +1830,18 @@ read" from a tab opened an hour earlier erased every mark made since. It also
 reads where each notice sits from the notice's own record rather than asking
 you, which is why a mark names nothing but the notice.
 
-**In the dashboard's Inbox these are the row's own controls.** *Done* marks
-the notices the open row stands for read — an ask's, when the row is a
-decision — and nothing else. *Snooze* offers an hour, tomorrow at 09:00 and next
-Monday at 09:00 on the company's clock, or a moment you pick, and only the ones
-inside the engine's bound: the person answer serves `max_snooze_ahead`, so a
-preset the write would refuse is never shown. *Mark all read* is `read_through`
-at the newest notice the screen LOADED, so a notice that arrived after you
-looked is still unread. A row that is not a notice — a parked coding run, a
-stopped seat, a condition — has nothing to mark; it leaves the list when it is
-answered or cleared, and its Done says so rather than disappearing.
+**In the dashboard's Inbox these are an update's own controls.** *Mark as
+read* marks the open update read and nothing else, and turns into *Mark as
+unread*. *Snooze* offers an hour, tomorrow at 09:00 and next Monday at 09:00 on
+the company's clock (each moment once, so on a Sunday, when next Monday is
+tomorrow, it is offered once), or a moment you pick, and only the ones inside
+the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
+the write would refuse is never shown. *Mark all read* is `read_through` at the
+newest notice the screen LOADED, so a notice that arrived after you looked is
+still unread. A question, a parked coding run, a stopped seat and a condition
+carry none of these: each leaves the list when it is answered or cleared, and
+answering a question in the Inbox marks the notices that asked it read, so it
+does not come back as an update.
 
 **Your read position is the rule, and the lists are the exceptions.** Everything
 at or below it reads as read and everything above it as unread, so your record
@@ -1962,8 +1971,8 @@ and the page says before the press that the reorder is stamped with the
 reader's name and tells them what is now first.
 
 **The Queue is the work list, narrowed to one person.** It is the same
-screen `#/work` is — the five shapes, the Filter and Display menus, the
-scope switch, Group by and Sort, the columns, the count line — with the assignee fixed
+screen `#/work/tasks` is (the five shapes, the Filter and Display menus, the
+scope switch, Group by and Sort, the columns, the count line), with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
 what the section *is* rather than something you narrowed it to. Whose day it is

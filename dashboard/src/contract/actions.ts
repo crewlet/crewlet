@@ -197,9 +197,11 @@ export const ACTIONS = {
     // (`update_work_item{linked_pages}`) — the long form a comment's size
     // limit sends a writer to.
     //
-    // AND "NEW PAGE" in the knowledge base: a space's own page files one at
-    // its top, a page's "New sub-page" under it (`parent`).
-    args: ["title", "body", "container", "parent"],
+    // AND THE KNOWLEDGE BASE'S COMPOSER: "New page" and a tree's Create,
+    // filed in a space at its top or under a page (`parent`), with the
+    // composer's `labels`, and Save as draft (`status: "draft"`). A folder is
+    // the same write with an empty body: a page that only groups pages.
+    args: ["title", "body", "container", "parent", "labels", "status"],
     domain: "pages",
     refreshes: ["knowledge"],
     scope: "person",
@@ -209,7 +211,10 @@ export const ACTIONS = {
     // version they opened (`base_version`), so a save that raced somebody
     // else's is refused `stale_version` rather than overwriting it. A
     // one-line `message` says what changed, as a seat's save does.
-    args: ["page", "base_version", "body", "message"],
+    //
+    // AND A PAGE'S WATCH EYE: `watch` alone, against the version on screen,
+    // follows the page as the person or stops following it.
+    args: ["page", "base_version", "body", "message", "watch"],
     domain: "pages",
     refreshes: ["knowledge"],
     scope: "person",

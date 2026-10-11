@@ -1,14 +1,13 @@
 /**
  * How a page's readers are said: one line per seat and way of reading, in the
- * words the approved Knowledge page uses — "turn 2 on ENG-412", `search:
- * “DHCP lease”` — and the faces of who read it today.
+ * words the approved Knowledge page uses ("turn 2 on ENG-412", `search:
+ * “DHCP lease”`), and who a tool skill reached.
  *
  * PURE, like `lib/seats.ts`: the counts are the engine's (`page_reads`), and
  * what this file adds is only the phrasing, which is what a suite can hold.
  */
 
 import type { PageReadRow, SkillLoad, TurnPlace } from "~/contract/pages.ts";
-import { companyMidnight } from "./range.ts";
 import { plural } from "./format.ts";
 
 /**
@@ -50,25 +49,6 @@ function turnOn(item: TurnPlace): string {
 /** "3 reads" beside a reader who came back — nothing for a single read. */
 export function readCount(reader: PageReadRow): string {
   return reader.count > 1 ? plural(reader.count, "read") : "";
-}
-
-/**
- * The seats whose newest read of the page fell on the company's today, most
- * recent first and each once — the faces beside the engine's count.
- *
- * THE COUNT IS NEVER THIS LIST'S LENGTH: the engine counts every seat that
- * read today, including one whose row the list's cap left out, and the
- * number drawn is always its `distinct_seats_today`.
- */
-export function readToday(readers: PageReadRow[], now: number, zone: string | undefined): string[] {
-  const since = companyMidnight(now, zone);
-  const out: string[] = [];
-  for (const reader of readers) {
-    if (Date.parse(reader.last_at) >= since && !out.includes(reader.handle)) {
-      out.push(reader.handle);
-    }
-  }
-  return out;
 }
 
 /**

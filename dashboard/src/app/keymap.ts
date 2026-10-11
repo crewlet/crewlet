@@ -143,6 +143,15 @@ const FRAME: KeyRow[] = [
     does: "Watch the running turn — with several running, see them all",
     by: "dashboard",
   },
+  // AND THE SCOPE OF WORK: the switcher under Work's trail, or centred over
+  // any other page, where nothing moves until a project is chosen.
+  {
+    id: "project",
+    scope: "frame",
+    presses: [{ after: "g", key: "p" }],
+    does: "Switch project",
+    by: "dashboard",
+  },
   {
     id: "drawer",
     scope: "frame",
@@ -435,6 +444,18 @@ const CAP_NAMES: Record<string, string> = {
   tab: "Tab",
   backspace: "Backspace",
 };
+
+/**
+ * A two-key sequence in words, as a tooltip or a hint says it: `g` then `p`
+ * is "G then P". Read off the table, so the words cannot drift from the key.
+ */
+export function sequenceWords(id: string): string {
+  const press = keyRow(id).presses[0]!;
+  return [press.after, press.key]
+    .filter((k): k is string => !!k)
+    .map((k) => k.toUpperCase())
+    .join(" then ");
+}
 
 /**
  * One press as the keys of a kit `Kbd` — `["Mod", "k"]` — so a hint drawn

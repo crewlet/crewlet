@@ -106,7 +106,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	// filtering on a name matched half of what they did. The kind is already
 	// its own column on both rows, so the prefix was a second encoding of a
 	// fact the row carries.
-	page, err := operator.PageActor(ctx, nil)
+	page, err := operator.PageActor(nil, nil)(ctx, nil)
 	if err != nil {
 		t.Fatalf("PageActor: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 			if _, err := operator.WorkActor(nil, nil)(ctx, nil); err == nil {
 				t.Error("a write with no operator was attributed rather than refused")
 			}
-			if _, err := operator.PageActor(ctx, nil); err == nil {
+			if _, err := operator.PageActor(nil, nil)(ctx, nil); err == nil {
 				t.Error("a page write with no operator was attributed rather than refused")
 			}
 		})
@@ -354,7 +354,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
 		},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: operator.PageActor},
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: operator.PageActor(nil, nil)},
 	})
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
@@ -506,7 +506,7 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
+			Actor: operator.PageActor(nil, nil),
 		},
 	})
 	if s == nil {

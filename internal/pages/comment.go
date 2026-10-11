@@ -184,7 +184,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 				if held.Author != actor.Name() {
 					return statelog.Decision{}, invalid("comment",
 						"comment %s was written by %s and only its author may edit "+
-							"it — a remark somebody else can rewrite is a remark "+
+							"it, because a remark somebody else can rewrite is a remark "+
 							"attributed to a person who did not make it",
 						commentID, held.Author)
 				}

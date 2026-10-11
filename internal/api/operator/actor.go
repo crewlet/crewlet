@@ -129,11 +129,7 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 		// for a caller to name a seat to act as.
 		actor := builtin.Actor{
 			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
-		}
-		if seat, pinned := pinnedSeat(ctx); pinned {
-			actor.Seat = seat
-		} else {
-			actor.Seat = seatFor(chart, lookup, id)
+			Seat: personOf(ctx, chart, lookup, id),
 		}
 		// AND THE OPERATION THE TRANSPORT NAMED, where it named one: it
 		// is what makes a retried request the same writes. See
@@ -141,6 +137,17 @@ func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
 		actor.Operation = operationFrom(ctx)
 		return actor, nil
 	}
+}
+
+// personOf is the seat a request's token is bound to: the one the call was
+// pinned to ([withSeat]), else the chart's answer ([seatFor]). One function for
+// both surfaces, so a token is never one person on a work commit and another
+// on a page commit.
+func personOf(ctx context.Context, chart func() *org.Organization, lookup org.EnvLookup, id string) string {
+	if seat, pinned := pinnedSeat(ctx); pinned {
+		return seat
+	}
+	return seatFor(chart, lookup, id)
 }
 
 // seatFor is the chart seat a token id is bound to, or "".
@@ -178,10 +185,29 @@ func seatFor(chart func() *org.Organization, lookup org.EnvLookup, id string) st
 // audit feed, which is the one screen that reads both histories, showed the
 // same person as two people three rows apart, and that a reader filtering on
 // a name matched half of what they did.
-func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return pages.Actor{}, fmt.Errorf("operator: no operator on this request")
+//
+// # And the person behind it, as on a work commit
+//
+// The seat the token is bound to travels in [pages.Actor.Seat] beside it, for
+// the questions that are the person's: whose subscription a watch changes,
+// whose team space a page that names none lands in, who a history row draws,
+// and who is not woken by their own write. Without it a person's dashboard
+// watch followed the page as their credential, which no wake can reach, and a
+// page they created was watched by nobody who could be told about it.
+//
+// A CONSTRUCTOR for the reason [WorkActor] is one: the binding is read off the
+// chart per call.
+func PageActor(chart func() *org.Organization, lookup org.EnvLookup) func(
+	context.Context, *turnctx.Turn) (pages.Actor, error) {
+
+	return func(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
+		id, ok := auth.OperatorFrom(ctx)
+		if !ok || id == "" {
+			return pages.Actor{}, fmt.Errorf("operator: no operator on this request")
+		}
+		return pages.Actor{
+			Handle: id, Kind: pages.AuthorOperator, OperatorID: id,
+			Seat: personOf(ctx, chart, lookup, id),
+		}, nil
 	}
-	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

@@ -840,7 +840,7 @@ function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
   }
   const key = unit?.key || stored;
   return (
-    <a className="t-link truncate" href={href(["work"], { unit: key })}>
+    <a className="t-link truncate" href={href(["work", "tasks"], { unit: key })}>
       {unit?.name || key}
     </a>
   );

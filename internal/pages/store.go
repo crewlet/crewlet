@@ -293,6 +293,7 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 		Actor:      actor.Name(),
 		ActorKind:  actor.Kind,
 		OperatorID: actor.OperatorID,
+		ActorSeat:  actor.recordedSeat(),
 		TurnID:     actor.TurnID,
 		Chain:      actor.Chain,
 		Notify:     notify,
@@ -367,8 +368,21 @@ type Actor struct {
 	Handle     string
 	Kind       AuthorKind
 	OperatorID string
-	TurnID     string
-	Chain      []string
+
+	// Seat is the person an OPERATOR's token is bound to
+	// (`contact.crewlet_operator_id`), and empty for an unbound token and for
+	// every other kind, whose Handle is already a seat.
+	//
+	// THE TOKEN STAYS THE AUTHOR (Handle, which [Actor.Name] records) because
+	// a knowledge base whose author field is chosen by the writer is not an
+	// audit trail. The seat is what everything about the PERSON reads: whose
+	// subscription a watch changes, who is not woken by their own write, and
+	// who a history row draws. A token is not somebody who can be told about a
+	// page: a wake for one reaches no seat at all.
+	Seat string
+
+	TurnID string
+	Chain  []string
 }
 
 // Name is how this actor is recorded and rendered.
@@ -386,6 +400,27 @@ func (a Actor) Name() string {
 		return "operator:" + a.OperatorID
 	}
 	return "operator:anonymous"
+}
+
+// recordedSeat is the seat a record carries as `actor_seat`: an operator's
+// bound seat, and nothing for any other kind, whose actor already IS its seat.
+func (a Actor) recordedSeat() string {
+	if a.Kind == AuthorOperator {
+		return a.Seat
+	}
+	return ""
+}
+
+// Person is the seat this actor writes as: the seat an operator's token is
+// bound to, the seat itself for every other kind, and nobody for an unbound
+// token. It is whose subscription the actor's own writes change, and whose
+// team space a write that names none lands in; for an unbound token there is
+// neither, because nothing a wake or a default could reach is a seat.
+func (a Actor) Person() string {
+	if a.Kind == AuthorOperator {
+		return a.Seat
+	}
+	return a.Handle
 }
 
 // IsHuman reports an actor a notification treats as a person.
@@ -456,7 +491,7 @@ func recipientsOf(watchers, muted []string) []string {
 func (s *Store) checkTitle(title string) error {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return invalid("title", "a page needs a title — it is its address")
+		return invalid("title", "a page needs a title, because it is its address")
 	}
 	if len(title) > MaxTitle {
 		return invalid("title", "%d bytes, past the %d-byte cap",

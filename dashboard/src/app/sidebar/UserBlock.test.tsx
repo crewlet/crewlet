@@ -3,12 +3,15 @@
  *
  * THREE STATES, ONE OF THEM A PERSON, each a sentence rather than a blank
  * avatar — because "who does the engine think I am" is the question every
- * write this dashboard makes turns on. The preferences are the theme, the
- * density and the token; the zone and the date's shape are the browser's.
+ * write this dashboard makes turns on. The preferences are the mode, the
+ * density, the theme and the token; the zone and the date's shape are the
+ * browser's.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { themeRegistry } from "@crewlethq/tokens";
+import { HIGHLIGHT_REST_MS, ToastProvider } from "@crewlethq/ui";
 
 import { Preferences, UserBlock, whoLine } from "./UserBlock.tsx";
 import { Router } from "~/app/router.tsx";
@@ -51,17 +54,32 @@ afterEach(() => {
   reloadForTest();
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-density");
+  document.documentElement.removeAttribute("data-palette");
 });
 
 describe("who the block says this is", () => {
-  test("a bound token is the person, with their seat and never a bare handle", () => {
-    expect(whoLine(ada, "Founder")).toEqual({
-      name: "Ada Lovelace",
-      detail: "Founder · human seat",
-    });
-    // A seat whose name IS the person's says so once.
-    expect(whoLine(ada, "Ada Lovelace").detail).toBe("human seat");
+  test("a bound token is the person, with their seat's role and never a bare handle", () => {
+    expect(whoLine(ada, "Founder")).toEqual({ name: "Ada Lovelace", detail: "Founder" });
+    // A seat whose name IS the person's says nothing more, and a person is
+    // never captioned "human seat", which says what the block already shows.
+    expect(whoLine(ada, "Ada Lovelace").detail).toBe("");
     expect(whoLine(ada, "Founder").detail).not.toContain("@");
+    // A token bound to an agent's seat says so: acting as an agent is the
+    // fact a reader must not miss.
+    expect(whoLine({ ...ada, kind: "agent" }, "Release Bot").detail).toBe(
+      "Release Bot · agent seat",
+    );
+  });
+
+  test("a person with no role to show draws no second line", () => {
+    render(
+      <Router>
+        <UserBlock viewer={ada} seatName="Ada Lovelace" onSetToken={() => {}} />
+      </Router>,
+    );
+    const who = screen.getByRole("link", { name: /Ada Lovelace/ });
+    expect(who.querySelector(".user-block-detail")).toBeNull();
+    expect(who.textContent).not.toContain("human seat");
   });
 
   test("an unbound token names the token, and says it is not a fault", () => {
@@ -165,15 +183,15 @@ describe("the preferences", () => {
     return onSetToken;
   }
 
-  // THE THEME IS THREE CHOICES, and the third is what makes the popover the
+  // THE MODE IS THREE CHOICES, and the third is what makes the popover the
   // place to set it: the one-press flip beside the name can only say light or
   // dark, and "follow the system" is a choice a reader has to be able to get
   // back to. Each choice is read back from `lib/prefs.ts` and from the root
-  // attribute the stylesheet keys on — and "system" REMOVES the attribute, so
+  // attribute the stylesheet keys on, and "system" REMOVES the attribute, so
   // the media query decides and keeps deciding when the OS setting changes.
-  test("the theme is light, dark or the system's, and each is kept", () => {
+  test("the mode is light, dark or the system's, and each is kept", () => {
     open();
-    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    const theme = screen.getByRole("radiogroup", { name: "Mode" });
     const pick = (name: string) => fireEvent.click(within(theme).getByRole("radio", { name }));
 
     pick("Dark");
@@ -211,7 +229,78 @@ describe("the preferences", () => {
     open();
     expect(screen.queryByText("Time zone")).toBeNull();
     expect(screen.queryByText("Dates")).toBeNull();
-    expect(screen.queryAllByRole("combobox")).toEqual([]);
+    // The one list here is the theme's.
+    expect(screen.getAllByRole("combobox").map((box) => box.getAttribute("aria-label"))).toEqual([
+      "Theme",
+    ]);
+  });
+
+  // THE ROWS ARE MODE, DENSITY, THEME, in that order, and the two switchers
+  // draw one box: the same width, three equal cells each.
+  test("the mode, the density and the theme are one column of one width", () => {
+    open();
+    const rows = [...document.querySelectorAll(".preferences-row")].map(
+      (row) => row.querySelector(".t-label")?.textContent,
+    );
+    expect(rows).toEqual(["Mode", "Density", "Theme"]);
+    for (const name of ["Mode", "Density"]) {
+      const group = screen.getByRole("radiogroup", { name });
+      expect(group.classList.contains("crewlet-segmented--fill"), name).toBe(true);
+      expect(group.parentElement?.className, name).toBe("preferences-switch");
+    }
+    // The theme's field sits in the same box, so the three draw one width.
+    const theme = screen.getByRole("combobox", { name: "Theme" });
+    expect(theme.closest(".preferences-switch")).toBeTruthy();
+  });
+
+  test("the theme lists every theme under its group, applies the pick and keeps it", () => {
+    render(
+      <ToastProvider>
+        <Preferences onSetToken={() => {}} tokenPresented />
+      </ToastProvider>,
+    );
+    const field = screen.getByRole("combobox", { name: "Theme" });
+    expect(field.textContent).toContain("Crewlet");
+    fireEvent.click(field);
+    const list = screen.getByRole("listbox", { name: "Theme" });
+    const names = within(list)
+      .getAllByRole("option")
+      .map((option) => option.querySelector(".crewlet-select__option-label")?.textContent);
+    expect(names).toEqual(themeRegistry.map((theme) => theme.name));
+    expect(within(list).getByRole("group", { name: "Purple" })).toBeTruthy();
+    fireEvent.mouseDown(within(list).getByRole("option", { name: /Abyss/ }));
+    expect(document.documentElement.getAttribute("data-palette")).toBe("abyss");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBe("abyss");
+    expect(screen.getByRole("combobox", { name: "Theme" }).textContent).toContain("Abyss");
+    // Said, with the way back, and the way back is the choice before.
+    const undo = screen.getByRole("button", { name: "Undo" });
+    // Drawn, and announced in the toaster's live region as well.
+    expect(screen.getAllByText("Theme set to Abyss").length).toBeGreaterThan(0);
+    fireEvent.click(undo);
+    expect(document.documentElement.hasAttribute("data-palette")).toBe(false);
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+  });
+
+  // A PREVIEW IS THE LIST'S, NEVER STORAGE'S: the frame takes the theme the
+  // highlight rests on, and the list closing puts back the one in effect.
+  test("the highlight previews the theme across the frame, and Escape puts back the one in effect", () => {
+    vi.useFakeTimers();
+    try {
+      open();
+      const field = screen.getByRole("combobox", { name: "Theme" });
+      fireEvent.click(field);
+      fireEvent.keyDown(field, { key: "ArrowDown" });
+      expect(document.documentElement.getAttribute("data-palette")).toBe("violet");
+      expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+      fireEvent.mouseEnter(screen.getByRole("option", { name: /Ledger/ }));
+      act(() => vi.advanceTimersByTime(HIGHLIGHT_REST_MS));
+      expect(document.documentElement.getAttribute("data-palette")).toBe("ledger");
+      fireEvent.keyDown(field, { key: "Escape" });
+      expect(document.documentElement.hasAttribute("data-palette")).toBe(false);
+      expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("the token is set or changed from here, and says which", () => {

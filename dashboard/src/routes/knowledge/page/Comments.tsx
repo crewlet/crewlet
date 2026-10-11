@@ -2,15 +2,18 @@
  * A page's thread, and a person's remark on it (`comment_on_page`, as the
  * signed-in person).
  *
- * A COMMENT DOES NOT SUBSCRIBE ITS WRITER here — the knowledge base's own rule,
- * the opposite of the tracker's, so a page a hundred people remarked on does
- * not wake a hundred seats when somebody fixes a heading. The composer says
- * who is told instead: the page's watchers, and anybody @-mentioned.
+ * A COMMENT DOES NOT SUBSCRIBE ITS WRITER here, which is the knowledge base's
+ * own rule and the opposite of the tracker's: a page a hundred people remarked
+ * on does not wake a hundred seats when somebody fixes a heading. The composer
+ * says who is told instead: the page's watchers, and anybody mentioned.
+ *
+ * A comment a person wrote through their own token is RECORDED under the
+ * token and DRAWN as the person (`comment_seats`), as every other row of a
+ * page is ([drawnBy]).
  */
 
-import type { SeatBadge } from "~/lib/seats.ts";
 import { useId, useState } from "react";
-import { Button, Textarea } from "@crewlethq/ui";
+import { Button, Document, Textarea } from "@crewlethq/ui";
 import { MessageSquareGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { SeatChip } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
@@ -18,19 +21,21 @@ import { useAct } from "~/lib/useAct.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import type { PageComment } from "~/protocol/index.ts";
-
-type Who = (handle: string) => SeatBadge;
+import { drawnBy, type Who } from "../parts.tsx";
 
 export function PageComments({
   pageID,
   title,
   comments,
+  seats,
   who,
   now,
 }: {
   pageID: string;
   title: string;
   comments: PageComment[];
+  /** The person behind each comment an operator's token wrote, by comment id. */
+  seats?: Record<string, string> | undefined;
   who: Who;
   now: number;
 }) {
@@ -38,8 +43,10 @@ export function PageComments({
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<PageComment | null>(null);
   const boxID = useId();
+  const headingID = useId();
   const byID = new Map(comments.map((c) => [c.id, c]));
   const body = draft.trim();
+  const person = (c: PageComment) => drawnBy(c.author, seats?.[c.id]);
 
   const send = async () => {
     const result = await write.run(
@@ -53,36 +60,37 @@ export function PageComments({
   };
 
   return (
-    <section className="kpage-section" aria-labelledby={`${pageID}-comments`}>
-      <h2 className="kpage-section-title" id={`${pageID}-comments`}>
+    <section className="knowledge-comments" aria-labelledby={headingID}>
+      <h2 className="knowledge-section-title" id={headingID}>
         <MessageSquareGlyph size="sm" />
         Comments
-        <span className="kpage-count">{comments.length}</span>
+        <span className="knowledge-count">{comments.length}</span>
       </h2>
       {comments.length === 0 ? (
-        <p className="muted">Nobody has commented.</p>
+        <p className="knowledge-note">Nobody has commented.</p>
       ) : (
-        <ol className="kpage-comments">
+        <ol className="knowledge-comment-list">
           {comments.map((c) => {
             const parent = c.reply_to ? byID.get(c.reply_to) : undefined;
+            const by = person(c);
             return (
-              <li key={c.id} className="kpage-comment">
-                <div className="row gap-2 wrap">
-                  <SeatChip handle={c.author} {...who(c.author)} />
+              <li key={c.id} className="knowledge-comment">
+                <div className="knowledge-comment-head">
+                  {by ? <SeatChip handle={by} {...who(by)} /> : <b>The engine</b>}
                   <time
-                    className="muted t-caption"
+                    className="knowledge-note"
                     dateTime={c.created_at}
                     title={fmtDateTime(c.created_at)}
                   >
                     {relTime(c.created_at, now)}
                   </time>
                   {c.updated_at && c.updated_at !== c.created_at && (
-                    <span className="muted t-caption" title={fmtDateTime(c.updated_at)}>
+                    <span className="knowledge-note" title={fmtDateTime(c.updated_at)}>
                       (edited)
                     </span>
                   )}
                   {parent && (
-                    <span className="muted t-caption">in reply to {who(parent.author).name}</span>
+                    <span className="knowledge-note">in reply to {who(person(parent)).name}</span>
                   )}
                   <span className="spacer" />
                   {write.access.can && (
@@ -91,17 +99,19 @@ export function PageComments({
                     </Button>
                   )}
                 </div>
-                <div className="prose md">{renderMarkdown(c.body)}</div>
+                <Document size="sm" measure="none">
+                  {renderMarkdown(c.body)}
+                </Document>
               </li>
             );
           })}
         </ol>
       )}
 
-      <div className="kpage-compose">
+      <div className="knowledge-compose">
         {replyTo && (
-          <span className="kpage-replying">
-            Replying to {who(replyTo.author).name}
+          <span className="knowledge-replying">
+            Replying to {who(person(replyTo)).name}
             <Button
               size="small"
               variant="ghost"
@@ -112,7 +122,7 @@ export function PageComments({
           </span>
         )}
         <label className="sr-only" htmlFor={boxID}>
-          {replyTo ? `Reply to ${who(replyTo.author).name}` : `Comment on “${title}”`}
+          {replyTo ? `Reply to ${who(person(replyTo)).name}` : `Comment on “${title}”`}
         </label>
         <Textarea
           id={boxID}
@@ -127,7 +137,7 @@ export function PageComments({
             }
           }}
         />
-        <div className="row gap-2 wrap">
+        <div className="knowledge-compose-foot">
           <WriteButton
             write={write}
             variant="secondary"
@@ -138,8 +148,8 @@ export function PageComments({
           >
             {replyTo ? "Reply" : "Comment"}
           </WriteButton>
-          <span className="t-caption">
-            The page&rsquo;s watchers are told, and anyone you @-mention.
+          <span className="knowledge-note">
+            The page&rsquo;s watchers are told, and anyone you mention.
           </span>
         </div>
         <RefusalNote write={write} />

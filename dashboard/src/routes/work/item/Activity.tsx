@@ -311,10 +311,12 @@ export function Activity({
               replyTo
                 ? undefined
                 : assignee
-                  ? `Leave a comment — Ask… to put a question to ${assignee} directly`
-                  : "Leave a comment — @mention to bring someone in"
+                  ? `Leave a comment, or use Ask… to put a question to ${assignee} directly`
+                  : "Leave a comment. @mention to bring someone in"
             }
-            onReply={() => setReplyTo(null)}
+            // A REPLY SENT CLOSES ITS TARGET: the banner over the field said
+            // who it answered, and kept saying so after it was posted.
+            onSent={() => setReplyTo(null)}
           />
         </div>
       )}

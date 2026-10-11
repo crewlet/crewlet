@@ -244,6 +244,10 @@ var contract = []Entry{
 	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
 	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_BODY_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABELS_MAX", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_CHANGES", ReadLiteral, "internal/pages.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
 }
 
 // Contract is every declaration the engine's gates read out of the

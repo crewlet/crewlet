@@ -120,7 +120,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		Title:    title, Body: in.Body, Status: in.Status, Labels: labels,
 		Version: 1, Author: actor.Name(), CreatedAt: at, UpdatedAt: at,
 	}
-	page.Watchers = watcherSet(actor.Handle, in.Watchers)
+	page.Watchers = watcherSet(actor.Person(), in.Watchers)
 	if len(page.Watchers) > MaxWatchers {
 		return Written{}, invalid("watchers", "%d watchers, past the cap of %d",
 			len(page.Watchers), MaxWatchers)
@@ -770,10 +770,14 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 	// the mute is added beside it, so the total moves.) The clause that
 	// used to cover the gap ("the mute now disagrees with what was asked")
 	// is false by construction after applyWatch has run, so it covered
-	// nothing and fired only for an operator, who has no handle at all: a
-	// `watch: false` from the operator surface published a record and woke
+	// nothing and fired only for an operator with no subscription to change:
+	// a `watch: false` from the operator surface published a record and woke
 	// every watcher for a change to nobody's subscription.
-	if save.Watch != nil && applyWatch(head, actor.Handle, *save.Watch) {
+	//
+	// THE SUBSCRIPTION IS THE PERSON'S, never the token's: an operator's
+	// watch follows the page as the seat their token is bound to
+	// ([Actor.Person]), which is who a wake can reach.
+	if save.Watch != nil && applyWatch(head, actor.Person(), *save.Watch) {
 		patch.Watchers = head.Watchers
 		patch.Muted = head.Muted
 		kinds[ChangeWatchers] = true
@@ -847,8 +851,9 @@ func (s *Store) headAt(ctx context.Context, pageID string) (Page, uint64, error)
 	return page, revision, err
 }
 
-// watcherSet is the author plus whoever else was named, de-duplicated and
-// sorted so two nodes forming the same set write the same rows.
+// watcherSet is the author's subscription plus whoever else was named,
+// de-duplicated and sorted so two nodes forming the same set write the same
+// rows. An author with no subscription ([Actor.Person]) adds nobody.
 func watcherSet(author string, extra []string) []string {
 	out := cleanList(append([]string{author}, extra...))
 	slicesSort(out)
@@ -867,8 +872,8 @@ func watcherSet(author string, extra []string) []string {
 // cheaply or safely: [slicesSort] runs in place and the append above it may
 // keep the head's backing array, so a slice saved before the call can be
 // reordered underneath whoever held it. An EMPTY HANDLE moves nothing and says
-// so — an operator write names no seat, and there is no subscription to change
-// on behalf of a token.
+// so: a token bound to no seat names nobody ([Actor.Person]), and there is
+// no subscription to change on behalf of a credential.
 func applyWatch(page *Page, handle string, watch bool) bool {
 	if handle == "" {
 		return false

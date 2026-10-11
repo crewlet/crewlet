@@ -57,20 +57,22 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "the Inbox's Mark all read, which reads through the newest notice loaded",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/SnoozeMenu.tsx": {
+  "routes/inbox/NoticeActions.tsx": {
     why:
-      "the open row's Snooze, Done and Mark unread — a kit Menu where the reader can act, " +
-      "and the same control disabled with its reason where they cannot",
+      "an update's Mark as read, Mark as unread, Snooze and Unsnooze, a kit Menu where the " +
+      "reader can act, and the same control disabled with its reason where they cannot",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/DecisionPane.tsx": {
-    why: "a decision's option cards and a parked run's answer, made in the pane",
+  "routes/inbox/InboxPane.tsx": {
+    why:
+      "a parked run's answer, made in the pane, and the read that marks an answered " +
+      "question's notices (an ask is answered through components/writes.tsx)",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "components/Composer.tsx": {
     why:
-      "the Inbox pane's reply or answer and the task page's comment or ask, and the " +
-      "task link and page either can attach",
+      "the Inbox pane's reply and the task page's comment or ask, and the task link and " +
+      "page either can attach",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "routes/work/item/edit.tsx": {
@@ -100,8 +102,20 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a page's Comment and Reply (comment_on_page)",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
-  "routes/knowledge/NewPage.tsx": {
-    why: "the New page sheet's Write the page, filed in a space or under a page (write_page)",
+  "routes/knowledge/Composer.tsx": {
+    why:
+      "the composer's Publish and Save as draft, one write_page with its status, filed " +
+      "in a space or under a page",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/knowledge/Pages.tsx": {
+    why:
+      "a space's Create at the end of an open level: a folder named in place is a " +
+      "write_page with an empty body, and a document opens the composer",
+    suite: "routes/knowledge/Pages.test.tsx",
+  },
+  "routes/knowledge/page/Watch.tsx": {
+    why: "a page's eye, a save_page carrying only the person's own watch",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
   "routes/work/NewTask.tsx": {

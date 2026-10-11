@@ -29,7 +29,9 @@ import (
 //
 //   - 1: every shape this domain has, a container's chart epoch
 //     ([ContainerPayload.ChartEpoch]) included.
-const RecordVersion = 1
+//   - 2: the seat behind an operator's token ([MutationRecord.ActorSeat]),
+//     which a history row stores and a wake is not sent to.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -54,7 +56,12 @@ const baseRecordVersion = 1
 // framework's ([statelog.VersionedField]). A field no tag has shipped is still
 // a field two builds of one rolling upgrade disagree about, so "nothing has
 // been released" does not exempt a new field from its row.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	// A history row stores it, so a build with no column for it must retain
+	// the record rather than apply it without the person. That holds on every
+	// op, because every op that changes a page writes a history row.
+	{Name: "MutationRecord.ActorSeat", Since: 2, Path: []string{"actor_seat"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -233,8 +240,18 @@ type MutationRecord struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-	TurnID     string     `json:"turn_id,omitempty"`
-	Chain      []string   `json:"chain,omitempty"`
+
+	// ActorSeat is the person an operator's token was bound to when it wrote
+	// this, and empty for every other actor, whose Actor is already a seat.
+	//
+	// RECORD-CARRIED, on the tracker's rule (replicated migration 0026): the
+	// binding is configuration and can change, and what a history row says
+	// is who wrote it THEN. Actor stays the token, which is the audit trail;
+	// this is who a row draws and who the change does not wake.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
+	TurnID string   `json:"turn_id,omitempty"`
+	Chain  []string `json:"chain,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.
@@ -446,4 +463,4 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 // the caller set.
 var recordFields = fieldSet(MutationRecord{}, "op_id", "created_at", "gen",
 	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id",
-	"turn_id", "chain", "notify")
+	"actor_seat", "turn_id", "chain", "notify")

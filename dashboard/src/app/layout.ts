@@ -29,12 +29,10 @@
  *     + 420  the peek
  *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
- *     + 236  Settings' section column, on a screen that draws one —
- *            or 256, Knowledge's tree ([TREE_COLUMN])
+ *     + 236  Settings' section column, on a screen that draws one
  *     + 444  the list
  *
- * = 1160 on a screen, 1396 beside Settings' column and 1416 beside
- * Knowledge's tree, at the normal density.
+ * = 1160 on a screen and 1396 beside Settings' column, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
@@ -129,23 +127,11 @@ export function densityScale(choice: keyof typeof density): number {
   return Number(density[choice]);
 }
 
-/**
- * Knowledge's tree column: the artboard's 256.
- *
- * WIDER THAN SETTINGS' COLUMN, deliberately. Settings lists nine sections at
- * one level; the tree nests a space, a folder and a page under each other,
- * each level indented, with a space's key on the right — and at the sidebar's
- * 236 a third-level title had under 120px before it was cut.
- */
-export const TREE_COLUMN = 256;
-
 /** How wide the column a workspace draws beside its screens is, if it draws one. */
 export function columnWidth(renderer: SectionRenderer | undefined): number {
   switch (renderer) {
     case "column":
       return px(size.shell.rail);
-    case "tree":
-      return TREE_COLUMN;
     default:
       return 0;
   }
@@ -155,7 +141,7 @@ export function columnWidth(renderer: SectionRenderer | undefined): number {
 export interface Frame {
   /**
    * The width of the column drawn inside the screen beside the list —
-   * Settings' sections, Knowledge's tree — or 0 where there is none
+   * Settings' sections, or 0 where there is none
    * ([columnWidth]).
    */
   column: number;

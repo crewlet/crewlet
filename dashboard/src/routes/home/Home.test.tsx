@@ -654,7 +654,8 @@ describe("the decisions", () => {
 
   // "REVIEW" LANDS ON WHAT IT COUNTED. It pointed at the Inbox filtered on a
   // notice reason no notice carries: Home said a decision was waiting, and
-  // the page it sent the reader to drew "decisions 0" and no ask at all.
+  // the page it sent the reader to drew "decisions 0" and no ask at all. The
+  // Inbox has no filter now, and its list opens with Needs you.
   test("Review and Open inbox land on an Inbox that draws the waiting decision", async () => {
     const waiting = { handle: "jane", items: [ask()], total: 1, capped: false };
     mount({ answers: { decisions: waiting } });
@@ -667,18 +668,17 @@ describe("the decisions", () => {
     location.hash = review;
     mount({ answers: { decisions: waiting }, page: <Inbox /> });
     await settle();
-    // THE DECISIONS CHIP, PRESSED, over the one decision — opened in the
-    // pane with its options to answer — and no notice group beside it.
-    expect(screen.getByRole("radio", { name: /Decisions/ }).getAttribute("aria-checked")).toBe(
-      "true",
-    );
+    // NEEDS YOU, over the one decision, opened in the pane with its options
+    // to answer, and no updates group beside it.
+    expect(review).toBe("#/inbox");
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy();
     expect(
       screen.getByRole("heading", {
         name: "Hold the 2.4 release until the scheduler migration lands?",
       }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Hold release/ })).toBeTruthy();
-    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Updates" })).toBeNull();
   });
 });
 
