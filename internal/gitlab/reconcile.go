@@ -105,6 +105,17 @@ type Result struct {
 	// credential's account see it.
 	GroupNotFound MissingGroup
 
+	// ProjectsNotFound names the `provisioning.projects` this instance
+	// answered 404 for. The run went on without them — see
+	// [resolveProjects] — so every seat lacks its membership of each, and on
+	// a tier that hooks per project nothing from them reaches a seat.
+	//
+	// A FIELD, not only the note it used to be. The note is what the command
+	// line prints; the loop discards notes, so the dashboard reported GitLab
+	// ready over a repository no agent could see — the silence
+	// [Result.NoIngress] was added to end, one level down.
+	ProjectsNotFound []string
+
 	// CredentialExpires is when the credential this run authenticated with
 	// stops working, set ONLY when that is inside
 	// [integration.ExpiryWarning] of the run's clock; zero otherwise, and
@@ -371,12 +382,22 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS MUTATED, and a missing one
-	// is dropped rather than fatal — see [resolveProjects].
-	projects, notes, err := resolveProjects(ctx, opts.Client, p.Projects)
+	// is dropped rather than fatal — see [resolveProjects] — and REPORTED,
+	// see [Result.ProjectsNotFound].
+	projects, missing, err := resolveProjects(ctx, opts.Client, p.Projects)
 	if err != nil {
 		return nil, err
 	}
-	res.Notes = append(res.Notes, notes...)
+	if len(missing) > 0 {
+		res.ProjectsNotFound = missing
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"GitLab answered 404 for these provisioning.projects, so they were "+
+				"skipped: %s — check each path and that the admin token's "+
+				"account can see it (GitLab answers 404 for a project it "+
+				"cannot see as well as for one that does not exist), or drop "+
+				"it from the config, and re-run; everything else reconciled",
+			strings.Join(missing, ", ")))
+	}
 
 	// AND THE MEMBERSHIPS ARE READ BEFORE ANY OF THEM IS WRITTEN — see
 	// [readMemberships]. One listing for the group and one per surviving
@@ -1511,7 +1532,8 @@ func sweepGroupHooks(ctx context.Context, c *Client, groupID int, name string) e
 	return nil
 }
 
-// resolveProjects keeps the declared projects this instance actually has.
+// resolveProjects keeps the declared projects this instance actually has,
+// and names the ones it answered 404 for.
 //
 // # A missing one is dropped, not fatal
 //
@@ -1523,21 +1545,28 @@ func sweepGroupHooks(ctx context.Context, c *Client, groupID int, name string) e
 //
 // It runs BEFORE any mutation for the same reason the group is resolved up
 // front: a check that happens halfway through leaves half a reconcile
-// behind, and the operator's fix — create the project, re-run — is what the
-// note tells them to do.
+// behind.
 //
 // It is the opposite call from a knowledge-base importer, deliberately.
 // There a missing container aborts before a single page is written, because
 // half an import looks like a complete knowledge base with holes in it.
 // Memberships and hooks are additive and independent: the seats that could
 // be added were added, and re-running adds the rest.
-func resolveProjects(ctx context.Context, c *Client, declared []string) ([]string, []string, error) {
-	kept := make([]string, 0, len(declared))
-	var missing []string
+//
+// # Any other answer is a fault, and a 401 or 403 is a refused credential
+//
+// Only a 404 is "not this project". Anything else is the pass failing to
+// look, and a 401 or 403 is the credential refused — routed through
+// [integration.Reject] like the group lookup's, because a project the token
+// may not read is refused identically on every later pass, and as a plain
+// fault it read as the engine working on it for ever.
+func resolveProjects(ctx context.Context, c *Client, declared []string) (kept, missing []string, err error) {
+	kept = make([]string, 0, len(declared))
 	for _, project := range declared {
 		exists, err := c.ProjectExists(ctx, project)
 		if err != nil {
-			return nil, nil, fmt.Errorf("gitlab: check project %s: %w", project, err)
+			return nil, nil, fmt.Errorf("gitlab: check project %s: %w", project,
+				integration.Reject(err, Status(err)))
 		}
 		if !exists {
 			missing = append(missing, project)
@@ -1545,14 +1574,7 @@ func resolveProjects(ctx context.Context, c *Client, declared []string) ([]strin
 		}
 		kept = append(kept, project)
 	}
-	if len(missing) == 0 {
-		return kept, nil, nil
-	}
-	return kept, []string{fmt.Sprintf(
-		"these provisioning.projects are not on this instance and were "+
-			"skipped: %s — create them (or drop them from the config) and "+
-			"re-run; everything else reconciled",
-		strings.Join(missing, ", "))}, nil
+	return kept, missing, nil
 }
 
 // webhookPath is where every GitLab delivery arrives, whatever base carries
