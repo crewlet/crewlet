@@ -53,8 +53,9 @@ import (
 // renewing it.
 //
 // It withholds the two things that write the company's records: SEATS, which
-// the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
-// WRITERS, which no surface is handed ([Engine.writeSide]). And everything that
+// the seat host never claims here ([Engine.seatsAdmitted]), and WRITERS — this
+// node's own, and the router's to a data node on a node that holds no data —
+// which no surface is handed ([Engine.writers]). And everything that
 // would append to a log on its own: the duties and schedulers the constructor's
 // gate never starts, the object store's collector, which pins the estate
 // with a barrier ([Engine.startNativeCollector]), and every barrier a read
@@ -301,14 +302,15 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 // writeSide is this node's own tracker writer and knowledge-base store — nil
 // where the runtime runs neither, and nil in a mode that does not publish.
 //
-// ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
-// node: a seat's tools, the operator's MCP, the purge route, the chart's and
-// the containers' applies, and the estate server writing for a stateless node.
-// Each is handed its writer from here, so a maintenance-mode node hands out none
-// — for [New]'s reason for gating its publishers in one place: a check per
-// surface is a list somebody maintains, and the surface it forgets is a publish
-// during the window the mode exists to rule out, into a log whose usage a
-// resize is being decided against.
+// ONE GATE FOR EVERY WRITE THIS NODE'S OWN COPY MAKES — the chart's and the
+// containers' applies, and the estate server writing for a peer — and, through
+// [Engine.writers], for whether a seat's tools, the operator's MCP and the
+// write routes are handed the router's writer at all. Each is handed its writer
+// from here, so a maintenance-mode node hands out none — for [New]'s reason
+// for gating its publishers in one place: a check per surface is a list
+// somebody maintains, and the surface it forgets is a publish during the
+// window the mode exists to rule out, into a log whose usage a resize is being
+// decided against.
 func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {

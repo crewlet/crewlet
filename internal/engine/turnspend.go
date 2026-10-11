@@ -312,8 +312,9 @@ func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharg
 	if !ok {
 		// A NATIVE ITEM ON A NODE THAT HANDS OUT NO TRACKER WRITER is a
 		// company that moved its tracker off the engine while the turn ran,
-		// or a data node in a maintenance mode, which publishes nothing:
-		// there is nowhere to charge.
+		// or any node in a maintenance mode, which publishes nothing —
+		// through a data node included ([Engine.writers]): there is
+		// nowhere to charge.
 		return cardedCharge{segmentCharge: charge}
 	}
 	charge = e.withCards(ctx, charge)

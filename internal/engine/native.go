@@ -1693,17 +1693,11 @@ type trackerSeams struct {
 // copy that had not seen it; one whose every call goes through the router
 // cannot.
 //
-// A data node that hands out no writer — one in a maintenance mode, which may
-// publish nothing ([Engine.writeSide]) — hands out no tracker tools either,
-// rather than tools whose every write is taken to a peer.
+// A node that hands out no tracker writer ([Engine.writers]) — any node in a
+// maintenance mode, which may publish nothing — hands out no tracker tools
+// either, rather than tools whose every write is refused.
 func (e *Engine) trackerHalves() (trackerSeams, bool) {
-	run := e.nativeHalves()
-	if !run.tracker {
-		return trackerSeams{}, false
-	}
-	// A DATA NODE'S OWN WRITE SIDE; a node without `data` writes through a
-	// data node, whose mode is that node's to answer for.
-	if writer, _ := e.writeSide(); run.own != nil && writer == nil {
+	if writes, _ := e.writers(e.nativeHalves()); !writes {
 		return trackerSeams{}, false
 	}
 	r := e.router
@@ -1962,14 +1956,46 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 // [Engine.trackerHalves] gives: the router's on every node.
 func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 	func(context.Context, statelog.Position) error, bool) {
-	run := e.nativeHalves()
-	if !run.wiki {
-		return nil, nil, nil, false
-	}
-	if _, store := e.writeSide(); run.own != nil && store == nil {
+	if _, writes := e.writers(e.nativeHalves()); !writes {
 		return nil, nil, nil, false
 	}
 	return e.router.Pages(), e.router.Pages(), e.router.Await, true
+}
+
+// writers is which of the halves one reading of this node's runtime found
+// (run) it hands a WRITER for — the tracker's and the knowledge base's. THE
+// ONE GATE every surface that writes the company's records through this node's
+// router is handed its writer behind: a seat's tools and the engine's write of
+// a turn's spend ([Engine.trackerHalves], [Engine.pageHalves]), the operator's
+// MCP and act transport, the purge and a project file's upload and removal
+// ([OperatorWorkWriter], [OperatorPageWriter]).
+//
+// NONE IN A MODE THAT PUBLISHES NOTHING, WHATEVER THE NODE HOLDS. The mode is
+// this node's promise that it starts nothing that writes
+// ([statelog.MaintenanceMode.Publishes]), and a write it routes to a data node
+// is one it starts. A node without `data` used to be exempt, on the reading
+// that the data node's mode was that node's to answer for — but a capacity
+// window puts every data node in the mode too, so the routed write was refused
+// there, and only after the request had done its work: a file's upload
+// streamed up to a gibibyte into the object store before its row was refused,
+// as `unavailable`, which a client retries, and each attempt left an object the
+// collector — which stands down in the mode — could not free until the window
+// closed. And outside a window it was a node in the mode writing into a fleet
+// that is not, which is the one thing its operator restarted it to rule out.
+//
+// AND ON A DATA NODE, ONLY THE HALVES ITS OWN WRITE SIDE HOLDS
+// ([Engine.writeSide]): a half is counted by its reader ([Engine.nativeHalves]),
+// and a writer is a fact of its own. A node without `data` holds no write side
+// and writes every half it runs through a data node.
+func (e *Engine) writers(run halves) (tracker, wiki bool) {
+	if !e.mode.Publishes() {
+		return false, false
+	}
+	if run.own == nil {
+		return run.tracker, run.wiki
+	}
+	writer, store := e.writeSide()
+	return run.tracker && writer != nil, run.wiki && store != nil
 }
 
 // ---- what the operator's surfaces are given ------------------------------ //
@@ -2054,8 +2080,9 @@ func OperatorNative(e *Engine) OperatorReads {
 
 // OperatorWorkWriter is the tracker's write side for those surfaces, acting as
 // whichever party each call names — or false where this node hands out no
-// tracker writer: a company on a vendor tracker, or a data node in a
-// maintenance mode, which may publish nothing ([Engine.trackerHalves]'s rule).
+// tracker writer: a company on a vendor tracker, or any node in a maintenance
+// mode, which may publish nothing, whether or not it holds data
+// ([Engine.writers]).
 func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) {
 	if _, ok := e.trackerHalves(); !ok {
 		return nil, false
@@ -2074,7 +2101,7 @@ func OperatorPages(e *Engine) (estate.Pages, bool) {
 }
 
 // OperatorPageWriter is the knowledge base's write side for those surfaces, or
-// false where this node hands out none ([Engine.pageHalves]'s rule).
+// false where this node hands out none ([Engine.writers]).
 func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 	if _, _, _, ok := e.pageHalves(); !ok {
 		return estate.Pages{}, false

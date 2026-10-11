@@ -1017,9 +1017,12 @@ acknowledgement could never establish about itself.
 A node in either maintenance mode **keeps its presence lease** — the process is
 running, and `crewlet fleet broker list`, the fleet view and the participant set
 below all read it — while it claims **no seat** and hands **no writer** to any
-surface: the operator's MCP endpoint offers only its search tool, the purge
-route is not served, the chart's projects and containers are applied at the
-next normal boot, and a stateless node's writes are answered "not here". Its
+surface, whether or not it holds data (a write a stateless node routes to a
+data node is still one it starts): the operator's MCP endpoint offers only its
+search tool, the purge route is not served, the chart's projects and
+containers are applied at the next normal boot, and a data node in the mode
+answers "not here" to the writes a stateless node still in normal mode routes
+to it. Its
 reads are still served — every level but `linearizable`, which proves the
 log's end by appending a barrier to it and is refused
 [`maintenance`](consistency.md#the-thirteen-refusals). The operator gestures

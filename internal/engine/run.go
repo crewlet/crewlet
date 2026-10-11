@@ -1319,7 +1319,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// fleet is in a maintenance mode. What would publish through it is
 	// withheld where it is decided rather than here: the host claims no
 	// seat unless the mode publishes ([Engine.seatsAdmitted]), and no
-	// surface is handed this node's writers ([Engine.writeSide]).
+	// surface is handed a writer — this node's own, or the router's to a
+	// data node ([Engine.writers]).
 	//
 	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
 	// by its own call and a per-call check is a list somebody maintains —
