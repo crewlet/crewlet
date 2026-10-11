@@ -823,26 +823,34 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if environ == nil {
 		environ = config.EnvSource{}
 	}
+	// THE KEYRING THE PER-RUN TOKENS ARE SIGNED UNDER, decoded once by the
+	// rule the secret store's cipher decodes it by. A keyring that is
+	// configured and cannot be decoded fails the boot here, with nothing
+	// open, rather than below the backends where the cipher meets it.
+	keys, _, err := opts.Bootstrap.Secrets.Keyring()
+	if err != nil {
+		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
+	}
 	otel := opts.OtelReceiver
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(getenv(environ),
-			keyMaterial(opts.Bootstrap))
-		if err != nil {
-			// A receiver URL that is set and unusable is a deployment
-			// that asked for in-box telemetry and would get none, so it
-			// is refused rather than dropped: the alternative is a
-			// config that looks complete and exports nothing.
+		// A receiver URL that is set and unusable is a deployment that
+		// asked for in-box telemetry and would get none, so it is refused
+		// rather than dropped: the alternative is a config that looks
+		// complete and exports nothing.
+		if otel, err = sandbox.BuildOtelReceiver(getenv(environ), keys); err != nil {
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
-		otel = built
 	}
-	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
-	// receiver above is built here: a fleet mints on one node and may
-	// verify on another, so every node derives its key from the fleet's
-	// keyring rather than from a per-process random.
+	// SAME KEYRING, DIFFERENT DOMAIN, and for the same reason the receiver
+	// above is built here: a fleet mints on one node and may verify on
+	// another, so every node signs under the fleet's keyring rather than a
+	// per-process random — the whole ring, so a node part-way through a
+	// rotation still verifies what its peers mint.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(getenv(environ), keyMaterial(opts.Bootstrap))
+		if bridge, err = mcpbridge.Build(getenv(environ), keys); err != nil {
+			return nil, fmt.Errorf("engine: the MCP tool bridge: %w", err)
+		}
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
@@ -2619,23 +2627,6 @@ func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
 // mounts the route, and it is handed this engine's own: one object, so a
 // session opened by a run is the session the route resolves.
 func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
-
-// keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
-//
-// THE REFERENCES ARE NOT RESOLVED HERE, and must not be: this runs before the
-// secret store is open, and the store's own key is what would resolve them.
-// Two nodes reading the same document derive the same key either way: what
-// matters is that they agree, not that the material is the plaintext.
-func keyMaterial(boot *config.Bootstrap) []string {
-	if boot == nil {
-		return nil
-	}
-	out := make([]string, 0, len(boot.Secrets.Keys))
-	for _, key := range boot.Secrets.Keys {
-		out = append(out, key.ID+":"+key.Material)
-	}
-	return out
-}
 
 // observe publishes an engine-side observability event.
 //

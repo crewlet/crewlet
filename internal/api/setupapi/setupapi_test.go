@@ -1,6 +1,7 @@
 package setupapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -267,6 +269,39 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 // the company document's only writers; none is an unmanaged document.
 func newManagedSurface(t *testing.T, apps map[string]string, writers ...string) *surface {
 	t.Helper()
+	return newKeyedSurface(t, stateKeys, apps, writers...)
+}
+
+// stateKeys is the Tier A keyring the test fleet signs GitHub App states
+// under. Read-only: a signer derives its own keys from it at construction.
+var stateKeys = keyring("k1", map[string]byte{"k1": 1})
+
+// keyring builds a Tier A keyring from fixed material, so two calls with the
+// same fill are two nodes holding the same key.
+func keyring(active string, keys map[string]byte) secrets.Keyring {
+	out := secrets.Keyring{ActiveID: active, Keys: map[string][]byte{}}
+	for id, fill := range keys {
+		out.Keys[id] = bytes.Repeat([]byte{fill}, 32)
+	}
+	return out
+}
+
+// stateSigner signs a GitHub App state as a node holding keys would, for a
+// case that mints one of its own rather than through the begin route.
+func stateSigner(t *testing.T, domain string, keys secrets.Keyring, now func() time.Time) *runtoken.Signer {
+	t.Helper()
+	signer, err := runtoken.New(runtoken.Options{Domain: domain, Keys: keys, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+// newKeyedSurface is newManagedSurface on a node whose Tier A keyring is keys,
+// so a case can stand two nodes at different points of a rotation side by
+// side.
+func newKeyedSurface(t *testing.T, keys secrets.Keyring, apps map[string]string, writers ...string) *surface {
+	t.Helper()
 	cfg, db := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
@@ -289,8 +324,8 @@ func newManagedSurface(t *testing.T, apps map[string]string, writers ...string) 
 		Resolve:   v.get,
 		Status:    s.status,
 		SlackApps: func() map[string]string { return apps },
-		// The keyring a GitHub App state is signed from.
-		StateKeys: []string{"test-material"},
+		// The keyring a GitHub App state is signed under.
+		StateKeys: keys,
 		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)
@@ -977,7 +1012,7 @@ func (s *surface) withPass(
 			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
 		},
 		Status:    status,
-		StateKeys: []string{"test-material"},
+		StateKeys: stateKeys,
 		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)

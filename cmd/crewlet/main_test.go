@@ -378,9 +378,7 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
+	bridge := testBridge(t, "http://127.0.0.1:"+strconv.Itoa(port))
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"seats"}
@@ -427,9 +425,7 @@ func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
+	bridge := testBridge(t, "http://127.0.0.1:"+strconv.Itoa(port))
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"data", "workers"}
@@ -713,6 +709,18 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 func testEngine(t *testing.T) *engine.Engine {
 	t.Helper()
 	return testEngineWithBridge(t, nil)
+}
+
+// testBridge is a tool bridge a box reaches at base, signed under a key of
+// this process alone: the node that opens a session is the only one that
+// serves it, so no case here needs a fleet's keyring.
+func testBridge(t *testing.T, base string) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(mcpbridge.Options{BaseURL: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bridge
 }
 
 // testEngineWithBridge is testEngine holding the given tool bridge. Nil builds

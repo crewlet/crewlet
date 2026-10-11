@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -115,7 +114,7 @@ func reachApp(t *testing.T) *api.App {
 			Publisher: memory.New(),
 		},
 		OtelReceiver: otlpReceiver(t, "http://127.0.0.1:1"),
-		Bridge:       mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
+		Bridge:       testBridge(t),
 		Operator: operatorSurface(t, operator.Options{
 			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 		}),

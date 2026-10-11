@@ -22,6 +22,18 @@ import (
 // answers every verb the transport uses, and is reachable WITHOUT the API's
 // own bearer token — because the caller is inside a sandbox and holds none.
 
+// testBridge is a bridge a box reaches at a placeholder address, signed under
+// a key of this process alone, which is all a route case needs: the bridge
+// that opens a session is the one that verifies its token.
+func testBridge(t *testing.T) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(mcpbridge.Options{BaseURL: "http://x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bridge
+}
+
 // A NIL BRIDGE MEANS THE ROUTE IS ABSENT, not present-and-refusing. An
 // endpoint that exists and 503s everything reads to an operator as broken,
 // while one that is not there matches what the config says.
@@ -41,7 +53,7 @@ func TestTheBridgeRouteIsAbsentWithoutABridge(t *testing.T) {
 func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Bridge: mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
+		Bridge: testBridge(t),
 	})
 	res := probe(a, http.MethodPost, mcpbridge.PathPrefix+"not-a-token")
 	if res.StatusCode != http.StatusUnauthorized {
@@ -56,7 +68,7 @@ func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 // route.
 func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	t.Parallel()
-	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	bridge := testBridge(t)
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})

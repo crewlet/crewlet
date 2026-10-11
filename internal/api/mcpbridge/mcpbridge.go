@@ -55,6 +55,7 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -160,9 +161,12 @@ type Bridge struct {
 
 // Options configure [New].
 type Options struct {
-	// Key signs the per-run tokens and must be the same in every process
-	// that mints or verifies one. See [runtoken.Options].
-	Key []byte
+	// Keys is the keyring the per-run tokens are signed under — the active
+	// key mints and every key verifies — and must be the fleet's own, so a
+	// peer a misrouted call reaches can still tell a fleet token from a
+	// forged one. The zero keyring takes a per-process key. See
+	// [runtoken.Options].
+	Keys secrets.Keyring
 
 	// Now is the clock, for the token expiry. Nil takes wall-clock time.
 	Now func() time.Time
@@ -189,18 +193,22 @@ type Options struct {
 // LEAKED token could match a still-running session.
 const DefaultTTL = 4 * time.Hour
 
-// New builds a bridge.
-func New(opts Options) *Bridge {
+// New builds a bridge, refusing a keyring with no usable active key.
+func New(opts Options) (*Bridge, error) {
 	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
+	signer, err := runtoken.New(runtoken.Options{Domain: KeyDomain, Keys: opts.Keys, Now: opts.Now})
+	if err != nil {
+		return nil, fmt.Errorf("mcpbridge: the token signer: %w", err)
+	}
 	return &Bridge{
-		signer:   runtoken.New(runtoken.Options{Key: opts.Key, Now: opts.Now}),
+		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
 		sessions: map[string]*Session{},
-	}
+	}, nil
 }
 
 // Open registers a run's session and returns the URL its box should dial.
@@ -285,13 +293,11 @@ func (b *Bridge) Open(s *Session) string {
 // replaced.
 //
 // The separator is "~" and the nonce comes FIRST, so the parse is a cut at
-// the first one whatever a run id contains. Two characters are unavailable
-// for it: "." delimits [runtoken.Signer.Mint]'s own payload, and the whole
-// token is a URL PATH SEGMENT, so anything reserved there is worse than
-// wrong — "#" opens the fragment, and a client sends the engine everything
-// before it and keeps the rest, which authenticates as a truncated token
-// rather than failing as a malformed one. "~" is unreserved (RFC 3986 §2.3)
-// and appears in neither a hex nonce nor a UUID.
+// the first one whatever a run id contains, and "~" appears in neither a hex
+// nonce nor a UUID. The token's own grammar constrains nothing here:
+// [runtoken.Signer.Mint] spells the subject as a URL-safe field, so no
+// character of it can split the token's fields or cut the path a box's client
+// sends.
 func (s *Session) subject() string { return s.nonce + subjectSep + s.RunID }
 
 // subjectSep joins a session's nonce to its run id. See [Session.subject].

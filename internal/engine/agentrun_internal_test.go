@@ -347,14 +347,24 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	}
 }
 
+// testBridge is a tool bridge a box reaches at base, signed under a key of
+// this process alone: the node that opens a session is the only one that
+// serves it, so no case here needs a fleet's keyring.
+func testBridge(t *testing.T, base string) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(mcpbridge.Options{BaseURL: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bridge
+}
+
 // launchReadyEngine is an engine that can take an agent-mode launch all the
 // way to a box: a remote cell served by the in-process double, a durable run
 // store, a queue for the start event and a bridge with somewhere to dial.
 func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	t.Helper()
-	e, _ := launchRig(t, c, mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
-	}))
+	e, _ := launchRig(t, c, testBridge(t, "https://engine.example.com"))
 	return e
 }
 
@@ -405,9 +415,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
-	e.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
-	})
+	e.bridge = testBridge(t, "https://engine.example.com")
 	launcher := &agentLauncher{
 		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,

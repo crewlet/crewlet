@@ -143,9 +143,7 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
-	})
+	bridge := testBridge(t, "http://127.0.0.1:"+strconv.Itoa(publicPort))
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, freePort(t))
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
@@ -190,9 +188,7 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
 	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
-	})
+	bridge := testBridge(t, "http://127.0.0.1:"+strconv.Itoa(publicPort))
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, 0)
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}

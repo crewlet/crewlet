@@ -2,7 +2,9 @@ package setupapi_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -21,55 +23,99 @@ import (
 // the seat, it expires, and it is signed: a forged one, a stale one and one
 // from another endpoint all have to be refused, and Slack's landing checks
 // none of these because it only ever prints a code.
+//
+// Each case is presented to the callback itself. The company is nil there, so
+// a state the flow accepts fails a step LATER with a different error, which is
+// what tells "refused" from "accepted".
 func TestTheAppCallbackStateIsSignedScopedAndExpiring(t *testing.T) {
 	t.Parallel()
-	key := runtoken.KeyFrom("github-app-manifest", []string{"k1:material"})
-	signer := runtoken.New(runtoken.Options{Key: key})
-
-	token := signer.Mint("sre-lead", 15*60*1000000000)
-	if got := signer.Validate(token); got != "sre-lead" {
-		t.Fatalf("a token this signer minted validates as %q", got)
-	}
-
-	// FORGED: the signature is checked, so an attacker naming a seat gets
-	// nothing.
-	if got := signer.Validate("v1.sre-lead.9999999999.deadbeef"); got != "" {
-		t.Errorf("a forged state validated as %q", got)
-	}
-
-	// FROM ANOTHER ENDPOINT: the domain separates these keys, so a token
-	// minted for the telemetry receiver cannot be replayed here.
-	other := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("otel-run", []string{"k1:material"}),
-	})
-	if got := signer.Validate(other.Mint("sre-lead", 15*60*1000000000)); got != "" {
-		t.Errorf("a token from another endpoint validated as %q", got)
-	}
+	flow := newService(t, setupapi.Options{StateKeys: stateKeys}).AppFlow()
+	subject := setupapi.StateSubject("sre-lead", "founder")
+	good := stateSigner(t, setupapi.StateDomain, stateKeys, nil).Mint(subject, 15*time.Minute)
 
 	// TAMPERED: changing the seat invalidates it, which is what stops one
 	// operator's link writing into another seat.
-	parts := strings.SplitN(token, ".", 4)
-	if len(parts) == 4 {
-		if got := signer.Validate(parts[0] + ".other-seat." + parts[2] + "." + parts[3]); got != "" {
-			t.Errorf("a state pointed at another seat validated as %q", got)
+	parts := strings.Split(good, ".")
+	if len(parts) != 5 {
+		t.Fatalf("a state of %d fields, where the case looks for the seat in the third", len(parts))
+	}
+	parts[2] = base64.RawURLEncoding.EncodeToString([]byte(setupapi.StateSubject("other-seat", "founder")))
+	tampered := strings.Join(parts, ".")
+
+	for _, tc := range []struct{ name, state string }{
+		// FORGED: the signature is checked, so an attacker naming a seat
+		// gets nothing.
+		{"a forged state", "v1.azE.c3JlLWxlYWQ.9999999999.deadbeef"},
+		// FROM ANOTHER ENDPOINT: the domain separates these keys, so a
+		// token minted for the telemetry receiver cannot be replayed here
+		// although it is signed under the same keyring.
+		{"another endpoint's token", stateSigner(t, "crewlet.otlp.v1", stateKeys, nil).
+			Mint(subject, 15*time.Minute)},
+		// EXPIRED: the state lives fifteen minutes, the span of the task.
+		{"an expired state", stateSigner(t, setupapi.StateDomain, stateKeys,
+			func() time.Time { return time.Now().Add(-time.Hour) }).Mint(subject, 15*time.Minute)},
+		{"a state pointed at another seat", tampered},
+	} {
+		if _, err := flow.Complete(t.Context(), "code", tc.state); !errors.Is(err, setupapi.ErrStateRefused) {
+			t.Errorf("%s: Complete = %v, want %v", tc.name, err, setupapi.ErrStateRefused)
 		}
+	}
+	if _, err := flow.Complete(t.Context(), "code", good); errors.Is(err, setupapi.ErrStateRefused) {
+		t.Errorf("a state the fleet signed was refused: %v", err)
 	}
 }
 
-// TWO NODES MUST AGREE, or a fleet where the begin and the callback land on
+// A CREATION BEGUN ON ONE NODE FINISHES ON ANOTHER — THROUGH A KEYRING
+// ROTATION TOO — or a fleet where the begin and the callback land on
 // different nodes refuses every completion, with a message about the link
 // rather than about the deployment.
-func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
+//
+// A keyring rotates one restart at a time, so for the length of one the node
+// that begins and the node that finishes can hold different rings: the state
+// is minted through the begin route on one and presented to the other's
+// callback, in both directions of every step a rolling restart puts side by
+// side.
+func TestAStateBegunOnOneNodeFinishesOnAnotherThroughARotation(t *testing.T) {
 	t.Parallel()
-	material := []string{"k2:second", "k1:first"}
-	one := runtoken.New(runtoken.Options{Key: runtoken.KeyFrom("github-app-manifest", material)})
-	// The SAME material in a different order, which is what a re-ordered
-	// document or a map iteration produces.
-	two := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:first", "k2:second"}),
-	})
-	if got := two.Validate(one.Mint("sre-lead", 15*60*1000000000)); got != "sre-lead" {
-		t.Errorf("a second node validated the first's state as %q", got)
+	before := keyring("k1", map[string]byte{"k1": 1})
+	added := keyring("k1", map[string]byte{"k1": 1, "k2": 2})
+	flipped := keyring("k2", map[string]byte{"k1": 1, "k2": 2})
+	dropped := keyring("k2", map[string]byte{"k2": 2})
+	for _, tc := range []struct {
+		name          string
+		begin, finish secrets.Keyring
+	}{
+		{"one keyring", before, before},
+		{"begun before the new key was added, finished after", before, added},
+		{"begun beside the new key, finished where it is not yet", added, before},
+		{"begun before the flip, finished after", added, flipped},
+		{"begun after the flip, finished where it has not happened", flipped, added},
+		{"begun before the old key was dropped, finished after", flipped, dropped},
+		{"begun after the old key was dropped, finished before", dropped, flipped},
+	} {
+		s := newKeyedSurface(t, tc.begin, nil)
+		s.seedGitHubApps(t)
+		if res := s.do(t, http.MethodPatch, "/config",
+			`{"integrations":{"public_base_url":"https://engine.example.com"}}`,
+			map[string]string{"Content-Type": "application/merge-patch+json", "X-Summary": "public url"},
+		); res.Code != http.StatusCreated {
+			t.Fatalf("%s: set the public url = %d: %s", tc.name, res.Code, res.Body)
+		}
+		begin := decode(t, s.do(t, http.MethodPost, "/setup/integrations/github/app",
+			`{"seat":"sre-lead"}`, nil))
+		state, _ := begin["state"].(string)
+		if state == "" {
+			t.Fatalf("%s: the begin route minted no state: %v", tc.name, begin)
+		}
+		// On the beginning node's clock, which the surface pins: the
+		// two nodes of a fleet agree on the time, and a state read on
+		// another day is one that expired.
+		finish := newService(t, setupapi.Options{
+			StateKeys: tc.finish, Now: func() time.Time { return pinned },
+		}).AppFlow()
+		if _, err := finish.Complete(t.Context(), "code", state); errors.Is(err, setupapi.ErrStateRefused) {
+			t.Errorf("%s: the other node refused the state: %v", tc.name, err)
+		}
 	}
 }
 
@@ -88,7 +134,7 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
 		Company:   func() *config.Company { return &config.Company{} },
-		StateKeys: []string{"k1:material"},
+		StateKeys: stateKeys,
 	})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
@@ -115,10 +161,8 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := newService(t, setupapi.Options{StateKeys: []string{"k1:material"}}).AppFlow()
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
+	flow := newService(t, setupapi.Options{StateKeys: stateKeys}).AppFlow()
+	state := stateSigner(t, setupapi.StateDomain, stateKeys, nil).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
 
 	if _, err := flow.Complete(t.Context(), "code-1", state); errors.Is(err, setupapi.ErrStateRefused) {
 		t.Fatalf("the first use of a fresh state was refused: %v", err)
@@ -140,11 +184,9 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
 	flow := newService(t, setupapi.Options{
-		StateKeys: []string{"k1:material"}, StateClaims: blindClaims{},
+		StateKeys: stateKeys, StateClaims: blindClaims{},
 	}).AppFlow()
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
+	state := stateSigner(t, setupapi.StateDomain, stateKeys, nil).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
 
 	_, err := flow.Complete(t.Context(), "code-1", state)
 	if !errors.Is(err, setupapi.ErrStateRefused) {

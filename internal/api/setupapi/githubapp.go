@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -147,15 +148,12 @@ type StateClaims interface {
 // newAppFlow builds the completer the webhook mux serves. See
 // [Options.StateKeys] and [Options.StateClaims] for why both have to be the
 // fleet's rather than this process's.
-func newAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
-	return &AppFlow{
-		service: s,
-		spent:   spent,
-		signer: runtoken.New(runtoken.Options{
-			Key: runtoken.KeyFrom(tokenDomain, material),
-			Now: s.clock,
-		}),
+func newAppFlow(s *Service, keys secrets.Keyring, spent StateClaims) (*AppFlow, error) {
+	signer, err := runtoken.New(runtoken.Options{Domain: tokenDomain, Keys: keys, Now: s.clock})
+	if err != nil {
+		return nil, fmt.Errorf("setupapi: the GitHub App state signer: %w", err)
 	}
+	return &AppFlow{service: s, spent: spent, signer: signer}, nil
 }
 
 // AppFlow is the completer the webhook mux serves for a GitHub App creation

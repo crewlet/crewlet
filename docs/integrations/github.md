@@ -462,11 +462,13 @@ token naming the seat, minted by the begin route, valid for 15 minutes, and
 validated before anything else happens. It is scoped to this flow, so a token
 minted for another signed URL this engine issues cannot be replayed here.
 
-Across a fleet the state signer is keyed from the Tier A keyring
-(`secrets.keys`), so a creation begun on one node can be finished on another. A
-deployment with no keys configured falls back to a per-process key, which is
-correct for a single node and cannot work across two; the engine says so at
-startup with `github_app_state_key_is_per_process`.
+Across a fleet the state is signed under the Tier A keyring (`secrets.keys`),
+so a creation begun on one node can be finished on another — during a
+[keyring rotation](../concepts/secret-store.md#operational-notes) too, because
+the state is signed under the active key, names it, and is verified under
+whichever key it names. A deployment with no keys configured falls back to a
+per-process key, which is correct for a single node and cannot work across two;
+the engine says so at startup with `github_app_state_key_is_per_process`.
 
 Request and response shapes are in
 [API Endpoints](../reference/api-endpoints.md#one-agents-own-github-app).

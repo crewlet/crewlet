@@ -1,6 +1,7 @@
 package mcpbridge_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -121,6 +123,24 @@ func (g denyGuard) Observe(string, map[string]any) {}
 
 // --- fixture ---------------------------------------------------------------
 
+// fleetKeys is the keyring every bridge of the test fleet signs under, so a
+// peer can tell a token its fleet signed from a forged one. Read-only: a
+// signer derives its own keys from it at construction.
+var fleetKeys = secrets.Keyring{
+	ActiveID: "k1",
+	Keys:     map[string][]byte{"k1": bytes.Repeat([]byte{1}, 32)},
+}
+
+// newBridge builds a bridge, failing the test on a keyring it refuses.
+func newBridge(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	b, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return b
+}
+
 type fixture struct {
 	bridge  *mcpbridge.Bridge
 	server  *httptest.Server
@@ -164,7 +184,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer)
-	f.bridge = mcpbridge.New(mcpbridge.Options{Key: []byte("test-key")})
+	f.bridge = newBridge(t, mcpbridge.Options{Keys: fleetKeys})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
@@ -180,8 +200,8 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 // open registers the session and returns the URL a box would dial.
 func (f *fixture) open(t *testing.T) string {
 	t.Helper()
-	f.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: f.server.URL,
+	f.bridge = newBridge(t, mcpbridge.Options{
+		Keys: fleetKeys, BaseURL: f.server.URL,
 	})
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
@@ -329,7 +349,7 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // launches the run whose end would have closed it.
 func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k")})
+	b := newBridge(t, mcpbridge.Options{})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
 	if url := b.Open(&mcpbridge.Session{
@@ -346,8 +366,8 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	clock := time.Now()
-	f.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: f.server.URL, TTL: time.Minute,
+	f.bridge = newBridge(t, mcpbridge.Options{
+		Keys: fleetKeys, BaseURL: f.server.URL, TTL: time.Minute,
 		Now: func() time.Time { return clock },
 	})
 	mux := http.NewServeMux()
@@ -757,7 +777,7 @@ func literal(v any) string {
 // tools/list — one seat's wiring mistake becoming a fleet node's crash.
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	b := newBridge(t, mcpbridge.Options{BaseURL: "http://x"})
 	// Mounted, so the incomplete session is the only reason to refuse.
 	_ = b.Handler()
 	for _, tc := range []struct {
@@ -786,7 +806,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 // or a bridge that always refused would pass.
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	b := newBridge(t, mcpbridge.Options{BaseURL: "http://x"})
 	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
@@ -825,20 +845,30 @@ func emptySurface() *tools.Surface {
 func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	// A session THIS node opened, then a PEER over the same fleet key —
+	// A session THIS node opened, then a PEER over the same fleet keyring —
 	// which is exactly a load balancer in front of two nodes.
 	endpoint := f.open(t)
 	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
 
-	peer := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
-	})
-	runID, reason := peer.Miss(token)
-	if runID != "run-1" {
-		t.Fatalf("the peer could not even name the run: %q", runID)
-	}
-	if !strings.Contains(reason, mcpbridge.BaseURLVar) {
-		t.Errorf("the reason does not name the setting that fixes it: %q", reason)
+	// AND A PEER PART-WAY THROUGH A KEYRING ROTATION, which a rolling
+	// restart puts beside this node for as long as it takes: it has
+	// activated a key this node does not mint under, and still verifies
+	// what this node minted, so the diagnosis does not turn into "forged"
+	// for the length of the rotation.
+	rotated := secrets.Keyring{ActiveID: "k2", Keys: map[string][]byte{
+		"k1": fleetKeys.Keys["k1"], "k2": bytes.Repeat([]byte{2}, 32),
+	}}
+	var peer *mcpbridge.Bridge
+	for _, keys := range []secrets.Keyring{fleetKeys, rotated} {
+		peer = newBridge(t, mcpbridge.Options{Keys: keys, BaseURL: "https://engine.example.com"})
+		runID, reason := peer.Miss(token)
+		if runID != "run-1" {
+			t.Fatalf("a peer active on %s could not even name the run: %q", keys.ActiveID, runID)
+		}
+		if !strings.Contains(reason, mcpbridge.BaseURLVar) {
+			t.Errorf("a peer active on %s does not name the setting that fixes it: %q",
+				keys.ActiveID, reason)
+		}
 	}
 
 	// A FORGED token is the other reason, and it names no run — telling
@@ -849,6 +879,49 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	}
 	if strings.Contains(forgedReason, mcpbridge.BaseURLVar) {
 		t.Errorf("a forged token was blamed on the deployment: %q", forgedReason)
+	}
+}
+
+// THE BRIDGE IS BUILT FROM THE ENVIRONMENT AND THE FLEET'S KEYRING, ONCE. An
+// unset address builds no bridge rather than a broken one, a keyring with no
+// usable active key is refused rather than built into a bridge whose tokens
+// nothing verifies, and the keyring a node is built with is the one its
+// tokens are signed under — so two nodes built from one keyring tell each
+// other's tokens from forged ones, which is the diagnosis the keyring is
+// there for.
+func TestTheBridgeIsBuiltFromTheEnvironmentAndTheKeyring(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{}
+	lookup := func(name string) string { return env[name] }
+	if b, err := mcpbridge.Build(nil, fleetKeys); b != nil || err != nil {
+		t.Errorf("no environment built %v (%v)", b, err)
+	}
+	if b, err := mcpbridge.Build(lookup, fleetKeys); b != nil || err != nil {
+		t.Errorf("an unset %s built %v (%v)", mcpbridge.BaseURLVar, b, err)
+	}
+
+	env[mcpbridge.BaseURLVar] = "https://engine.example.com"
+	broken := secrets.Keyring{ActiveID: "k9", Keys: fleetKeys.Keys}
+	if b, err := mcpbridge.Build(lookup, broken); err == nil {
+		t.Errorf("a keyring with no usable active key built %v", b)
+	}
+
+	build := func() *mcpbridge.Bridge {
+		t.Helper()
+		b, err := mcpbridge.Build(lookup, fleetKeys)
+		if err != nil || b == nil {
+			t.Fatalf("Build = %v, %v", b, err)
+		}
+		return b
+	}
+	opener, peer := build(), build()
+	_ = opener.Handler()
+	endpoint := opener.Open(&mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()})
+	if endpoint == "" {
+		t.Fatal("a built, mounted bridge opened no endpoint")
+	}
+	if runID, reason := peer.Miss(endpoint[strings.LastIndex(endpoint, "/")+1:]); runID != "run-1" {
+		t.Errorf("a peer built from the same keyring read the token as forged: %q", reason)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // In-sandbox telemetry, without handing the box a secret.
@@ -48,12 +49,30 @@ import (
 // the receiver will happily validate into the wrong thing.
 type OtelTokens struct{ signer *runtoken.Signer }
 
-// OtelTokenOptions configure [NewOtelTokens]. See [runtoken.Options].
-type OtelTokenOptions = runtoken.Options
+// OtelTokenOptions configure [NewOtelTokens].
+//
+// NO DOMAIN, because it is not the caller's to choose: every OTLP token is
+// keyed under [OtelKeyDomain], and a caller that could name another would be
+// minting tokens some other endpoint accepts.
+type OtelTokenOptions struct {
+	// Keys is the fleet's keyring: the active key mints and every key
+	// verifies. The zero keyring takes a per-process key. See
+	// [runtoken.Options].
+	Keys secrets.Keyring
+
+	// Now is the clock. Nil takes wall-clock time.
+	Now func() time.Time
+}
 
 // NewOtelTokens builds the minter.
-func NewOtelTokens(opts OtelTokenOptions) *OtelTokens {
-	return &OtelTokens{signer: runtoken.New(opts)}
+func NewOtelTokens(opts OtelTokenOptions) (*OtelTokens, error) {
+	signer, err := runtoken.New(runtoken.Options{
+		Domain: OtelKeyDomain, Keys: opts.Keys, Now: opts.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: the OTLP token signer: %w", err)
+	}
+	return &OtelTokens{signer: signer}, nil
 }
 
 // Mint returns a token scoped to one trace, valid for ttl.
@@ -214,33 +233,10 @@ func ParseOtelHeaders(raw string) map[string]string {
 	return out
 }
 
-// OtelSigningKey derives the token key every process must share.
-//
-// FROM THE KEYRING, which is the one secret every Crewlet process already
-// loads — and never from the database, which a token check must not depend
-// on: the check runs on the request path of an endpoint that is deliberately
-// reachable without other credentials.
-//
-// With no keyring the key is RANDOM PER PROCESS. A single node is unaffected,
-// because the node that mints also verifies. A fleet gets a loud warning
-// rather than a deterministic key invented from non-secret material, which
-// would let anyone who can reach the endpoint forge one.
-func OtelSigningKey(material []string) []byte {
-	if len(material) == 0 {
-		log.Warn("sandbox_otel_signing_key_ephemeral",
-			"detail", "no Tier A secrets.keys, so OTLP tokens are signed with "+
-				"a per-process key: on a fleet, a box that exports to any node "+
-				"but the one that minted its token is refused. `crewlet secrets "+
-				"keygen` fixes it")
-		return nil
-	}
-	return runtoken.KeyFrom(OtelKeyDomain, material)
-}
-
 // OtelKeyDomain separates this endpoint's tokens from the tool bridge's.
 //
 // Without a domain, a token minted for one would validate at the other: both
-// are HMACs over the same fleet key, and the subject is just a string.
+// are signed under the same fleet keyring, and the subject is just a string.
 const OtelKeyDomain = "crewlet.otlp.v1"
 
 // RunEnv is the OTel environment one run's box receives.
@@ -312,10 +308,18 @@ const (
 // the failure the signed, stateless token exists to prevent. A node with the
 // variable unset builds none, and its route is absent rather than refusing.
 //
-// keyMaterial is the Tier A keyring, which every process already loads. Nil
-// or empty takes a per-process key: correct for a single process, and warned
-// about because it cannot work across two.
-func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelReceiver, error) {
+// keys is the Tier A keyring, decoded — the one secret every Crewlet process
+// already loads, and never the database, which a token check must not depend
+// on: the check runs on the request path of an endpoint that is deliberately
+// reachable without other credentials. The WHOLE ring rather than its active
+// key: the active key mints and every key verifies, which is what keeps a
+// token minted on one side of a rolling rotation valid on the other.
+//
+// The zero keyring takes a RANDOM PER-PROCESS KEY. A single node is
+// unaffected, because the node that mints also verifies. A fleet gets a loud
+// warning rather than a deterministic key invented from non-secret material,
+// which would let anyone who can reach the endpoint forge one.
+func BuildOtelReceiver(env func(string) string, keys secrets.Keyring) (*OtelReceiver, error) {
 	if env == nil {
 		return nil, nil
 	}
@@ -323,9 +327,20 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 	if base == "" {
 		return nil, nil
 	}
+	if len(keys.Keys) == 0 {
+		log.Warn("sandbox_otel_signing_key_ephemeral",
+			"detail", "no Tier A secrets.keys, so OTLP tokens are signed with "+
+				"a per-process key: on a fleet, a box that exports to any node "+
+				"but the one that minted its token is refused. `crewlet secrets "+
+				"keygen` fixes it")
+	}
+	tokens, err := NewOtelTokens(OtelTokenOptions{Keys: keys})
+	if err != nil {
+		return nil, err
+	}
 	return NewOtelReceiver(OtelReceiverOptions{
 		BaseURL:          base,
-		Tokens:           NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),
+		Tokens:           tokens,
 		UpstreamEndpoint: strings.TrimSpace(env(OtelUpstreamEndpointVar)),
 		UpstreamHeaders:  ParseOtelHeaders(env(OtelUpstreamHeadersVar)),
 	})
