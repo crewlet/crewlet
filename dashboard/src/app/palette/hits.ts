@@ -149,7 +149,11 @@ export interface Hit {
   icon: GlyphName;
   label: string;
   hint: string;
-  go: () => void;
+  /**
+   * Taking the row. The palette closes after it unless it returns `false`,
+   * which a row that leads into a step of the palette (Change theme) does.
+   */
+  go: () => boolean | void;
 }
 
 /** The ranked matches of a list, best first, capped. */
@@ -312,16 +316,33 @@ export function commandHits(
     setToken: () => void;
     clearRecents: () => void;
     showKeys: () => void;
+    /** Step into the list of themes; the palette stays open. */
+    changeTheme: () => void;
+    /** The name of the theme in effect, for the row's hint. */
+    themeName: string;
     hash: string;
   },
 ): Hit[] {
-  const out: Hit[] = [];
+  const out: Hit[] = [
+    {
+      id: "cmd-theme",
+      icon: "palette",
+      label: "Change theme…",
+      hint: `${actions.themeName} is on`,
+      go: () => {
+        actions.changeTheme();
+        return false;
+      },
+    },
+  ];
+  // THE MODE IS ITS OWN CHOICE, named as the interface names it: light, dark
+  // or the machine's, whatever the theme.
   for (const choice of THEMES) {
     if (choice === prefs.theme) continue;
     out.push({
       id: `cmd-theme-${choice}`,
       icon: choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
-      label: `Theme: ${choice === "system" ? "match system" : choice}`,
+      label: `Mode: ${choice === "system" ? "match system" : choice}`,
       hint: choice === "system" ? "follow this machine's setting" : `always ${choice}`,
       go: () => prefs.setTheme(choice),
     });

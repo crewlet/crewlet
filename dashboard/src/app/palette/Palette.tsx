@@ -56,11 +56,13 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import {
   CommandPalette as KitPalette,
   Kbd,
+  ThemeSwatch,
   type CommandPaletteGroup,
   type CommandPaletteItem,
   type CommandPaletteScopeProps,
   useToast,
 } from "@crewlethq/ui";
+import { isThemeId, themeGroups, themeRegistry } from "@crewlethq/tokens";
 import {
   BookOpenGlyph,
   CircleAlertGlyph,
@@ -79,7 +81,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
-import { useViewerPrefs } from "~/lib/prefs.ts";
+import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
+import { themeEntry, useApplyTheme } from "../appearance.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import {
@@ -200,6 +203,20 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState<Pick | null>(null);
   const [pickQuery, setPickQuery] = useState("");
+  // THE THEME STEP, the kit's own step: a list of the themes in place of the
+  // results, whose highlight previews behind the palette and whose Enter
+  // applies (see `app/appearance.tsx`).
+  const [themeStep, setThemeStep] = useState(false);
+  const [themeQuery, setThemeQuery] = useState("");
+  const applyTheme = useApplyTheme();
+  const openThemeStep = () => {
+    setThemeStep(true);
+    setThemeQuery("");
+  };
+  const leaveThemeStep = () => {
+    setThemeStep(false);
+    setThemeQuery("");
+  };
   const [notice, setNotice] = useState<Notice | null>(null);
 
   // A ROW THAT STEPS INTO A PICKER, OR THAT WAITS FOR THE ENGINE, KEEPS THE
@@ -724,6 +741,32 @@ export function CommandPalette({
     return groups;
   };
 
+  /** The themes, in their groups, narrowed by the step's query: a name, a tag or a group. */
+  const themeRows = (): CommandPaletteGroup[] => {
+    const q = themeQuery.trim().toLowerCase();
+    return themeGroups
+      .map((group) => ({
+        id: `themes-${group.id}`,
+        label: group.name,
+        items: themeRegistry
+          .filter((theme) => theme.group === group.id)
+          .filter(
+            (theme) =>
+              !q ||
+              [theme.name, theme.tag, group.name].some((word) => word.toLowerCase().includes(q)),
+          )
+          .map((theme): CommandPaletteItem => ({
+            id: `${THEME_ROW}${theme.id}`,
+            icon: <ThemeSwatch swatch={theme.swatch} size="chip" />,
+            label: theme.name,
+            hint: theme.tag,
+            meta: theme.id === prefs.palette ? "Current" : undefined,
+            onSelect: () => applyTheme(theme.id),
+          })),
+      }))
+      .filter((group) => group.items.length > 0);
+  };
+
   const pickerGroups = (): CommandPaletteGroup[] => {
     if (pick?.kind === "project") return projectGroups(pick.filing, pick.suggested);
     const q = pickTerm.toLowerCase();
@@ -797,7 +840,9 @@ export function CommandPalette({
     if (items.length) groups.push({ id, label, items });
   };
 
-  if (picking) {
+  if (themeStep) {
+    groups.push(...themeRows());
+  } else if (picking) {
     groups.push(...pickerGroups().filter((g) => g.items.length));
   } else if (scope === "all") {
     if (!term) {
@@ -861,6 +906,8 @@ export function CommandPalette({
           setToken: requestToken,
           clearRecents: forgetAll,
           showKeys: onShowKeys,
+          changeTheme: openThemeStep,
+          themeName: themeEntry(prefs.palette).name,
           hash: route.hash || "#/",
         }),
       ),
@@ -870,6 +917,7 @@ export function CommandPalette({
 
   // ---- what the list says when it has no rows ------------------------------
   const emptyMessage = (): string => {
+    if (themeStep) return "No theme matches. Try a name, or a group such as “purple”.";
     if (pick?.kind === "project") {
       if (projects === null) {
         return projectsRead.error
@@ -908,7 +956,7 @@ export function CommandPalette({
   // ---- the lead --------------------------------------------------------------
   const scopeRefusal =
     scope === "tasks" ? taskAnswer.error : scope === "pages" ? pageAnswer.error : null;
-  const lead = picking ? (
+  const lead = themeStep ? null : picking ? (
     <PickLead
       pick={pick}
       itemTitle={itemRead.data?.task.title}
@@ -958,6 +1006,9 @@ export function CommandPalette({
       onClose();
       return;
     }
+    // THE THEME STEP'S KEYS ARE THE KIT'S: Escape and an empty Backspace go
+    // back to the commands, and nothing here may also act on them.
+    if (themeStep) return;
     if (picking) {
       if (matchesRow("search.back", native) && pickQuery === "") {
         e.preventDefault();
@@ -978,6 +1029,10 @@ export function CommandPalette({
   };
 
   const onQueryChange = (value: string) => {
+    if (themeStep) {
+      setThemeQuery(value);
+      return;
+    }
     if (picking) {
       setPickQuery(value);
       return;
@@ -996,16 +1051,18 @@ export function CommandPalette({
 
   const mode = modeWord(taskAnswer.data, pageAnswer.data);
 
-  // A PICKER HAS NO SCOPES: it is one list, of agents, until it is left.
-  const scoped: CommandPaletteScopeProps = picking
-    ? {}
-    : {
-        scopes: SCOPES.map((s) => ({ id: s.id, label: s.label })),
-        scope,
-        onScopeChange: (next: string) => setScope(next as ScopeId),
-        groupsScope: scope,
-        scopesLabel: "Search in",
-      };
+  // A PICKER HAS NO SCOPES: it is one list, of agents, until it is left. Nor
+  // does the theme step, which is one list of themes.
+  const scoped: CommandPaletteScopeProps =
+    picking || themeStep
+      ? {}
+      : {
+          scopes: SCOPES.map((s) => ({ id: s.id, label: s.label })),
+          scope,
+          onScopeChange: (next: string) => setScope(next as ScopeId),
+          groupsScope: scope,
+          scopesLabel: "Search in",
+        };
 
   return (
     <KitPalette
@@ -1013,17 +1070,35 @@ export function CommandPalette({
       onClose={close}
       label="Search"
       className="palette"
-      query={picking ? pickQuery : query}
+      query={themeStep ? themeQuery : picking ? pickQuery : query}
       onQueryChange={onQueryChange}
       groups={groups}
+      step={
+        themeStep
+          ? {
+              label: "Change theme",
+              onBack: leaveThemeStep,
+              // Opened on the theme in effect, so nothing repaints until the
+              // reader moves.
+              startAt: `${THEME_ROW}${prefs.palette}`,
+            }
+          : undefined
+      }
+      // THE HIGHLIGHT PREVIEWS, in the theme step and nowhere else: the
+      // whole frame takes the theme the highlight rests on, and the palette
+      // closing, the step being left or the pointer leaving the list puts
+      // back the theme in effect.
+      onHighlight={(item) => previewPalette(themeStep ? themeOfRow(item?.id) : null)}
       placeholder={
-        pick?.kind === "assign"
-          ? `Assign ${pick.item} to…`
-          : pick?.kind === "ask"
-            ? "Ask which agent?"
-            : pick?.kind === "project"
-              ? "File it in which project?"
-              : "Search, or ask a question — # tasks, @ agents, > actions"
+        themeStep
+          ? `Search ${themeRegistry.length} themes`
+          : pick?.kind === "assign"
+            ? `Assign ${pick.item} to…`
+            : pick?.kind === "ask"
+              ? "Ask which agent?"
+              : pick?.kind === "project"
+                ? "File it in which project?"
+                : "Search, or ask a question: # tasks, @ agents, > actions"
       }
       escapeHint
       lead={lead}
@@ -1035,12 +1110,16 @@ export function CommandPalette({
           <span className="palette-keys">
             <span>
               <Kbd subtle>↑</Kbd>
-              <Kbd subtle>↓</Kbd> move
+              <Kbd subtle>↓</Kbd> {themeStep ? "preview" : "move"}
             </span>
             <span>
-              <Kbd subtle keys={["Enter"]} /> {picking ? "choose" : "open"}
+              <Kbd subtle keys={["Enter"]} /> {themeStep ? "apply" : picking ? "choose" : "open"}
             </span>
-            {picking ? (
+            {themeStep ? (
+              <span>
+                <Kbd subtle keys={["Escape"]} /> back to Actions
+              </span>
+            ) : picking ? (
               <span>
                 <Kbd subtle keys={capsOf(keyRow("search.back").presses[0]!)} /> back
               </span>
@@ -1055,28 +1134,41 @@ export function CommandPalette({
           {/* THE MODE, where a ranked search is what the scope runs — drawn
               at the END OF THE SCOPE ROW, as the approved palette places it
               (frame.css), since the kit's scope row takes no trailing slot. */}
-          {!picking && (scope === "all" || scope === "tasks" || scope === "pages") && (
-            <span className="palette-mode" title={mode.title}>
-              {mode.degraded ? <CircleAlertGlyph size="xs" /> : <ZapGlyph size="xs" />}
-              {mode.word}
-            </span>
-          )}
+          {!picking &&
+            !themeStep &&
+            (scope === "all" || scope === "tasks" || scope === "pages") && (
+              <span className="palette-mode" title={mode.title}>
+                {mode.degraded ? <CircleAlertGlyph size="xs" /> : <ZapGlyph size="xs" />}
+                {mode.word}
+              </span>
+            )}
           <span className="palette-scope-note">
             <GlobeGlyph size="xs" />{" "}
-            {pick?.kind === "project"
-              ? "The company’s projects"
-              : picking
-                ? "The company’s agents"
-                : scope === "actions"
-                  ? viewer.name
-                    ? `Changes are made as ${viewer.name}`
-                    : "Changes need a token bound to your seat"
-                  : SCOPE_NOTES[scope]}
+            {themeStep
+              ? "This browser only"
+              : pick?.kind === "project"
+                ? "The company’s projects"
+                : picking
+                  ? "The company’s agents"
+                  : scope === "actions"
+                    ? viewer.name
+                      ? `Changes are made as ${viewer.name}`
+                      : "Changes need a token bound to your seat"
+                    : SCOPE_NOTES[scope]}
           </span>
         </>
       }
     />
   );
+}
+
+/** The prefix of a theme row's id in the theme step: the rest is the theme's id. */
+const THEME_ROW = "theme-";
+
+/** The theme a theme row names, or null for any other row. */
+function themeOfRow(id: string | undefined) {
+  const theme = id?.startsWith(THEME_ROW) ? id.slice(THEME_ROW.length) : "";
+  return isThemeId(theme) ? theme : null;
 }
 
 /** What the footer says each scope searches. */

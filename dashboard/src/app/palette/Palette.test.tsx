@@ -20,6 +20,8 @@ import { DESTINATIONS } from "../nav.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { remember } from "~/lib/recents.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -1019,5 +1021,103 @@ describe("closing", () => {
     await p.press("Enter");
     expect(p.keys).toHaveBeenCalledTimes(1);
     expect(p.closed).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * CHANGE THEME IS A STEP OF THE PALETTE, the kit's own: a list of the themes
+ * in place of the results, whose highlight previews behind the palette and
+ * whose Enter applies. A preview is never written, and leaving the step puts
+ * back the theme in effect.
+ */
+describe("the theme step", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => reloadForTest());
+  afterEach(() => {
+    root().removeAttribute("data-palette");
+    localStorage.clear();
+    reloadForTest();
+  });
+
+  async function intoStep() {
+    const p = mount();
+    await p.type(">");
+    await act(async () => {
+      fireEvent.click(p.row("Change theme…"));
+    });
+    return p;
+  }
+
+  const labels = () =>
+    screen
+      .getAllByRole("option")
+      .map((o) => o.querySelector(".crewlet-palette__label")?.textContent);
+
+  test("Actions offers Change theme with the theme in effect, and the modes not in use", async () => {
+    const p = mount();
+    await p.type(">");
+    expect(p.row("Change theme…").textContent).toContain("Crewlet is on");
+    // The mode in effect is the system's, so it is not offered again.
+    expect(screen.queryByText("Mode: match system")).toBeNull();
+    expect(screen.getByText("Mode: dark")).toBeTruthy();
+    expect(screen.queryByText(/^Theme: /)).toBeNull();
+  });
+
+  test("it opens on the theme in effect, keeps the palette open and draws no scopes", async () => {
+    const p = await intoStep();
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "Change theme" })).toBe(p.input);
+    expect(screen.getByRole("button", { name: "Back from Change theme" })).toBeTruthy();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    const active = document.getElementById(p.input.getAttribute("aria-activedescendant")!);
+    expect(active?.textContent).toContain("Crewlet");
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    // Every theme, under its group.
+    expect(screen.getByRole("group", { name: "High contrast" })).toBeTruthy();
+    expect(labels()).toHaveLength(10);
+  });
+
+  test("the highlight previews, a query narrows by group, and Enter applies and closes with Undo", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+    // A group's name finds its themes, and a tag finds its own: Origin's is
+    // "Purple on charcoal". The best match leads, and is previewed.
+    await p.type("purple");
+    expect(labels()).toEqual(["Origin", "Abyss", "Iris", "Dusk"]);
+    expect(root().getAttribute("data-palette")).toBe("origin");
+    await p.type("abyss");
+    expect(labels()).toEqual(["Abyss"]);
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    await p.press("Enter");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBe("abyss");
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    expect(p.closed).toHaveBeenCalledOnce();
+    expect(screen.getAllByText("Theme set to Abyss").length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    });
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+  });
+
+  test("Escape goes back to Actions and puts back the theme in effect", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    await p.press("Escape");
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(p.tab()).toBe("Actions");
+    expect(screen.getByText("Change theme…")).toBeTruthy();
+  });
+
+  test("a query that matches no theme says how to find one", async () => {
+    const p = await intoStep();
+    await p.type("zzz");
+    expect(screen.getByText(/No theme matches/)).toBeTruthy();
+    expect(root().hasAttribute("data-palette")).toBe(false);
   });
 });
