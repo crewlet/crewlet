@@ -64,6 +64,7 @@ import {
   keepsTheLens,
   useBuilder,
   type BuilderApi,
+  type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
 import {
@@ -155,11 +156,14 @@ import { withProblems } from "~/ui/Problems.tsx";
 export function NodeEditor({
   nodeKey,
   section,
+  preset,
   onClose,
 }: {
   nodeKey: NodeKey;
   /** The part of the form to start on (see `EditorSectionName`). */
   section?: EditorSectionName;
+  /** Values the form starts holding on top of the node's own (see `EditorPreset`). */
+  preset?: EditorPreset;
   onClose: () => void;
 }) {
   const { state } = useBuilder();
@@ -182,9 +186,9 @@ export function NodeEditor({
   // the base by the engine's handles), and the form and its drawer stay: keyed
   // by the node here, they were torn down and built again on that answer.
   return found.kind === "unit" ? (
-    <UnitEditor unit={found.node} section={section} onClose={onClose} />
+    <UnitEditor unit={found.node} section={section} preset={preset} onClose={onClose} />
   ) : (
-    <SeatEditor seat={found.node} section={section} onClose={onClose} />
+    <SeatEditor seat={found.node} section={section} preset={preset} onClose={onClose} />
   );
 }
 
@@ -192,16 +196,35 @@ export function NodeEditor({
 // The shell every form shares
 // ---------------------------------------------------------------------------
 
-/** A form that starts from `initial` and knows whether it has been changed. */
-function useForm<T>(initial: () => T) {
+/**
+ * A form that starts from `initial` and knows whether it has been changed.
+ *
+ * `arrived` is what an address asked it to hold on top (`EditorPreset`):
+ * applied to the FORM and not to `initial`, so it reads as a change the
+ * reader has still to apply, and the editor's Apply records it like any edit.
+ */
+function useForm<T>(initial: () => T, arrived?: (start: T) => Partial<T> | undefined) {
   const [start] = useState(initial);
-  const [form, setForm] = useState(start);
+  const [form, setForm] = useState(() => ({ ...start, ...arrived?.(start) }));
   return {
     initial: start,
     form,
     set: (patch: Partial<T>) => setForm((was) => ({ ...was, ...patch })),
     dirty: !jsonEqual(start, form),
   };
+}
+
+/**
+ * The project an address asked a node's editor to hold, for a node that owns
+ * none yet: one that already owns a project keeps it.
+ */
+function presetProject<T extends { project: string }>(
+  preset: EditorPreset | undefined,
+): (start: T) => Partial<T> | undefined {
+  return (start) =>
+    preset?.project && start.project === ""
+      ? ({ project: preset.project } as Partial<T>)
+      : undefined;
 }
 
 /**
@@ -637,6 +660,7 @@ function Owns({
   onSpace,
   errorFor,
   disabled,
+  focusProject = false,
 }: {
   who: "seat" | "unit";
   project: string;
@@ -645,6 +669,8 @@ function Owns({
   onSpace: (next: string) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
   disabled: boolean;
+  /** Start on the project field: the editor was opened at its Project part. */
+  focusProject?: boolean;
 }) {
   const { state } = useBuilder();
   const company = state.draft.company;
@@ -659,6 +685,7 @@ function Owns({
             onChange={onProject}
             required={false}
             disabled={disabled}
+            autoFocus={focusProject}
             help={`Where unrouted work for this ${who} goes. Not a permission.`}
             error={errorFor(PROJECT)}
           />
@@ -828,16 +855,21 @@ function parentUnitOf(api: BuilderApi, key: NodeKey): DraftUnit | undefined {
 function UnitEditor({
   unit,
   section,
+  preset,
   onClose,
 }: {
   unit: DraftUnit;
   section: EditorSectionName | undefined;
+  preset: EditorPreset | undefined;
   onClose: () => void;
 }) {
   const api = useBuilder();
   const { state } = api;
   const key = unit.key;
-  const { initial, form, set, dirty } = useForm<UnitForm>(() => unitForm(unit.data));
+  const { initial, form, set, dirty } = useForm<UnitForm>(
+    () => unitForm(unit.data),
+    presetProject(preset),
+  );
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(
     placedOn(api, key),
@@ -957,6 +989,7 @@ function UnitEditor({
         <>
           <Owns
             who="unit"
+            focusProject={section === "project"}
             project={form.project}
             space={form.space}
             onProject={(project) => set({ project })}
@@ -1023,7 +1056,9 @@ function UnitEditor({
       placed={placedOn(api, key)}
       changed={changedPaths(parts)}
       tabs={tabs}
-      initialTab={section === "leadership" ? "leadership" : undefined}
+      initialTab={
+        section === "leadership" ? "leadership" : section === "project" ? "work" : undefined
+      }
       onApply={() => apply(parts)}
       onClose={onClose}
     />
@@ -1087,10 +1122,12 @@ const GITHUB_TIERS: FieldChoice[] = [
 function SeatEditor({
   seat,
   section,
+  preset,
   onClose,
 }: {
   seat: DraftSeat;
   section: EditorSectionName | undefined;
+  preset: EditorPreset | undefined;
   onClose: () => void;
 }) {
   const api = useBuilder();
@@ -1101,8 +1138,9 @@ function SeatEditor({
   const minted = isMintedKey(key);
   const human = kindOf(data) === "human";
   const handle = handlesOf(state).get(key);
-  const { initial, form, set, dirty } = useForm<SeatForm>(() =>
-    seatForm(data, gitLabAccessLevel(company, handle)),
+  const { initial, form, set, dirty } = useForm<SeatForm>(
+    () => seatForm(data, gitLabAccessLevel(company, handle)),
+    presetProject(preset),
   );
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(
@@ -1391,6 +1429,7 @@ function SeatEditor({
               {reports}
               <Owns
                 who="seat"
+                focusProject={section === "project"}
                 project={form.project}
                 space={form.space}
                 onProject={(project) => set({ project })}
@@ -1493,7 +1532,7 @@ function SeatEditor({
       placed={placedOn(api, key)}
       changed={changedPaths(parts)}
       tabs={tabs}
-      initialTab={section === "reports" ? "work" : undefined}
+      initialTab={section === "reports" || section === "project" ? "work" : undefined}
       onApply={() => apply(parts)}
       onClose={onClose}
     />
