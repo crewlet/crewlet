@@ -64,10 +64,11 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 // tools reach the searcher the engine holds at each call ([engineKnowledge]).
 //
 // ONE CATALOGUE PER SERVER, both transports over it, swapped together, so a
-// request is served by one whole catalogue and never by half of two. An MCP
-// session opened on a server this replaces is not served again: the next
-// request it makes is answered 404 for an unknown session, and the client
-// opens a new one, as the streamable-HTTP transport requires of it.
+// request is served by one whole catalogue and never by half of two. A swap
+// ends no client's connection: the MCP transport keeps no session (see
+// [operator.MCPPattern]), so a client connected before it is answered by the
+// new catalogue at its next request, and nothing of it is left on the server
+// this replaced.
 //
 // THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
 // is what makes this one implementation of every tool rather than two — see

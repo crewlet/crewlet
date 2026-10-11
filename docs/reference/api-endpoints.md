@@ -75,7 +75,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
-`/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
+`/operator/mcp` serves only `POST` — it keeps no session, so there is no stream to open and no session to end — and every JSON-RPC call it carries, reads included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
 A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
 
@@ -197,7 +197,7 @@ node means nothing was done.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
-| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request |
+| `POST` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request. Stateless: no session, so any node answers any request and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Served wherever `/operator/mcp` is, over the same catalogue |
 
 > **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
@@ -3155,13 +3155,28 @@ or removes the company's knowledge backend, and a rename of the company, which
 titles the MCP server. A revision that reconfigures the knowledge backend it
 has — another Confluence site or space, a rotated credential — builds nothing:
 `search_knowledge` and `answer_knowledge` reach the backend the node holds at
-each call. A revision that switches a native half
-to a vendor or back changes nothing here until the node restarts, as
+each call. A revision that switches a native half to a vendor or back changes
+nothing here until the node restarts, as
 [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)
-says for every surface. An MCP session opened on the catalogue a revision
-replaced is not served again: its next request is answered `404` for an
-unknown session, and the client opens a new one — what MCP's streamable-HTTP
-transport requires of a client whose session ended.
+says for every surface. A client connected while the catalogue is built again
+keeps its connection: its next listing is the new catalogue's.
+
+**It keeps no session.** Every request carries its own token and is answered
+whole by whichever node it reaches, and nothing is held for the client between
+two of them — no `Mcp-Session-Id` is handed out, and a `GET` (a
+server-to-client stream) or a `DELETE` (ending a session) is answered `405`,
+which an MCP client reads as a server that offers no stream. So a fleet's
+ingress nodes behind a load balancer need no session affinity, a rebuilt
+catalogue ends nobody's connection, and a client that crashed leaves nothing
+behind on the node. A session-keeping transport refused every request that
+reached a node other than the one that opened the session, and the MCP client
+the Go SDK ships treats that refusal as the end of its connection.
+
+**A request body is at most 4 MiB.** Every tool's arguments fit far below it
+— the largest is a page's body — except `write_project_file`'s `content`,
+which carries the whole file in one string; a file larger than that goes up
+through [`PUT /work/files/{project}/{path...}`](#project-files), which streams
+it.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a

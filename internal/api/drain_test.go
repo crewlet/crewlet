@@ -197,7 +197,6 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	for _, req := range []struct{ method, path string }{
 		{http.MethodGet, "/config"},
 		{http.MethodOptions, "/config"},
-		{http.MethodGet, "/operator/mcp"},
 	} {
 		if rec := send(t, a, req.method, req.path); refusedForDraining(t, rec) {
 			t.Errorf("%s %s was refused for draining, and it starts nothing",

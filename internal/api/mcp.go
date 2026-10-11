@@ -88,10 +88,11 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 // lines logged here therefore name the paths and no tool; the catalogue logs
 // its tools where it is built (`operator_surface_built`).
 func (a *App) mountOperator(mux httpjson.Router, surface OperatorSurface) {
-	// EVERY METHOD, for the reason the bridge takes every method: streamable
-	// HTTP is a GET for the server-to-client stream and a DELETE to end a
-	// session.
-	mux.Handle(operator.MCPPath, operatorRoute(surface, (*operator.Server).MCPHandler))
+	// POST ONLY, unlike the bridge, which takes every verb: this transport
+	// keeps no session, so it offers no server-to-client stream for a GET to
+	// open and no session for a DELETE to end, and the mux's own 405 naming
+	// POST is how streamable HTTP says so — see operator.MCPPattern.
+	mux.Handle(operator.MCPPattern, operatorRoute(surface, (*operator.Server).MCPHandler))
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
