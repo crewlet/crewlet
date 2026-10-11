@@ -9,12 +9,21 @@ name: Publish docs
 # neither, and no trigger below can hand them to a fork. A push to main is a
 # real merge. The workflow_run trigger IS reachable from a fork — the release
 # workflow also runs on pull requests that touch the release surface, and a
-# workflow_run job runs on the default branch WITH this repository's secrets
-# whatever triggered the run it watched. What holds is the job condition, not
+# workflow_run job runs on the default branch, with the secrets main's jobs
+# get, whatever triggered the run it watched. What holds is the job condition, not
 # the trigger: it fires only for a release run whose own event was a push,
 # which for that workflow means a v* tag. Nothing here checks out the
 # triggering ref either — the job only POSTs a dispatch — so there is no
 # fork-authored code in the run at all.
+#
+# They are secrets of the docs-publish ENVIRONMENT rather than of the
+# repository, and that environment admits main and nothing else. The token
+# needs Contents: read and write on the site's repository, the permission
+# repository_dispatch sits under, and that permission also pushes to it.
+# Anybody who can push a branch here can push one whose own workflow prints
+# every repository secret, since a branch's runs get them all; an environment
+# secret reaches only a job its deployment-branch rule admits, and a branch
+# reaches main only through a reviewed merge.
 
 on:
   push:
@@ -59,10 +68,13 @@ on:
     workflows: [release]
     types: [completed]
 
+  # By hand, from main: after configuring the secrets, or to republish. Run
+  # from any other branch, the environment refuses the job and the run fails.
   workflow_dispatch:
 
-permissions:
-  contents: read
+# The job checks nothing out and calls GitHub's API with its own token, never
+# with GITHUB_TOKEN.
+permissions: {}
 
 concurrency:
   group: publish-docs
@@ -82,6 +94,13 @@ jobs:
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
+    # Where DOCS_REPO and DOCS_TOKEN live. Its deployment-branch rule must allow
+    # main and nothing else: a push to main and a workflow_run run, which runs
+    # on the default branch, pass it; a branch's workflow is refused it and
+    # never sees the token. An environment nobody created is created bare by
+    # the first run that names it, with no secrets, so the job then skips with
+    # the message below.
+    environment: docs-publish
     steps:
       - name: Ask the docs site to rebuild
         env:
@@ -105,7 +124,9 @@ jobs:
             echo "  DOCS_REPO   $([ -n "${DOCS_REPO}" ]  && echo set || echo MISSING)"
             echo "  DOCS_TOKEN  $([ -n "${DOCS_TOKEN}" ] && echo set || echo MISSING)"
             echo
-            echo "Both are repository secrets, under Settings → Secrets and variables → Actions."
+            echo "Both are secrets of the docs-publish environment (Settings → Environments),"
+            echo "whose deployment branches are limited to main; never repository secrets, which"
+            echo "any branch's workflow can read."
             echo "DOCS_REPO is the docs site repository as owner/name; DOCS_TOKEN needs"
             echo "Contents: read and write on it (repository_dispatch lives under Contents)."
             echo "Without them the docs site still picks the change up on its hourly poll."
