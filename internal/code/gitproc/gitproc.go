@@ -24,17 +24,33 @@
 // (GIT_EXEC_PATH, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_CONFIG_PARAMETERS,
 // GIT_SSH_COMMAND, GIT_TRACE…) any one of which changes what a process is.
 // HOME is an empty directory the pool owns, and neither the system nor the
-// global configuration is read.
+// global configuration is read — nor the system or global ATTRIBUTES, which
+// the configuration switches do not reach: git reads /etc/gitattributes
+// unless GIT_ATTR_NOSYSTEM is set and $HOME/.config/git/attributes unless
+// core.attributesFile names another file, so the environment sets the one and
+// the base configuration points the other at a path that cannot exist.
+// pack-objects asks a path's `delta` attribute when it SEARCHES for a delta,
+// so a `* -delta` an operator wrote on the host for something else would
+// leave whole every object whose delta pack-objects has to compute: one
+// stored whole, and every object of a pack written without reusing the
+// stored deltas — which is what a compaction that recomputes deltas writes,
+// and keeps. A clone or fetch of what the host stores reuses its stored
+// deltas whatever the attribute says. Measured on git 2.43 over thirty
+// revisions of one 100 KB file: 135 120 bytes either way from one pack and
+// 79 987 either way from thirty pushes kept as their packs, but
+// 135 304 → 1 691 584 (12.5×) with --no-reuse-delta, and 135 120 →
+// 1 691 584 from loose objects.
 //
 // Configuration reaches a process only as GIT_CONFIG_COUNT pairs: a fixed
 // BASE the pool owns (no transport, no automatic gc or maintenance, one
-// thread, no hook unless the call site names a hooks directory), then the
-// call site's own pairs, each of which must be on an ALLOWLIST. An allowlist
-// rather than a list of forbidden keys, for hostbox's reason: git has a dozen
-// keys that run a command (alias.*, uploadpack.packObjectsHook,
-// core.fsmonitor, core.alternateRefsCommand, include.path, …) and one that
-// serves every object in a repository to anyone (uploadpack.allowAnySHA1InWant,
-// which the code host never sets) — a denylist leaks whichever nobody named.
+// thread, no hook unless the call site names a hooks directory, no global
+// attributes file), then the call site's own pairs, each of which must be on
+// an ALLOWLIST. An allowlist rather than a list of forbidden keys, for
+// hostbox's reason: git has a dozen keys that run a command (alias.*,
+// uploadpack.packObjectsHook, core.fsmonitor, core.alternateRefsCommand,
+// include.path, …) and one that serves every object in a repository to
+// anyone (uploadpack.allowAnySHA1InWant, which the code host never sets) — a
+// denylist leaks whichever nobody named.
 //
 // A REPOSITORY CANNOT CONFIGURE ITS OWN PROCESS, and the obvious mechanism
 // does not achieve it: command-line configuration outranks a repository's
@@ -323,12 +339,24 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 			// git runs its own subcommands from its exec-path; PATH is
 			// what a hook's interpreter resolves by.
 			"PATH=" + os.Getenv("PATH"),
-			// No ~/.gitconfig, no ~/.config/git/*, no credential store.
+			// An empty directory the pool owns. Nothing git would read
+			// there is read even when something writes into it later:
+			// the configuration by GIT_CONFIG_GLOBAL below, the
+			// attributes by the base's core.attributesFile (cmd.go).
 			"HOME=" + home,
 			// /etc/gitconfig is the host's, not the engine's.
 			"GIT_CONFIG_NOSYSTEM=1",
 			// Overrides both ~/.gitconfig and $XDG_CONFIG_HOME/git/config.
 			"GIT_CONFIG_GLOBAL=/dev/null",
+			// /etc/gitattributes is the host's too, and the variable above
+			// does not reach it (traced on git 2.43: a process with
+			// GIT_CONFIG_NOSYSTEM still opens it). pack-objects' delta
+			// search asks a path's `delta` attribute, so a host's
+			// `* -delta`, written for something else entirely, would
+			// write undeltified every delta a repack recomputes — 12.5
+			// times the bytes, measured (the package doc) — though the
+			// deltas a clone or fetch reuses are sent as stored.
+			"GIT_ATTR_NOSYSTEM=1",
 			// Nothing ever prompts.
 			"GIT_TERMINAL_PROMPT=0",
 			// A refs/replace/ ref can never change what an object id means.

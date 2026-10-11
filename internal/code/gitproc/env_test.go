@@ -18,8 +18,9 @@ import (
 
 // THE ENVIRONMENT IS BUILT, NOT INHERITED: every variable git reads that the
 // engine's own environment could carry — its secrets, a trace, an exec path,
-// an alternate object directory, a config of its own — is absent, and what is
-// present is exactly the pool's table, its base configuration first.
+// an alternate object directory, a config of its own, a tree to read
+// attributes from — is absent, and what is present is exactly the pool's
+// table, its base configuration first.
 func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 	for name, value := range map[string]string{
 		"CREWLET_SECRET_X":                 "leaked",
@@ -30,6 +31,8 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		"GIT_TRACE":                        "1",
 		"XDG_CONFIG_HOME":                  "/tmp",
 		"GIT_CONFIG_SYSTEM":                "/tmp/x",
+		"GIT_ATTR_SOURCE":                  "HEAD",
+		"GIT_ATTR_NOSYSTEM":                "0",
 	} {
 		t.Setenv(name, value)
 	}
@@ -46,11 +49,11 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 	}
 	env := envOf(res.Stdout)
 	want := []string{
-		"PATH", "HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT",
+		"PATH", "HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_ATTR_NOSYSTEM", "GIT_TERMINAL_PROMPT",
 		"GIT_NO_REPLACE_OBJECTS", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "LC_ALL", "GIT_DIR",
 		"GIT_PROTOCOL", "GIT_CONFIG_COUNT", gitproc.EnvHookToken,
 	}
-	for i := range 6 {
+	for i := range 7 {
 		want = append(want, "GIT_CONFIG_KEY_"+string(rune('0'+i)), "GIT_CONFIG_VALUE_"+string(rune('0'+i)))
 	}
 	slices.Sort(want)
@@ -61,6 +64,7 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		"PATH":                   os.Getenv("PATH"),
 		"GIT_CONFIG_NOSYSTEM":    "1",
 		"GIT_CONFIG_GLOBAL":      "/dev/null",
+		"GIT_ATTR_NOSYSTEM":      "1",
 		"GIT_TERMINAL_PROMPT":    "0",
 		"GIT_NO_REPLACE_OBJECTS": "1",
 		"GIT_GRAFT_FILE":         "/dev/null/grafts",
@@ -83,6 +87,7 @@ func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 		{Key: "maintenance.auto", Value: "false"},
 		{Key: "pack.threads", Value: "1"},
 		{Key: "core.hooksPath", Value: "/dev/null/no-hooks"},
+		{Key: "core.attributesFile", Value: "/dev/null/no-attributes"},
 		{Key: "receive.unpackLimit", Value: "1"},
 	}
 	if got := configOf(t, env); !slices.Equal(got, wantConfig) {
@@ -126,7 +131,15 @@ func TestAClientProtocolIsPassedOnlyWhenWellFormed(t *testing.T) {
 }
 
 // THE HOME CAN NEVER CONFIGURE A GIT PROCESS — even when something writes into
-// it after the pool checked it was empty.
+// it after the pool checked it was empty — and neither can the HOST: no
+// configuration and no ATTRIBUTES are read from either. The attributes are the
+// half GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL do not reach: git reads
+// $HOME/.config/git/attributes unless core.attributesFile names another file,
+// and /etc/gitattributes unless GIT_ATTR_NOSYSTEM is set, and pack-objects
+// asks a path's `delta` attribute whenever it searches for a delta — so a
+// `* -delta` in either would have every delta a compaction recomputes, and
+// every object stored whole, written undeltified (the deltas a clone reuses
+// it leaves alone; the package doc has the measurement).
 func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 	t.Parallel()
 	home := filepath.Join(t.TempDir(), "home")
@@ -134,12 +147,16 @@ func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 	hooks := t.TempDir()
 	writeHook(t, filepath.Join(hooks, "pre-receive"), "exit 7")
 	planted := "[uploadpack]\n\tallowAnySHA1InWant = true\n[core]\n\thooksPath = " + hooks + "\n"
-	for _, rel := range []string{".gitconfig", ".config/git/config"} {
+	for rel, body := range map[string]string{
+		".gitconfig":             planted,
+		".config/git/config":     planted,
+		".config/git/attributes": "* -delta\n",
+	} {
 		path := filepath.Join(home, rel)
 		if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(planted), hostbox.FileMode); err != nil {
+		if err := os.WriteFile(path, []byte(body), hostbox.FileMode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -166,6 +183,33 @@ func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 	if err != nil || res.Exit != 0 {
 		t.Fatalf("hook run with a planted hooksPath = exit %d, %v; want no hook run", res.Exit, err)
+	}
+
+	// The planted attributes file answers nothing, and the path that
+	// replaces it — one that can never exist — costs no warning either.
+	res, err = p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"check-attr", "delta", "--", "x"},
+		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if err != nil || string(res.Stdout) != "x: delta: unspecified\n" || res.Stderr != "" {
+		t.Fatalf("check-attr delta with a planted HOME attributes file = %q, stderr %q, %v; want unspecified and silent",
+			res.Stdout, res.Stderr, err)
+	}
+
+	// The HOST's attributes file cannot be planted from a test, so git is
+	// asked: `git var GIT_ATTR_SYSTEM` names the system file only while it
+	// is read (git 2.42 and newer, which answers 1 otherwise; an older git
+	// knows no such variable and answers usage's 129 either way, and the
+	// exact table TestTheEnvironmentIsBuiltNotInherited holds is the line
+	// there). GIT_ATTR_GLOBAL names the global file git reads, which must be
+	// the base's path that cannot exist.
+	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_SYSTEM"}, Answers: []int{1, 129},
+		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if err != nil || res.Exit == 0 {
+		t.Errorf("git var GIT_ATTR_SYSTEM = exit %d %q, %v: the pool's git reads the host's attributes file", res.Exit, res.Stdout, err)
+	}
+	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_GLOBAL"}, Answers: []int{129},
+		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if err != nil || (res.Exit == 0 && strings.TrimSpace(string(res.Stdout)) != "/dev/null/no-attributes") {
+		t.Errorf("git var GIT_ATTR_GLOBAL = exit %d %q, %v: want the base's /dev/null/no-attributes", res.Exit, res.Stdout, err)
 	}
 }
 
@@ -530,7 +574,10 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 			t.Errorf("%s: %v, want ErrConfig", name, err)
 		}
 	}
-	for key, says := range map[string]string{"protocol.allow": "sets it for every process", "core.hooksPath": "Cmd.Hooks", "pack.threads": "sets it for every process"} {
+	for key, says := range map[string]string{
+		"protocol.allow": "sets it for every process", "core.hooksPath": "Cmd.Hooks", "pack.threads": "sets it for every process",
+		"core.attributesFile": "sets it for every process", "CORE.ATTRIBUTESFILE": "sets it for every process",
+	} {
 		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"version"}, Config: []gitproc.KV{{Key: key, Value: "x"}}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 		if !errors.Is(err, gitproc.ErrConfig) || !strings.Contains(err.Error(), says) {
 			t.Errorf("%s: %v, want ErrConfig saying %q", key, err, says)
