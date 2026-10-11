@@ -296,10 +296,11 @@ func (d *collectorDuty) settle(held bool, err error) (mine, resume bool) {
 }
 
 // collectorPass reads the fleet's record first if the turn has to, runs
-// whichever pass is due, and reports whether one ran.
+// whichever pass is due, and reports whether one ran — none on a turn whose
+// read of the record the store did not answer ([Engine.resumeCollector]).
 func (e *Engine) collectorPass(ctx context.Context, duty *collectorDuty, resume bool) bool {
-	if resume {
-		e.resumeCollector(ctx, duty)
+	if resume && !e.resumeCollector(ctx, duty) {
+		return false
 	}
 	now := time.Now()
 	duty.mu.Lock()
@@ -343,17 +344,46 @@ func (d *collectorDuty) ran(last *time.Time, interval time.Duration, err error) 
 // resumeCollector picks the schedule and the findings up from the fleet's
 // record when this node takes the duty, so a duty that moved does not run every
 // pass again at once — the record says when its last holder ran each — and
-// does not forget what the last audit found.
-func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
-	raw, found, err := e.backends.Fleet.ObjectCollection(ctx)
-	var last collectionReport
-	if err == nil && found {
-		err = json.Unmarshal(raw, &last)
-	}
-	if err != nil {
-		// RUN THE PASSES rather than wait on a record that cannot be read:
-		// the cost is a pass run early, never one skipped.
-		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err)
+// does not forget what the last audit found. It reports whether it read the
+// record: false when the store did not give it up, and the turn then runs no
+// pass.
+//
+// ONLY A RECORD OF THIS STORE, read whole ([Backends.ObjectCollection]): a
+// report of another store — left behind by a move of the fleet's files — is
+// none, and both passes are due at once, as on a fleet that never recorded
+// one.
+//
+// AND NO PASS UNTIL THE STORE HAS ANSWERED. A record the store did not give
+// up — the objects bucket's leader moving, a blip — is UNKNOWN (ADR-0005),
+// and says nothing about what the last holder found: run from nothing, the
+// turn collected at once and recorded a status with no audit half, writing
+// the last holder's findings out of the fleet's record and clearing
+// objects_missing until a whole audit of the store found them again, a day
+// later. So the turn runs no pass and records nothing, the resume stays owed,
+// and the next turn — a minute later — reads again, as an unknown claim is
+// settled ([collectorDuty.settle]). A record that DOES NOT DECODE is an
+// answer, and the passes run from nothing over it: waiting on a record that
+// will never decode would skip every pass, where running from nothing costs a
+// pass run early.
+func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) bool {
+	last, found, err := e.backends.ObjectCollection(ctx)
+	switch {
+	case errors.Is(err, errCollectionUnreadable):
+		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err,
+			"detail", "the collector's record does not decode, so this store is "+
+				"collected and audited now and the record replaced")
+	case err != nil:
+		if ctx.Err() == nil {
+			log.WarnContext(ctx, "object_collector_schedule_unanswered", "error", err,
+				"detail", "no pass runs until the fleet's record of the collector is "+
+					"read; the duty's next turn asks again")
+		}
+		return false
+	case !found:
+		log.InfoContext(ctx, "object_collector_nothing_to_resume",
+			"store", e.backends.objectsIdentity,
+			"detail", "the fleet holds no report of this store's passes — a new fleet, "+
+				"or one whose files moved here — so it is collected and audited now")
 	}
 	// THE FINDINGS AS WELL AS THE SCHEDULE: the next pass this node records
 	// carries its other half from here, and seeded with nothing it would
@@ -369,6 +399,7 @@ func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 	if last.Status.Audit.At.After(duty.audited) {
 		duty.audited = last.Status.Audit.At
 	}
+	return true
 }
 
 // recordCollection writes the collector's status where every node reads it.
@@ -507,18 +538,56 @@ func (e *Engine) ObjectsStream() string {
 	return e.backends.objectsStream
 }
 
-// ObjectCollection is the collector's last report as the fleet recorded it,
-// for the status surfaces — false when no pass has recorded one.
-func ObjectCollection(ctx context.Context, fleet CollectionRecords) (CollectionReport, bool, error) {
-	raw, found, err := fleet.ObjectCollection(ctx)
+// errCollectionUnreadable is a record of the collector that the store gave up
+// and that does not decode — an ANSWER, unlike a store that did not give the
+// record up at all, and the duty treats the two apart
+// ([Engine.resumeCollector]).
+var errCollectionUnreadable = errors.New("engine: the object collection record is unreadable")
+
+// ObjectCollection is the collector's last report on store, the object store
+// identity a node agreed with the fleet at boot ([openObjects]), as the fleet
+// recorded it — false when no pass on that store has recorded one. It is the
+// record's ONE reader: a node taking the collector's duty resumes from it
+// ([Engine.resumeCollector]) and the status surfaces render it, both through
+// [Backends.ObjectCollection], so the rules below cannot hold for one and not
+// the other.
+//
+// A REPORT OF ANOTHER STORE IS NONE. The record names the store its passes
+// ran on, and it outlives a change of store: a move deletes the backend record
+// beside it and leaves the report, and a restore into a new bucket may bring
+// the bucket back. Resumed, another store's report put the new store's first
+// audit — the one check that its copy is whole — up to a day away, raised the
+// old store's lost files as the new one's, and was written back at the next
+// pass under the new store's name; rendered, it showed every node's /fleet and
+// `crewlet objects status` the OLD store as the one the files are in, with the
+// old store's audit and lost files, until the new store's first pass recorded
+// — and for as long as no data node took the duty. So it answers as a fleet
+// whose collector never reported.
+//
+// READ WHOLE OR NOT AT ALL: JSON fills every field it can before it reports
+// one it could not, so a record that fails to decode answers nothing of it —
+// a partly decoded one would put a pass off on the strength of a timestamp
+// beside a field nobody could read.
+func ObjectCollection(ctx context.Context, records CollectionRecords, store string) (CollectionReport, bool, error) {
+	raw, found, err := records.ObjectCollection(ctx)
 	if err != nil || !found {
 		return CollectionReport{}, false, err
 	}
 	var r collectionReport
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return CollectionReport{}, false, fmt.Errorf("engine: the object collection record is unreadable: %w", err)
+		return CollectionReport{}, false, fmt.Errorf("%w: %w", errCollectionUnreadable, err)
+	}
+	if r.Backend != store {
+		return CollectionReport{}, false, nil
 	}
 	return CollectionReport(r), true, nil
+}
+
+// ObjectCollection is the collector's last report on the object store this
+// node agreed with the fleet at boot — [ObjectCollection] over this node's
+// fleet store and its identity, which only [OpenBackends] knows.
+func (b *Backends) ObjectCollection(ctx context.Context) (CollectionReport, bool, error) {
+	return ObjectCollection(ctx, b.Fleet, b.objectsIdentity)
 }
 
 // CollectionRecords is where the collector's reports are recorded — the

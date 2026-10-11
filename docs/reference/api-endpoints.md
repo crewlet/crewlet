@@ -4317,10 +4317,12 @@ reads no record.
 
 `state` names three things apart rather than drawing any of them as an empty
 report: `unavailable` (the coordination store did not answer), `not_yet` (no
-collector has finished a pass — a new fleet, or no data node running the duty)
-and `reported`. Only a report carries the other fields. The example is the
-engine's own rendering: a test holds its `objects` block to what the renderer
-writes.
+collector has finished a pass on the store the files are in — a new fleet, no
+data node running the duty, or a fleet whose files
+[moved](../concepts/object-store.md#one-store-per-fleet) since the last report,
+which describes the old store and is never shown as the new one's) and
+`reported`. Only a report carries the other fields. The example is the engine's
+own rendering: a test holds its `objects` block to what the renderer writes.
 
 | Field | What it is |
 |---|---|

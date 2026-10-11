@@ -191,7 +191,7 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 			}
 			var report CollectionReport
 			waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
-				r, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
+				r, found, err := e.backends.ObjectCollection(t.Context())
 				report = r
 				return err == nil && found
 			})
@@ -242,14 +242,23 @@ func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty
 	return e, duty, fleet
 }
 
-// collectionRecorded is the collector's report as the fleet holds it.
+// collectionRecorded is the collector's report as the fleet holds it, of
+// whichever store it names — decoded here rather than through the reader the
+// node itself resumes from, which is under test.
 func collectionRecorded(t *testing.T, fleet *coordmemory.Fleet) (CollectionReport, bool) {
 	t.Helper()
-	r, found, err := ObjectCollection(t.Context(), fleet)
+	raw, found, err := fleet.ObjectCollection(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return r, found
+	if !found {
+		return CollectionReport{}, false
+	}
+	var r collectionReport
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatal(err)
+	}
+	return CollectionReport(r), true
 }
 
 // EACH TURN RUNS AT MOST ONE PASS, the one that is due, and RECORDS what it
@@ -518,6 +527,253 @@ func TestATakenDutyKeepsTheFindingsItsLastHolderRecorded(t *testing.T) {
 		t.Fatalf("the record after the new holder's collection carries audit %+v; "+
 			"want its last holder's findings kept", r.Status.Audit)
 	}
+}
+
+// ANOTHER STORE'S REPORT IS NOTHING TO RESUME. A fleet whose files moved — the
+// documented move, which deletes the backend record and leaves the report
+// beside it, or a restore into a new bucket that brought the bucket back —
+// holds a report about the OLD store. Resumed, the new holder waited out the
+// old store's schedule before auditing the new one, which is the one check
+// that the copy is whole; raised the old store's lost files as the new
+// store's; and at its next pass wrote both into the fleet's record under the
+// new store's name, an audit of one store reported as an audit of another.
+func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
+	t.Parallel()
+	source := &namedNothing{}
+	e, duty, fleet := collectorNode(t, source)
+	now := time.Now()
+	lost := collect.MissingFile{Object: objstore.KeyAt(now), NamedBy: "ENG/lost.md"}
+	raw, err := json.Marshal(collectionReport{Node: "data-b",
+		Backend: "s3:https://old.example.com/acme-files/crewlet/", Status: collect.Status{
+			Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
+			Audit: collect.AuditReport{Completed: true, Referenced: 7, Missing: 1, At: now.Add(-time.Hour),
+				Found: &collect.AuditFindings{At: now.Add(-time.Hour), Completed: true, Referenced: 7,
+					Missing: 1, MissingFiles: []collect.MissingFile{lost}}},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	mine := func(context.Context) (bool, error) { return true, nil }
+	e.collectorTurn(t.Context(), mine, duty)
+	if source.barriers == 0 {
+		t.Fatal("the new store was not collected at once: its holder resumed the old store's schedule")
+	}
+	var reading statelog.Reading
+	e.objectsReading(time.Now(), &reading)
+	if reading.ObjectsMissing != 0 {
+		t.Errorf("the new store's holder reads %d missing, the old store's findings", reading.ObjectsMissing)
+	}
+	r, _ := collectionRecorded(t, fleet)
+	if r.Node != "data-a" || r.Backend != "nats" || r.Status.Collect.At.Before(now) {
+		t.Fatalf("the turn recorded node %q, backend %q, collection %+v; want this node's "+
+			"collection of its own store", r.Node, r.Backend, r.Status.Collect)
+	}
+	if !r.Status.Audit.At.IsZero() || r.Status.Audit.Found != nil {
+		t.Fatalf("the record names %q with audit %+v, which ran on the old store", r.Backend, r.Status.Audit)
+	}
+
+	e.collectorTurn(t.Context(), mine, duty)
+	if r, _ = collectionRecorded(t, fleet); r.Status.Audit.At.Before(now) || !r.Status.Audit.Completed {
+		t.Fatalf("the second turn recorded audit %+v, want the new store audited at once", r.Status.Audit)
+	}
+}
+
+// A RECORD THAT CANNOT BE READ RESUMES NOTHING OF IT, not the half that
+// decoded: JSON fills every field it can before it reports one it could not,
+// and a schedule taken from a record nobody could read waits out a pass on
+// the strength of a timestamp beside a field that would not decode.
+//
+// AND IT IS AN ANSWER, unlike a record the store did not give up: the passes
+// run from nothing over it, since waiting on a record that will never decode
+// would skip every pass.
+func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
+	t.Parallel()
+	source := &namedNothing{}
+	e, duty, fleet := collectorNode(t, source)
+	now := time.Now()
+	// A WELL-FORMED DOCUMENT with a recent collection beside an audit of the
+	// wrong type: the decoder fills the first and reports the second.
+	raw := []byte(`{"node":"data-b","backend":"nats","status":{"collect":{"completed":true,"at":"` +
+		now.Add(-10*time.Minute).UTC().Format(time.RFC3339Nano) + `"},"audit":7}}`)
+	var partial collectionReport
+	if err := json.Unmarshal(raw, &partial); err == nil || partial.Status.Collect.At.IsZero() {
+		t.Fatalf("the premise: the record decodes in part and fails (err %v, collection %+v)",
+			err, partial.Status.Collect)
+	}
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE COLLECTION IS DUE AT ONCE, as it is with no record at all; taken
+	// from the half that decoded, it waited out the hour and the turn ran the
+	// audit in its place.
+	e.collectorTurn(t.Context(), func(context.Context) (bool, error) { return true, nil }, duty)
+	if source.barriers == 0 {
+		t.Fatal("the turn ran no pass over a record that does not decode, as though the " +
+			"store had not answered: no pass would ever run")
+	}
+	if r, _ := collectionRecorded(t, fleet); r.Status.Collect.At.Before(now) {
+		t.Fatalf("the turn recorded collection %+v and audit at %v: the holder took its schedule "+
+			"from a record it could not read", r.Status.Collect, r.Status.Audit.At)
+	}
+}
+
+// unansweredRecord is the fleet, but its store does not give the collector's
+// record up the next fails times it is asked.
+type unansweredRecord struct {
+	*memFleet
+	fails atomic.Int32
+}
+
+func (f *unansweredRecord) ObjectCollection(ctx context.Context) ([]byte, bool, error) {
+	if f.fails.Add(-1) >= 0 {
+		return nil, false, errors.New("the coordination store did not answer")
+	}
+	return f.memFleet.ObjectCollection(ctx)
+}
+
+// A RECORD THE STORE DID NOT GIVE UP IS UNKNOWN, NOT EMPTY (ADR-0005). A node
+// taking the duty whose read of the fleet's record goes unanswered — the
+// objects bucket's leader moving, a store blip — runs NO pass and records
+// nothing, and reads the record again at its next turn. Run from nothing, as a
+// record that does not decode is, it collected at once and recorded a status
+// with no audit half: the last holder's findings written out of the fleet's
+// record, and objects_missing cleared, until a whole audit of the store found
+// them again — a day later.
+func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
+	t.Parallel()
+	// recordLost has data-b, which held the duty in between, record an audit
+	// that found lost, with a collection due again.
+	recordLost := func(t *testing.T, fleet *coordmemory.Fleet, lost []collect.MissingFile) {
+		t.Helper()
+		now := time.Now()
+		found := &collect.AuditFindings{At: now, Completed: true, Referenced: 2, MissingFiles: lost}
+		for _, m := range lost {
+			switch m.Finding {
+			case collect.FindingUnanswered:
+				found.Unanswered++
+			default:
+				found.Missing++
+			}
+		}
+		audit := collect.AuditReport{Completed: true, Referenced: 2, Missing: found.Missing,
+			Unanswered: found.Unanswered, At: now, Found: found}
+		raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+			Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
+			Audit:   audit,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// unanswered is a node over source whose fleet withholds the record the
+	// next time it is asked.
+	unanswered := func(t *testing.T, source collect.Source) (*Engine, *collectorDuty,
+		*coordmemory.Fleet, *unansweredRecord) {
+		t.Helper()
+		e, duty, fleet := collectorNode(t, source)
+		record := &unansweredRecord{memFleet: fleet}
+		e.backends.Fleet = record
+		return e, duty, fleet, record
+	}
+	mine := func(context.Context) (bool, error) { return true, nil }
+	missing := func(e *Engine) int {
+		var r statelog.Reading
+		e.objectsReading(time.Now(), &r)
+		return r.ObjectsMissing
+	}
+	// unchanged fails unless the fleet's record is still data-b's.
+	unchanged := func(t *testing.T, fleet *coordmemory.Fleet, source *namedNothing,
+		barriers int, duty *collectorDuty) {
+		t.Helper()
+		if source.barriers != barriers {
+			t.Errorf("a turn whose record went unanswered ran a pass (%d barriers)",
+				source.barriers-barriers)
+		}
+		if r, _ := collectionRecorded(t, fleet); r.Node != "data-b" {
+			t.Errorf("a turn whose record went unanswered recorded %q's report over data-b's", r.Node)
+		}
+		if duty.resumed {
+			t.Error("a turn whose record went unanswered counts the record as read")
+		}
+	}
+	// carried fails unless the turn after an answered read recorded this
+	// node's pass with lost carried on.
+	carried := func(t *testing.T, fleet *coordmemory.Fleet, lost int) {
+		t.Helper()
+		r, _ := collectionRecorded(t, fleet)
+		if r.Node != "data-a" {
+			t.Fatalf("the turn after the record answered recorded %q's report, want this node's", r.Node)
+		}
+		if f := r.Status.Audit.Found; f == nil || len(f.MissingFiles) != lost {
+			t.Fatalf("this node's first pass recorded findings %+v; want the %d files "+
+				"the holder in between found lost", f, lost)
+		}
+	}
+
+	t.Run("a node taking the duty", func(t *testing.T) {
+		t.Parallel()
+		source := &namedNothing{}
+		e, duty, fleet, record := unanswered(t, source)
+		recordLost(t, fleet, []collect.MissingFile{{Object: objstore.KeyAt(time.Now()),
+			NamedBy: "ENG/lost.md", Finding: collect.FindingMissing}})
+
+		record.fails.Store(1)
+		e.collectorTurn(t.Context(), mine, duty)
+		unchanged(t, fleet, source, 0, duty)
+
+		// A MINUTE LATER the record answers: the findings raise the alarm
+		// here, and the collection that is due carries them on.
+		e.collectorTurn(t.Context(), mine, duty)
+		if got := missing(e); got != 1 {
+			t.Errorf("the holder reads %d missing once the record answered, want 1", got)
+		}
+		carried(t, fleet, 1)
+	})
+
+	t.Run("a node taking it back after an unknown claim", func(t *testing.T) {
+		t.Parallel()
+		source := &namedObject{k: objstore.KeyAt(time.Now())}
+		e, duty, fleet, record := unanswered(t, source)
+		e.collectorTurn(t.Context(), nil, duty) // collect
+		e.collectorTurn(t.Context(), nil, duty) // audit: the one object is lost
+		e.collectorTurn(t.Context(), func(context.Context) (bool, error) {
+			return false, errors.New("the coordination store did not answer")
+		}, duty)
+		recordLost(t, fleet, []collect.MissingFile{
+			{Object: source.k, NamedBy: "ENG/lost.md", Finding: collect.FindingMissing},
+			{Object: objstore.KeyAt(time.Now()), NamedBy: "ENG/also-lost.md",
+				Finding: collect.FindingUnanswered},
+		})
+		duty.mu.Lock()
+		duty.collected = time.Time{} // a collection is due: a pass would run if one could
+		duty.mu.Unlock()
+		barriers := source.barriers
+
+		record.fails.Store(1)
+		e.collectorTurn(t.Context(), mine, duty)
+		unchanged(t, fleet, &source.namedNothing, barriers, duty)
+		// WHAT IT BELIEVED STANDS: its own audit's one lost file, never
+		// cleared by a read the store did not answer.
+		if got := missing(e); got != 1 {
+			t.Errorf("the alarm reads %d missing after an unanswered read, want the 1 "+
+				"this node's own audit found", got)
+		}
+
+		e.collectorTurn(t.Context(), mine, duty)
+		if got := missing(e); got != 2 {
+			t.Errorf("the alarm reads %d missing once the record answered, want the 2 "+
+				"the holder in between found", got)
+		}
+		carried(t, fleet, 2)
+	})
 }
 
 // A CLAIM THAT CANNOT BE ANSWERED IS NEITHER HELD NOR LOST: the node runs no

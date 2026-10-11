@@ -110,7 +110,8 @@ type Sources struct {
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
-	// Objects is the fleet's record of the object store, for the fleet
+	// Objects is the collector's last report on the object store this node
+	// agreed with the fleet, read from the fleet's record, for the fleet
 	// view's file-storage card. Nil leaves the card out of the answer rather
 	// than reporting a fleet whose collector never ran.
 	Objects ObjectsReader

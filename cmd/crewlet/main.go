@@ -1684,8 +1684,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Coord: e.Backends().Coord,
 			Plane: e.Backends().Fleet,
 			// The object collector's last report, read from the store
-			// every node reads it from, for the fleet view's card.
-			Objects: e.Backends().Fleet,
+			// every node reads it from, for the fleet view's card — as a
+			// report on the object store this node agreed with the fleet,
+			// through the reader the collector's duty resumes from, so a
+			// report left behind by a move of the files is none here too.
+			Objects: e.Backends(),
 			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because

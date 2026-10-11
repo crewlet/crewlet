@@ -27,6 +27,15 @@ import (
 // pass in the coordination store. Every node answers from that record, so the
 // card says the same thing whichever node a request reached — and names the
 // node that ran the pass.
+//
+// # And only as a report on the store the files are in
+//
+// The record names the store its passes ran on and outlives a move of the
+// fleet's files, so it is read through the one reader the collector's duty
+// resumes from ([engine.ObjectCollection]), which answers a report of another
+// store as none. Rendered as it stood, the card showed the OLD store as the
+// one the files are in, with that store's audit and lost files, until the new
+// store's first pass recorded.
 
 // ObjectsState is which of three things the fleet's record was when the view
 // read it.
@@ -38,8 +47,10 @@ const (
 	// what the collector last found.
 	ObjectsUnavailable ObjectsState = "unavailable"
 
-	// ObjectsNotYet is a fleet whose collector has not finished a pass —
-	// a new fleet, or one with no data node running the duty.
+	// ObjectsNotYet is a fleet whose collector has not finished a pass on
+	// the store the files are in — a new fleet, one with no data node
+	// running the duty, or one whose files moved to another store since the
+	// collector last reported.
 	ObjectsNotYet ObjectsState = "not_yet"
 
 	// ObjectsReported is a record read and rendered: every
@@ -152,17 +163,21 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 	return FleetObjects{State: ObjectsReported, ReportedObjects: out}
 }
 
-// ObjectsReader is the fleet's record of the object store, read as every node
-// reads it.
-type ObjectsReader = engine.CollectionRecords
+// ObjectsReader is the collector's last report on the object store this node
+// agreed with the fleet at boot — [engine.Backends.ObjectCollection] — and
+// false when the fleet holds none, a report of another store included.
+type ObjectsReader interface {
+	ObjectCollection(ctx context.Context) (engine.CollectionReport, bool, error)
+}
 
 // objects is the fleet's object store as the fleet view shows it.
 //
 // THREE STATES NAMED APART, never folded into an empty report: a record the
-// store would not give up, a fleet whose collector has not reported yet, and
-// a report — because each sends an operator somewhere different.
+// store would not give up, a fleet whose collector has not reported on this
+// store yet, and a report — because each sends an operator somewhere
+// different.
 func (s Sources) objects(ctx context.Context) FleetObjects {
-	r, found, err := engine.ObjectCollection(ctx, s.Objects)
+	r, found, err := s.Objects.ObjectCollection(ctx)
 	switch {
 	case err != nil:
 		log.WarnContext(ctx, "fleet_objects_unavailable", "error", err)
