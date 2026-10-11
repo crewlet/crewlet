@@ -1332,6 +1332,20 @@ func (g *GitLab) validate(path Path) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
+	// THE GROUP IS WHAT A PASS RESOLVES FIRST, in either mode: every seat is
+	// made a member of it and the group hook lives on it. Left empty, the
+	// pass looked up `/groups/`, an address that names no group, and either
+	// faulted on whatever answered — "the last pass could not read this
+	// integration", the engine's work for ever — or reported a group with no
+	// name as missing, every tick, over a field nobody had filled in. Only an
+	// enabled block is held to it, as `url` and `signing_secret` are: a
+	// disabled one runs no pass.
+	if g.Enabled && strings.TrimSpace(pv.Group) == "" {
+		p.add(at(pp, "group"), ErrMissing,
+			"required when gitlab provisioning is configured: it is the "+
+				"top-level group every agent's service account joins, and "+
+				"the first thing a pass looks up")
+	}
 	// REFUSED HERE rather than discovered from a 404 half way through a run.
 	// This one input decides which endpoint every account is created on,
 	// which tokens are minted through and which a disconnect deletes down —

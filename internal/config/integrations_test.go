@@ -203,6 +203,39 @@ func TestConfigAndGitLabAgreeAboutTheServiceAccountModes(t *testing.T) {
 	}
 }
 
+// A PROVISIONING BLOCK THAT NAMES NO GROUP IS REFUSED AT VALIDATION.
+//
+// The group is the first thing a pass looks up, in either mode. Left empty,
+// the pass looked up `/groups/`, an address that names no group, every tick,
+// over a field nobody had filled in. A disabled block runs no pass, so it is
+// not held to it.
+func TestAGitLabProvisioningBlockWithNoGroupIsRefused(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "gitlab", `    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      admin_token: "${GITLAB_ADMIN_TOKEN}"`)
+	if err == nil {
+		t.Fatal("a provisioning block with no group was accepted")
+	}
+	if !strings.Contains(err.Error(), "integrations.gitlab.provisioning.group") {
+		t.Errorf("error %q does not name the field", err)
+	}
+	if err := validateIntegrationDoc(t, "gitlab", `    enabled: false
+    provisioning:
+      admin_token: "${GITLAB_ADMIN_TOKEN}"`); err != nil {
+		t.Errorf("a disabled block, which runs no pass, was refused: %v", err)
+	}
+	if err := validateIntegrationDoc(t, "gitlab", `    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      group: nimbus`); err != nil {
+		t.Errorf("a block naming its group was refused: %v", err)
+	}
+}
+
 // AND A MODE THIS BUILD DOES NOT SERVE IS REFUSED AT VALIDATION, not
 // discovered from a 404 half way through a run that has already created some
 // of the accounts.

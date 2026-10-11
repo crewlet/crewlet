@@ -100,7 +100,8 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Help: "Find your [top-level group](https://gitlab.com/dashboard/groups). " +
 				"Each Crewlet agent becomes a service account inside it.",
 			// BLOCKS NOTHING, because Blocks names what an ABSENT value
-			// produces and nothing reports this one absent. A group the
+			// produces and an absent group is refused by validation
+			// before any pass runs (config.GitLab's validate). A group the
 			// instance answers 404 for is reported — as an ingress block
 			// on the GROUP, owed at GitLab ([Result.GroupNotFound]) —
 			// and that is not this field's to clear: GitLab's 404 cannot

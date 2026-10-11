@@ -1607,7 +1607,7 @@ integrations:
     signing_secret: "${GITLAB_SIGNING_SECRET}"   # 19.1+ whsec_ HMAC — the only verification mode, required
     token: "${GITLAB_ROUTING_TOKEN}"              # optional read PAT → participants-based routing
     provisioning:                                # read only by `crewlet gitlab provision`
-      group: nimbus-hq                           # top-level group agent service accounts join
+      group: nimbus-hq                           # required: top-level group agent service accounts join
       access_level: developer                    # developer | maintainer
 
 ```
