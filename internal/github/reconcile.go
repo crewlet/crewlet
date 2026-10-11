@@ -93,8 +93,8 @@ type Options struct {
 }
 
 // IdentityOutcome is what one run learned about a seat's own code-host
-// credential, and it has FOUR values because three of them are an empty Login
-// and they lead to three different conclusions.
+// credential, and it has FIVE values because four of them are an empty Login
+// and they lead to four different conclusions.
 //
 // A seat that NAMES a credential which does not authenticate has a fault
 // somebody can fix: every call its tools make is refused. Which somebody turns
@@ -103,7 +103,9 @@ type Options struct {
 // variable is this deployment's to set. A seat that names NONE has not asked
 // for one — identity on this host is each agent's OWN GitHub App, which
 // [ReconcileSeatApps] is the authority on and which this run cannot see from
-// the org chart it was handed.
+// the org chart it was handed. And a seat whose lookup GitHub never ANSWERED
+// has told this run nothing at all, so it is neither a fault of the seat's nor
+// a finding: the run raises ([resolveSeats]).
 //
 // Reported as one state, they were both "Login is empty, Reason says why",
 // and every agent seat on the current per-seat-app shape — where by design no
@@ -119,14 +121,22 @@ type Options struct {
 // Reason changes what [Result.Findings] does with it.
 type IdentityOutcome string
 
-// The four outcomes.
+// The five outcomes.
 const (
 	// IdentityResolved is a seat whose credential named an account.
 	IdentityResolved IdentityOutcome = "resolved"
 
-	// IdentityRefused is a seat whose credential GitHub was shown and this
-	// run could not turn into an account. A finding owed at GitHub.
+	// IdentityRefused is a seat whose credential GitHub was shown and
+	// ANSWERED without an account: a refusal, or a login-less 200. A finding
+	// owed at GitHub.
 	IdentityRefused IdentityOutcome = "refused"
+
+	// IdentityUnanswered is a seat whose credential was sent to GitHub and
+	// got NO ANSWER: a dial that failed, a read that timed out, a cancelled
+	// pass. Not a finding, because nothing was learned about the credential;
+	// a run that holds one has raised, and the seat is described only so the
+	// command line can print it beside the error rather than as refused.
+	IdentityUnanswered IdentityOutcome = "unanswered"
 
 	// IdentityUnset is a seat whose mcp_env names a credential slot that
 	// resolved to nothing, so there was nothing to show GitHub. A finding
@@ -143,7 +153,8 @@ const (
 // rather than a panic.
 func (o IdentityOutcome) Valid() bool {
 	switch o {
-	case IdentityResolved, IdentityRefused, IdentityUnset, IdentityUnclaimed:
+	case IdentityResolved, IdentityRefused, IdentityUnanswered, IdentityUnset,
+		IdentityUnclaimed:
 		return true
 	default:
 		return false
@@ -179,6 +190,9 @@ func (s SeatIdentity) Routes() bool { return s.Login != "" }
 // Refused reports a seat that named a credential this run could not turn
 // into an account at GitHub — the case [Result.Findings] reports as the
 // vendor's, beside [IdentityUnset], which it reports as this deployment's.
+// [IdentityUnanswered] is excluded by name for the opposite reason: GitHub
+// said nothing about that credential, so reading it as refused would be the
+// claim [resolveSeats] raises rather than make.
 //
 // Stated as what was NOT established rather than as an equality, so that a
 // seat nothing positively concluded about is reported: silence is the answer
@@ -186,7 +200,8 @@ func (s SeatIdentity) Routes() bool { return s.Login != "" }
 // are broken" the forgiving reading of silence is the one that loses a
 // finding.
 func (s SeatIdentity) Refused() bool {
-	return !s.Routes() && s.Outcome != IdentityUnclaimed && s.Outcome != IdentityUnset
+	return !s.Routes() && s.Outcome != IdentityUnclaimed && s.Outcome != IdentityUnset &&
+		s.Outcome != IdentityUnanswered
 }
 
 // HookOutcome is what happened at one webhook target, and it has THREE
@@ -404,14 +419,24 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	login, err := opts.Client.Me(ctx)
 	if err != nil {
+		// [integration.Refusal] SAYS WHICH, because "was refused" is a claim
+		// only GitHub can make: a timeout here said it too, and sent an
+		// operator to rotate a token that was fine.
+		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
-			"github: the credential this run authenticates with was refused, "+
-				"so nothing else it reported would be trustworthy: %w",
-			integration.Reject(err, Status(err)))
+			"github: the credential this run authenticates with %s, so "+
+				"nothing else it reported would be trustworthy: %w",
+			integration.Refusal(rejected), rejected)
 	}
 
 	res := &Result{Login: login}
-	res.Seats = resolveSeats(ctx, opts)
+	res.Seats, err = resolveSeats(ctx, opts)
+	if err != nil {
+		// RETURNED BEFORE ANYTHING IS SEALED — [webhookSecret] is the first
+		// thing that writes, and it runs below — so the flush every later
+		// failure owes the sink has nothing to complete here.
+		return res, err
+	}
 
 	in, err := ensureWebhooks(ctx, opts)
 	res.Hooks = in.Hooks
@@ -424,13 +449,14 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res.NoIngress = noIngressReason(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
-		// stop halfway: every read between here and the probe reports its
-		// own failure as a FINDING rather than raising — a seat whose
-		// lookup failed becomes identity_failed, a repository whose hook
-		// listing failed becomes ingress_blocked — so a node draining
-		// mid-pass would record a page of sentences about the operator's
-		// credentials, every one of them actually about this engine
-		// shutting down.
+		// stop halfway: the hook half reports a read's failure as a
+		// FINDING rather than raising — a repository whose hook listing
+		// failed becomes ingress_blocked — so a node draining mid-pass
+		// would record a page of sentences about the operator's
+		// repositories, every one of them actually about this engine
+		// shutting down. (The seat walk raises on a lookup that was never
+		// answered — see [resolveSeats] — so a cancellation there has
+		// already come back as an error.)
 		err = interrupted(ctx)
 	}
 	if err != nil {
@@ -508,11 +534,31 @@ func interrupted(ctx context.Context) error {
 //
 // CONCURRENTLY, because sequentially this is one round trip per seat and the
 // whole point of the command is that an operator runs it and reads the
-// answer. A seat whose lookup fails is reported unresolved rather than
-// failing the run: the finding IS the report.
-func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
+// answer.
+//
+// # A credential GitHub REFUSED is a finding; one it never answered is a fault
+//
+// [integration.Reconciler]'s own contract, and the rule jira.resolveSeats
+// already keeps: findings are statements about the operator's world, and an
+// error is the engine or the third-party app failing to look at it. A lookup
+// GitHub answered — any status, or a login-less 200 ([ErrNoLogin]) — is a
+// fact about that credential, and the seat is reported refused: the account
+// at GitHub is what somebody has to look at. A lookup that never got an
+// answer — a dial that failed, a read that timed out, a cancelled context —
+// says nothing about the seat at all, and every one of those became
+// identity_failed: a GitHub organization owner sent to look for a broken
+// credential, retried on the vendor admin's backoff, because a network blip
+// or a node draining mid-pass reported every credentialled seat it caught as
+// an account that cannot authenticate, with the transport error as the reason.
+//
+// So the walk is three-valued, as everything else in this engine is: resolved,
+// definitively not resolved, and NOT OBSERVED. The third RAISES, naming the
+// first such seat in seat order, so the loop records this surface's fault and
+// retries it; the seats are still handed back, each with its reason, for the
+// command line to print.
+func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	if opts.Org == nil {
-		return nil
+		return nil, nil
 	}
 	var seats []*org.Role
 	for seat := range opts.Org.AllRoles() {
@@ -562,6 +608,13 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 			"personal access token"
 	}
 
+	// Written by INDEX from inside the fan-out, exactly as out is, so no two
+	// goroutines touch one element and the scan below reads them in seat
+	// order rather than in whatever order they finished: a pass that raised
+	// on whichever lookup lost the race would name a different seat on
+	// every run over one unchanged world.
+	unanswered := make([]error, len(seats))
+
 	// BOUNDED, at the same cap as the engine's own resolvers and for the
 	// same reason — see [provision.IdentityLookups]. This path is the
 	// operator-invoked `crewlet github provision`, so unbounded it opened
@@ -580,11 +633,35 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 		login, err := client.Me(ctx)
 		if err != nil {
 			out[i].Reason = err.Error()
+			if !answered(err) {
+				out[i].Outcome = IdentityUnanswered
+				unanswered[i] = err
+			}
 			return
 		}
 		out[i].Login, out[i].Outcome = login, IdentityResolved
 	})
-	return out
+
+	for _, i := range lookups {
+		if unanswered[i] != nil {
+			return out, fmt.Errorf(
+				"github: ask GitHub which account %s's own credential "+
+					"authenticates as: %w", out[i].Handle, unanswered[i])
+		}
+	}
+	return out, nil
+}
+
+// answered reports a lookup GitHub gave an answer to — a status, or a
+// login-less 200 — as opposed to one that failed before any answer arrived.
+//
+// THE ANSWER, NEVER THE ERROR'S WORDING: an [APIError] is the only shape a
+// status reaches this package in, and [ErrNoLogin] the only answer that
+// carries none. Everything else — a refused dial, a timeout, a body cut off
+// before it could be decoded, a cancelled context — is this engine failing
+// to hear back, which a retry may well change.
+func answered(err error) bool {
+	return Status(err) != 0 || errors.Is(err, ErrNoLogin)
 }
 
 // noIngressReason says why this run could register no delivery path, or "".
