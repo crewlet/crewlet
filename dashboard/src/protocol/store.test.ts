@@ -331,6 +331,22 @@ describe("a member's socket", () => {
     expect(store.state.agents[0]).toMatchObject({ activity: "idle", work_item: null, step: null });
   });
 
+  // A MEMBER'S METER WAKES ITS READERS. It was filed in its own slice and
+  // announced under the admin's, so a screen subscribed to `budgetStatus`
+  // drew the first reading it was handed and never another.
+  //
+  // Mutation: emit only "budget" from applyBudget, or drop "budgetStatus"
+  // from what a snapshot replaces, and this counts nothing.
+  test("a member's meter wakes the slice it fills, from a push and from a snapshot", () => {
+    const store = new Store();
+    let woken = 0;
+    store.subscribe(["budgetStatus"], () => woken++);
+    store.applyBudget(budgetStatus as never);
+    expect(woken).toBe(1);
+    store.applySnapshot({ budget: budgetStatus as never });
+    expect(woken).toBe(2);
+  });
+
   test("an admin's meter after a member's replaces it, and the reverse", () => {
     const store = new Store();
     store.applyBudget(budgetStatus as never);

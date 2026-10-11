@@ -229,6 +229,7 @@ const ALL_DATA_SLICES: Slice[] = [
   "tools",
   "tokens",
   "budget",
+  "budgetStatus",
   "schedules",
   "health",
 ];
@@ -486,7 +487,10 @@ export class Store {
 
   applyBudget(budget: OrgBudget | BudgetStatus | null | undefined): void {
     this.setBudget(budget);
-    this.emit("budget");
+    // BOTH SLICES, because one meter replaces the other: a member's reading
+    // emitted only as `budget` left every `budgetStatus` reader asleep on the
+    // one push that fills it.
+    this.emit("budget", "budgetStatus");
   }
 
   /**
