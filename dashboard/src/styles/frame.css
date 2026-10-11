@@ -673,11 +673,27 @@ a.user-block-who:focus-visible {
   padding: var(--spacing-3);
 }
 
+/* A LABEL COLUMN AND A CONTROL COLUMN. The theme select is a field and
+   takes its line; the two switchers share one box of one width, three 32px
+   cells each, which the kit's `fill` divides evenly, so a row of glyphs and a
+   row of letters are the same control twice. */
 .preferences-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3.875rem minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
+  gap: var(--spacing-2);
+}
+
+.preferences-switch {
+  justify-self: start;
+  width: 6.75rem;
+}
+
+/* The theme list is wider than its field, which a narrow popover makes
+   narrow: a theme is read by its name and its tag together, and a list cut
+   to the field's width cut both. */
+.preferences-theme-menu {
+  min-width: 17.25rem;
 }
 
 /* ---- The page header -----------------------------------------------------

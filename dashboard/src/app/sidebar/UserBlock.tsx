@@ -15,17 +15,21 @@
  *
  * # Preferences are per-browser, and they are here
  *
- * Theme, density and the token: none of them is the company's, none has a
- * page of its own,
- * and all of them are about the person at this browser — so they sit behind
- * the one control beside that person's name. The theme also has a one-press
- * flip beside it, the kit's `ThemeToggle`, because it is the preference a
+ * Mode, density, theme and the token: none of them is the company's, and all
+ * of them are about the person at this browser, so they sit behind the one
+ * control beside that person's name. Settings › Appearance offers the same
+ * three with room to show every theme. The mode also has a one-press flip
+ * beside the name, the kit's `ThemeToggle`, because it is the preference a
  * reader changes most; "match the system" is a choice in the popover's
  * `ThemeSwitcher`, where there is room to name it.
  *
- * BOTH ARE CONTROLLED by `lib/prefs.ts`. The kit's controls can keep their own
- * copy under a storage key, and a second copy is a second opinion about which
- * theme is on — the command palette sets it too.
+ * EVERY CONTROL IS CONTROLLED by `lib/prefs.ts`. The kit's controls can keep
+ * their own copy under a storage key, and a second copy is a second opinion
+ * about which mode is on; the command palette sets them too.
+ *
+ * THE THEME ROW PREVIEWS. Its list repaints the whole frame in the theme the
+ * highlight rests on, and puts back the theme in effect when the list closes
+ * or the pointer leaves it; Enter or a click applies (see `app/appearance.tsx`).
  */
 
 import {
@@ -33,13 +37,16 @@ import {
   DensitySwitcher,
   IconButton,
   Popover,
+  Select,
   ThemeSwitcher,
   ThemeToggle,
 } from "@crewlethq/ui";
+import { isThemeId } from "@crewlethq/tokens";
 import { KeyGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
+import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
 import { href } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { useViewerPrefs } from "~/lib/prefs.ts";
+import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 
 /** What the block says about who this browser is. */
@@ -146,25 +153,57 @@ export function Preferences({
   tokenPresented: boolean;
 }) {
   const prefs = useViewerPrefs();
+  const applyTheme = useApplyTheme();
   return (
     <div className="preferences">
-      {/* THE TWO SWITCHERS NAME THEMSELVES: each is a radio group carrying
-          its own label, so a second label round it would be read twice. */}
+      {/* EVERY CONTROL NAMES ITSELF: each switcher is a radio group carrying
+          its own label and the select is named Theme, so a second label round
+          one would be read twice. The two switchers FILL one box of one width,
+          so a row of glyphs and a row of letters draw the same cells. */}
       <div className="preferences-row">
         <span className="t-label" aria-hidden="true">
-          Theme
+          Mode
         </span>
-        <ThemeSwitcher label="Theme" value={prefs.theme} onChange={prefs.setTheme} size="sm" />
+        <div className="preferences-switch">
+          <ThemeSwitcher
+            label="Mode"
+            value={prefs.theme}
+            onChange={prefs.setTheme}
+            size="sm"
+            fill
+          />
+        </div>
       </div>
       <div className="preferences-row">
         <span className="t-label" aria-hidden="true">
           Density
         </span>
-        <DensitySwitcher
-          label="Density"
-          value={prefs.density}
-          onChange={prefs.setDensity}
+        <div className="preferences-switch">
+          <DensitySwitcher
+            label="Density"
+            value={prefs.density}
+            onChange={prefs.setDensity}
+            size="sm"
+            fill
+          />
+        </div>
+      </div>
+      <div className="preferences-row">
+        <span className="t-label" aria-hidden="true">
+          Theme
+        </span>
+        <Select
+          ariaLabel="Theme"
           size="sm"
+          menuClassName="preferences-theme-menu"
+          options={THEME_OPTIONS}
+          value={prefs.palette}
+          onChange={(next) => {
+            if (isThemeId(next)) applyTheme(next);
+          }}
+          onHighlight={(option) =>
+            previewPalette(option && isThemeId(option.value) ? option.value : null)
+          }
         />
       </div>
       <Button
