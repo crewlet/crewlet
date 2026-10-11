@@ -558,7 +558,15 @@ leaves out. Then:
   same at-least-once posture the engine holds after any crash. The reverse
   skew is the one to avoid: a ledger *newer* than the mailboxes it acquits
   writes off work that never ran, which is why the embedded topology's
-  one-directory, one-instant copy is the paved path. On an external NATS
+  one-directory, one-instant copy is the paved path. A restored log's
+  **duplicate window** — the broker collapsing an operation id appended twice
+  ([replication](replication.md)) — is rebuilt from its records' ids when its
+  broker next starts, not by the restore itself (nats-server 2.15.0, solo
+  restore, measured): the embedded path starts its broker again with the node,
+  and a stream restored into a running external cluster may serve without one
+  until its servers restart. That matters only for a backup restored inside the
+  window (two minutes) of being taken, since the window holds only records the
+  broker stored that recently. On an external NATS
   cluster, `nats stream backup` / `nats account backup` against the cluster
   are the equivalent, taken across the streams and KV buckets as one session.
   A node on an external cluster snapshots no stream, so its backup has no last

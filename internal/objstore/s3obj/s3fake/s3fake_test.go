@@ -420,3 +420,71 @@ func TestABodyCrossesAtTheConnectionsCeiling(t *testing.T) {
 		t.Fatalf("the hook heard the gets begin at %v, want [0 1024]", starts)
 	}
 }
+
+// AN OBJECT PUT FROM OUTSIDE IS ONE THE BUCKET SERVES as if a client had put it
+// — the bytes it was handed, the tag a put of them is answered with, in every
+// listing taken after it — because a restore fills a fresh bucket that way
+// and then hands it to a node that reads it through the SDK. And the bytes are
+// the bucket's own: the caller's buffer, reused for the next file, rewrites
+// nothing it stored.
+func TestAnObjectPutFromOutsideIsOneTheBucketServes(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	do := func(method, target string, body []byte) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+target, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, target, err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	listed := func() []string {
+		t.Helper()
+		var page struct {
+			Contents []struct {
+				Key string `xml:"Key"`
+			} `xml:"Contents"`
+		}
+		if err := xml.NewDecoder(do(http.MethodGet, "/files?list-type=2&prefix=crewlet/", nil).Body).
+			Decode(&page); err != nil {
+			t.Fatal(err)
+		}
+		var keys []string
+		for _, c := range page.Contents {
+			keys = append(keys, c.Key)
+		}
+		return keys
+	}
+
+	if got := listed(); len(got) != 0 {
+		t.Fatalf("a fresh bucket lists %q", got)
+	}
+	buf := []byte("the bytes of one restored file")
+	want := slices.Clone(buf)
+	srv.Put("crewlet/files/one", buf)
+	copy(buf, "THE BYTES OF THE NEXT FILE, NOW")
+
+	got := do(http.MethodGet, "/files/crewlet/files/one", nil)
+	body, err := io.ReadAll(got.Body)
+	if err != nil || got.StatusCode != http.StatusOK || !bytes.Equal(body, want) {
+		t.Fatalf("the object put from outside reads %d %q, %v; want %q", got.StatusCode, body, err, want)
+	}
+	put := do(http.MethodPut, "/files/crewlet/files/two", want)
+	if tag := got.Header.Get("ETag"); tag == "" || tag != put.Header.Get("ETag") {
+		t.Fatalf("the object put from outside is tagged %q and a put of its bytes %q",
+			tag, put.Header.Get("ETag"))
+	}
+	if got, want := listed(), []string{"crewlet/files/one", "crewlet/files/two"}; !slices.Equal(got, want) {
+		t.Fatalf("the listing after the puts = %q, want %q", got, want)
+	}
+	srv.Put("crewlet/files/zero", nil)
+	if got, want := listed(), []string{"crewlet/files/one", "crewlet/files/two",
+		"crewlet/files/zero"}; !slices.Equal(got, want) {
+		t.Fatalf("the listing after a later put from outside = %q, want %q", got, want)
+	}
+}
