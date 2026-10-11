@@ -57,10 +57,12 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 	a := restApp(t)
 
 	// The routes every node serves from its company and its projection. A
-	// question whose SOURCE is absent is left unregistered by design (a
-	// company on Confluence has no native pages) and answers 404 for a
-	// reason that is not "the route was never built", so those are
-	// exercised separately below.
+	// native question is REGISTERED wherever an engine is beside the API,
+	// and on a node whose view lacks the backend it is about (a company on
+	// Confluence runs no native knowledge base) it is answered 404 per
+	// request — the query layer's `unknown_query`, a reason that is not
+	// "the route was never built" — so those are exercised separately
+	// below.
 	for _, path := range []string{
 		"/agents",
 		"/org",
@@ -97,8 +99,11 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// No native knowledge base wired, which is a company on Confluence, so
-	// `pages` is unregistered.
+	// The view holds no native knowledge base, which is a company on
+	// Confluence. `pages` is still REGISTERED — an engine is beside this
+	// API — and its guard (queries' registerNative) answers it
+	// `unknown_query` on this request, because the view lacks the backend
+	// the question is about.
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/pages", nil))
 	res := rec.Result()
@@ -246,7 +251,7 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
+		Sources: queries.Sources{Native: nativeWork(stubWorkReader{})},
 	})
 
 	rec := httptest.NewRecorder()
@@ -275,7 +280,7 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
+		Sources: queries.Sources{Native: nativeWork(stubWorkReader{})},
 	})
 
 	rec := httptest.NewRecorder()
@@ -284,6 +289,12 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	if got := rec.Result().StatusCode; got != http.StatusOK {
 		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
 	}
+}
+
+// nativeWork is a read surface's native backends with work as the tracker,
+// held from the moment the surface was assembled.
+func nativeWork(work queries.WorkReader) func() queries.Native {
+	return func() queries.Native { return queries.Native{Work: work} }
 }
 
 // stubWorkReader answers every method of the seam with its zero value: a route
@@ -399,7 +410,7 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Work: stubWorkReader{}},
+		Sources: queries.Sources{Native: nativeWork(stubWorkReader{})},
 	})
 
 	rec := httptest.NewRecorder()

@@ -31,11 +31,14 @@ func answeredMap(t *testing.T, s queries.Sources, what string,
 
 // SEARCH IS GATED ON ITS OWN INDEX, not on the tracker. A node holding the
 // whole board and no lexical index is a real state — it joined recently — and
-// registering the two together would leave the board unanswerable on a node
-// that can answer every question on it.
-func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
+// gating the two together would leave the board unanswerable on a node that
+// can answer every question on it. Both are REGISTERED here, as every native
+// question is wherever an engine is beside the API: the search is answered
+// `unknown_query` on this request because the view holds no index, which is
+// the query layer's answer and not an absent registration.
+func TestSearchIsUnknownWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 	t.Parallel()
-	s := queries.Sources{Work: &stubWork{}}
+	s := nativeSources(queries.Native{Work: &stubWork{}})
 	if _, err := askNative(t, s, "work_search", map[string]any{"q": "billing"}); !errors.Is(
 		err, queries.ErrUnknown) {
 
@@ -52,7 +55,7 @@ func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{err: tracker.ErrIndexBuilding}
-	got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+	got := answeredMap(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 		"work_search", map[string]any{"q": "billing"})
 	switch {
 	case got["available"] != false:
@@ -77,7 +80,7 @@ func TestASearchThatFailedIsNotReportedAsBuilding(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("the store could not be reached")
 	w := &stubWork{err: sentinel}
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 		"work_search", map[string]any{"q": "billing"})
 	if !errors.Is(err, sentinel) {
 		t.Errorf("a failed search answered %v, want the failure", err)
@@ -89,7 +92,7 @@ func TestASearchThatFailedIsNotReportedAsBuilding(t *testing.T) {
 func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+	if _, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 		"work_search", map[string]any{"q": "  billing  "}); err != nil {
 
 		t.Fatalf("search: %v", err)
@@ -106,7 +109,7 @@ func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 
 func TestASearchWithNoPhraseIsRefusedNamingTheParameter(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: &stubWork{}}),
 		"work_search", map[string]any{"q": "   "})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a search with no phrase answered %v, want bad params", err)
@@ -146,7 +149,7 @@ func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
 		if tc.asked != "" {
 			params["mode"] = tc.asked
 		}
-		got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+		got := answeredMap(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
 			"work_search", params)
 		if w.searchMode != tc.want {
 			t.Errorf("mode %q reached the searcher as %q, want %q",
@@ -164,7 +167,7 @@ func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
 			t.Errorf("modes = %#v", got["modes"])
 		}
 	}
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: &stubWork{}}),
 		"work_search", map[string]any{"q": "billing", "mode": "meaning"})
 	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "semantic") {
 		t.Errorf("an unknown mode answered %v, want a refusal naming the modes", err)
@@ -201,7 +204,7 @@ func TestTheRoutingReadCarriesTheCompanysOwnInboxHorizon(t *testing.T) {
 func TestWithNoCompanyTheRoutingReadStatesNoHorizon(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_routing",
+	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_routing",
 		map[string]any{"record_id": "r-1"}); err != nil {
 
 		t.Fatalf("routing: %v", err)
@@ -214,7 +217,7 @@ func TestWithNoCompanyTheRoutingReadStatesNoHorizon(t *testing.T) {
 
 func TestARoutingReadWithNoRecordIsRefusedNamingTheParameter(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, queries.Sources{Work: &stubWork{}}, "work_routing",
+	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}}), "work_routing",
 		map[string]any{"record_id": "  "})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a routing read with no record answered %v, want bad params", err)

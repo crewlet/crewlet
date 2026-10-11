@@ -71,7 +71,7 @@ func TestTheViewerResolvesItsBindingThroughTheLookupTheNodeHandsIn(t *testing.T)
 	sources := queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Env:     handedOnly(t, variable, "ops-1"),
-		Work:    work,
+		Native:  nativeOf(queries.Native{Work: work}),
 	}
 	answered, err := askAsOperator(t, sources, "viewer", nil)
 	got := answerMap(t, answered, err)

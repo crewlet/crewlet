@@ -192,7 +192,7 @@ var LinkedFromStatuses = []LinkedFromStatus{LinkedFromBuilding, LinkedFromUnavai
 // value off the wire is a value rather than a panic.
 func (st LinkedFromStatus) Valid() bool { return slices.Contains(LinkedFromStatuses, st) }
 
-func (s Sources) page(ctx context.Context, p Params) (any, error) {
+func (s Sources) page(ctx context.Context, n Native, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("id"))
 	if ref == "" {
 		return nil, badParams("id", "", nil)
@@ -201,7 +201,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Pages.Get(ctx, ref, fresh)
+	detail, err := n.Pages.Get(ctx, ref, fresh)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
@@ -219,8 +219,8 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 		}
 		out.SkillLoadedBy = foldSkillLoads(rows, s.chartHandles())
 	}
-	if s.Backlinks != nil {
-		links, err := s.Backlinks.LinkedFrom(ctx, detail.Page.ID)
+	if n.Backlinks != nil {
+		links, err := n.Backlinks.LinkedFrom(ctx, detail.Page.ID)
 		switch {
 		case errors.Is(err, search.ErrIndexBuilding):
 			out.LinkedFromStatus = LinkedFromBuilding
@@ -236,6 +236,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 
 // pageReads answers `page_reads{page, days}`.
 func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
+	n := s.native()
 	page := strings.TrimSpace(p.String("page"))
 	if page == "" {
 		return nil, badParams("page", "", nil)
@@ -270,14 +271,14 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	// to say. Best effort in one direction only — a tracker that cannot be
 	// read leaves the lines naming no task rather than failing the list of
 	// who read the page.
-	if s.Work != nil {
+	if n.Work != nil {
 		var runs []string
 		for _, r := range answer.Readers {
 			if r.LastTurnID != "" {
 				runs = append(runs, r.LastTurnID)
 			}
 		}
-		places, err := s.Work.TurnPlaces(ctx, runs, statelog.Freshness{Level: statelog.ReadStale})
+		places, err := n.Work.TurnPlaces(ctx, runs, statelog.Freshness{Level: statelog.ReadStale})
 		if err != nil {
 			log.WarnContext(ctx, "page_reads_turns_unread", "page", page, "error", err.Error())
 		}

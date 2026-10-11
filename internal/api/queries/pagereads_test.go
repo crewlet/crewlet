@@ -78,7 +78,7 @@ func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
 	work := &stubWork{places: map[string]tracker.TurnPlace{
 		"run-b": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
 	sources := f.sources()
-	sources.Work = work
+	sources.Native = nativeOf(queries.Native{Work: work})
 	got, ok := askRaw(t, registryOver(t, sources), "page_reads",
 		map[string]any{"page": readPage}).(queries.PageReadsAnswer)
 	if !ok {
@@ -153,8 +153,10 @@ func TestThePageAnswerSaysWhyItCarriesNoBacklinks(t *testing.T) {
 			t.Parallel()
 			f := newSpendFixture(t)
 			sources := f.sources()
-			sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}}
-			sources.Backlinks = stubBacklinks{err: tc.err}
+			sources.Native = nativeOf(queries.Native{
+				Pages:     &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}},
+				Backlinks: stubBacklinks{err: tc.err},
+			})
 			got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
 			if !ok {
 				t.Fatalf("page answered %T", got)
@@ -210,7 +212,7 @@ func TestThePageAnswerCarriesSkillLoadsAndBacklinks(t *testing.T) {
 	}
 	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
-	sources.Pages, sources.Backlinks = stub, stubBacklinks{links: links}
+	sources.Native = nativeOf(queries.Native{Pages: stub, Backlinks: stubBacklinks{links: links}})
 	got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
 	if !ok {
 		t.Fatalf("page answered %T", got)
@@ -243,7 +245,7 @@ func TestAnUnloadedSkillSendsAnEmptyListNotAnAbsentKey(t *testing.T) {
 	f := newSpendFixture(t)
 	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
-	sources.Pages = stub
+	sources.Native = nativeOf(queries.Native{Pages: stub})
 	wire := func() map[string]json.RawMessage {
 		t.Helper()
 		raw, err := json.Marshal(askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}))
@@ -276,7 +278,7 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 	stub := &stubPages{list: []pages.Summary{{ID: readPage, Title: "Deploying", Skill: true},
 		{ID: "p-quiet", Title: "Rollback", Skill: true}}, total: 2}
 	sources := f.sources()
-	sources.Pages = stub
+	sources.Native = nativeOf(queries.Native{Pages: stub})
 	got := ask(t, registryOver(t, sources), "pages", map[string]any{"skills": true})
 	loads, ok := got["skill_loaded_by"].(map[string][]queries.SkillLoad)
 	if !ok {

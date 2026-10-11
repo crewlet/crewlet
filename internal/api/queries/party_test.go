@@ -42,7 +42,7 @@ func partySources(t *testing.T, work *stubWork) queries.Sources {
 	}
 	return queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Work:    work,
+		Native:  nativeOf(queries.Native{Work: work}),
 	}
 }
 

@@ -1773,42 +1773,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// while it serves and from another data node's while it does
 			// not, which is also how a node without `data` answers at all.
 			//
-			// Nil on a company running Jira or Confluence, which leaves
-			// their questions unregistered: there is no native record
-			// to read, and an empty board would claim otherwise.
-			//
-			// A METHOD VALUE is safe here where [Sources.Knowledge]
-			// needs a function: the router and the native runtime belong
-			// to the NODE and are not rebuilt by an apply — see
-			// engine/native.go for why their lifetime is the process
-			// rather than the epoch. Nil-typed-nil is not a risk either,
-			// because these accessors return an untyped nil for a node
-			// with no backend.
-			Work:  nativeWork(e),
-			Pages: nativePages(e),
-			// A PROJECT'S FILES, the rows only: the bytes stream from
-			// the download route, which reads them through this node's
-			// object client.
-			Files: nativeFiles(e),
-			// WHO LINKS TO A PAGE, from this node's lexical index, which
-			// derives the links from the bodies it already reads. Untyped
-			// nil on a node with no index, which leaves the answer without
-			// `linked_from` rather than claiming nothing links anywhere.
-			Backlinks: nativeBacklinks(e),
-			// RANKED SEARCH, gated on its own index rather than on
-			// the tracker: the rows are the fleet's and the lexical
-			// index is this node's own, so a node still building one
-			// answers every board question and cannot rank a word.
-			// The accessor already returns an untyped nil in that
-			// case, which is what the registration check needs.
-			WorkSearch: nativeWorkSearch(e),
+			// ASKED PER QUESTION, never read once here: the native
+			// runtime is built at boot OR at the first apply whose
+			// company runs a state log, and on a node that booted with no
+			// company — the quickstart's live bootstrap — that apply runs
+			// after this line. A value read here described such a node as
+			// one with no tracker for the life of the process. See
+			// queries.Sources.Native. Through the one constructor the
+			// end-to-end harness builds its node's view with too.
+			Native: api.EngineReads(e),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
-			// it, and what this node costs to replace. Assembled per
-			// call, because half of it is coordination that changes
-			// under the answer and the other half is this node's own
-			// loops.
-			Retention: nativeRetention(ctx, e),
+			// it, and what this node costs to replace — and whether it
+			// runs a state log at all, read per call for Native's
+			// reason: the trim starts with the runtime.
+			Retention: api.EngineRetention(e),
 			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
 			// resolved and its pools' state, read per call because an
 			// apply replaces every pool — beside the fleet's cooldown
@@ -2664,34 +2643,9 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 	return out
 }
 
-// nativeWork and nativePages are the company's tracker and knowledge base as
-// the read surface wants them — through this node's estate router, as a seat's
-// tools reach them ([engine.OperatorWork]) — or an interface that is genuinely
-// nil when the company runs the vendor backends.
-//
-// THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
-// would satisfy its `!= nil` registration check and then panic on the first
-// question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
-// place where the check is a registration rather than a call.
-func nativeWork(e *engine.Engine) queries.WorkReader {
-	if w, ok := engine.OperatorWork(e); ok {
-		return w
-	}
-	return nil
-}
-
-// nativeFiles is a project's file rows, or nil — converted for [nativeWork]'s
-// reason.
-func nativeFiles(e *engine.Engine) queries.FileReader {
-	if w, ok := engine.OperatorWork(e); ok {
-		return w
-	}
-	return nil
-}
-
 // nativeNodes is the eviction gate over every identity-claiming log, or nil
-// where this node runs no state log — converted for [nativeWork]'s reason: a
-// typed nil would pass the route's registration check and panic on the first
+// where this node runs no state log — converted for [api.EngineReads]' reason:
+// a typed nil would pass the route's registration check and panic on the first
 // press.
 //
 // NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
@@ -2733,47 +2687,6 @@ func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
 		PurgeTask(ctx, opID, id, project, reason)
 }
 
-func nativePages(e *engine.Engine) queries.PageReader {
-	if p, ok := engine.OperatorPages(e); ok {
-		return p
-	}
-	return nil
-}
-
-// nativeBacklinks is the "linked from" reader — the knowledge base's own
-// reader, through the estate's router, so a page's backlinks are answered by a
-// data node whose copies of both the knowledge base and the tracker serve
-// (ADR-0031) — or an untyped nil.
-func nativeBacklinks(e *engine.Engine) queries.PageBacklinks {
-	if p, ok := engine.OperatorPages(e); ok {
-		return p
-	}
-	return nil
-}
-
-// nativeRetention is this node's retention answer, or nil on a node that runs
-// no state log.
-//
-// NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
-// follows: a process running no state log has no applier, no stream and no
-// floor, and a report of zeros would claim a fleet whose log is perfectly
-// trimmed. The question is simply unregistered instead.
-//
-// IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
-// probe is a coordination read, so on a node whose store cannot be reached it
-// is exactly as slow as every other one — and a `context.Background()` here
-// made the ONE call that decides whether this surface exists at all the one
-// call a shutting-down process could not abandon.
-func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context) any {
-	if _, runs := e.RetentionReport(ctx); !runs {
-		return nil
-	}
-	return func(ctx context.Context) any {
-		report, _ := e.RetentionReport(ctx)
-		return report
-	}
-}
-
 // memoryReads is the engine's memory reader as the read surface's seam, or nil
 // when the engine has none — a typed nil in the interface would register
 // `agent_memory` and `conversations` over a reader that cannot answer.
@@ -2790,21 +2703,6 @@ func memoryReads(e *engine.Engine) queries.SeatMemory {
 func sandboxTails(e *engine.Engine) queries.SandboxTails {
 	if r := e.SandboxTails(); r != nil {
 		return r
-	}
-	return nil
-}
-
-// nativeWorkSearch is the ranked item search, as the read surface wants it —
-// through this node's estate router as a seat's search is
-// ([engine.WorkSearcher]), and converted for [nativeWork]'s reason.
-//
-// SEPARATE FROM [nativeWork], because the two are absent independently: a node
-// can hold the whole board and no lexical index at all. Folding them into one
-// seam would leave the board unregistered on a node that can answer every
-// question on it.
-func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
-	if s := engine.WorkSearcher(e); s != nil {
-		return s
 	}
 	return nil
 }

@@ -30,17 +30,21 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)
 
-	if _, ok := nativeWork(e).(estate.Work); !ok {
-		t.Errorf("the REST reads are handed %T, want the router's estate.Work", nativeWork(e))
+	native := api.EngineReads(e)()
+	if _, ok := native.Work.(estate.Work); !ok {
+		t.Errorf("the REST reads are handed %T, want the router's estate.Work", native.Work)
 	}
-	if _, ok := nativeFiles(e).(estate.Work); !ok {
-		t.Errorf("the file rows are handed %T, want the router's estate.Work", nativeFiles(e))
+	if _, ok := native.Files.(estate.Work); !ok {
+		t.Errorf("the file rows are handed %T, want the router's estate.Work", native.Files)
 	}
-	if _, ok := nativePages(e).(estate.Pages); !ok {
-		t.Errorf("the knowledge reads are handed %T, want the router's estate.Pages", nativePages(e))
+	if _, ok := native.Pages.(estate.Pages); !ok {
+		t.Errorf("the knowledge reads are handed %T, want the router's estate.Pages", native.Pages)
 	}
-	if _, ok := nativeWorkSearch(e).(estate.Work); !ok {
-		t.Errorf("the ranked search is handed %T, want the router's estate.Work", nativeWorkSearch(e))
+	if _, ok := native.Backlinks.(estate.Pages); !ok {
+		t.Errorf("the backlinks are handed %T, want the router's estate.Pages", native.Backlinks)
+	}
+	if _, ok := native.WorkSearch.(estate.Work); !ok {
+		t.Errorf("the ranked search is handed %T, want the router's estate.Work", native.WorkSearch)
 	}
 	if _, ok := nativePurger(e).(purgeAdapter); !ok {
 		t.Errorf("the purge is handed %T, want the router's writer", nativePurger(e))

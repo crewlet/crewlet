@@ -71,7 +71,7 @@ const DefaultSearchLimit = 25
 // THE SAME THREE MODES AS `knowledge`, and the same four outcome fields —
 // `served_mode`, `modes`, `coverage`, `degraded` — so one screen control
 // drives both searches and says the same thing about each.
-func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
+func (s Sources) workSearch(ctx context.Context, n Native, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
 		return nil, badParams("q", "", nil)
@@ -83,7 +83,7 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if err = searchTextRefusal(text); err != nil {
 		return nil, err
 	}
-	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
+	answer, err := n.WorkSearch.Search(ctx, tracker.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
 	})
 	switch {
@@ -141,7 +141,7 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 // has written exactly that set since the domain landed and its only trace on
 // any surface was a boolean — `work_activity.notified` — saying that somebody,
 // somewhere, was told.
-func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
+func (s Sources) workRouting(ctx context.Context, n Native, p Params) (any, error) {
 	record := strings.TrimSpace(p.String("record_id"))
 	if record == "" {
 		return nil, badParams("record_id", "", nil)
@@ -150,7 +150,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer, err := s.Work.Routing(ctx, tracker.RoutingQuery{
+	answer, err := n.Work.Routing(ctx, tracker.RoutingQuery{
 		RecordID: record,
 		// THE HORIZON THIS COMPANY IS ACTUALLY RUNNING, read per call
 		// from the current epoch — which is the whole reason the
