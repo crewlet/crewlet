@@ -1,9 +1,12 @@
 name: Publish docs
 
-# The documentation site (docs.crewlet.ai) renders this repository's docs/ tree.
-# The renderer is a separate repository that pulls from here on a schedule; this
-# workflow just tells it not to wait, so a docs change is live in a minute
-# instead of within the hour.
+# The documentation site (docs.crewlet.ai) renders this repository's docs/ tree
+# under /engine/: /engine/latest/ is the newest release (until this engine's
+# first release, a redirect to main's pages), /engine/next/ is main, and
+# /engine/vX.Y/ an older release line. The renderer is a separate
+# repository with no schedule of its own: it rebuilds when it is asked, and
+# this workflow is what asks, so a docs change is live in a minute. Without it
+# a change waits for whatever next rebuilds the site.
 #
 # Both the target repository and the token are secrets, so this file names
 # neither, and no trigger below can hand them to a fork. A push to main is a
@@ -34,9 +37,9 @@ on:
       - "skills/**"
 
   # A release changes which versions the site publishes, not just the content of
-  # one: the newest tag takes the bare URLs and the line it replaces moves to
-  # /vX.Y/. Nothing above notices that happening, and the two obvious ways to
-  # catch it do not work:
+  # one: the newest tag takes /engine/latest/ and the line it replaces moves to
+  # /engine/vX.Y/ (main stays /engine/next/). Nothing above notices that
+  # happening, and the two obvious ways to catch it do not work:
   #
   #   - `tags: ["v*"]` here would be ANDed with the `paths` filter above, and a
   #     tag pointing at a commit already on main changes no files at all — so
@@ -47,12 +50,12 @@ on:
   #     workflows triggering each other in a loop.
   #
   # Watching the release workflow itself sidesteps both. Without it a new
-  # version waits for the docs site's hourly poll.
+  # version is not published until something else rebuilds the site.
   #
   # The name must match `name:` in .github/workflows/release.yml EXACTLY —
   # GitHub matches this list against that string and reports no error when
-  # nothing matches, so a mismatch just silently never fires and the site
-  # falls back to the hourly poll this trigger exists to pre-empt. Nothing
+  # nothing matches, so a mismatch just silently never fires and a release
+  # waits for an unrelated rebuild to reach the site. Nothing
   # asserts the two strings match, and "silently never fires" has no other
   # symptom, so re-read both on any workflow rename.
   workflow_run:
@@ -108,7 +111,7 @@ jobs:
             echo "Both are repository secrets, under Settings → Secrets and variables → Actions."
             echo "DOCS_REPO is the docs site repository as owner/name; DOCS_TOKEN needs"
             echo "Contents: read and write on it (repository_dispatch lives under Contents)."
-            echo "Without them the docs site still picks the change up on its hourly poll."
+            echo "Without them the docs site picks the change up only when something else rebuilds it."
             exit 0
           fi
           curl --fail-with-body --silent --show-error \

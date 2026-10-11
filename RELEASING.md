@@ -237,8 +237,9 @@ doing the thing, or starts doing more — so read the file when you touch it:
   pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
 - **`docs-publish.yml` watches the release workflow by its exact `name:`.**
   GitHub reports nothing when that string matches no workflow, so a rename on
-  either side just means the trigger never fires again and the site falls back
-  to its hourly poll.
+  either side just means the trigger never fires again: the site has no
+  schedule of its own, so a release is not published until something else
+  rebuilds it.
 - **Every dependency surface has a `.github/dependabot.yml` entry.** A manifest
   nobody told Dependabot about produces no pull requests, which looks exactly
   like a manifest with nothing to update — that is how `go.mod` went unwatched
