@@ -425,3 +425,43 @@ func (s *Store) Delete(ctx context.Context, k Key) error {
 	}
 	return nil
 }
+
+// BatchDeletes reports whether the store's backend can delete many objects in
+// one request ([BatchDeleter]) — whether [Store.DeleteKeys] can answer at all.
+func (s *Store) BatchDeletes() bool {
+	_, ok := s.backend.(BatchDeleter)
+	return ok
+}
+
+// DeleteKeys removes the objects of keys — at most [MaxDeleteBatch] — in one
+// batch deletion, answering how many the store says it removed: all of them
+// when err is nil; all but the names a [*DeleteBatchError] gives when the store
+// answered name by name; and none it can count otherwise — for [ErrNoBatch], a
+// store that refused the request or a backend with no such verb, none at all.
+// Deleting what is not there is not an error.
+func (s *Store) DeleteKeys(ctx context.Context, keys []Key) (int, error) {
+	b, ok := s.backend.(BatchDeleter)
+	if !ok {
+		return 0, fmt.Errorf("%w: this backend deletes one name a request", ErrNoBatch)
+	}
+	if len(keys) > MaxDeleteBatch {
+		return 0, fmt.Errorf("objstore: a batch deletion of %d objects, past the %d one takes",
+			len(keys), MaxDeleteBatch)
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	names := make([]string, len(keys))
+	for i, k := range keys {
+		names[i] = k.Name()
+	}
+	err := b.DeleteBatch(ctx, names)
+	if err == nil {
+		return len(keys), nil
+	}
+	var refused *DeleteBatchError
+	if errors.As(err, &refused) {
+		return len(keys) - len(refused.Failed), fmt.Errorf("objstore: delete %d objects: %w", len(keys), err)
+	}
+	return 0, fmt.Errorf("objstore: delete %d objects: %w", len(keys), err)
+}

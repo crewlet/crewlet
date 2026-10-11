@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"time"
 )
 
@@ -50,6 +52,42 @@ var ErrUndated = errors.New("objstore: the backend listed an entry with no date"
 // The caller asks about each name instead — an answer the order was not kept
 // in would have every name past the first stray read as absent.
 var ErrUnordered = errors.New("objstore: the backend cannot list a range of names in order")
+
+// ErrNoBatch is a batch deletion ([BatchDeleter]) the store refused as a
+// request, having removed nothing: an S3-compatible gateway that does not offer
+// the verb, or a backend that has none ([Store.DeleteKeys]). The caller deletes
+// each name on its own instead.
+var ErrNoBatch = errors.New("objstore: the backend refused a batch deletion as a request")
+
+// MaxDeleteBatch is the most names one batch deletion ([BatchDeleter]) is
+// handed: S3's DeleteObjects takes at most a thousand keys a request.
+const MaxDeleteBatch = 1000
+
+// DeleteBatchError is a batch deletion the store answered name by name,
+// refusing some names: Failed holds why, for each name it did not remove. The
+// rest are gone.
+type DeleteBatchError struct {
+	Failed map[string]error
+}
+
+// Error names how many names were refused, and the first of them by name.
+func (e *DeleteBatchError) Error() string {
+	names := slices.Sorted(maps.Keys(e.Failed))
+	if len(names) == 0 {
+		return "objstore: a batch deletion refused no name"
+	}
+	return fmt.Sprintf("objstore: a batch deletion was refused for %d name(s), the first %q: %v",
+		len(names), names[0], e.Failed[names[0]])
+}
+
+// Unwrap is every refusal, so errors.Is and errors.As reach each.
+func (e *DeleteBatchError) Unwrap() []error {
+	out := make([]error, 0, len(e.Failed))
+	for _, name := range slices.Sorted(maps.Keys(e.Failed)) {
+		out = append(out, e.Failed[name])
+	}
+	return out
+}
 
 // Info is one object a backend holds, as it reports it.
 type Info struct {
@@ -241,6 +279,32 @@ type Ranged interface {
 	// store this backend cannot list in order answers [ErrUnordered], before
 	// it has visited anything.
 	ListRange(ctx context.Context, after, through string, visit func(Info) error) error
+}
+
+// BatchDeleter is a [Backend] that can also delete many names in one request:
+// an S3 bucket, whose DeleteObjects takes up to [MaxDeleteBatch] keys.
+//
+// AN OPTIONAL HALF OF THE CONTRACT, as [Ranged] is, and for the same kind of
+// reason: only some stores have the verb — the broker's object store purges an
+// object's metadata and its pieces as writes of their own, which nothing
+// batches — and it exists for the collector, which deletes what no row names a
+// batch of judged keys at a time. On S3 a bulk removal — a project of a million
+// files nobody names any more — is then two thousand requests rather than a
+// million. Declared here, beside the contract, for [Ranged]'s reason: the suite
+// certifies it (objstoretest, which also refuses a backend that implements it
+// uncertified) and the store reads it ([Store.DeleteKeys]).
+type BatchDeleter interface {
+	Backend
+
+	// DeleteBatch removes every one of names — at most [MaxDeleteBatch],
+	// each what [Backend.Delete] would remove — in one request. A name that
+	// is not there is not an error. It answers nil when every name is gone;
+	// a [*DeleteBatchError] when the store answered name by name and refused
+	// some, why for each, the rest being gone; an error wrapping
+	// [ErrNoBatch] when the store refused the request itself, having
+	// removed nothing; and any other error when the request failed,
+	// whatever it may have removed.
+	DeleteBatch(ctx context.Context, names []string) error
 }
 
 // CheckRead refuses the reads every backend refuses: a negative offset, an

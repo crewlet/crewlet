@@ -15,8 +15,11 @@
 // and that a name holding something the backend cannot read as an object is a
 // definite answer, listed and deletable, rather than a failure. A backend that
 // lists a range of its names in order ([objstore.Ranged]) is held to that too,
-// and one that does not claim it is held to not offering it — an ordering
-// nothing certified is one an audit would read objects as lost by.
+// and so is one that deletes many names in one request
+// ([objstore.BatchDeleter]); one that does not claim either is held to not
+// offering it — an ordering nothing certified is one an audit would read
+// objects as lost by, and a batch nothing certified one that could delete a
+// file somebody keeps.
 //
 // And ONE BENCHMARK SUITE ([Bench]) every backend runs from a
 // `BenchmarkBackend` of its own, as it runs [Run] from `TestContract`: the
@@ -82,6 +85,12 @@ type Options struct {
 	// suite holds it to NOT implementing the interface, so no backend can
 	// offer an ordering nothing certified.
 	Ranged bool
+
+	// BatchDeletes says the backend deletes many names in one request
+	// ([objstore.BatchDeleter]), which the suite then holds it to. Unset,
+	// the suite holds it to NOT implementing the interface, so the
+	// collector never hands a batch to a deletion nothing certified.
+	BatchDeletes bool
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -118,6 +127,7 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
 		{"a_name_holding_no_object_is_corrupt_listed_and_deletable", aNameHoldingNoObjectIsCorrupt},
 		{"a_range_lists_its_names_in_order", aRangeListsItsNamesInOrder},
+		{"a_batch_deletion_removes_exactly_its_names", aBatchDeletionRemovesExactlyItsNames},
 	}
 	for _, c := range cases {
 		// IN PARALLEL: each case is handed a backend of its own from the
@@ -810,3 +820,64 @@ func aRangeListsItsNamesInOrder(t *testing.T, b objstore.Backend, opts Options) 
 // defaultPageOf is more names than any backend's listing page in the suite
 // holds — s3fake pages seven at a time — so a range crosses pages.
 const defaultPageOf = 10
+
+// A BATCH DELETION REMOVES EXACTLY ITS NAMES: every name it is handed is gone —
+// a full batch of [objstore.MaxDeleteBatch] included, names that were never
+// there and a name holding no object the backend can read among them — every
+// name it is not handed is untouched, and an empty batch removes nothing. The
+// collector deletes a batch of the names no row names; a batch that reached a
+// name beside them would delete a file somebody keeps.
+func aBatchDeletionRemovesExactlyItsNames(t *testing.T, b objstore.Backend, opts Options) {
+	d, ok := b.(objstore.BatchDeleter)
+	if !opts.BatchDeletes {
+		if ok {
+			t.Fatal("the backend deletes in batches and the suite was not told to certify it: " +
+				"set Options.BatchDeletes")
+		}
+		return
+	}
+	if !ok {
+		t.Fatal("the suite was told the backend deletes in batches, and it does not implement " +
+			"objstore.BatchDeleter")
+	}
+	var doomed []string
+	for i := range objstore.MaxDeleteBatch - 2 {
+		name := fmt.Sprintf("files/doomed-%04d", i)
+		put(t, b, name, []byte(name))
+		doomed = append(doomed, name)
+	}
+	if opts.Spoil != nil {
+		put(t, b, "files/doomed-spoiled", []byte("bytes about to be made unreadable"))
+		opts.Spoil(t, b, "files/doomed-spoiled")
+	}
+	doomed = append(doomed, "files/doomed-spoiled", "files/never-put")
+	kept := []string{"files/doomed", "files/doomed-0000x", "files/kept"}
+	for _, name := range kept {
+		put(t, b, name, []byte(name))
+	}
+
+	if err := d.DeleteBatch(t.Context(), nil); err != nil {
+		t.Fatalf("DeleteBatch of no names: %v", err)
+	}
+	if err := d.DeleteBatch(t.Context(), doomed); err != nil {
+		t.Fatalf("DeleteBatch of %d names: %v", len(doomed), err)
+	}
+	all := listed(t, b)
+	for _, name := range doomed {
+		if got := all[name]; len(got) != 0 {
+			t.Fatalf("a listing after the batch deletion visited %s: %+v", name, got)
+		}
+	}
+	gone(t, b, doomed[0], "a batch deletion")
+	gone(t, b, "files/doomed-spoiled", "a batch deletion")
+	for _, name := range kept {
+		if got, err := get(t, b, name, 0, -1); err != nil || string(got) != name {
+			t.Fatalf("%s, beside the names a batch deletion was handed, read back %q, %v", name, got, err)
+		}
+	}
+	// AGAIN, every name now gone: deleting what is not there is not an
+	// error, as one deletion of it is not.
+	if err := d.DeleteBatch(t.Context(), doomed[:3]); err != nil {
+		t.Fatalf("DeleteBatch of names already gone: %v", err)
+	}
+}

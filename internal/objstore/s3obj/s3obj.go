@@ -157,6 +157,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -227,13 +228,15 @@ const partsInFlight = 4
 // this.
 const spareParts = 3 * partsInFlight
 
-// callBudget bounds a request that carries no body of its own: a head, a
-// delete, a page of a listing, the start or the abandonment of an upload.
+// callBudget bounds a request that carries no object's bytes: a head, a
+// delete, a batch deletion — whose body is at most a thousand keys, a hundred
+// kilobytes — a page of a listing, the start or the abandonment of an upload.
 //
 // THIRTY SECONDS: each is one small request and its answer, a fraction of a
-// second against any healthy provider, and thirty is room for the SDK's own
-// retries of one that failed — while a bucket that has stopped answering ends
-// a request rather than holding the handler that sent it.
+// second against any healthy provider — a batch deletion a second or two —
+// and thirty is room for the SDK's own retries of one that failed, while a
+// bucket that has stopped answering ends a request rather than holding the
+// handler that sent it.
 const callBudget = 30 * time.Second
 
 // completeBudget bounds the request that assembles a multipart upload.
@@ -728,6 +731,60 @@ func (b *Backend) Delete(ctx context.Context, name string) error {
 	})
 	if err != nil && !missing(err) {
 		return fmt.Errorf("s3obj: delete %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteBatch implements [objstore.BatchDeleter]: one DeleteObjects request of
+// up to [objstore.MaxDeleteBatch] keys, QUIET, so its answer names only the
+// keys it refused — a key that is not there is one it answers deleted.
+//
+// CONTENT-MD5 BESIDE THE SDK'S OWN CHECKSUM: the API required an MD5 of this
+// verb's body for most of its life, and S3-compatible gateways implemented the
+// requirement as written, while Amazon checks whichever it is sent.
+//
+// A REQUEST THE BUCKET REFUSES AS A WHOLE — a client error but a throttle, or
+// 501 — is [objstore.ErrNoBatch]: it removed nothing, and a gateway that does
+// not offer the verb answers it so (Google Cloud Storage's XML API has no
+// multi-object delete), so its caller deletes each name instead. A throttle or
+// a server error is the bucket failing, and is reported as such: the caller
+// asking for each name on its own would answer a prefix that said to slow
+// down with a request for every key.
+func (b *Backend) DeleteBatch(ctx context.Context, names []string) error {
+	if len(names) > objstore.MaxDeleteBatch {
+		return fmt.Errorf("s3obj: a batch deletion of %d names, past the %d one DeleteObjects takes",
+			len(names), objstore.MaxDeleteBatch)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	objects := make([]types.ObjectIdentifier, len(names))
+	for i, name := range names {
+		objects[i] = types.ObjectIdentifier{Key: aws.String(b.key(name))}
+	}
+	out, err := call(ctx, callBudget, func(ctx context.Context) (*s3.DeleteObjectsOutput, error) {
+		return b.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(b.bucket),
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		}, s3.WithAPIOptions(smithyhttp.AddContentChecksumMiddleware))
+	})
+	if err != nil {
+		if code := status(err); (code >= 400 && code < 500 && code != http.StatusTooManyRequests) ||
+			code == http.StatusNotImplemented {
+			return fmt.Errorf("s3obj: delete %d objects: %w: %w", len(names), objstore.ErrNoBatch, err)
+		}
+		return fmt.Errorf("s3obj: delete %d objects: %w", len(names), err)
+	}
+	failed := map[string]error{}
+	for _, e := range out.Errors {
+		if aws.ToString(e.Code) == "NoSuchKey" {
+			continue // not there: gone, as Delete reads it
+		}
+		name := strings.TrimPrefix(aws.ToString(e.Key), b.prefix)
+		failed[name] = fmt.Errorf("s3obj: delete %s: %s: %s", name, aws.ToString(e.Code), aws.ToString(e.Message))
+	}
+	if len(failed) > 0 {
+		return &objstore.DeleteBatchError{Failed: failed}
 	}
 	return nil
 }
