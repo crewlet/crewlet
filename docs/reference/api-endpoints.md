@@ -3131,9 +3131,19 @@ saved view and a person's own marks, pins and queue all follow the one rule.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets only `answer_run`, which is about the fleet's own run record. `search_knowledge` is the exception and is
-offered against **any** knowledge backend, Confluence included — a ranked
-search over the company's own wiki is exactly as useful to an assistant there.
+neither gets only the tools about the fleet's own records — `answer_run`,
+`pause_seat`, `resume_seat` and `steer_turn`. `search_knowledge` is the
+exception and is offered against **any** knowledge backend, Confluence
+included — a ranked search over the company's own wiki is exactly as useful to
+an assistant there — and so is `answer_knowledge`, which answers from it.
+
+A half's **reads and writes are offered apart**. A node that serves a half's
+reads and hands out no writer for it — any node started in a
+[maintenance mode](../guides/retention.md#the-three-modes) — offers its read
+tools (`list_work_items`, `get_page`, `read_project_file` and the rest the act
+transport does not serve) and none of its write tools. What appends to no log
+stays: the four tools about the fleet's own records, `search_knowledge` and
+`answer_knowledge`.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
