@@ -398,6 +398,9 @@ describe("the list", () => {
     const task = list.getByRole("link", { name: "PROD-91 Ledger export" });
     // A REAL LINK, so a modified click opens the task's own page in a tab.
     expect(task.getAttribute("href")).toBe("#/work/PROD-91");
+    // AND A QUIET ONE, in the kit's own ink for a reference among other
+    // words: a column of full accent links read as a column of links.
+    expect(task.className).toContain("crewlet-link--quiet");
     // AND NOT INSIDE THE ROW'S OWN BUTTON, which would make it unreachable.
     expect(task.closest("button")).toBeNull();
     fireEvent.click(task);
