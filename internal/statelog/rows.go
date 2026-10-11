@@ -192,6 +192,23 @@ type Snap struct {
 	Checkpoint Position
 }
 
+// anchorIn is the subject's arbitration anchor IN generation gen, or zero.
+//
+// ONE RULE FOR EVERY READER OF THE ANCHOR. A row keeps the generation it was
+// written in and a reanchor keeps every row, so an anchor from another
+// generation is a sequence in a number space the log has left — a restored log
+// counts again below it, a rebuilt one from one. Compared with a sequence from
+// this generation it says nothing: an expectation formed from it arbitrates
+// against a number the broker never assigned on this log, and the ambiguous
+// path that compared with it read "nothing landed above the anchor" for a
+// record that had landed, and decided again.
+func (s Snap) anchorIn(gen uint32) uint64 {
+	if s.Anchor.Generation != gen {
+		return 0
+	}
+	return s.Anchor.Seq
+}
+
 // ErrNoDecision reports a domain that returned neither a payload nor an
 // error, which is a bug in the domain rather than an outcome: the publisher
 // has nothing to publish and nothing to tell the caller.
