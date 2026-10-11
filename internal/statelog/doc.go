@@ -397,7 +397,11 @@
 // generation on the live stream and re-keys the runner to it, so every number
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// domain's log would key it to a stream it never read.
+// domain's log would key it to a stream it never read. WHICH instant
+// identifies a stream is ADR-0035: the one its creator stamped into its
+// configuration ([CreatedAtKey]), which a snapshot restore keeps and the
+// broker's own does not, read by every consumer through [StreamCreatedAt] and
+// by nothing else.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the

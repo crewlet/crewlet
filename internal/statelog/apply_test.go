@@ -1890,7 +1890,7 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 	}
 }
 
-// A RECREATED STREAM STOPS THE APPLIER, and it is the broker's own creation
+// A RECREATED STREAM STOPS THE APPLIER, and it is the stream's own creation
 // instant that says so.
 //
 // A stream deleted and remade restarts its sequences at one. Every position

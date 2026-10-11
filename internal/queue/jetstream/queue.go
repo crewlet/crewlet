@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Errors this backend reports. Callers branch on these; everything else is
@@ -566,6 +567,14 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		AllowRollup:       spec.allowRollup,
 		AllowDirect:       spec.allowDirect,
 		MirrorDirect:      spec.mirrorDirect,
+		// THE STREAM'S IDENTITY, stamped by the create that makes it,
+		// because the broker's own creation instant does not survive a
+		// snapshot restore and this does — see [statelog.CreatedAtKey].
+		// Minted ONCE for this ensure, so a create the placement retries
+		// asks for the same stream each time; a peer racing with its own
+		// stamp is the "name already in use" the read-back below answers,
+		// and whichever create won is the stream's identity.
+		Metadata: statelog.StampCreatedAt(nil, time.Now()),
 	}
 	if spec.maxPerSubject == 0 {
 		// The client spells "unlimited" as -1; a zero would be read as a

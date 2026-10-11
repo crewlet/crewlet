@@ -21,8 +21,13 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// THE APPLIER IS HANDED THE BROKER'S OWN CREATION INSTANT, and a stream
-// recreated between two boots stops it.
+// THE APPLIER IS HANDED THE STREAM'S STAMPED IDENTITY, and a stream recreated
+// between two boots stops it.
+//
+// The identity is the instant [statelog.StreamCreatedAt] reads: the one the
+// create that made the stream stamped into its configuration
+// ([statelog.CreatedAtKey]), which a snapshot restore hands back with the
+// configuration — never the broker's own, which a restore moves (ADR-0035).
 //
 // # Why this is an engine test and not only a framework one
 //
@@ -34,7 +39,7 @@ import (
 // the reanchor verb asked an operator to confirm 0001-01-01. A framework test
 // passing a real instant proves nothing about a caller that passes the wrong
 // one, so this boots the engine over its own broker and checks both halves.
-func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
+func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -46,7 +51,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	}
 	stream := tracker.Domain{}.Stream().Name
 
-	// FIRST BOOT: the running domain carries what the broker reports.
+	// FIRST BOOT: the running domain carries the stream's stamped identity.
 	back, err := OpenBackends(t.Context(), &b, cfg)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
@@ -69,16 +74,36 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 		t.Fatalf("read the stream: %v", err)
 	}
 	if stats.CreatedAt.IsZero() {
-		t.Fatal("the broker reports no creation instant, so nothing below can be checked")
+		t.Fatal("the log reports no creation instant, so nothing below can be checked")
+	}
+	// THE STAMP, read off the stream's own configuration: the engine made
+	// this log, so it carries the instant a restore hands back, and the
+	// log's identity is that instant rather than the broker's.
+	js, err := natsjs.New(q.Conn())
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	made, err := js.Stream(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("read the stream the engine made: %v", err)
+	}
+	stamp, stamped := made.CachedInfo().Config.Metadata[statelog.CreatedAtKey]
+	if !stamped {
+		t.Fatalf("the engine made %s with no %s in its configuration — its "+
+			"identity is then the broker's instant, which a restore moves",
+			stream, statelog.CreatedAtKey)
+	}
+	if got := stats.CreatedAt.UTC().Format(time.RFC3339Nano); got != stamp {
+		t.Fatalf("the log's identity is %s and its stamp %s", got, stamp)
 	}
 	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
 	if !running.runner.StreamCreatedAt().Equal(stats.CreatedAt.UTC()) {
-		t.Fatalf("the running domain carries %s and the broker reports %s — the "+
-			"detector compares the checkpoint against this, and a value read "+
-			"back out of the checkpoint detects nothing",
+		t.Fatalf("the running domain carries %s and the stream's stamped identity "+
+			"is %s — the detector compares the checkpoint against this, and a "+
+			"value read back out of the checkpoint detects nothing",
 			running.runner.StreamCreatedAt(), stats.CreatedAt)
 	}
 	// Commit a checkpoint under that identity, the way the applier does
@@ -96,18 +121,18 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	}
 	e.Stop(context.Background())
 
-	// THE STREAM IS DELETED AND REMADE with the same name, which is what a
-	// broker-level restore or a hand rebuild does. Its sequences restart
-	// and its creation instant moves.
-	js, err := natsjs.New(q.Conn())
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
+	// THE STREAM IS LOST, and the second boot provisions it again under the
+	// same name — stamped with a new instant, as the queue stamps every
+	// stream it creates. That is the recreation the identity exists to
+	// detect, and so is a hand rebuild from a configuration that carries no
+	// stamp: either way its sequences restart and its identity moves. A
+	// snapshot restore is NOT this: it hands the broker the configuration
+	// the snapshot recorded, stamp and all, and keeps every sequence.
 	if err := js.DeleteStream(t.Context(), stream); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
 	back.Close(context.Background())
-	// The broker keeps stream creation instants at nanosecond precision
+	// The stamp keeps the creating node's instant at nanosecond precision
 	// and the row keeps microseconds; a second boot inside the same
 	// microsecond would compare equal, so it waits one out.
 	time.Sleep(2 * time.Millisecond)
@@ -668,11 +693,14 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 }
 
 // rebuildLog deletes a domain's stream and makes it again under the same name:
-// a new creation instant, and sequences counting from 1 again.
+// a new identity, and sequences counting from 1 again.
 //
 // THROUGH THE BROKER'S OWN API rather than the queue's, which remembers what
 // it has provisioned and would no-op — and a broker-level rebuild is precisely
-// a stream this process did not create.
+// a stream this process did not create. FROM A CONFIGURATION WITH NO STAMP, as
+// an operator's hand rebuild makes one, so its identity is the broker's new
+// instant ([statelog.StreamCreatedAt]); one remade from the original's own
+// configuration would carry its stamp and be the same stream.
 func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	t.Helper()
 	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {

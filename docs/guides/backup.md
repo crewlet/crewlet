@@ -531,6 +531,27 @@ leaves out. Then:
   `CREWLET_NODE_ID`): a node restored under a fresh
   name is a new peer, its old replicas are orphaned, and the stream sits short
   of quorum waiting for a server that will never return.
+- **Keep each stream's configuration as its snapshot recorded it.** What a
+  node's rows are keyed to is each log's creation instant as the engine
+  stamped it into the stream's configuration when it created the stream
+  (`crewlet.created_at`), not the broker's own creation time: a restore dates
+  every stream to the moment of the restore, and the stamp survives because
+  the restore request hands the recorded configuration back. Restored that
+  way, each log is the stream the rows came from, so a node restored from the
+  same backup set resumes every log at its copy's position and replays the
+  records past it, and the memory changelog hydrates every seat. A
+  configuration edited on the way back — the stamp dropped or changed — is a
+  recreated stream to every node, which then refuses that log as
+  `wrong_stream` until it is
+  [re-anchored](retention.md#re-anchoring-a-recreated-or-restored-log).
+  The converse holds for a stream deleted and remade outside a restore: one
+  created from a configuration that still carries `crewlet.created_at` — the
+  configuration `nats stream info --json` printed, passed to `nats stream add
+  --config` — is the same stream to every node, judged only by where it ends
+  and what it holds at each node's checkpoint, and re-anchored as the restored
+  case (followed from its end) rather than the recreated one. To make a
+  deliberate rebuild read as a recreation, remove that metadata key from the
+  configuration before creating the stream.
 - **Expect bounded duplicates, not loss.** Mailboxes hold exactly the unacked
   backlog, and a restored completion ledger and dedupe window are older than
   the outside world — so some already-handled triggers re-run. That is the

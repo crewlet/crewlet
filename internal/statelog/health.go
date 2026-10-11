@@ -355,17 +355,18 @@ type Health struct {
 	// that has caught up with it. What is left is a node applying a DIFFERENT
 	// history into rows keyed by the old one, reporting itself caught up.
 	//
-	// The only thing that separates the two streams is the broker's own creation
-	// instant. The boot compares it once, and a running node sees the live one
-	// wherever it reads the stream's state — the position heartbeat every ten
-	// seconds, and the write fence on every expectation of zero. Every one of
-	// those lands in [Runner.StreamIdentity], and this is that answer's
-	// RECREATION half — errors.Is against [ErrStreamRecreated] — the SAME one
-	// the write path refuses on, so a node can never refuse its reads over a
-	// rebuilt log while its writes go on landing there. The identity's other
-	// half, a checkpoint past the end, is [Health.AheadOfLog] here, read live
-	// from this health's own end rather than from the runner's last reading.
-	// The remedy is the same either way, an operator's re-anchor.
+	// The only thing that separates the two streams is the stream's creation
+	// instant ([StreamCreatedAt]). The boot compares it once, and a running
+	// node sees the live one wherever it reads the stream's state — the
+	// position heartbeat every ten seconds, and the write fence on every
+	// expectation of zero. Every one of those lands in [Runner.StreamIdentity],
+	// and this is that answer's RECREATION half — errors.Is against
+	// [ErrStreamRecreated] — the SAME one the write path refuses on, so a node
+	// can never refuse its reads over a rebuilt log while its writes go on
+	// landing there. The identity's other half, a checkpoint past the end, is
+	// [Health.AheadOfLog] here, read live from this health's own end rather
+	// than from the runner's last reading. The remedy is the same either way,
+	// an operator's re-anchor.
 	StreamRecreated bool
 
 	// GenerationPassed is a domain a peer re-anchored past this node's rows

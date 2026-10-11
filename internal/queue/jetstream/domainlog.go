@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
@@ -280,8 +281,8 @@ type LogStats struct {
 	// real setting rather than a full log.
 	Bytes, MaxBytes uint64
 
-	// CreatedAt is the broker's own creation instant for the stream, which
-	// is what detects a recreated one.
+	// CreatedAt is the creation instant the stream's identity is keyed to
+	// ([statelog.StreamCreatedAt]), which is what detects a recreated one.
 	CreatedAt time.Time
 }
 
@@ -293,12 +294,19 @@ func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
 	if err != nil {
 		return LogStats{}, fmt.Errorf("jetstream: read %q's state: %w", l.name, err)
 	}
+	// THE STREAM'S IDENTITY, read the one way every consumer reads it —
+	// the instant stamped at its creation, which a snapshot restore keeps
+	// and the broker's own instant does not ([statelog.StreamCreatedAt]).
+	created, err := statelog.StreamCreatedAt(info)
+	if err != nil {
+		return LogStats{}, fmt.Errorf("jetstream: read %q's identity: %w", l.name, err)
+	}
 	stats := LogStats{
 		FirstSeq:  info.State.FirstSeq,
 		LastSeq:   info.State.LastSeq,
 		Messages:  info.State.Msgs,
 		Bytes:     info.State.Bytes,
-		CreatedAt: info.Created,
+		CreatedAt: created,
 	}
 	if info.Config.MaxBytes > 0 {
 		stats.MaxBytes = uint64(info.Config.MaxBytes)

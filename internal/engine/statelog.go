@@ -935,14 +935,15 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		return nil, err
 	}
 
-	// THE BROKER SAYS WHICH STREAM THIS IS. Its creation instant is the
-	// detector for a recreated stream, and the applier compares it against
-	// the instant its checkpoint was committed under — so it has to be the
-	// LIVE one. The cursor row's own value was passed here once, and a
-	// value read out of the row is compared against itself: every recreated
-	// stream went undetected, the manifest carried a zero instant on every
-	// fresh node, and the reanchor verb asked an operator to confirm the
-	// year one.
+	// THE STREAM SAYS WHICH STREAM THIS IS. Its creation instant — the one its
+	// creator stamped into its configuration ([statelog.StreamCreatedAt],
+	// which the log's Stats read) — is the detector for a recreated stream,
+	// and the applier compares it against the instant its checkpoint was
+	// committed under — so it has to be the LIVE one. The cursor row's own
+	// value was passed here once, and a value read out of the row is compared
+	// against itself: every recreated stream went undetected, the manifest
+	// carried a zero instant on every fresh node, and the reanchor verb asked
+	// an operator to confirm the year one.
 	stats, err := appendTo.Stats(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read %s's identity: %w — a node cannot "+
@@ -952,7 +953,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	created := stats.CreatedAt.UTC()
 	if created.IsZero() {
-		return nil, fmt.Errorf("engine: the broker reports no creation instant "+
+		return nil, fmt.Errorf("engine: the log reports no creation instant "+
 			"for %s, so this node cannot tell it from a recreated stream: %w",
 			spec.Name, statelog.ErrStreamRecreated)
 	}

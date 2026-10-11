@@ -513,34 +513,72 @@ func TestABackupReadsPastARecordAtTheTransportCeiling(t *testing.T) {
 // is a sequence on a stream that no longer exists, and read against the live
 // one it names other records. The instant the copy recorded is the one the
 // live stream was created at, or the window is somebody else's — and exactly
-// that instant is accepted.
+// that instant is accepted. For a log restored from a snapshot that instant is
+// the one its creator stamped, which the restore kept, and never the broker's,
+// which is the restore's own.
 func TestABackupRefusesACopyKeyedToAnotherInstanceOfTheLog(t *testing.T) {
 	t.Parallel()
-	for name, earlier := range map[string]bool{"another instance": true, "this instance": false} {
+	// stampedAt is when the restored log's original was created: a day
+	// before the broker made the restored one.
+	stampedAt := time.Now().Add(-24 * time.Hour).UTC()
+	for name, tc := range map[string]struct {
+		restored bool
+		keyed    func(broker time.Time) time.Time
+		refused  bool
+	}{
+		"another instance": {keyed: func(broker time.Time) time.Time { return broker.Add(-time.Hour) }, refused: true},
+		"this instance":    {keyed: func(broker time.Time) time.Time { return broker }},
+		"this instance, restored": {restored: true,
+			keyed: func(time.Time) time.Time { return stampedAt }},
+		"the restore's own instant": {restored: true,
+			keyed: func(broker time.Time) time.Time { return broker }, refused: true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			db := openStore(t)
 			nc := embeddedNATS(t)
 			stream := trackerLog(t, nc)
-			appendBarriers(t, nc, 5)
-			created := stream.CachedInfo().Created
-			if earlier {
-				created = created.Add(-time.Hour)
+			if tc.restored {
+				stream = restoredTrackerLog(t, nc, stampedAt)
 			}
-			seedCursorCreated(t, db, trackerLogStream, 1, 3, created)
+			appendBarriers(t, nc, 5)
+			seedCursorCreated(t, db, trackerLogStream, 1, 3, tc.keyed(stream.CachedInfo().Created))
 			files, _ := filesStore(t)
 			dir := filepath.Join(t.TempDir(), "instance")
 			_, err := windowService(t, db, nc, &backup.Objects{Open: files.Open}).Take(t.Context(), dir)
 			switch {
-			case earlier && !errors.Is(err, statelog.ErrStreamRecreated):
+			case tc.refused && !errors.Is(err, statelog.ErrStreamRecreated):
 				t.Fatalf("Take = %v, want ErrStreamRecreated", err)
-			case earlier:
+			case tc.refused:
 				noManifest(t, dir)
 			case err != nil:
 				t.Fatalf("a copy keyed to the live stream was refused: %v", err)
 			}
 		})
 	}
+}
+
+// restoredTrackerLog makes the tracker's log on nc's broker again as a snapshot
+// restore makes it: from a configuration carrying the instant its original was
+// stamped with, while the broker dates the stream itself to now.
+func restoredTrackerLog(t *testing.T, nc *nats.Conn, original time.Time) jetstream.Stream {
+	t.Helper()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := js.DeleteStream(t.Context(), trackerLogStream); err != nil {
+		t.Fatalf("delete the tracker's log: %v", err)
+	}
+	stream, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
+		Name: trackerLogStream, Subjects: tracker.Domain{}.Stream().Subjects,
+		Storage:  jetstream.FileStorage,
+		Metadata: statelog.StampCreatedAt(nil, original),
+	})
+	if err != nil {
+		t.Fatalf("restore the tracker's log: %v", err)
+	}
+	return stream
 }
 
 // A KEY THE COPY NAMES AS ONE OBJECT AND A RECORD PAST IT AS ANOTHER REFUSES
