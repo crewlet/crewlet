@@ -338,12 +338,38 @@ colour before adding it.
 ## Editing a node
 
 Choose **Edit** on the company, a unit or a seat to open its editor at the side
-of the chart. **Edit reports** opens a seat's editor at **Manages**, and a
-lead chip's **Choose another seat** opens a unit's at **Lead**, so an action
-about one field starts on that field. The editor holds your changes in its
+of the chart. The editor's head shows the node's mark (an agent's profile
+icon, which opens its picker), its name as you type it, and under the name the
+seat's handle and kind (or the unit's type); where the node sits in the
+organization is on its **Work** or **Leadership** tab rather than in the
+head. **Cancel** and **Apply** stay in the head while the form scrolls.
+
+A unit's and a seat's fields are split into tabs, so a long form reads as
+parts:
+
+| Node | Tabs |
+|---|---|
+| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
+| Human seat | **Profile**, **Contact** (contact identities and availability), **Work** (manages, and Delete) |
+| Unit | **Profile** (name, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
+
+The charter is short enough for one panel. A tab carries one marker, the most
+urgent: the number of problems in it, else a warning, else a dot for changes
+you have made there and not applied. A field that stops **Apply** marks its
+tab the same way, and pressing Enter in any field opens the tab that holds the
+reason.
+
+A field's help line shows while the field has focus, so the form reads as its
+labels and values. A value the builder shows and does not edit is a locked
+row: hover it, or read it with a screen reader, for the reason and where it is
+changed instead.
+
+**Edit reports** opens a seat's editor on **Work** at **Manages**, and a lead
+chip's **Choose another seat** opens a unit's on **Leadership** at **Lead**, so
+an action about one field starts on that field. The editor holds your changes in its
 own form until you press **Apply**, which adds them to the draft as **one
 step**: one Undo takes the whole edit back. Closing an editor that holds
-changes (Cancel, Close, Escape or a click outside it) asks before discarding
+changes (Cancel, Escape or a click outside it) asks before discarding
 them, and so does anything that would leave the builder under it: one of its
 links, the browser's Back or Forward to another screen, or a reload.
 **Keep editing** leaves you where you were, form and all. Moving between the
@@ -380,7 +406,7 @@ not a field somebody sets.
 | Purpose, goals | |
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
-| Knowledge | Free-text references, not a read scope. |
+| References | The unit's `knowledge` list: free-text references, not a read scope. |
 | Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). |
 | Schedules: enabled | Each schedule can be switched on or off. |
 
@@ -402,12 +428,13 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 |---|---|
 | Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
 | Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle once a check has seen the seat under the name it has now. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
+| Kind | Never. A seat keeps the kind it was added with; see [A seat keeps its kind](#a-seat-keeps-its-kind). |
 | Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
 | Email, goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
 | Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
-| Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
+| Providers, in order | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order shown; each chip moves earlier or later in place. A seat with no providers runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
@@ -419,9 +446,8 @@ workers, placement, learning, tool credentials (names only) and whether the
 seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
 each depend on a company-level block the builder does not edit.
 
-A seat's kind is changed with **Change to human seat** or **Change to agent
-seat**, in its menu or in the editor, which is its own step because it
-removes fields.
+**Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
+**Work** for a person) and opens the same dialog as the chart's Delete.
 
 A seat has no skills to edit. A skill is a knowledge base page the engine
 admits and injects per phase, and the learning subsystem drafts new ones from
@@ -430,9 +456,14 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 
 ### Seat integrations
 
-Each field is shown only when the company has connected the tool. Otherwise the
-editor says the tool is not connected and links to **Integrations**. No
-credential is ever shown.
+Each tool the company has connected is a card with the tool's own mark, its
+name and its state in the **Integrations** screen's words and colour:
+**Connected**, **Action needed** (or **Credential expiring**), **Connecting**,
+**Paused** or **Status unavailable**. That state is the company's, one word
+per tool everywhere. What is this seat's own (its GitHub app, and whether that
+app is installed yet) is a row inside the card, never a second status. The
+tools the company does not use are one line under the cards, with a link to
+**Integrations**. No credential is ever shown.
 
 - **GitHub:** access tier and repositories (an empty list means every
   repository the installation covers). Setting a tier on a seat with no GitHub
@@ -545,28 +576,18 @@ seat goes:
   and a seat added later under the same handle reattaches to it. See
   [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).
 
-## Changing a seat's kind
+## A seat keeps its kind
 
-**Change to human seat** and **Change to agent seat** are their own step,
-because the change removes fields: the engine refuses a human seat every
-runtime field (models, sandbox, token budget, workers, learning, schedules,
-placement, chat app blocks, the project and space it owns, tool credentials,
-behavioral guidelines, its own GitHub App and its profile icon), and refuses an agent seat
-`contact` and `availability`. The dialog lists the fields by name before
-anything is recorded, and calls out the ones that hold credentials: the builder
-never shows a credential, so it cannot type one back in and the value is gone
-for good once the change is saved. Removing a field tears nothing down at a
-vendor, so the seat's apps, bots and accounts, and the secret store entries the
-removed fields referenced, are listed as they are for a deleted seat.
-
-Becoming a human seat needs one contact identity, and cannot be done to the
-Datadog fallback (while Datadog is enabled) without choosing the agent seat
-that takes over. Where the
-seat is the company's only agent seat, the dialog says so and the change waits
-until another agent seat exists or Datadog is disconnected. The
-schedules the change would strand, and a turn the seat is running now, are
-named first. A seat that becomes human stops running; its memory is kept but
-unused while it is a human seat.
+The builder does not change a seat from an agent to a person or back. The two
+kinds share almost nothing: the engine refuses a human seat every runtime field
+(models, sandbox, token budget, workers, learning, schedules, placement, chat
+app blocks, tool credentials, behavioral guidelines, its own GitHub App and its
+profile icon) and refuses an agent seat `contact` and `availability`, and an
+agent seat's memory, mailbox and vendor accounts belong to the agent it was.
+The editor shows the kind as a locked row. To make a seat the other kind,
+delete it and add a new seat of the kind you want; the delete dialog lists
+what the removal leaves behind, and a seat added later under the same handle
+reattaches to its memory.
 
 ## Reviewing and saving
 
@@ -580,13 +601,12 @@ would do before it does it:
   seats that onboard again (and why), handle changes, reporting lines and
   leads that move (including a reorder that only changes which manager comes
   first), channels, where unrouted Jira and Confluence work goes, the tool
-  credentials a seat gains or loses (names only), fields a kind change
-  removes, references a removal clears, the Datadog fallback seat and GitLab
+  credentials a seat gains or loses (names only), references a removal clears, the Datadog fallback seat and GitLab
   access levels, and a new seat that takes a removed seat's handle and with it
   its memory.
 - **Warnings** the engine gave for exactly this save.
 
-A company rename, a handle change, a kind change, a change of tool
+A company rename, a handle change, a change of tool
 credentials and removing more than half of the seats each need an
 acknowledgement before **Save** enables. While the engine reports problems
 the review opens so you can read it, with Save disabled until they are fixed.
@@ -722,9 +742,8 @@ now, and sorts every change into one of three outcomes:
   now and yours, and you choose **Keep mine** or **Keep theirs** for each. A
   change is never replayed over somebody else's value without that choice.
   Where a change is about a whole seat or unit (a removal) the dialog names
-  the fields somebody changed, a position reads as where the node sits, and a
-  kind change lists the fields it would remove by name; a credential is never
-  shown, only that a literal value is set.
+  the fields somebody changed and a position reads as where the node sits; a
+  credential is never shown, only that a literal value is set.
 
 "The same seat" means what it means to the engine: a seat is its handle and a
 unit is its name, because those are what its memory, mailbox, schedules and

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,11 +244,17 @@ func (p *pacedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 
 // seedTasks files n tasks in a project of their own through the node's writer,
 // and waits for the node to apply them.
+// seededProjects numbers the projects seedTasks files, so every call names a
+// new one. The key was read off the clock once, and a clock that counts in
+// microseconds (macOS) left it a hundred values: a test seeding twice reused
+// its own key about once in a hundred runs, and the second create was refused.
+var seededProjects atomic.Int64
+
 func seedTasks(t *testing.T, e *Engine, n int) {
 	t.Helper()
 	writer := e.native.Load().writer
 	at := time.Now().UTC()
-	key := fmt.Sprintf("P%d", at.UnixNano()%100_000)
+	key := fmt.Sprintf("P%05d", seededProjects.Add(1))
 	mustApply(t, "the project", func() (tracker.WriteResult, error) {
 		return writer.WriteDocument(t.Context(), statelog.NewOpID(at, "project"),
 			tracker.ProjectSubject(key), "", tracker.Project{

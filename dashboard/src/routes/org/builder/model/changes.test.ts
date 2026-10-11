@@ -6,7 +6,7 @@
  * organizations (so a reorder that changes a primary manager, a lead change
  * that moves unrouted work, or a unit rename that re-onboards a subtree are
  * all reported even though no operation says so), matched by key; what only
- * the log can say (stripped fields, cleared references) is read from it; and a
+ * the log can say (cleared references) is read from it; and a
  * side without a derivation reports no derived consequence rather than a
  * guess.
  */
@@ -386,27 +386,6 @@ describe("reporting, leads, channels and routing", () => {
 });
 
 describe("what only the log says", () => {
-  test("fields a kind change removed, credentials called out, and the kind change acknowledged", () => {
-    const doc = fixtureCompany();
-    doc.units![0]!.roles![1]!.mcp_env = { git: { TOKEN: "__redacted__" } };
-    doc.units![0]!.roles![1]!.llm = "default";
-    const s = scenario(
-      [{ type: "changeKind", target: "seat:dev", kind: "human", contact: { github_login: "dev" } }],
-      doc,
-    );
-    const changes = changesOf(s);
-    expect(changes.strippedFields).toEqual([
-      {
-        ref: { key: "seat:dev", kind: "seat", name: "Dev" },
-        fields: [
-          { name: "llm", credential: false },
-          { name: "mcp_env", credential: true },
-        ],
-      },
-    ]);
-    expect(changes.acknowledgements).toEqual(["kind_change", "credential_servers"]);
-  });
-
   test("references a removal cleared, and the integration entries keyed by handle", () => {
     const s = scenario([{ type: "remove", target: "seat:sre", routeTo: "dev" }]);
     const changes = changesOf(s);

@@ -31,6 +31,7 @@ import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
 import {
   Callout,
   CharacterPicker,
+  FactList,
   FormField,
   HuePicker,
   InlineCode,
@@ -57,10 +58,13 @@ type SectionHeading = "h2" | "h3" | "h4" | "h5" | "h6";
 export function EditorSection({
   title,
   hint,
+  aside,
   children,
 }: {
   title: string;
   hint?: ReactNode;
+  /** A short control or tag at the end of the heading's row: a link out, "At least one". */
+  aside?: ReactNode;
   children: ReactNode;
 }) {
   const id = useId();
@@ -72,9 +76,12 @@ export function EditorSection({
        section inside one is a sub-part that takes none. */
     <section className="builder-section col gap-3" data-depth={depth} aria-labelledby={id}>
       <div className="col gap-1">
-        <Heading className="builder-section-title" id={id}>
-          {title}
-        </Heading>
+        <div className="builder-section-head">
+          <Heading className="builder-section-title" id={id}>
+            {title}
+          </Heading>
+          {aside && <span className="builder-section-aside">{aside}</span>}
+        </div>
         {hint && <p className="t-caption">{hint}</p>}
       </div>
       <SectionDepth.Provider value={depth + 1}>{children}</SectionDepth.Provider>
@@ -179,23 +186,29 @@ export function ReadOnlyFact({
 }: {
   label: string;
   children: ReactNode;
-  reason: ReactNode;
+  /** Why it cannot be changed here: one sentence, shown as the row's tooltip. */
+  reason: string;
   link?: { to: ScreenName; label: string };
 }) {
+  // ONE ROW, the kit's: the label and a lock on the left, the value on the
+  // right, and the reason as the row's tooltip rather than a caption under it.
   return (
-    <div className="builder-fact col gap-1">
-      <span className="t-label">{label}</span>
-      <div className="t-body">{children}</div>
-      <p className="t-caption">
-        {reason}
-        {link && (
-          <>
-            {" "}
-            <ScreenLink to={link.to}>{link.label}</ScreenLink>
-          </>
-        )}
-      </p>
-    </div>
+    <FactList
+      items={[
+        {
+          key: label,
+          label,
+          value: link ? (
+            <>
+              {children} <ScreenLink to={link.to}>{link.label}</ScreenLink>
+            </>
+          ) : (
+            children
+          ),
+          reason,
+        },
+      ]}
+    />
   );
 }
 
@@ -230,8 +243,6 @@ export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
     "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
   handle_change:
     "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
-  kind_change:
-    "Changing a seat's kind removes the fields listed above, and a removed credential cannot be recovered from the dashboard.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };
@@ -259,6 +270,9 @@ const CUSTOM_TYPE = "\u0000custom";
 const DEFAULT_UNIT_TYPE = "team";
 
 const typeLabel = (type: string) => type.charAt(0).toUpperCase() + type.slice(1);
+
+/** A unit's type as a word, the default type where it names none. */
+export const unitTypeLabel = (type: string) => typeLabel(type.trim() || DEFAULT_UNIT_TYPE);
 
 /**
  * A unit's type: one of the engine's well-known names, or anything else.

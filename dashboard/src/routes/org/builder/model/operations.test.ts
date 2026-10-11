@@ -21,7 +21,6 @@ import {
   describeOperation,
   evaluate,
   intentOf,
-  isCredentialField,
   malformedReason,
   record,
   touchedKeys,
@@ -674,9 +673,6 @@ describe("integration blocks", () => {
     expect(record(draft, { type: "remove", target: "seat:sre", routeTo: "dev" })).toMatchObject({
       refusal: "no_datadog",
     });
-    expect(
-      record(draft, { type: "changeKind", target: "seat:sre", kind: "human", routeTo: "dev" }),
-    ).toMatchObject({ refusal: "no_datadog" });
   });
 
   test("removing the last access level or the fallback leaves the connected block standing", () => {
@@ -715,93 +711,6 @@ describe("integration blocks", () => {
   });
 });
 
-describe("changing kind", () => {
-  test("becoming human strips every field a human seat may not carry, each recorded, and sets the contact", () => {
-    const base = fixtureCompany();
-    base.units![0]!.roles![1] = {
-      name: "Dev",
-      llm: "default",
-      token_budget: { day: 10, month: 200 },
-      mcp_env: { git: { TOKEN: "__redacted__" } },
-      behavioral_guidelines: ["Be kind"],
-      placement: { labels: { zone: "eu" } },
-      // A seat's tracker project and knowledge container are top-level keys,
-      // never under `integrations:` — a list naming them there stripped
-      // nothing and left a draft the engine refuses.
-      project: "ENG",
-      space: "DOCS",
-      integrations: {
-        github: { tier: "review" },
-        slack: { bot_token: "${DEV_SLACK_BOT}" },
-      },
-      goal: "Build",
-    };
-    const { op, draft, report } = run(fixture(base), {
-      type: "changeKind",
-      target: "seat:dev",
-      kind: "human",
-      contact: { github_login: "dev" },
-    });
-    expect(report.stripped).toEqual([
-      "llm",
-      "token_budget",
-      "placement",
-      "integrations.slack",
-      "project",
-      "space",
-      "mcp_env",
-      "behavioral_guidelines",
-      "integrations.github",
-    ]);
-    expect(seat(draft, "seat:dev")).toEqual({
-      name: "Dev",
-      kind: "human",
-      contact: { github_login: "dev" },
-      goal: "Build",
-    });
-    expect(
-      op.type === "changeKind" && op.stripped.find((f) => f.path.join(".") === "mcp_env")?.before,
-    ).toEqual({ git: { TOKEN: "__redacted__" } });
-  });
-
-  // The engine refuses a seat's own GitHub App on a human seat on admission
-  // (`config.Company.validateHumanSeatApps`): a person acts on GitHub as
-  // `contact.github_login`, never as an app. A kind change that kept the block
-  // would produce a draft the next check refuses over a field nobody touched,
-  // and the app's key is a credential the builder can never re-enter.
-  test("becoming human strips the seat's own GitHub App, marked as a credential", () => {
-    const base = fixtureCompany();
-    base.units![0]!.roles![1] = {
-      name: "Dev",
-      integrations: {
-        github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
-      },
-    };
-    const { op, draft } = run(fixture(base), {
-      type: "changeKind",
-      target: "seat:dev",
-      kind: "human",
-      contact: { github_login: "dev" },
-    });
-    expect(getPath(seat(draft, "seat:dev"), ["integrations", "github"])).toBeUndefined();
-    expect(isCredentialField(["integrations", "github"])).toBe(true);
-    expect(op.type === "changeKind" && op.stripped.map((f) => f.path.join("."))).toEqual([
-      "integrations.github",
-    ]);
-  });
-
-  test("becoming an agent strips contact and availability", () => {
-    const base: CompanyDocument = {
-      name: "X",
-      roles: [
-        { name: "Pat", kind: "human", contact: { slack_user_id: "U1" }, availability: "9-5" },
-      ],
-    };
-    const { draft } = run(fixture(base), { type: "changeKind", target: "seat:pat", kind: "agent" });
-    expect(seat(draft, "seat:pat")).toEqual({ name: "Pat" });
-  });
-});
-
 describe("evaluating", () => {
   test("a changed precondition is a conflict carrying the base value, their value and this operation's", () => {
     const draft = fixture();
@@ -823,8 +732,7 @@ describe("evaluating", () => {
   });
 
   // A CONFLICT'S VALUES ARE NOT ALWAYS A FIELD'S. Node keys, placements, a
-  // removal's whole node and a kind change's stripped fields are the
-  // builder's own structures, so each says which it is and a view can name
+  // removal's whole node are the builder's own structures, so each says which it is and a view can name
   // what it is about rather than print keys and masked credentials.
   test("a conflict over the builder's own structures says which structure it holds", () => {
     const draft = fixture();
@@ -875,14 +783,6 @@ describe("evaluating", () => {
     });
     const devGone = run(draft, { type: "remove", target: "seat:dev" }).draft;
     expect(shapes(devGone, addAfterDev)).toEqual([["position", "sibling"]]);
-
-    const toHuman = recordOk(draft, { type: "changeKind", target: "seat:sre", kind: "human" });
-    const trackerMoved = run(draft, {
-      type: "updateSeat",
-      target: "seat:sre",
-      set: [{ path: ["project"], value: "SUP" }],
-    }).draft;
-    expect(shapes(trackerMoved, toHuman)).toContainEqual(["fields the new kind removes", "fields"]);
 
     // A field's own values carry no shape: they are what the document writes.
     const editOp = recordOk(draft, editDev);
@@ -939,7 +839,6 @@ describe("an operation as data", () => {
         clearLeads: ["unit:Engineering"],
       },
       { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"] }], accessLevel: null },
-      { type: "changeKind", target: "seat:dev", kind: "human", contact: { slack_user_id: "U1" } },
       {
         type: "setScheduleEnabled",
         target: "unit:Engineering",
@@ -1059,12 +958,6 @@ describe("an operation as data", () => {
     expect(describeOperation(recordOk(added, { type: "remove", target: "new:legal" }), added)).toBe(
       "Removed unit Legal.",
     );
-
-    const human = recordOk(draft, { type: "changeKind", target: "seat:dev", kind: "human" });
-    expect(describeOperation(human, draft)).toBe("Changed Dev to a human seat.");
-    const humanDraft = apply(draft, human).draft;
-    const agent = recordOk(humanDraft, { type: "changeKind", target: "seat:dev", kind: "agent" });
-    expect(describeOperation(agent, humanDraft)).toBe("Changed Dev to an agent seat.");
   });
 
   test("an operation that records always applies to the draft it was recorded on, whatever odd values that draft holds", () => {
@@ -1089,12 +982,7 @@ describe("an operation as data", () => {
     const draft = fixture(odd);
     const intents: Intent[] = [
       { type: "renameSeat", target: "seat:blank-handle", name: "Renamed" },
-      {
-        type: "changeKind",
-        target: "seat:null-kind",
-        kind: "human",
-        contact: { github_login: "x" },
-      },
+      { type: "updateSeat", target: "seat:null-kind", set: [{ path: ["goal"], value: "Ship" }] },
       {
         type: "move",
         target: "seat:member",
@@ -1136,7 +1024,11 @@ describe("an operation as data", () => {
     const before = cloneJson(doc(draft));
     run(draft, { type: "remove", target: "unit:Engineering", placedSeats: "remove" });
     run(draft, { type: "renameUnit", target: "unit:Platform", name: "Infra" });
-    run(draft, { type: "changeKind", target: "seat:dev", kind: "human" });
+    run(draft, {
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [{ path: ["goal"], value: "Ship" }],
+    });
     expect(doc(draft)).toEqual(before);
   });
 });

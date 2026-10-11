@@ -134,7 +134,6 @@ export interface BuilderApi {
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;
   openDelete(key: NodeKey): void;
-  openChangeKind(key: NodeKey): void;
   /** Says a sentence through the Builder's one polite live region. */
   announce(message: string): void;
   /** Focuses and reveals a node in whichever view is mounted. */

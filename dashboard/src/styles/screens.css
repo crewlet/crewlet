@@ -2083,10 +2083,10 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
-   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
-   kind dialogs. A drawer's body is a column of fields; a section separates a
-   group of them (reports, a tool, what the document configures) with a rule
-   and a heading, so a long seat form reads as parts rather than one list. */
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move and Delete dialogs. A
+   dialog's body is a column of fields; a section separates a group of them
+   with a rule and a heading. The node editor is a sheet of TABS instead, and
+   its sections are the quieter kind described under "The node editor" below. */
 
 /* KEYED ON THE SECTION'S OWN DEPTH, which it already knows: it reads the depth
    to pick its heading level, so it says it. A section inside a section (one
@@ -2106,9 +2106,21 @@ a.prof-row:hover {
   color: var(--color-text-secondary);
 }
 .builder-section p,
-.builder-fact p,
 .builder-note {
   margin: 0;
+}
+/* A section's heading and the one link beside it (Open Schedules, Open the
+   document) share a line, the link at its inline end. */
+.builder-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.builder-section-aside {
+  flex: none;
+  font-size: var(--font-size-xs);
 }
 .builder-list {
   margin: 0;
@@ -2125,12 +2137,140 @@ a.prof-row:hover {
    carry. It used to be a flex row that sized its children through `> .field`,
    the class the engine's own field component drew; the design system draws the
    field now, and that selector went with it, leaving the two questions to size
-   themselves and the pair to read as one wide and one narrow. */
+   themselves and the pair to read as one wide and one narrow. On a phone the
+   pair stacks: two 30px controls side by side at phone width truncate both. */
 .builder-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-3) var(--spacing-4);
+  min-width: 0;
+}
+@media (width < 640px) {
+  .builder-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- The node editor -------------------------------------------------------
+   A sheet with a 72px head (the node's mark and name, Cancel and Apply), a
+   band of underline tabs that stays put while the panel scrolls, and the
+   active tab's panel. The sizes are the approved spec's: a 20px panel inset
+   with 32px below the last field, 24px between groups, and section titles as
+   11px uppercase labels with no rule, because the tab already says which part
+   of the node this is and a rule above every group read as a second border. */
+.node-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.node-editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.node-editor-panel {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-6);
+  padding: var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  min-width: 0;
+}
+.node-editor .builder-section[data-depth="0"] {
+  padding-top: 0;
+  border-top: 0;
+}
+.node-editor .builder-section {
+  gap: var(--spacing-4);
+}
+.node-editor
+  .builder-section[data-depth="0"]
+  > div
+  > .builder-section-head
+  > .builder-section-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+/* Three token ceilings share one row; on a phone they stack like a pair. */
+.node-editor-trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-3);
   min-width: 0;
+}
+@media (width < 640px) {
+  .node-editor-trio {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The chosen profile icon, with its character and colour named beside it. */
+.node-editor-icon {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+/* A connected tool: its real mark, its name and its status in the head, and
+   the seat's own settings for it below. One bordered box per tool, so tools
+   never run together. */
+.node-editor-card {
+  display: grid;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  min-width: 0;
+}
+.node-editor-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-6);
+}
+.node-editor-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+/* Every tool the company does not use, as one dashed line rather than a box
+   each: muted marks, their names and the way to connect them. */
+.node-editor-unused {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.node-editor-unused-marks {
+  display: inline-flex;
+  gap: var(--spacing-1);
+}
+/* Delete: what it does on the left, the danger button on the right. */
+.node-editor-delete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+/* A field label that carries its surface's mark (a contact's Slack or GitHub). */
+.field-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }
 
 /* ---- Feed --------------------------------------------------------------- */

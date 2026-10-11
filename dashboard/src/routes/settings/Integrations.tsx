@@ -54,6 +54,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
+import { TOOL_TONE } from "~/lib/toolState.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
@@ -374,22 +375,6 @@ export function entryState(
     surface: tool.surface,
   };
 }
-
-/**
- * The tone each state is drawn in.
- *
- * CONNECTED IS ONLY EVER GREEN, and nothing else is: the engine never sends
- * `connected` over a surface nothing can reach. `not_connected` is AMBER for the
- * reason every in-progress phase is — an integration that does not work yet,
- * which is not the neutral this screen keeps for a state nobody needs to come
- * back to. `not_in_use` is that neutral.
- */
-const TOOL_TONE: Record<IntegrationToolState, Tone> = {
-  attention: "warning",
-  not_connected: "warning",
-  connected: "success",
-  not_in_use: "neutral",
-};
 
 // ---------------------------------------------------------------------------
 // What an integration IS, in facts

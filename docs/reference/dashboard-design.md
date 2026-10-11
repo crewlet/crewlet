@@ -6711,7 +6711,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   confirming waits for a choice on each. A value is shown as a person reads
   it: the model tags a conflict over its own structures with their shape, so
   a node key reads as the node's name, a removed node as the fields that
-  changed, a kind change's stripped fields by name only, and a credential's
+  changed, and a credential's
   mask as "A literal value is set (hidden)", never as the marker or as JSON.
 - **Only the operation log is kept, and nothing is written before it is
   decided.** `useDraftKeeping.ts` reads the kept draft once the base is keyed,
@@ -6820,6 +6820,28 @@ to.
   `manages` is. The Builder's `openEditor` names the part of the form to start
   on (`EditorSectionName`), so an action about one field lands on it: a lead
   chip's "Choose another seat" opens the unit's editor at its lead.
+- **The node editor is a sheet of tabs, and the head names the node only.**
+  A seat's form ran to a dozen sections in one column, every group under a
+  rule and every field with a help line and an info icon. It is now the
+  kit's 560px sheet (`Modal variant="sheet" flush`) with a 72px head (the
+  node's mark, its live name, then the handle and kind or the unit's type,
+  never where it reports: that is the **Work** tab's), a sticky band of
+  underline `Tabs`, and one panel at a time, laid out to fixed sizes (a 20px
+  inset with 32px below, 24px between groups, 16px between fields, 30px
+  controls, 32px fact rows). The panel is the active tab's `tabpanel`; the
+  form's state is the editor's, so a tab that unmounts loses nothing. Each
+  tab carries one `TabsMarker`, the most urgent of a problem count, a warning
+  and a change, mapped from a problem's path or an edit part's path by the
+  longest tab prefix, and a field that blocks Apply counts as a problem on
+  its tab. Help lines show on focus (`helperOnFocus`), and what the builder
+  shows and does not edit is a `FactList` row with a lock whose reason is a
+  hover tooltip and is read inline by a screen reader, with no info icons.
+  A connected tool is a card with its `VendorMark` and the `integrations`
+  roll-up's own label and tone (`lib/toolState.ts`, shared with the
+  Integrations screen), so a tool has one status word everywhere; a seat's
+  own app state is a row in the card. The tools nobody connected are one
+  line. A seat's kind is a locked fact: there is no kind-change operation,
+  because the kinds share almost no fields, so the editor ends in **Delete**.
 - **A node holds no control a keyboard has to reach.** Each node is a
   `treeitem` with its level, position and expansion, and
   one roving tab stop moves among them: the arrows, Home, End and type-ahead
@@ -6841,8 +6863,9 @@ to.
   branch into it and its table row, and every other node is neutral. No hue is
   made from a seat (one hashed from its key, stated in its editor as a
   "Colour" fact, was removed: a legend nobody could decode); the editor offers
-  an agent's character and colour as two pickers instead, under **Profile
-  icon**, and a person's and a unit's editor offers neither. A seat leads with
+  an agent's character and colour in one `AvatarPicker` instead, in its head
+  and under **Profile icon**, and a person's and a unit's editor offers
+  neither. A seat leads with
   the console chart's mark rather than a badge: the agent's own character for
   an agent, a person's glyph in a dashed ring for a person (drawn alone in a
   table row). A

@@ -831,7 +831,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
  * (Enter, Delete), so they are the pair a pointer gets without opening
  * anything, and two is also what a node one rank tall can split into cells a
  * finger can hit. Everything else (Add, Move to, Open seat, Edit reports,
- * Change kind, Move up and Move down) is one list, in `nodeActions`, and it is
+ * Move up and Move down) is one list, in `nodeActions`, and it is
  * reached three ways that are all still here: the ContextMenu key or Shift+F10
  * on the node, the toolbar, which mirrors the selected node, and the Add on
  * the branch below.

@@ -50,11 +50,19 @@
  * carry a second line under an option, which is where a choice's hint belongs.
  */
 
-import { useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 
 import { withProblems } from "~/ui/Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "~/ui/secretref.ts";
 import { Combobox, FormField, InputAffix, Select, Textarea } from "@crewlethq/ui";
+
+/**
+ * Whether a field's help line is drawn only while it has focus. A dense form
+ * (the org builder's node editor) provides `true`, so it reads as labels and
+ * values at rest and each sentence appears under the field the reader is in;
+ * every other form draws its help as it always has.
+ */
+export const HelperOnFocus = createContext(false);
 
 export type FieldKind =
   "text" | "multiline" | "secret" | "url" | "id" | "choice" | "handle" | "email";
@@ -68,6 +76,7 @@ export interface FieldChoice {
 
 export function ConfigField({
   label,
+  mark,
   kind = "text",
   value,
   onChange,
@@ -84,6 +93,8 @@ export function ConfigField({
   rows = 3,
 }: {
   label: string;
+  /** A mark drawn before the label, such as a third-party app's own mark. */
+  mark?: ReactNode;
   kind?: FieldKind;
   value: string;
   onChange: (v: string) => void;
@@ -241,6 +252,7 @@ export function ConfigField({
   // nobody. It is also carried under each option in the list, which is what
   // the listbox can do and a native dropdown cannot: one says what you are
   // about to pick, the other what you have picked.
+  const helperOnFocus = useContext(HelperOnFocus);
   const chosen = picker ? (choices ?? []).find((choice) => choice.value === value) : undefined;
   const helper: ReactNode =
     chosen?.hint && help ? (
@@ -254,7 +266,16 @@ export function ConfigField({
   return (
     <FormField
       htmlFor={id}
-      label={label}
+      label={
+        mark ? (
+          <span className="field-mark">
+            {mark}
+            {label}
+          </span>
+        ) : (
+          label
+        )
+      }
       // REQUIRED IS THE UNMARKED DEFAULT on this form, and the exception is
       // marked: most fields are required, so marking them all is noise that
       // teaches a reader to skip the note. A field that just APPEARED because
@@ -263,6 +284,7 @@ export function ConfigField({
       optional={required === false}
       requiredNews={required === true && markRequired === true}
       helper={helper}
+      helperOnFocus={helperOnFocus}
       error={withProblems(error)}
       describedBy={affix ? affixID : undefined}
     >
