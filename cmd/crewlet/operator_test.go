@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -196,6 +197,54 @@ func TestAMaintenanceNodeOffersItsOperatorEveryReadAndNoLogWrite(t *testing.T) {
 	if !slices.Equal(acts, noLog) {
 		t.Errorf("a node in a maintenance mode offers its operator the writes %v, "+
 			"want exactly those that append to no log %v", acts, noLog)
+	}
+}
+
+// AN OPERATOR'S WRITE IS JUDGED AGAINST THE CONTAINERS THE CURRENT COMPANY
+// RESERVES. The skills container and the org root are Tier B, and the
+// operator's catalogue is not rebuilt for a revision that moves one of them —
+// so a list evaluated when it was built went on refusing the container the
+// company moved away from and wrote into the one it moved to, where pages are
+// excluded from every search; on a node that booted with no company it
+// reserved nothing at all. Pressed through the act transport `crewlet run`
+// serves, so the catalogue judged is the one a person's dashboard reaches.
+func TestAnOperatorWriteIsJudgedAgainstTheCurrentCompanysReservedContainers(t *testing.T) {
+	t.Parallel()
+	n := bootUnconfigured(t, "a-test-token")
+	n.reconcile()
+	founder := companyYAML + `  - name: Founder
+    kind: human
+    contact:
+      crewlet_operator_id: ops
+`
+	if err := n.settle(n.put(founder)); err != nil {
+		t.Fatalf("the company: %v", err)
+	}
+	refused := func(container string) (bool, string) {
+		t.Helper()
+		status, body := n.act(t, builtin.WritePageTool, map[string]any{
+			"title": "a page in " + container, "body": "x", "container": container,
+		})
+		var answer struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(body), &answer)
+		return status == http.StatusForbidden && answer.Error == "forbidden" &&
+			strings.Contains(body, "reserved container"), body
+	}
+	if ok, body := refused(config.DefaultSkillsContainer); !ok {
+		t.Fatalf("the premise: a page into the default skills container %s answered %s",
+			config.DefaultSkillsContainer, body)
+	}
+
+	// A REVISION MOVING THE SKILLS CONTAINER, which changes nothing the
+	// catalogue is built from.
+	if err := n.settle(n.put(founder + "knowledge:\n  skills_container: SKILLS\n")); err != nil {
+		t.Fatalf("the revision moving the skills container: %v", err)
+	}
+	if ok, body := refused("SKILLS"); !ok {
+		t.Errorf("a page into the skills container the company moved to answered %s, "+
+			"want 403 forbidden naming a reserved container", body)
 	}
 }
 

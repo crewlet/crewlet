@@ -867,7 +867,10 @@ a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
 
 The [reserved containers](#accessible-containers) are refused to it, exactly as
 they are to a seat — a page written into the tool-skills container would be
-injected into a phase as an instruction rather than read as knowledge.
+injected into a phase as an instruction rather than read as knowledge. Which
+containers those are is read from the running company at each write, so a
+revision that moves `knowledge.skills_container` or `knowledge.root_space`
+moves what is refused with it, with no restart.
 
 ### On Confluence: the import CLI
 

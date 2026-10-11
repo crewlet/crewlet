@@ -69,12 +69,20 @@ type PageDeps struct {
 	// unit's space. Empty makes the container argument required.
 	DefaultContainer func(handle string) string
 
-	// Reserved are the containers a seat may not write to directly: the
+	// Reserved names the containers a seat may not write to directly: the
 	// tool-skills container (whose pages are machinery published by the
 	// sync CLI) and the org root. A write there is refused naming the
 	// container, rather than silently landing somewhere excluded from
-	// every search.
-	Reserved []string
+	// every search. Nil reserves nothing.
+	//
+	// ASKED AT EACH WRITE rather than handed as a list, because both keys
+	// are Tier B and an apply can move them, and the operator's surface is
+	// not rebuilt for a new company document: a list captured when it was
+	// built went on refusing the containers the company had renamed away
+	// from and admitting the ones it had moved to — and on a node that
+	// booted with no company it reserved nothing at all. A seat's surface
+	// is rebuilt for every epoch, so it answers its own epoch's list.
+	Reserved func() []string
 
 	// Actor decides who a write is attributed to. Nil takes the turn's
 	// seat; the operator surface sets it. See [WorkDeps.Actor] for why
@@ -224,7 +232,10 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 }
 
 func (d PageDeps) reserved(container string) bool {
-	for _, key := range d.Reserved {
+	if d.Reserved == nil {
+		return false
+	}
+	for _, key := range d.Reserved() {
 		if strings.EqualFold(strings.TrimSpace(key), container) {
 			return true
 		}

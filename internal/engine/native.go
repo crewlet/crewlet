@@ -1932,6 +1932,7 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 	if !ok {
 		return builtin.PageDeps{}
 	}
+	reserved := reservedContainers(c.Config)
 	return builtin.PageDeps{
 		Reader:   reader,
 		Writer:   writer,
@@ -1944,10 +1945,11 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		// THE TWO CONTAINERS A SEAT MAY NOT WRITE TO DIRECTLY: the
 		// tool-skills container, whose pages are machinery the sync
 		// publishes, and the org root, which holds the onboarding tree.
-		// Read off the CURRENT epoch for the reason the defaults are —
-		// and refused by name at the call rather than silently landing
-		// somewhere every search excludes.
-		Reserved: reservedContainers(c.Config),
+		// Read off THIS epoch, which a seat's surface is rebuilt for,
+		// for the reason the defaults are — and refused by name at the
+		// call rather than silently landing somewhere every search
+		// excludes.
+		Reserved: func() []string { return reserved },
 		Await:    await,
 	}
 }
@@ -2119,6 +2121,23 @@ func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 		return nil
 	}
 	return e.router.Await(ctx, at)
+}
+
+// LiveReserved is [reservedContainers] of the engine's CURRENT company, read
+// per call, for the operator's surface: it is not rebuilt for a new company
+// document, and both containers are Tier B. ONE RULE for both surfaces —
+// the API used to keep a copy of it, evaluated once when its catalogue was
+// built, so an operator's assistant was refused the containers the company
+// had renamed away from and admitted to the ones it had moved to, and on a
+// node that booted with no company nothing was reserved at all.
+func LiveReserved(e *Engine) func() []string {
+	return func() []string {
+		c := e.Company()
+		if c == nil {
+			return nil
+		}
+		return reservedContainers(c.Config)
+	}
 }
 
 // reservedContainers are the containers a seat's own writes may not target.

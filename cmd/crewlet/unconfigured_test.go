@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -155,6 +158,37 @@ func (n *unconfiguredNode) settle(epoch int64) error {
 func (n *unconfiguredNode) get(t *testing.T, path string) (int, string) {
 	t.Helper()
 	return n.send(t, http.MethodGet, path)
+}
+
+// act presses one tool on the act transport as the operator — a fresh
+// request id, the arguments as JSON — answering the status and the body.
+func (n *unconfiguredNode) act(t *testing.T, tool string, args map[string]any) (int, string) {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{"request_id": id.String(), "args": args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		n.base+"/operator/act/"+tool, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+n.token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := n.client.Do(req)
+	if err != nil {
+		t.Fatalf("act %s: %v", tool, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("act %s: %v", tool, err)
+	}
+	return res.StatusCode, string(body)
 }
 
 // send makes one request with no body to path as the operator, answering the

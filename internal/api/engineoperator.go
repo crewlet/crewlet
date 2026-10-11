@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -428,7 +427,10 @@ func (b operatorBasis) options(e *engine.Engine) operator.Options {
 			Reader:   b.reads.Pages,
 			Actor:    operator.PageActor,
 			Mentions: engine.LiveMentions(e),
-			Reserved: engineReserved(e),
+			// THE CONTAINERS NO WRITE MAY TARGET, read off the company
+			// at each write: both are Tier B, and this catalogue is not
+			// rebuilt for a new company document.
+			Reserved: engine.LiveReserved(e),
 			Await:    e.AwaitEstate,
 		}
 		if key.wikiWrites {
@@ -566,22 +568,6 @@ func engineLeads(e *engine.Engine) builtin.Leads {
 		}
 		return false
 	}
-}
-
-// engineReserved is the containers an operator's assistant may not write to
-// directly, on the same terms a seat has them.
-func engineReserved(e *engine.Engine) []string {
-	c := e.Company()
-	if c == nil || c.Config == nil {
-		return nil
-	}
-	var out []string
-	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
-		if key = strings.TrimSpace(key); key != "" {
-			out = append(out, key)
-		}
-	}
-	return out
 }
 
 // engineKnowledge resolves the node's searcher per call, for the reason the
