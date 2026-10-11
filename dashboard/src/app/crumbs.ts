@@ -342,6 +342,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         : sectionPage("backups");
     case "audit":
       return sectionPage("audit");
+    case "appearance":
+      return sectionPage("appearance");
   }
 }
 

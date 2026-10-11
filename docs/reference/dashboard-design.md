@@ -830,6 +830,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
+| `#/settings/appearance` | **Appearance**: the mode, the density and the theme gallery for this browser, with a pane previewing the theme the pointer rests on. Not guarded: it is the reader's own and asks the engine nothing. No tail | |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route
@@ -5757,7 +5758,8 @@ the screen rather than as tabs in the page bar, in three groups: **Company**
 (General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
 arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
 MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups &
-retention, Audit log). A guarded section draws a key and **is never hidden**: a section that
+retention, Audit log), and at its foot **Personal** (Appearance), the one
+group that is the reader's own rather than the company's. A guarded section draws a key and **is never hidden**: a section that
 vanished for a reader without an operator credential is one they cannot know
 exists. The landing page is one of the column's sections, so its trail reads
 **Settings › General** rather than "Settings" alone. **On a phone the column

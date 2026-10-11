@@ -115,7 +115,8 @@ export type Screen =
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
-  | { screen: "audit" };
+  | { screen: "audit" }
+  | { screen: "appearance" };
 
 export type ScreenName = Screen["screen"];
 
@@ -397,6 +398,8 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     case "audit":
       // NO TAIL: every row has a page of its own somewhere else.
       return tail.length ? none() : screen({ screen: "audit" });
+    case "appearance":
+      return tail.length ? none() : screen({ screen: "appearance" });
     default:
       return none();
   }

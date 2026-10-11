@@ -83,6 +83,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const Audit = lazyScreen("settings", (m) => m.Audit);
+const Appearance = lazyScreen("settings", (m) => m.Appearance);
 
 /** One resolved screen, drawn. */
 export function screenFor(route: Resolved): ReactNode {
@@ -185,6 +186,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "audit":
       return <Audit />;
+    case "appearance":
+      return <Appearance />;
   }
 }
 

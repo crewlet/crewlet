@@ -570,6 +570,17 @@ export const WORKSPACES: WorkspaceRow[] = [
         group: "Engine",
         guarded: true,
       },
+      {
+        // THE READER'S OWN, at the foot: how the console looks in this
+        // browser, which no operator configures and nobody else sees. Not
+        // guarded, because it reads and writes nothing of the company's.
+        key: "appearance",
+        label: "Appearance",
+        icon: "palette",
+        path: ["settings", "appearance"],
+        hint: "Mode, density and theme, in this browser only",
+        group: "Personal",
+      },
     ],
   },
 ];
@@ -641,6 +652,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "revisions",
   "backups",
   "audit",
+  "appearance",
 ];
 
 /**
