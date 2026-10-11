@@ -45,7 +45,7 @@ func rewritten(t *testing.T, payload []byte, fn func(map[string]any)) []byte {
 	return out
 }
 
-// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES. A backup reads the
+// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0034). A backup reads the
 // tracker's log past its store copy and carries every object a record names,
 // because a restore replays those records into the rows — so what the
 // declaration's reader says one record writes has to be what the applier

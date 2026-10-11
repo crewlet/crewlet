@@ -84,7 +84,7 @@
 // objects ([ReferenceTable.Records], the domain's own decoder): a backup
 // restores a copy of the rows and replays the log from the copy's position, so
 // what it owes is what the copy names AND what every record it replays names
-// (internal/backup). The collector reads rows alone and never the log.
+// (ADR-0034). The collector reads rows alone and never the log.
 package objstore
 
 import (
@@ -371,7 +371,7 @@ type ReferenceTable struct {
 	// domain's applier keeps the records of it this node could not apply
 	// yet (statelog's DeferredTable).
 	//
-	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup): a
+	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0034): a
 	// restore brings the copy back and replays that log from the copy's
 	// position — and a build that can read a deferred record applies it —
 	// so the objects the restored rows name include every object a record
@@ -610,6 +610,30 @@ func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +
 		` WHERE ` + t.Key + ` IS NOT NULL AND ` + t.Key + ` > ?` +
 		` ORDER BY ` + t.Key + ` LIMIT ` + fmt.Sprint(n), nil
+}
+
+// ReferencesAmong is the statement answering every row naming one of n given
+// keys, its n arguments the keys asked about, each row in
+// [ReferenceTable.ReferencesAfter]'s columns — so [ReferenceTable.ScanReferences]
+// decodes it. A backup asks it of the keys the records past its copy name, to
+// learn which the copy names too and as what, with n seeks of the key column's
+// index rather than a read of the bytes it carried.
+//
+// ONLY FOR A REQUIRED TABLE, for [ReferenceTable.ReferencesAfter]'s reason.
+func (t ReferenceTable) ReferencesAmong(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("objstore: a question about %d references", n)
+	}
+	if err := t.Validate(); err != nil {
+		return "", err
+	}
+	if t.Standing != Required {
+		return "", fmt.Errorf("objstore: %s is declared %s: its rows name no object the "+
+			"company is owed, so nothing asks which of them it names", t.Table, t.Standing)
+	}
+	return `SELECT ` + t.Key + `, ` + t.Hash + `, ` + t.Size + `, ` +
+		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +
+		` WHERE ` + t.Key + ` IN (?` + strings.Repeat(`, ?`, n-1) + `)`, nil
 }
 
 // Rows is the part of a statement's result the decoders below read — what

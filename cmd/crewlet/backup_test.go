@@ -192,3 +192,23 @@ func TestBackupReportsANodeThatCannotTakeOne(t *testing.T) {
 		t.Errorf("the node's reason was lost: %v", err)
 	}
 }
+
+// THE FILES WRITTEN WHILE THE BACKUP RAN ARE SAID: a backup carries every
+// object a record its restore replays names, and those are the files a backup
+// of its copy's rows alone used to miss — so the report counts them apart.
+func TestABackupSaysHowManyFilesWereWrittenDuringTheCopy(t *testing.T) {
+	t.Parallel()
+	node := newBackupNode(t)
+	node.answer = map[string]any{
+		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:02Z",
+		"node_id": "node-0",
+		"objects": map[string]any{"dir": "objects", "objects": 9, "replayed": 2, "bytes": 9000},
+	}
+	stdout, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/var/backups/tonight")
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if !strings.Contains(stdout, "9 objects (2 written during the copy)") {
+		t.Errorf("the report does not count the files written during the copy:\n%s", stdout)
+	}
+}

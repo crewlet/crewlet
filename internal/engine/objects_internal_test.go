@@ -36,7 +36,7 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	}
 }
 
-// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG. A backup reads
+// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0034). A backup reads
 // the log a declaration names past its store copy, and the deferred records of
 // the table it names, to carry the objects a restore's replay names — so a
 // declaration naming another domain's stream or table would have the backup

@@ -156,8 +156,9 @@ logs survive, on the same members:
   about files changes what a fleet of a given size survives — it is the same
   arithmetic as its logs (see [Scaling Out](scaling.md)).
 - **A backup carries it as a stream.** The stream snapshot every backup takes
-  includes `OBJ_crewlet_files`, so no object is copied on its own; a restore
-  brings the bucket back with every other stream.
+  includes `OBJ_crewlet_files` — snapshotted after every other stream, so it
+  holds every object a record of those snapshots names — and no object is
+  copied on its own; a restore brings the bucket back with every other stream.
 
 What it costs is that **every member holding a copy holds every object**: the
 bucket is one stream on one replica set. For the three or five data nodes a
@@ -259,9 +260,9 @@ new block. **The fleet stops first** because an upload stores its object before
 it writes the row naming it: an object uploaded after a copy taken while the
 fleet still ran is named by a row and absent from the new store, and its file
 cannot be read. The copy is of the old store's whole `files/` corner, never of
-a backup's `objects/`, which holds only the objects
-[live](#live-and-retired-references) rows name and none a retired row still
-keeps for a reader catching up.
+a backup's `objects/`, which holds only the objects a backup's restore point
+names — [live](#live-and-retired-references) rows of its copy and the records
+it replays — and none a retired row still keeps for a reader catching up.
 
 Deleting the record reaches the broker from outside the engine, and so does
 the copy when either store is `nats`, so a move needs a broker that listens:
@@ -410,7 +411,8 @@ Every table whose rows name objects declares which of two kinds its rows are:
 
 - **Live** — the object is part of something the company holds, such as a
   file's bytes. The collector keeps it, the audit checks it, and a backup
-  carries it.
+  carries it — and every object a record its restore replays names, since
+  those records write live rows too.
 - **Retired** — the object has been replaced and nothing new will read it,
   but a reader that has not caught up may still be fetching it. A retired row
   keeps the object from the collector until the part of the engine that wrote

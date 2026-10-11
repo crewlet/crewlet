@@ -171,7 +171,7 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	}
 }
 
-// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS. A backup
+// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0034). A backup
 // restores its store copy and replays the declaring domain's log from the
 // copy's position — and a newer build applies what the copy's applier deferred
 // — so it owes every object a record of either names, and it learns how a

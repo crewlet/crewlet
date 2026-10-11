@@ -648,11 +648,14 @@ partial copy as a backup.
 
 **The company's files come too**, as an `objects` line. On the default `nats`
 object store their objects are in the `OBJ_crewlet_files` stream the backup
-snapshots with the rest, and the line counts the objects the copy's live rows
-name that the stream holds, asked thirty-two at a time (lost ones are listed
-beneath); on `s3` each object a live row of the copy names is read from the
-bucket into `objects/`, sixteen at a time, and checked against its file's size
-and SHA-256 as it is written, and the line gives their count and size. A file
+snapshots after the rest, and the line counts the objects the backup owes that
+the stream holds, asked thirty-two at a time (lost ones are listed beneath); on
+`s3` each object it owes is read from the bucket into `objects/`, sixteen at a
+time, and checked against its file's size and SHA-256 as it is written, and the
+line gives their count and size. What it owes is every object a live row of the
+copy names and every object a record the restore replays from the copy names —
+a file written while the backup ran, counted as "(N written during the copy)".
+A file
 whose object the store answered it does not hold, or holds wrong, does not
 fail the backup: it is listed beneath, as `PROJECT/path` and the object's key,
 to restore from an earlier backup or upload again. The first one the store
