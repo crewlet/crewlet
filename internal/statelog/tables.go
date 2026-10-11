@@ -396,6 +396,55 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	}, nil
 }
 
+// sweepAnchors removes up to [AnchorsPerTrimmedRecord] of this stream's
+// anchors below below, LOWEST FIRST, and reports how many went — a trimmed
+// record's whole effect (ADR-0032).
+//
+// A RANGE OVER `statelog_anchor_swept_idx (stream, anchor)`, the index the
+// replicated estate's first migration shipped for exactly this delete. PACKED
+// COMPARISON, so every anchor of an earlier generation goes too — the
+// publisher already ignores one ([Snap.anchorIn]).
+//
+// WHICH [AnchorsPerTrimmedRecord] go is a function of the table's contents
+// alone, so two nodes holding the same anchors remove the same rows: an anchor
+// is the position of the last record consumed on its subject, and one position
+// is one record on one subject, so no two of a stream's anchors are equal and
+// the order has no ties to break.
+func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (int, error) {
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM statelog_anchor WHERE rowid IN (
+			SELECT rowid FROM statelog_anchor
+			WHERE stream = ? AND anchor < ?
+			ORDER BY anchor LIMIT ?)`,
+		t.stream, below.Packed(), AnchorsPerTrimmedRecord)
+	if err != nil {
+		return 0, fmt.Errorf("statelog: remove the anchors on %s below %s: %w", t.stream, below, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("statelog: count the anchors removed on %s: %w", t.stream, err)
+	}
+	return int(n), nil
+}
+
+// anchorsBelow counts this stream's anchors below below, up to limit — a
+// bounded walk of the same index, because what the caller needs is how many
+// records to append, which the bound already caps.
+func (t tables) anchorsBelow(ctx context.Context, db ReadEstate, below Position, limit int) (int, error) {
+	var n int
+	err := db.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM (
+				SELECT 1 FROM statelog_anchor
+				WHERE stream = ? AND anchor < ? LIMIT ?)`,
+			t.stream, below.Packed(), limit).Scan(&n)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("statelog: count the anchors on %s below %s: %w", t.stream, below, err)
+	}
+	return n, nil
+}
+
 // writeOp records that this node applied an operation at a position, by the
 // record whose broker instant is storedAt.
 func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p Position,

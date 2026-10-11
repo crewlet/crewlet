@@ -252,11 +252,13 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Eviction](rec)
 	case rec.Subject.Kind == KindGeneration && rec.Op == OpGeneration:
 		return decodePayload[Generation](rec)
-	case rec.Subject.Kind == KindBarrier && rec.Op == OpBarrier:
-		// THE ONE PAYLOAD-FREE RECORD, and nil is its value rather than
-		// an absence: the applier's switch has a case for it that
-		// writes nothing, which is what keeps "this kind wrote nothing"
-		// distinguishable from "nobody classified this kind".
+	case rec.Subject.Kind == KindBarrier && rec.Op == OpBarrier,
+		rec.Subject.Kind == KindTrimmed && rec.Op == OpTrimmed:
+		// THE TWO PAYLOAD-FREE RECORDS, and nil is their value rather
+		// than an absence: the applier's switch has a case for each that
+		// writes nothing of this domain's, which is what keeps "this kind
+		// wrote nothing" distinguishable from "nobody classified this
+		// kind".
 		return nil, nil
 	}
 	return nil, fmt.Errorf("pages: no payload shape for (%s, %s) — a record's "+
@@ -320,6 +322,44 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},
 			Gen:     env.Gen,
+		},
+	})
+}
+
+// EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
+// ADR-0032) as a record this domain's applier decodes — the barrier's split:
+// the framework owns when one is appended, what it removes and the floor its
+// subject names, and the domain owns what a record on its log looks like.
+//
+// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID, asserted —
+// one becomes a message id and a ledger row nothing resolves. And the floor is
+// CHECKED here, at the write, rather than in [Subject.Validate], which the
+// read path runs too: a refusal there would turn one malformed record into an
+// applier that stops on every node, where the framework's apply faults instead.
+func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
+		return nil, fmt.Errorf("pages: a %q envelope on %q is not a trimmed record",
+			env.Kind, env.Subject)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("pages: a trimmed record carries no op id and this " +
+			"one has one — an op id becomes a message id and a ledger row nothing " +
+			"resolves")
+	}
+	floor, err := statelog.TrimmedFloor(Domain{}.Stream().Name, env.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			// PINNED, for the barrier's reason: see [baseRecordVersion].
+			V:       baseRecordVersion,
+			Subject: TrimmedSubject(floor),
+			Op:      OpTrimmed,
+			Scope:   ScopeSet{Subject: true},
+			Gen:     env.Gen,
+			Writer:  env.Writer,
 		},
 	})
 }

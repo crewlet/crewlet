@@ -5,11 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -82,7 +79,7 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
-	log := &recordingLog{last: map[string]uint64{}}
+	log := newSuiteLog()
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: c.spec(),
 		Log: log, Records: log, Rows: rows,
@@ -90,16 +87,10 @@ func Stamped(t *testing.T, new Factory) error {
 		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
-	}
-	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
-	// is under test is what the decision writes, not the log's room.
-	if statelog.KeepsGateReserve(c.Domain) {
-		reserve, reserveErr := statelog.NewReserve(c.spec().Name,
-			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
-		if reserveErr != nil {
-			t.Fatalf("build a reserve over %s: %v", name, reserveErr)
-		}
-		deps.Admission = reserve
+		// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps
+		// one: what is under test is what the decision writes, not the
+		// log's room.
+		Admission: admissionFor(t, c),
 	}
 	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
@@ -147,57 +138,20 @@ func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.
 	})
 }
 
-// recordingLog is a broker that keeps what it was handed: per-subject
-// sequences, the one expectation check a conditional append makes, and every
-// payload in order.
-type recordingLog struct {
-	mu      sync.Mutex
-	seq     uint64
-	last    map[string]uint64
-	records [][]byte
-}
-
-func (l *recordingLog) Append(_ context.Context, subject, _ string, expect *uint64,
-	body []byte) (uint64, bool, error) {
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if expect != nil && *expect != l.last[subject] {
-		// THE BROKER'S OWN REFUSAL, so the publisher classifies it as the
-		// lost race it would be rather than as no answer at all.
-		return 0, false, &jetstream.APIError{
-			ErrorCode:   jetstream.JSErrCodeStreamWrongLastSequence,
-			Description: "wrong last sequence",
-		}
+// admissionFor is a reserve over a log with no ceiling where the candidate's
+// domain keeps one, and none where it keeps none — [statelog.KeepsGateReserve]'s
+// rule, which every publisher, read index and sweep is held to.
+func admissionFor(t *testing.T, c Candidate) statelog.Admission {
+	t.Helper()
+	if !statelog.KeepsGateReserve(c.Domain) {
+		return nil
 	}
-	l.seq++
-	l.last[subject] = l.seq
-	l.records = append(l.records, append([]byte(nil), body...))
-	return l.seq, false, nil
-}
-
-func (l *recordingLog) LastSeq(_ context.Context, subject string) (uint64, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	seq, ok := l.last[subject]
-	return seq, ok, nil
-}
-
-// At is the record appended at seq, which a resolution reads to learn whose a
-// record it did not append itself is.
-func (l *recordingLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if seq == 0 || seq > uint64(len(l.records)) {
-		return "", nil, time.Time{}, false, nil
+	reserve, err := statelog.NewReserve(c.spec().Name,
+		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
+	if err != nil {
+		t.Fatalf("build a reserve over %s: %v", c.Domain.Name(), err)
 	}
-	return "", l.records[seq-1], time.Time{}, true, nil
-}
-
-func (l *recordingLog) appended() [][]byte {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([][]byte(nil), l.records...)
+	return reserve
 }
 
 // openFence refuses nothing: the suite's node is neither evicted nor below

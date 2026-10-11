@@ -235,6 +235,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// that is its entire content: it exists so a linearizable read
 		// has a quorum-committed position to wait through.
 		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// below the floor its subject names, in this same transaction
+		// (ADR-0032); this domain writes nothing for it.
+		return 0, nil
 	case KindEviction:
 		return a.applyEviction(ctx, tx, at)
 	case KindGeneration:

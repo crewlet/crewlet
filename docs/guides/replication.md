@@ -19,7 +19,7 @@ are stated first.
 
 | Number | Where it lives | What it is for |
 |---|---|---|
-| **the arbitration anchor** | `statelog_anchor` | The position of the last record this node consumed on a subject, *whatever that record then did*. It is what the broker arbitrates a new write against. |
+| **the arbitration anchor** | `statelog_anchor` | The position of the last record this node consumed on a subject, *whatever that record then did*. It is what the broker arbitrates a new write against. Once the trim has removed a subject's last record from the log, the anchor is removed too, by a `trimmed` record every node applies ([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)); a write to that subject then asks the log what it holds and passes the same zero fence one whose anchor named a trimmed record does ([Anchors below the log are removed by a record](retention.md#anchors-below-the-log-are-removed-by-a-record)). |
 | **`version`** | a column on every object row | The object's accepted state. It is what a caller's `if_match` compares against. |
 | **the barrier comparison** | computed | `MAX(version, scoped_through)` — what a read barrier compares, because a record can change an object without being *about* it. |
 

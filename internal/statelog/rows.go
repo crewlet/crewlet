@@ -155,8 +155,9 @@ type Snap struct {
 	// Anchor is the arbitration anchor for (stream, subject) — THE
 	// EXPECTATION, and the only thing an expectation is ever formed
 	// from. A zero anchor means this node has consumed nothing on this
-	// subject in this generation, which is a probe rather than a
-	// licence to publish at zero.
+	// subject in this generation — or the trim removed its anchor
+	// because the log holds none of its records (ADR-0032) — which is a
+	// probe rather than a licence to publish at zero.
 	Anchor Position
 
 	// Deferral and Deferred are the step-0 scope probe. SCOPE-KEYED and

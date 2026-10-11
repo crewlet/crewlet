@@ -17,7 +17,10 @@
 // the trim counts nodes per log, and a log whose evictions nothing reads
 // counts an evicted node for ever — the node gate that is the domain's own
 // eviction and nothing else, because a write flagged one is excused the fences
-// and the reserve every other write is held to — and the domain that gates
+// and the reserve every other write is held to — the anchors a trimmed record
+// removes below the trim floor and the zero fence a write to one of their
+// subjects then has to pass, because a log whose anchors nothing removes grows
+// a row for every subject it ever wrote (ADR-0032) — and the domain that gates
 // seat admission, which must replay strictly, because a compacted domain's gap
 // is a coverage number that would otherwise withhold every seat claim on a
 // node. Whether a domain's copy is JUDGED is not a declaration and has no case
@@ -131,6 +134,13 @@ type Candidate struct {
 	// publishes it. Required of a domain that claims identity, whose log the
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
+
+	// EncodeTrimmed is the domain's own encoder of the trim's trimmed record
+	// (ADR-0032) — the production function the engine hands the trim, never
+	// a fixture. Required exactly when the domain's log arbitrates a kind,
+	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
+	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].
+	EncodeTrimmed func(statelog.Envelope) ([]byte, error)
 }
 
 // spec is the domain's own stream, which every case runs the candidate on.
@@ -152,12 +162,22 @@ func Run(t *testing.T, new Factory) {
 	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
 	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
+	t.Run("trimmed anchors", func(t *testing.T) { runTrimmed(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and
 // the candidate's own, and answers the handle the runtime would hand the
 // candidate's applier and readers.
 func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
+	t.Helper()
+	_, db := openNodeEstate(t, c)
+	return db
+}
+
+// openNodeEstate is [openEstate] answering the node's own store too, for a case
+// that runs the framework's applier — which keeps a verdict about its log in
+// the node's file.
+func openNodeEstate(t *testing.T, c Candidate) (*store.DB, store.ReplicatedHandle) {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -170,7 +190,7 @@ func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
 			t.Fatalf("create %s's tables: %v", c.Domain.Name(), err)
 		}
 	}
-	return db
+	return node, db
 }
 
 // countRows is what determinism and idempotency are both asserted over: the

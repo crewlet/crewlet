@@ -41,7 +41,8 @@ it could answer.
 A fleet-singleton duty that decides from a domain's rows asks the same verdict
 before it claims, and a node whose copy of any domain the duty decides from is
 out of service declines it, so a node whose copies serve takes it: the trim
-(the evictions the identity-claiming logs' rows hold), the embedding duty (the
+(the evictions the identity-claiming logs' rows hold, and the anchors the logs
+that write them hold — ADR-0032), the embedding duty (the
 vectors, and the tracker's and the knowledge base's rows it embeds and
 withdraws for) and the object collector (the rows that name objects).
 Declining is not claiming — the conservative direction for each: nothing

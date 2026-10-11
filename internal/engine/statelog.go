@@ -1235,6 +1235,26 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 	return nil
 }
 
+// trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0032) on
+// its own log, or nil for a domain whose log writes no anchor and so has none
+// to remove — the compacted vectors and usage.
+//
+// A SWITCH, for [barrierEncoder]'s reason: the framework decides when the
+// record goes out and what its apply removes, and the domain decides what a
+// record on its log looks like. TestEveryLogThatWritesAnchorsHasATrimmedRecord
+// holds the switch to [statelog.WritesAnchors] for every registered domain, so
+// a domain added with anchors and no case here fails rather than growing an
+// anchor for every subject it ever writes.
+func trimmedEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, error) {
+	switch domain.Name() {
+	case tracker.Domain{}.Name():
+		return tracker.EncodeTrimmed
+	case pages.Domain{}.Name():
+		return pages.EncodeTrimmed
+	}
+	return nil
+}
+
 // readerFor builds a domain's READ authority: the four levels, the refusal
 // ladder, the coverage probe and the quorum-committed barrier a linearizable
 // read waits through — the last only for a domain [barrierEncoder] knows.

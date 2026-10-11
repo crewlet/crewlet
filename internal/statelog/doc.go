@@ -347,6 +347,31 @@
 // zero is the truthful statement "this subject holds nothing", arbitrated
 // between concurrent writers exactly as a create is.
 //
+// # An anchor below the floor is removed by a record
+//
+// Below the floor an anchor names a record the log no longer holds, so all it
+// can do is send its subject's next write to be refused before the
+// discriminator takes the zero path — and kept, the table grows by every
+// subject the log ever carried. The trim removes them (ADR-0032): after each
+// tick's purge it appends a framework [TrimmedKind] record naming the log's
+// first surviving sequence ([SweepAnchors]), and every node's applier removes
+// that log's anchors below it in the transaction that applies the record, at
+// most [AnchorsPerTrimmedRecord] a record, lowest first — never a sweep beside
+// the applier, because the table is replicated state (ADR-0002). The trim
+// counts them only from a copy that has applied the whole log, appends each
+// record only once its own node has applied the one before, and stops when a
+// time budget is spent: a write or a read queued behind the records waits one
+// record's apply on the node that appended them, at most about k − 1 budgets
+// on a node that applies them k times slower, and the trim's own goroutine is
+// held for at most the budget ([SweepDeps.Budget]). A write to a subject whose
+// anchor went takes the road to zero an object never written takes — the
+// subject's last sequence from the log, then the fence — rather than the one
+// through the broker's refusal of a stale anchor, and both are the roads the
+// proof above covers: the removal moves a write between them and never off the
+// fence. That is why it is safe at any bound, and why the bound — what the log
+// no longer holds, rather than anything higher — is chosen for cost: an anchor
+// of a record the log still holds saves its next write a leader read.
+//
 // The deferral probe, the per-tick floor check and the per-write fence are
 // therefore LOAD-BEARING rather than defensive. None may be optimised away as
 // a rare case.

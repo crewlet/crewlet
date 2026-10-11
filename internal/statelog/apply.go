@@ -2150,24 +2150,29 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Payload:  row.payload,
 				StoredAt: row.storedAt,
 			}
-			landed, reason, dropped, err := r.reprocessOne(ctx, w, rec)
+			landed, result, err := r.reprocessOne(ctx, w, rec)
 			switch {
 			case err != nil:
 				return err
 			case !landed:
 				kept++
 				continue
-			case dropped:
+			case result.gated:
 				// A GATE DROPPED IT, which the build that retained it
 				// could not ask — and that is not a reprocess: it
 				// wrote no row, so it is counted as the live loop
 				// counts one, under `gated`, beside the gate's own
 				// counter, which is reported here because the
 				// transaction that dropped it has committed.
-				r.gatedRecord(ctx, rec, reason)
+				r.gatedRecord(ctx, rec, result.reason)
 				gated++
 			default:
 				applied++
+				// A trimmed record is version 1 and declares the
+				// framework's scope, so nothing retains one — but a
+				// removal is counted where its transaction committed,
+				// whichever path committed it.
+				r.countSwept(result.swept)
 			}
 			r.applier.Committed(ctx)
 		}
@@ -2194,12 +2199,13 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 
 // reprocessOne applies one retained record unless an earlier retained record
 // still covers it, reporting whether it landed — released from the retained
-// table — and whether a gate dropped it rather than applied it, and which.
-func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, Reason, bool, error) {
-	var landed, gated bool
-	var reason Reason
+// table — and what applying it did: whether a gate dropped it rather than
+// applied it, and which.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, applyResult, error) {
+	var landed bool
+	var result applyResult
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		landed, reason, gated = false, "", false
+		landed, result = false, applyResult{}
 		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
 			return err
 		} else if covered {
@@ -2208,14 +2214,14 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		opts := r.opts
 		opts.Now = r.now()
 		opts.MaxVariables = r.db.Caps().MaxVariables
-		_, why, dropped, err := r.applyOne(ctx, tx, rec, opts)
+		a, err := r.applyOne(ctx, tx, rec, opts)
 		if err != nil {
 			return err
 		}
 		// A RECORD THIS BUILD COULD NOT READ WHEN IT ARRIVED, now in the
 		// rows — the one case the checkpoint's own write never sees, since a
 		// reprocess does not move it.
-		if !dropped {
+		if !a.gated {
 			if err := r.tables.raiseApplied(ctx, tx, rec.V); err != nil {
 				return err
 			}
@@ -2223,14 +2229,14 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
 		}
-		landed, reason, gated = true, why, dropped
+		landed, result = true, a
 		return nil
 	})
 	if err != nil {
-		return false, "", false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+		return false, applyResult{}, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
 			rec.Position, err)
 	}
-	return landed, reason, gated, nil
+	return landed, result, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever
@@ -2550,13 +2556,14 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					}
 				}
 				if !blocked {
-					n, reason, gated, err := r.applyOne(ctx, tx, rec, opts)
+					a, err := r.applyOne(ctx, tx, rec, opts)
 					if err != nil {
 						return err
 					}
-					rows += n
-					if gated {
-						tally.drop(rec, reason)
+					rows += a.rows
+					tally.swept += a.swept
+					if a.gated {
+						tally.drop(rec, a.reason)
 					} else {
 						tally.applied++
 						tally.version = max(tally.version, rec.V)
@@ -2715,10 +2722,26 @@ func (r *Runner) Commits() float64 {
 	return r.commits
 }
 
+// applyResult is what applying one record did, for the caller to count once
+// its transaction commits — never from inside it, for [Runner.gatedRecord]'s
+// reason.
+type applyResult struct {
+	// rows is every row the record wrote or removed: the input the
+	// transaction's row budget is held to.
+	rows int
+
+	// swept is how many anchors a trimmed record removed (ADR-0032).
+	swept int
+
+	// gated is whether a gate dropped the record, and reason which.
+	gated  bool
+	reason Reason
+}
+
 // applyOne runs the domain's state machine for one record, unless a gate says
 // it must produce no rows — reporting which gate, and whether one did, for the
 // caller to report once its transaction commits ([Runner.gatedRecord]).
-func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, Reason, bool, error) {
+func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (applyResult, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
 	// THE FRAMEWORK'S OWN GATES FIRST: a record written in a generation the
@@ -2739,19 +2762,42 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		var err error
 		reason, gated, err = r.applier.Gated(ctx, tx, rec)
 		if err != nil {
-			return 0, "", false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+			return applyResult{}, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
 		}
 	}
 	if gated {
-		return 0, reason, true, nil
+		return applyResult{gated: true, reason: reason}, nil
 	}
 	n, err := r.applier.Apply(ctx, tx, rec, opts)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
+		return applyResult{}, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
 	}
 	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.tables.subjectOf(rec.Subject), rec.Position,
 		rec.StoredAt, opts.Now); err != nil {
-		return 0, "", false, err
+		return applyResult{}, err
+	}
+	out := applyResult{rows: n}
+	if rec.Subject.Kind == TrimmedKind {
+		// THE FRAMEWORK'S OWN EFFECT OF A TRIMMED RECORD — ADR-0032 — in
+		// the record's own transaction, once the gates have said it
+		// applies: a record a gate drops removes nothing. AFTER the
+		// domain's own apply, which writes nothing for it but has a case
+		// for it, so a domain that forgot the kind faults here rather
+		// than having its anchors removed by a record it cannot name.
+		//
+		// A FLOOR THAT DOES NOT PARSE IS A FAULT, the treatment a domain
+		// gives a malformed record of a kind it declares: the one writer
+		// ([SweepAnchors]) checks every body before it appends one, so a
+		// record that names no floor came from somewhere this build cannot
+		// explain, and applying it as nothing would hide that.
+		floor, err := TrimmedFloor(r.spec.Name, rec.Subject)
+		if err != nil {
+			return applyResult{}, fmt.Errorf("statelog: the trimmed record at %s: %w", rec.Position, err)
+		}
+		if out.swept, err = r.tables.sweepAnchors(ctx, tx, floor); err != nil {
+			return applyResult{}, err
+		}
+		out.rows += out.swept
 	}
 	if r.metrics != nil {
 		// ONE RECORD'S APPLY, which is the real ceiling on how long a
@@ -2761,7 +2807,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
-	return n, "", false, nil
+	return out, nil
 }
 
 // Voided reports whether this applier drops a record stamped with generation gen
@@ -2931,6 +2977,10 @@ type results struct {
 	// to ([tables.setCursor]) — zero where it applied none.
 	version int
 
+	// swept is how many anchors this transaction's trimmed records removed
+	// (ADR-0032).
+	swept int
+
 	// barriers is how many of the records this batch consumed for the
 	// first time were barriers, whatever became of them — each is a record
 	// on the log, which is what the census counts — BY THE HOUR THE BROKER
@@ -3016,6 +3066,7 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 		r.metrics.AddAt(metrics.StatelogBarriersApplied, n, hour,
 			metrics.Attrs{"domain": domain, "stream": r.spec.Name})
 	}
+	r.countSwept(tally.swept)
 	// THE COMMIT-TO-APPLY GAP, from the BROKER's own timestamp rather
 	// than from when this node fetched the record: every read level is a
 	// policy about this quantity, and a node's own fetch time hides
@@ -3030,6 +3081,17 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 
 func (r *Runner) count(name string) {
 	r.countWith(name, metrics.Attrs{"domain": r.domain.Name()})
+}
+
+// countSwept counts the anchors trimmed records removed in a transaction that
+// has COMMITTED — never from inside one, which the store may run again
+// ([Runner.gatedRecord]).
+func (r *Runner) countSwept(n int) {
+	if r.metrics == nil || n == 0 {
+		return
+	}
+	r.metrics.Add(metrics.StatelogAnchorsSwept, uint64(n),
+		metrics.Attrs{"domain": r.domain.Name()})
 }
 
 func (r *Runner) countWith(name string, attrs metrics.Attrs) {

@@ -20,6 +20,7 @@ const (
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
 	HistoryAnswers                   = "crewlet.history.answers"
+	StatelogAnchorsSwept             = "crewlet.statelog.anchors.swept"
 	StatelogAppliedThrough           = "crewlet.statelog.applied_through"
 	StatelogApplyBatchRows           = "crewlet.statelog.apply.batch.rows"
 	StatelogApplyLagSeconds          = "crewlet.statelog.apply.lag.seconds"

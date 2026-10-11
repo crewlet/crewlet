@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -17,8 +18,8 @@ import (
 // is delivered fine, wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
-	if len(tracker.ObjectKinds) != 14 {
-		t.Fatalf("%d kinds are enumerated; the log carries fourteen",
+	if len(tracker.ObjectKinds) != 15 {
+		t.Fatalf("%d kinds are enumerated; the log carries fifteen",
 			len(tracker.ObjectKinds))
 	}
 	seen := map[tracker.ObjectKind]bool{}
@@ -36,13 +37,16 @@ func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	}
 }
 
-// TWO KINDS ARE NOT ARBITRATED, AND THEY ARE THE TWO THAT MUST NOT BE.
+// THREE KINDS ARE NOT ARBITRATED, AND THEY ARE THE THREE THAT MUST NOT BE.
 //
 // A turn is additive — it records spend that happened and races nobody. A
 // barrier shares ONE subject across the whole company, so an expectation there
 // would serialise every linearizable read behind every other and write an
 // anchor row per read into the transaction holding this store's only writer.
-func TestOnlyTheTurnAndTheBarrierAreUnarbitrated(t *testing.T) {
+// And the trim's trimmed record removes anchors: identical ones are each meant
+// to land, and an anchor of its own is the row it exists not to leave
+// (ADR-0032).
+func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 	t.Parallel()
 	var unarbitrated []tracker.ObjectKind
 	for _, k := range tracker.ObjectKinds {
@@ -50,11 +54,12 @@ func TestOnlyTheTurnAndTheBarrierAreUnarbitrated(t *testing.T) {
 			unarbitrated = append(unarbitrated, k)
 		}
 	}
-	if len(unarbitrated) != 2 ||
+	if len(unarbitrated) != 3 ||
 		!contains(unarbitrated, tracker.KindTurn) ||
-		!contains(unarbitrated, tracker.KindBarrier) {
-		t.Fatalf("the unarbitrated kinds are %v, want exactly the turn and the "+
-			"barrier", unarbitrated)
+		!contains(unarbitrated, tracker.KindBarrier) ||
+		!contains(unarbitrated, tracker.KindTrimmed) {
+		t.Fatalf("the unarbitrated kinds are %v, want exactly the turn, the "+
+			"barrier and the trimmed record", unarbitrated)
 	}
 }
 
@@ -114,6 +119,8 @@ func TestEverySubjectRoundTripsThroughTheWire(t *testing.T) {
 		"a turn":       tracker.TurnSubject("t-1"),
 		"the barrier":  tracker.BarrierSubject(),
 		"a file":       tracker.FileSubject("ENG", "reports/q3 plan*v2.md"),
+		"a trimmed record": tracker.TrimmedSubject(statelog.Position{
+			Stream: topics.TrackerLogStream, Generation: 3, Seq: 9_000}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -53,16 +53,18 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxBytes:      TrackerLogMaxBytes,
 		Duplicates:    TrackerLogDuplicates,
 		Replay:        statelog.ReplayStrict,
-		// EVERY KIND BUT TWO. A turn is additive and races
+		// EVERY KIND BUT THREE. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable
 		// read behind every other one and write an anchor row per read
-		// into the transaction holding this store's only writer.
+		// into the transaction holding this store's only writer; and the
+		// trim's trimmed record removes anchors, so arbitrated it would
+		// write one of its own on every apply (ADR-0032).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is every kind but those two, derived from the enum rather
+// arbitratedKinds is every kind but those three, derived from the enum rather
 // than typed again — a list written twice is a kind that arbitrates in one
 // place and not the other, which wedges that subject the first time a gate
 // drops a record.

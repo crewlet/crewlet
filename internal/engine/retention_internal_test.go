@@ -515,12 +515,17 @@ func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 	r := &retention{fleet: fleet, nodeID: "node-a"}
 	name := running.domain.Name()
 	to := last
-	if err := r.apply(t.Context(), running.log, name, running.runner.Committed().Generation,
+	after, err := r.apply(t.Context(), running.log, name, running.runner.Committed().Generation,
 		statelog.TrimDecision{
 			To:    to,
 			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: to, Known: true}},
-		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}); err != nil {
+		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}})
+	if err != nil {
 		t.Fatalf("apply: %v", err)
+	}
+	if after != to {
+		t.Fatalf("the tick answered %d as the log's first surviving sequence, want "+
+			"the %d it purged to — the floor the anchor sweep removes below", after, to)
 	}
 	if fleet.puts != 1 {
 		t.Fatalf("the tick published %d floor(s), want 1", fleet.puts)
@@ -561,7 +566,7 @@ func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
 	fleet := &orderFleet{fleetRegister: back.Fleet, stream: running.log,
 		refuse: errors.New("the register refuses writes")}
 	r := &retention{fleet: fleet, nodeID: "node-a"}
-	err = r.apply(t.Context(), running.log, running.domain.Name(),
+	_, err = r.apply(t.Context(), running.log, running.domain.Name(),
 		running.runner.Committed().Generation, statelog.TrimDecision{
 			To:    last,
 			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: last, Known: true}},

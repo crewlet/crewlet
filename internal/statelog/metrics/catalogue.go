@@ -416,6 +416,20 @@ func Catalogue() []Instrument {
 				"trim blocked for weeks is a log walking toward its ceiling " +
 				"with a cause an operator can act on.",
 		},
+		{
+			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Arbitration anchors this node's applier removed under the " +
+				"trim's `trimmed` records (ADR-0032), counted once the " +
+				"transaction that removed them commits. Every node applies " +
+				"every record, so every data node counts the same removals. " +
+				"Flat is the normal reading of a log whose purged objects all " +
+				"wrote again later — their anchors moved above the trim and " +
+				"nothing is below it to remove; a sweep that is failing shows " +
+				"as a `retention_anchor_sweep_failed` line from the trim's " +
+				"holder, and as anchors below the log's first record that keep " +
+				"growing while this stays flat.",
+		},
 
 		// ---- the backup -----------------------------------------------
 		{

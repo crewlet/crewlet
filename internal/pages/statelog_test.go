@@ -46,6 +46,8 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   pages.NewRows,
 			Write:  suiteWrite,
+			// THE PRODUCTION ENCODER the engine hands the trim.
+			EncodeTrimmed: pages.EncodeTrimmed,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -180,6 +182,8 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindBarrier:
 		return pages.OpBarrier, nil, pages.ScopeSet{Subject: true}
+	case pages.KindTrimmed:
+		return pages.OpTrimmed, nil, pages.ScopeSet{Subject: true}
 	}
 	return pages.OpPatch, nil, pages.ScopeSet{Subject: true}
 }
