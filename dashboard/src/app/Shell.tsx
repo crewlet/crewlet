@@ -103,6 +103,8 @@ export interface PageContext {
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
   setFleet: (fleet: PublishedFleet | null) => void;
+  /** The screen carries the page's star in its own menu ([useOwnStar]). */
+  setOwnStar: (own: boolean) => void;
 }
 
 /**
@@ -123,6 +125,7 @@ const noop: PageContext = {
   setShowWorking: () => {},
   setMenu: () => {},
   setFleet: () => {},
+  setOwnStar: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -290,6 +293,20 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 }
 
 /**
+ * Say that this screen's own menu carries the page's star, so the frame draws
+ * none: one control per action on screen, and a screen whose design keeps the
+ * star with its other page actions (Knowledge's page) would otherwise show it
+ * twice. Cleared when the screen goes, for the reason [usePageLabels] gives.
+ */
+export function useOwnStar(): void {
+  const { setOwnStar } = usePageContext();
+  useEffect(() => {
+    setOwnStar(true);
+    return () => setOwnStar(false);
+  }, [setOwnStar]);
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * how much is waiting on them, and how much open work is on them.
  *
@@ -365,6 +382,7 @@ function Frame({ children }: { children: ReactNode }) {
   const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
   const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
+  const [ownStar, setOwnStar] = useState(false);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -452,7 +470,7 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet, setOwnStar }),
     [],
   );
 
@@ -515,6 +533,7 @@ function Frame({ children }: { children: ReactNode }) {
               workspace={workspace}
               working={showWorking}
               menu={menu}
+              star={!ownStar}
             >
               <StateBar degraded={degraded} coverage={coverage} />
             </PageHeader>

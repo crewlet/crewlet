@@ -47,6 +47,45 @@ describe("the star", () => {
     fireEvent.click(star);
     expect(localStorage.getItem("crewlet_starred") ?? "[]").toBe("[]");
   });
+
+  // A SCREEN WHOSE OWN MENU CARRIES THE STAR (a knowledge page's More) gets
+  // none from the frame, inline or in the phone's More: one control per
+  // action on screen.
+  test("is drawn by the frame unless the screen's own menu carries it", () => {
+    location.hash = "#/work/ENG-42";
+    const header = (star?: boolean) => {
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      return render(
+        <Router>
+          <ClientContext.Provider value={{ store, socket }}>
+            <AppShell
+              topbar={
+                <PageHeader
+                  crumbs={[]}
+                  row={undefined}
+                  counts={{}}
+                  title="ENG-42"
+                  workspace="work"
+                  {...(star === undefined ? {} : { star })}
+                />
+              }
+            />
+          </ClientContext.Provider>
+        </Router>,
+      );
+    };
+    const drawn = header();
+    expect(screen.getAllByRole("button", { name: "Keep in Starred" }).length).toBeGreaterThan(0);
+    drawn.unmount();
+
+    const carried = header(false);
+    expect(screen.queryByRole("button", { name: /Starred/ })).toBeNull();
+    // NOTHING TO OFFER IS NO MENU: the phone's More has neither the star nor
+    // an entry of the screen's.
+    expect(carried.container.querySelector(".page-more")).toBeNull();
+    location.hash = "#/";
+  });
 });
 
 // THE TRAIL IS THE KIT'S BREADCRUMB (its floor and its tab stop are held by

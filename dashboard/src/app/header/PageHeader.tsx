@@ -111,6 +111,7 @@ export function PageHeader({
   workspace,
   working = false,
   menu = [],
+  star = true,
   children,
 }: {
   crumbs: Crumb[];
@@ -125,6 +126,8 @@ export function PageHeader({
   working?: boolean;
   /** The screen's secondary actions, folded into "More" on a phone. */
   menu?: readonly PageMenuEntry[];
+  /** The frame draws the star; false where the screen's own menu carries it. */
+  star?: boolean;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
@@ -155,8 +158,9 @@ export function PageHeader({
           {working && <WorkingNow />}
           {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
-              action in view. Not on Work's scope pages: see the module doc. */}
-          {!at && (
+              action in view. Not on Work's scope pages (see the module doc),
+              and not where the screen's own menu carries the star. */}
+          {star && !at && (
             <span className="page-frame-actions">
               <StarPage path={route.path} label={title} workspace={workspace} />
             </span>
@@ -169,7 +173,7 @@ export function PageHeader({
             label={title}
             workspace={workspace}
             entries={menu}
-            star={!at}
+            star={star && !at}
           />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
@@ -756,7 +760,10 @@ export function PageMore({
   star = true,
 }: Omit<Star, "at"> & {
   entries: readonly PageMenuEntry[];
-  /** Whether the frame's star is offered here; not on Work's scope pages. */
+  /**
+   * Whether the frame's star is offered here: not on Work's scope pages, nor
+   * where the screen's own menu carries it.
+   */
   star?: boolean;
 }) {
   const stars = useStarred();
@@ -771,10 +778,12 @@ export function PageMore({
     disabled: e.disabled,
     description: e.description,
   }));
-  if (items.length > 0) items.push({ kind: "separator", key: "frame" });
-  // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
-  // unavailable and saying why on a workspace's own page.
-  if (star && resolves(path)) {
+  // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one, or
+  // whose own entries carry it, and unavailable and saying why on a
+  // workspace's own page.
+  const frameStar = star && resolves(path);
+  if (items.length > 0 && frameStar) items.push({ kind: "separator", key: "frame" });
+  if (frameStar) {
     items.push(
       path.length < 2
         ? {
@@ -796,6 +805,9 @@ export function PageMore({
           },
     );
   }
+  // NOTHING TO OFFER IS NO MENU: a screen whose entries carry the star has
+  // none until its page has answered.
+  if (items.length === 0) return null;
   return (
     <span className="page-more">
       <Menu
