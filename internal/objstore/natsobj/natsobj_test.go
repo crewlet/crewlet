@@ -261,18 +261,24 @@ func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 			"holding nothing", listed)
 	}
 	// THE SUBJECT A NAME IS SPELLED IN IS NOT ALWAYS ONE: metadata on a
-	// subject that decodes to no name is stepped over, and the listing still
-	// ends.
+	// subject that decodes to no name is stepped over, and the listing goes
+	// ON past it — to an object stored after it, so the stepped-over message
+	// is not the listing's last and the walk has to read beyond it rather
+	// than end on it.
 	if _, err := client.Publish(t.Context(), "$O."+natsobj.Bucket+".M.!",
 		[]byte("on no name at all")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(t.Context(), "after", bytes.NewReader([]byte("yz")), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	clear(listed)
 	if err := b.List(ctx, func(info objstore.Info) error {
 		listed[info.Name] = info
 		return nil
-	}); err != nil || len(listed) != 2 {
-		t.Fatalf("a listing past metadata on a subject spelling no name = %+v, %v", listed, err)
+	}); err != nil || len(listed) != 3 || listed["after"].Size != 2 {
+		t.Fatalf("a listing past metadata on a subject spelling no name = %+v, %v; want "+
+			"readable, garbled and after", listed, err)
 	}
 	// AND IT LEAVES NO CONSUMER BEHIND for the broker to reap later: a
 	// collection lists the bucket every hour.
