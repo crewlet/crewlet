@@ -608,7 +608,7 @@ at all and a classic token carries only if whoever minted it ticked the box.
 
 | `org_webhook` | Behaviour |
 |---|---|
-| `auto` (config default) | Try one org hook; fall back to per-repository hooks if the credential may not, saying so in the run's notes |
+| `auto` (config default) | Try one org hook; fall back to per-repository hooks if GitHub refuses it, saying so in the run's notes. A request GitHub never answers is not a refusal and does not fall back: the pass fails and is retried, because repository hooks registered over a blip would sit beside the org hook the next pass registers, delivering everything twice |
 | `true` | Demand the org hook. A credential that cannot register it **fails the run** — an operator who asked for this arrangement must not silently get the other one |
 | `false` | Register no org hook. Every repository in `repos` is hooked; with `repos` empty, each agent's own app carries its own webhook |
 

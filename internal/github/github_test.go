@@ -1571,6 +1571,160 @@ func TestASeatLookupGitHubAnsweredIsReportedAtGitHub(t *testing.T) {
 	}
 }
 
+// hookWorld is an organization `acme` whose org-hook listing answers as
+// orgHooks says and whose repositories answer as repos says, each value one
+// of "ok" (an admin may hook it, and nothing is hooked yet), "missing" (404)
+// or "silent" (the connection closes before any answer). It hands back the
+// options and the paths the pass POSTed a hook to.
+func hookWorld(t *testing.T, orgHooks string, repos map[string]string) (github.Options, func() []string) {
+	t.Helper()
+	var (
+		mu     sync.Mutex
+		posted []string
+	)
+	silent := func(w http.ResponseWriter) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}
+	answer := func(w http.ResponseWriter, how string, body string) {
+		switch how {
+		case "silent":
+			silent(w)
+		case "missing":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message": "Not Found"}`))
+		case "refused":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message": "Resource not accessible by personal access token"}`))
+		default:
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case path == "/user":
+			_, _ = w.Write([]byte(`{"login": "crewlet-engine"}`))
+		case path == "/orgs/acme/hooks":
+			answer(w, orgHooks, `[]`)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hooks"):
+			mu.Lock()
+			posted = append(posted, path)
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+		case strings.HasSuffix(path, "/hooks"):
+			_, _ = w.Write([]byte(`[]`))
+		case strings.HasPrefix(path, "/repos/"):
+			name := strings.TrimPrefix(path, "/repos/")
+			answer(w, repos[name], `{"full_name": "`+name+`", "archived": false,`+
+				`"permissions": {"admin": true}}`)
+		default:
+			t.Errorf("the pass asked for %s %s, which this world does not serve", r.Method, path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := github.NewClient(github.ClientOptions{
+		APIBase: server.URL, WebBase: server.URL, Token: "ghp_crewlet-engine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s3cret",
+			Provisioning: &config.GitHubProvisioning{
+				Org: "acme", Repos: slices.Sorted(maps.Keys(repos)),
+			},
+		},
+		Value:       func(v string) string { return v },
+		WebhookBase: "https://x",
+	}
+	return opts, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(posted)
+	}
+}
+
+// A HOOK REQUEST GITHUB NEVER ANSWERED IS RAISED, not filed as blocked.
+//
+// It was reported as an ingress block on that repository — owed by a GitHub
+// organization owner, re-asked on the vendor admin's backoff — about a
+// request that never reached GitHub. The seat walk's rule, for the same
+// reason: an error is the engine failing to look. The rest of the list is
+// still walked, so a repository GitHub did answer for is hooked, and a
+// repository GitHub refused is still the finding it always was.
+func TestAHookRequestGitHubNeverAnsweredIsRaisedRatherThanReported(t *testing.T) {
+	t.Parallel()
+	opts, posted := hookWorld(t, "refused", map[string]string{
+		"acme/api":  "ok",
+		"acme/gone": "missing",
+		"acme/web":  "silent",
+	})
+	res, err := github.Reconcile(t.Context(), opts)
+	if err == nil {
+		t.Fatalf("a hook request that got no answer was reported as %+v", res.Findings())
+	}
+	if errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("an unanswered request was marked as a refused credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "acme/web") {
+		t.Errorf("the fault does not name the repository: %v", err)
+	}
+	byTarget := map[string]github.HookState{}
+	for _, h := range res.Hooks {
+		byTarget[h.Target.String()] = h
+	}
+	if got := byTarget["acme/web"]; got.Outcome != github.HookUnanswered || got.Blocks() ||
+		!got.Outcome.Valid() {
+		t.Errorf("the unanswered repository is described as %+v", got)
+	}
+	if got := byTarget["acme/gone"]; !got.Blocks() {
+		t.Errorf("a repository GitHub answered 404 for is no longer a block: %+v", got)
+	}
+	if got := posted(); !slices.Contains(got, "/repos/acme/api/hooks") {
+		t.Errorf("the repository GitHub answered for was not hooked: %v", got)
+	}
+}
+
+// AN ORGANIZATION HOOK GITHUB NEVER ANSWERED ABOUT IS NOT A REASON TO FALL
+// BACK.
+//
+// Under `auto` any failure to read the org's hooks fell back to one hook per
+// repository — right for a refusal, which says this credential will never
+// register one, and wrong for silence: the next pass reaching GitHub
+// registered the org hook beside the repository hooks and removed none, so
+// every event in them arrived twice for as long as both lived.
+func TestAnOrgHookGitHubNeverAnsweredAboutDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+	opts, posted := hookWorld(t, "silent", map[string]string{"acme/api": "ok"})
+	res, err := github.Reconcile(t.Context(), opts)
+	if err == nil {
+		t.Fatalf("an org hook read that got no answer was reported as %+v", res.Findings())
+	}
+	if got := posted(); len(got) != 0 {
+		t.Errorf("the pass fell back to repository hooks over an unanswered "+
+			"org read: %v", got)
+	}
+	if len(res.Hooks) != 1 || res.Hooks[0].Outcome != github.HookUnanswered {
+		t.Errorf("hooks = %+v, want the organization described as unanswered", res.Hooks)
+	}
+	// AND A REFUSAL STILL FALLS BACK, which is what `auto` means.
+	opts, posted = hookWorld(t, "refused", map[string]string{"acme/api": "ok"})
+	if _, err := github.Reconcile(t.Context(), opts); err != nil {
+		t.Fatalf("an org hook GitHub refused failed the run under auto: %v", err)
+	}
+	if got := posted(); !slices.Contains(got, "/repos/acme/api/hooks") {
+		t.Errorf("a refused org hook did not fall back to the repository: %v", got)
+	}
+}
+
 // THE ORGANIZATION CREDENTIAL IS CALLED REFUSED ONLY WHEN GITHUB REFUSED IT.
 //
 // The pass's own probe said "was refused" whatever went wrong, so a timeout
