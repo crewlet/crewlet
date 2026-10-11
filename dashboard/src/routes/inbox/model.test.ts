@@ -181,6 +181,14 @@ describe("the snooze presets", () => {
     );
   });
 
+  // ON A SUNDAY NEXT MONDAY IS TOMORROW: the menu offered one moment twice.
+  test("offer each moment once, so a Sunday has no second Monday", () => {
+    const sunday = Date.parse("2026-10-11T17:40:00Z");
+    const presets = snoozePresets(sunday, "America/Vancouver", undefined);
+    expect(presets.map((p) => p.key)).toEqual(["hour", "tomorrow"]);
+    expect(presets[1]!.day).toBe("Mon, Oct 12");
+  });
+
   // THE ENGINE'S BOUND: a preset it refuses is not offered.
   test("offers nothing past the engine's max_snooze_ahead", () => {
     const keys = (ahead: number) => snoozePresets(now, "UTC", ahead).map((p) => p.key);

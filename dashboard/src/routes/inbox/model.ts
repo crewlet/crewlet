@@ -230,6 +230,10 @@ export interface SnoozePreset {
  * The snooze presets this person may set now: an hour, tomorrow at nine and
  * next Monday at nine, both on the COMPANY's clock.
  *
+ * EACH MOMENT ONCE. On a Sunday the next Monday at nine IS tomorrow at nine,
+ * and the menu offered the one moment twice under two names; the later name
+ * is dropped, so the reader picks between moments rather than spellings.
+ *
  * ONLY THE ONES THE ENGINE WILL TAKE. The write refuses a snooze further ahead
  * than `max_snooze_ahead` (the person answer serves it), so a preset past it
  * is a button that is refused every time it is pressed — it is not offered.
@@ -247,7 +251,7 @@ export function snoozePresets(
   // Monday is 1; a reader on a Monday means the one after.
   const weekday = new Date(Date.UTC(civil.y, civil.m - 1, civil.d)).getUTCDay();
   const monday = addDays(civil, (8 - weekday) % 7 || 7);
-  const presets: SnoozePreset[] = [
+  const offered: SnoozePreset[] = [
     { key: "hour", label: "In an hour", until: new Date(now + 3_600_000).toISOString() },
     {
       key: "tomorrow",
@@ -257,6 +261,7 @@ export function snoozePresets(
     },
     { key: "monday", label: "Next Monday, 09:00", until: atNine(monday, tz), day: dayIn(monday) },
   ];
+  const presets = offered.filter((p, i) => offered.findIndex((q) => q.until === p.until) === i);
   if (maxAheadSeconds === undefined || !(maxAheadSeconds > 0)) return presets;
   const limit = now + maxAheadSeconds * 1_000;
   return presets.filter((p) => Date.parse(p.until) <= limit);
