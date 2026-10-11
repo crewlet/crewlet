@@ -142,26 +142,26 @@ func checkParent(ctx context.Context, tx *sql.Tx, pageID, container,
 	case parentSound:
 		return nil
 	case parentSelf:
-		return badParent("a page cannot be its own parent — leave parent_id " +
+		return badParent("a page cannot be its own parent. Leave parent_id " +
 			"empty to file it at its container's top")
 	case parentMissing:
-		return badParent("there is no page %s — name the id of a page in "+
+		return badParent("there is no page %s. Name the id of a page in "+
 			"container %s (list_pages finds one), or leave parent_id empty to "+
 			"file this page at the container's top", parentID, container)
 	case parentPurged:
-		return badParent("page %s was purged and is gone for good — name "+
+		return badParent("page %s was purged and is gone for good. Name "+
 			"another page in container %s, or leave parent_id empty to file "+
 			"this page at the container's top", parentID, container)
 	case parentElsewhere:
 		return badParent("page %s (%q) is in container %s, and a page's parent "+
-			"must be in its own container, %s — name a page there, or leave "+
+			"must be in its own container, %s. Name a page there, or leave "+
 			"parent_id empty", parentID, parent.Title, parent.Container, container)
 	case parentTrashed:
-		return badParent("page %s (%q) is in the trash — restore it first, or "+
+		return badParent("page %s (%q) is in the trash. Restore it first, or "+
 			"name another parent", parentID, parent.Title)
 	case parentBeneath:
 		return badParent("page %s (%q) is beneath this page, so filing this "+
-			"page under it would make each the other's ancestor — move %q "+
+			"page under it would make each the other's ancestor. Move %q "+
 			"somewhere else first, or choose another parent",
 			parentID, parent.Title, parent.Title)
 	}
