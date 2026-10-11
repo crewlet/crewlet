@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Internal because these are the engine's own hooks, not its API. Exporting
@@ -64,7 +65,9 @@ func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 }
 
 // engineOn wires just enough engine for the park and pause hooks: they reach
-// the queue and the topic grammar and nothing else.
+// the queue and the topic grammar and nothing else — and for the inbound
+// edge's start, which also asks the node's mode: normal, which [New] gives
+// every node that names none.
 func engineOn(t *testing.T) (*Engine, queue.EventQueue) {
 	t.Helper()
 	q := memory.New()
@@ -72,7 +75,7 @@ func engineOn(t *testing.T) (*Engine, queue.EventQueue) {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	return &Engine{backends: &Backends{Queue: q}}, q
+	return &Engine{backends: &Backends{Queue: q}, mode: statelog.ModeNormal}, q
 }
 
 func TestAParkRepublishesOntoTheSeatsOwnInbox(t *testing.T) {

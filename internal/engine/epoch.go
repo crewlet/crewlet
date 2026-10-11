@@ -355,7 +355,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// a start that fails is refused like a build: a company served
 		// with no inbound edge looks healthy and hears nothing, and the
 		// retry the refusal earns starts it again. See
-		// [Engine.startInbound].
+		// [Engine.startInbound] — which starts nothing on a node in a
+		// maintenance mode, the other node with no edge here.
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the inbound edge could not be started for this node's "+
 				"first company; the revision is not served here yet")

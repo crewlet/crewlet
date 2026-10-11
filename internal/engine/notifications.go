@@ -482,7 +482,19 @@ func (e *Engine) inboundStarted() bool {
 // that fails can refuse the apply with nothing served. What a failed start
 // brought up is taken down again: a chat transport left running would hold
 // every seat's socket beside the one the retry opens.
+//
+// NOTHING ON A NODE IN A MAINTENANCE MODE, which has no edge for the same
+// reason a node with no company has none — its constructor returns before the
+// edge, behind the gate that keeps every publisher off it — but which an
+// apply reaches on every activation. The edge is a fleet-wide consumer that
+// routes each delivery onto a seat's mailbox, so starting it here put the
+// notification spine on every node of a capacity window the moment somebody
+// activated a revision. Deliveries are left for a node that publishes, as
+// they are while such a node boots.
 func (e *Engine) startInbound(ctx context.Context, c *Company) error {
+	if !e.mode.Publishes() {
+		return nil
+	}
 	if err := e.startNotifications(ctx, c); err != nil {
 		e.stopNotifications(ctx)
 		return fmt.Errorf("start the inbound edge: %w", err)

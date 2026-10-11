@@ -1029,6 +1029,12 @@ mode. None of them is what a window needs — a participant that will not
 acknowledge is excluded from the operation, not evicted from the logs — and
 each would move the usage the window is measuring.
 
+A company revision **activated during the window** is still applied — the
+node serves the new epoch's reads and reports `ok` — and it starts none of
+what the mode keeps off: no inbound edge (the node routes no webhook or chat
+message to a seat, exactly as when it booted in that mode) and no scheduler
+(a schedule the revision adds starts firing at the next normal boot).
+
 The [object store](../concepts/object-store.md)'s **collection and audit do
 not run** in either mode: the `object-collector` duty is a duty, and a node in
 a window claims none — and each pass first pins the estate with a
