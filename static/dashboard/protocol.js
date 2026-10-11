@@ -124,6 +124,7 @@ var ALL_DATA_SLICES = [
 	"tools",
 	"tokens",
 	"budget",
+	"budgetStatus",
 	"schedules",
 	"health"
 ];
@@ -354,7 +355,7 @@ var Store = class {
 	}
 	applyBudget(budget) {
 		this.setBudget(budget);
-		this.emit("budget");
+		this.emit("budget", "budgetStatus");
 	}
 	/**
 	* Files a meter under the slice its SHAPE says it is: a member's `org` is the
