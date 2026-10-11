@@ -314,6 +314,27 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 
 Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
 
+### A native backend changes at a restart
+
+Each node builds its native runtime once — the engine's own tracker and its knowledge base — from the company that started it, and it follows the fleet's logs rather than a revision. A revision that turns one of them on or off (`tracker.backend` or `knowledge.backend` moving to or from `native`) activates normally and reports `ok`, and the node keeps serving what it was built with until it restarts: a tracker turned off is still served, and a knowledge base turned on is not served yet. The node says so once per activation with a `native_backend_needs_restart` warning naming the `field`, what it is `running` and what the revision `activated`:
+
+```json
+{
+  "time": "2026-03-12T10:30:00.412Z",
+  "level": "WARN",
+  "msg": "native_backend_needs_restart",
+  "component": "engine",
+  "field": "tracker.backend",
+  "running": "native",
+  "activated": "jira",
+  "detail": "this node's native runtime was built with the engine's own tracker (tracker.backend: native) and keeps serving it until the process restarts; restart each node (one at a time is fine) to serve tracker.backend: jira"
+}
+```
+
+Restart each node (a rolling restart is fine) to serve the new choice. Moving between two vendors — `jira` to `none`, say — is not such a switch and takes effect at the apply, because a vendor's half is rebuilt by its own reconciler; and a node that runs no native runtime at all brings one up at the first apply that names a native backend, so it has nothing to restart for. A re-activation of a revision that still asks for the switch says it again.
+
+A restart serves the switch because a node boots on the revision its own store holds — never on a stale `-company` file, which is ignored once a company exists ([Two equivalent bootstrap entry points](configuration.md#two-equivalent-bootstrap-entry-points)) — so the first apply after it says nothing. The one exception is a node that did not hold the switch when it restarted: one that was **down while it was activated**, or a data node **joining** the fleet with an empty store. Before its engine is up a node cannot read the fleet's pointer, so it boots on the company it had (or on its file), applies the switch at its first reconcile, says the line once more, and serves the switch after one more restart — by which point its store holds that revision.
+
 ---
 
 ## See also
