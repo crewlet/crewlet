@@ -443,7 +443,7 @@ export interface TextBudget {
   limit: number;
   /** Past the cap: the engine would refuse it. */
   over: boolean;
-  /** The line under the field — a count near the cap, the refusal past it. */
+  /** The line under the field: a count near the cap, the refusal past it. */
   line: string | undefined;
 }
 
@@ -467,7 +467,7 @@ export function textBudget(
   const bytes = utf8Bytes(value.trim());
   const over = bytes > limit;
   const line = over
-    ? `${bytes} bytes — ${what} holds at most ${limit}. ${remedy}`
+    ? `${bytes} bytes, but ${what} holds at most ${limit}. ${remedy}`
     : bytes >= limit * COUNT_FROM
       ? `${bytes} of ${limit} bytes`
       : undefined;

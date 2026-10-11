@@ -154,7 +154,7 @@ test("a phrase past the search bound is not asked, and the screen says why", asy
   const asked = mount(ran);
   expect(
     await screen.findByText(
-      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
     ),
   ).toBeTruthy();
   expect(asked.filter((a) => a.what === "knowledge" && a.params.q !== "")).toEqual([]);

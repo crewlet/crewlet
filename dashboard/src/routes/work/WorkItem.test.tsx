@@ -1354,7 +1354,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   }) as HTMLInputElement;
   expect(question.value).toBe(opening);
   expect(document.body.textContent).toContain(
-    `${opening.length} bytes — a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
+    `${opening.length} bytes, but a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
   );
 });
 

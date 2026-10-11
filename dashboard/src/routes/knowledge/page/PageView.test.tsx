@@ -609,7 +609,7 @@ test("a page title past the engine's cap is held whole and said, not cut", async
   await settle();
   expect(title.value).toBe(typed);
   expect(document.body.textContent).toContain(
-    `${PAGE_TITLE_MAX_BYTES + 44} bytes — a page's title holds at most ${PAGE_TITLE_MAX_BYTES}.`,
+    `${PAGE_TITLE_MAX_BYTES + 44} bytes, but a page's title holds at most ${PAGE_TITLE_MAX_BYTES}.`,
   );
   const write = screen.getByRole("button", { name: "Write the page" });
   expect(write.getAttribute("aria-disabled")).toBe("true");
