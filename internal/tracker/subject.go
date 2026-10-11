@@ -192,10 +192,10 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, which is why its
-	// table declaration is the EMPTY set stated explicitly rather than
-	// left out: a kind that writes nothing must not be able to slip
-	// through the completeness walk by writing nothing.
+	// The only kind that writes no row on any node, and the applier has a
+	// case for it all the same: a kind with no case faults
+	// (TestAKindNobodyDeclaredFaults), so a barrier is applied as nothing
+	// on purpose rather than by omission.
 	KindBarrier ObjectKind = "barrier"
 
 	// KindFile is one file in a project: where it lives, what it is and

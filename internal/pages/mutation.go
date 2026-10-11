@@ -292,10 +292,9 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 // where they meet.
 //
 // Every other part of a barrier was already here — [KindBarrier], [OpBarrier],
-// [BarrierSubject], the applier's case, the empty [BarrierTables] and the
-// scope sentinel — and the encoder was the one piece missing, which is why the
-// index could not be built and every `linearizable` read on this domain
-// refused for want of one.
+// [BarrierSubject], the applier's case and the scope sentinel — and the
+// encoder was the one piece missing, which is why the index could not be built
+// and every `linearizable` read on this domain refused for want of one.
 //
 // AN OP ID IS REFUSED, and that is a correctness rule rather than tidiness. An
 // op id becomes the Nats-Msg-Id; a repeat inside the duplicate window is

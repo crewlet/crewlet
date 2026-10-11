@@ -97,8 +97,9 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, which is why its table
-	// declaration is the EMPTY set stated explicitly rather than left out.
+	// The only kind that writes no row on any node, and the applier has a
+	// case for it all the same: a kind with no case faults, so a barrier is
+	// applied as nothing on purpose rather than by omission.
 	KindBarrier ObjectKind = "barrier"
 )
 

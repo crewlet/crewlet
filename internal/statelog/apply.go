@@ -1586,18 +1586,6 @@ func (r *Runner) WaitApplied(ctx context.Context, s ScopeSet, p Position) error 
 	return nil
 }
 
-// Anchor reads a subject's arbitration anchor, which is what the publisher
-// forms its expectation from.
-func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
-	var p Position
-	err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		var err error
-		p, err = r.tables.anchor(ctx, tx, subject, r.Committed().Generation)
-		return err
-	})
-	return p, err
-}
-
 // OpsRetention is how long a node keeps its record of which operations it
 // applied.
 //

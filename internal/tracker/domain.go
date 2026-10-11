@@ -222,11 +222,3 @@ func (Domain) ClaimsIdentity() bool { return true }
 // same constant the [Translator] opens, so the trim waits on the consumer the
 // wakes actually advance.
 func (Domain) FeedGroup() string { return FeedGroup }
-
-// BarrierTables is the empty set, DECLARED.
-//
-// The barrier writes no row on any node, and stating that explicitly is what
-// stops a no-op record slipping through the kind-completeness walk by writing
-// nothing: "this kind wrote nothing" and "nobody classified this kind" are the
-// same observation, and only one of them is correct.
-var BarrierTables = map[string]statelog.TableClass{}

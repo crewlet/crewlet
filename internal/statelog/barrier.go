@@ -11,10 +11,10 @@ import (
 
 // BarrierKind is the subject kind of the one subject that names no object.
 //
-// It is a KIND anyway, because the applier has a case for it and a domain's
-// table map must classify it — it declares the EMPTY set, explicitly, so a
-// record that writes nothing cannot slip through a completeness walk by
-// writing nothing.
+// It is a KIND anyway, because every domain's applier has a case for it: an
+// applier faults on a kind it has no case for, so a domain that forgot the
+// barrier would stop at the first linearizable read rather than skip a record
+// it did not know.
 const BarrierKind = "barrier"
 
 // BarrierScope is the one-byte scope sentinel a barrier declares.
@@ -127,10 +127,6 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
 	}
 	if gen == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no generation source", d.Name())
-	}
-	if class, ok := d.Tables()[BarrierKind]; ok && class != Local {
-		return nil, fmt.Errorf("statelog: domain %q classes the barrier %s — a "+
-			"barrier writes no rows at all", d.Name(), class)
 	}
 	return &ReadIndex{
 		log:       log,
