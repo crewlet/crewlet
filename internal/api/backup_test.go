@@ -163,6 +163,24 @@ func TestUnreachableObjectsAreTheFleetsStateNotTheNodes(t *testing.T) {
 	}
 }
 
+// A BACKUP ASKED FOR WHILE ONE RUNS IS A 409. Nothing is wrong with the node
+// or the command — the first one is still copying — and a 500 would send an
+// operator whose cron overlapped to the engine's logs for a backup that is in
+// fact under way.
+func TestABackupWhileOneRunsAnswers409(t *testing.T) {
+	t.Parallel()
+	taker := &fakeBackup{err: backup.ErrBackupRunning}
+	a := newApp(t, api.Options{Bootstrap: guarded(), Backup: taker})
+
+	status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", status)
+	}
+	if body["error"] != "backup_running" || body["hint"] == nil {
+		t.Errorf("body = %v, want backup_running with a hint", body)
+	}
+}
+
 // The manifest is the answer: it is what the CLI renders and what a restore
 // reads, so the route must hand it back rather than a bare acknowledgement.
 func TestASuccessfulBackupAnswersWithItsManifest(t *testing.T) {

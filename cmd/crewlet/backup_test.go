@@ -212,3 +212,18 @@ func TestABackupSaysHowManyFilesWereWrittenDuringTheCopy(t *testing.T) {
 		t.Errorf("the report does not count the files written during the copy:\n%s", stdout)
 	}
 }
+
+// A BACKUP ALREADY RUNNING ON THE NODE IS SAID, with the node's own hint:
+// nothing failed and nothing was written, and the remedy is to wait for the one
+// that is running.
+func TestABackupWhileOneRunsSaysSo(t *testing.T) {
+	t.Parallel()
+	node := newBackupNode(t)
+	node.status = http.StatusConflict
+	node.answer = map[string]any{"error": "backup_running",
+		"hint": "a backup is already running on this node; take this one when it finishes"}
+	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/var/backups/tonight")
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("backup = %v; want the refusal saying a backup is already running", err)
+	}
+}

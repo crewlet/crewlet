@@ -141,6 +141,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -194,6 +195,22 @@ var ErrBadDestination = errors.New("backup: unusable destination")
 
 // ErrNotEmpty reports a destination that already holds something.
 var ErrNotEmpty = fmt.Errorf("%w: not empty", ErrBadDestination)
+
+// ErrBackupRunning refuses a backup asked for while another runs on this node.
+//
+// TWO AT ONCE WOULD SHARE ONE TRIM HOLD. The hold is keyed on the node and the
+// purpose ([HoldPurpose]) — which is what lets an operator read a stalled trim
+// as "node-0's backup" — so a second backup's pin is the first's, and the first
+// to finish releases the pin the other's gap still needs: the trim may then
+// delete exactly the records the slower copy has to replay, and that backup is
+// refused at its assertion after however long it spent copying. One at a time
+// also keeps one copy's I/O, not two, competing with the applier's own commits.
+//
+// NOT A DESTINATION REFUSAL (the directory is fine) and returned before a
+// byte is written, the directory included.
+var ErrBackupRunning = errors.New("backup: a backup is already running on this node — " +
+	"take this one once it finishes; two at once would share the node's one trim " +
+	"hold, and the first to finish would release the other's pin")
 
 // Manifest describes one backup: what was captured, from where, and when.
 //
@@ -413,6 +430,9 @@ type Service struct {
 	// deferred, with how many the read answered — nil but in a test, which
 	// sees that the table is walked a page at a time.
 	deferredRead func(rows int)
+	// running is set while a backup runs, so a second is refused
+	// ([ErrBackupRunning]).
+	running atomic.Bool
 }
 
 // HoldPurpose names this subsystem in the trim-hold register, so an operator
@@ -494,6 +514,13 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			"because it is resolved on the engine's host rather than yours",
 			ErrBadDestination, dir)
 	}
+	// ONE AT A TIME, refused before anything is written — the directory
+	// included — and after the two refusals above, which are the caller's
+	// own mistakes and answered the same whatever is running.
+	if !s.running.CompareAndSwap(false, true) {
+		return Manifest{}, ErrBackupRunning
+	}
+	defer s.running.Store(false)
 	if err := emptyDir(dir); err != nil {
 		return Manifest{}, err
 	}
