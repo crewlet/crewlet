@@ -96,6 +96,8 @@ func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 			Subject: PageSubject("stamp"), Op: OpPurge}},
 		"a barrier": {RecordEnvelope: RecordEnvelope{
 			V: baseRecordVersion, Subject: BarrierSubject(), Op: OpBarrier}},
+		"a trimmed record": {RecordEnvelope: RecordEnvelope{
+			V: baseRecordVersion, Subject: Subject{Kind: KindTrimmed, ID: "1.2"}, Op: OpTrimmed}},
 		"a generation": {RecordEnvelope: RecordEnvelope{
 			V: baseRecordVersion, Subject: GenerationSubject(2), Op: OpGeneration}},
 	} {

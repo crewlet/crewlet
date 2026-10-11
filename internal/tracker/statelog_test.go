@@ -50,6 +50,8 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			Rows:       tracker.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER the engine hands the trim.
+			EncodeTrimmed: tracker.EncodeTrimmed,
 		}
 	})
 }

@@ -32,7 +32,11 @@ import (
 // from a live fleet, publishes what it concluded — so a node that is not
 // holding the duty can still say why the log is not shrinking, and so every
 // write fence knows what may be gone — and only THEN applies the answer to the
-// broker, for the reason [retention.apply] gives.
+// broker, for the reason [retention.apply] gives. Last, on a log that writes
+// arbitration anchors, it appends the trimmed records that have every node
+// remove the anchors below what the log no longer holds (ADR-0032,
+// [retention.sweepAnchors]): an anchor there names a record that is gone, and
+// can only send its subject's next write to be refused.
 //
 // # Why nothing here re-decides
 //
@@ -109,6 +113,13 @@ type retention struct {
 
 	db  *store.DB
 	cfg config.TrackerRetention
+
+	// estate is THIS node's replicated copy, resolved per call because an
+	// adoption swaps the file — what the anchor sweep counts the anchors
+	// below the log from ([retention.sweepAnchors]). Nil counts none and
+	// sweeps nothing, the conservative direction: an anchor kept costs its
+	// next write one refused append, never a lost update.
+	estate func() statelog.ReadEstate
 
 	// claim answers whether this node holds the trim's duty this tick
 	// ([Engine.workerDuty]). Nil answers yes — a node with no coordination
@@ -235,6 +246,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		holders:     e.holdersOf(),
 		state:       s,
 		db:          e.backends.Store,
+		estate:      func() statelog.ReadEstate { return s.estate().Reader() },
 		cfg:         boot.Stream.TrackerRetention,
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
@@ -312,9 +324,11 @@ func (e *Engine) Alarms() ([]statelog.Kind, bool) {
 //
 // AND THE ALARM TABLE ON ITS OWN, FASTER CADENCE ([AlarmInterval]) between
 // trims. ONE GOROUTINE for both, so an evaluation and a trim never run at
-// once. Only the evaluation takes the faster ticker: [retention.capacity]
-// stays on the trim's, the cadence its pool-wait delta and backup walk are
-// defined at.
+// once — which is why the one part of a tick whose length is not a handful of
+// round trips, the anchor sweeps, shares one alarm interval among them
+// ([retention.anchorSweepBudget]). Only the evaluation takes the faster
+// ticker: [retention.capacity] stays on the trim's, the cadence its pool-wait
+// delta and backup walk are defined at.
 func (r *retention) run(ctx context.Context) {
 	defer close(r.done)
 	trim := time.NewTicker(RetentionInterval)
@@ -407,17 +421,25 @@ func (r *retention) tick(ctx context.Context) {
 	}
 }
 
-// decidesFrom is every domain whose rows the trim decides from: the logs that
-// claim identity, whose evictions it counts from this node's own rows
-// ([logTombstones]) — in the register's order. Every other term it reads is
-// the fleet's register or the log itself.
+// decidesFrom is every domain whose rows the trim decides from, in the
+// register's order: the logs that claim identity, whose evictions it counts
+// from this node's own rows ([logTombstones]), and the logs that write
+// arbitration anchors, whose anchors below the log it counts from this node's
+// own rows before appending the records that remove them
+// ([retention.sweepAnchors]). Every other term it reads is the fleet's
+// register or the log itself.
+//
+// THE TWO SETS ARE NAMED APART although they are the same logs today — the
+// tracker's and the knowledge base's — because a log that writes anchors and
+// claims no identity is a domain somebody can add, and a copy of it out of
+// service would have the trim count anchors on rows nobody can trust.
 func (r *retention) decidesFrom() []string {
 	if r.state == nil {
 		return nil
 	}
 	var out []string
 	for _, running := range r.state.running() {
-		if running.domain.ClaimsIdentity() {
+		if running.domain.ClaimsIdentity() || statelog.WritesAnchors(running.spec) {
 			out = append(out, running.domain.Name())
 		}
 	}
@@ -547,7 +569,116 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 
 	decision := statelog.Trim(in.Terms())
 	r.gauges(name, statelog.KeepsGateReserve(running.domain), stats, decision, shared)
-	return r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
+	first, err := r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
+	if err != nil {
+		return err
+	}
+	// AND THEN THE ANCHORS BELOW WHAT THE LOG NO LONGER HOLDS — ADR-0032.
+	// After the purge, so the floor is the log's first surviving sequence:
+	// the published floor can lead the log after a purge that failed, and an
+	// anchor of a record the log still holds is one its next write uses.
+	r.sweepAnchors(ctx, running, statelog.Position{
+		Stream: running.spec.Name, Generation: generation, Seq: first,
+	})
+	return nil
+}
+
+// sweepAnchors appends the trimmed records that remove the arbitration anchors
+// this node's copy holds below what running's log no longer holds — one per
+// [statelog.AnchorsPerTrimmedRecord] of them, at most
+// [statelog.TrimmedRecordsPerSweep] a tick, and none on a tick with none below,
+// so an idle fleet's log gains nothing ([statelog.SweepAnchors]).
+//
+// A RECORD AND NEVER A DELETE, because the anchors are replicated-estate state
+// and the trim is not their writer: every node's applier removes them, at the
+// record's position, in the transaction that applies it.
+//
+// ON THIS NODE'S OWN APPLIER, which the sweep counts only once it has applied
+// the log's end and paces its records on, one committed before the next is
+// appended — so a holder whose copy is behind appends nothing, and a write or
+// a read behind the sweep on this node waits one record's apply rather than
+// the whole run's. And WITHIN ITS SHARE OF ONE ALARM INTERVAL
+// ([retention.anchorSweepBudget]), which also bounds what a node applying the
+// records slower than this one is left queued behind them.
+//
+// A FAILURE DOES NOT FAIL THE TICK. The floor and the purge have already
+// landed, and an anchor kept costs its next write one refused append and never
+// a lost update — so it is said, and the next tick's count retries it. A sweep
+// whose budget ran out is no failure at all: it says what it appended and that
+// more remain, as one stopped by the cap does, and the next tick goes on.
+func (r *retention) sweepAnchors(ctx context.Context, running *runningLog, below statelog.Position) {
+	deps, sweeps := r.sweepDeps(running)
+	if !sweeps {
+		return
+	}
+	name := running.domain.Name()
+	swept, err := statelog.SweepAnchors(ctx, deps, below)
+	if err != nil {
+		log.WarnContext(ctx, "retention_anchor_sweep_failed", "domain", name,
+			"generation", below.Generation, "below", below.Seq, "records", swept.Records,
+			"err", err)
+		return
+	}
+	if swept.Records > 0 {
+		log.InfoContext(ctx, "retention_anchors_swept", "domain", name,
+			"generation", below.Generation, "below", below.Seq, "records", swept.Records,
+			"more_remain", swept.Remain)
+	}
+}
+
+// sweepDeps is what running's anchor sweep is handed, or false for a log the
+// trim sweeps nothing on: one that writes no anchor, which has no trimmed
+// record, or a node with no copy of the estate to count from.
+func (r *retention) sweepDeps(running *runningLog) (statelog.SweepDeps, bool) {
+	encode := trimmedEncoder(running.domain)
+	if encode == nil || r.estate == nil {
+		return statelog.SweepDeps{}, false
+	}
+	deps := statelog.SweepDeps{
+		Domain: running.domain, Spec: running.spec, Log: running.log,
+		Ends: func(ctx context.Context) (statelog.LogEnds, error) {
+			first, last, err := running.log.Bounds(ctx)
+			return statelog.LogEnds{First: first, Last: last}, err
+		},
+		Runner: running.runner,
+		Encode: encode, DB: r.estate(), Writer: r.nodeID, Evicted: running.evicted,
+		Budget: r.anchorSweepBudget(),
+	}
+	// NEVER A NIL *Reserve IN THE INTERFACE: a domain that keeps none is
+	// handed none, which the sweep tells apart from one that forgot it.
+	if running.reserve != nil {
+		deps.Admission = running.reserve
+	}
+	return deps, true
+}
+
+// anchorSweepBudget is how long one log's anchor sweep may take: ONE
+// [AlarmInterval], shared equally by every log this node runs that writes
+// anchors.
+//
+// THE SWEEPS RUN ON THE GOROUTINE THAT EVALUATES THIS NODE'S ALARMS
+// ([retention.run]), one log after another, and each paces its records on this
+// node's applier — so their length is whatever that applier takes, and an
+// applier slow but still moving would hold the alarms for minutes: the moment
+// `apply_lag` matters most is the one it would go unevaluated. Shared out of
+// one interval, a tick's sweeps together delay an evaluation by at most one
+// interval and the appends in flight when their budgets ran out — one skipped
+// evaluation in a quarter hour — however many logs write anchors. A larger
+// share delays the alarms further; a smaller one only drains a backlog slower,
+// and the budget binds only on a large table, where records apply slowest
+// (the drain arithmetic is [statelog.TrimmedRecordsPerSweep]'s).
+//
+// It is the bound on another node's queue too: a node that applies the
+// records k times slower than this one is left at most about k − 1 of these
+// budgets behind them when a sweep ends ([statelog.SweepAnchors]).
+func (r *retention) anchorSweepBudget() time.Duration {
+	logs := 0
+	for _, running := range r.state.running() {
+		if statelog.WritesAnchors(running.spec) {
+			logs++
+		}
+	}
+	return AlarmInterval / time.Duration(max(logs, 1))
 }
 
 // apply carries out what one tick decided: it publishes the conclusion, and
@@ -576,20 +707,25 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 // closes only when a later tick licenses removing at least that far, and that
 // can be a while: a blocked tick purges nothing, and one whose lowest counted
 // node is lower purges less.
+//
+// It answers the log's first surviving sequence once the tick is done — what
+// it purged to, or the first it was handed — which is the floor the anchor
+// sweep removes below ([retention.sweepAnchors]).
 func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name string,
-	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
+	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) (uint64, error) {
 
 	if err := r.publish(ctx, name, generation, decision, first, shared); err != nil {
-		return err
+		return 0, err
 	}
-	if !decision.Blocked() && decision.To > first {
-		if err := stream.Purge(ctx, decision.To); err != nil {
-			return fmt.Errorf("purge below %d: %w", decision.To, err)
-		}
-		log.InfoContext(ctx, "retention_trimmed", "domain", name,
-			"trim_to", decision.To, "was", first, "generation", generation)
+	if decision.Blocked() || decision.To <= first {
+		return first, nil
 	}
-	return nil
+	if err := stream.Purge(ctx, decision.To); err != nil {
+		return 0, fmt.Errorf("purge below %d: %w", decision.To, err)
+	}
+	log.InfoContext(ctx, "retention_trimmed", "domain", name,
+		"trim_to", decision.To, "was", first, "generation", generation)
+	return decision.To, nil
 }
 
 // nextFloor is the [coord.TrimFloor.Floor] a tick publishes: the previous

@@ -69,7 +69,8 @@ being counted about a minute after that record lands.
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
 `worker:retention`. Only a data node may claim it, since the trim reads the
 estate it holds — and not one whose copy of the tracker or the knowledge base
-is out of service, since the evictions it counts are in those rows: such a node
+is out of service, since the evictions and the arbitration anchors it counts
+are in those rows: such a node
 declines the duty (`retention_duty_declined`), gives its lease back if it holds
 it (`retention_duty_given_back`), and one whose copies serve takes it at its
 next tick ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
@@ -112,8 +113,10 @@ at the arithmetic and again here.
 Default 7 days, range 24 h to 90 d. The 24-hour floor has three reasons: a
 value below a day cannot outlast a nightly backup cycle; it is the margin that
 keeps a quiet object writable, because an object whose last record has been
-trimmed has to be recognised as *trimmed* rather than as *absent*; and it
-bounds the window a joining node's vector gap is refilled from.
+trimmed has to be recognised as *trimmed* rather than as *absent* — and its
+arbitration anchor is then removed, see
+[Anchors below the log are removed by a record](#anchors-below-the-log-are-removed-by-a-record);
+and it bounds the window a joining node's vector gap is refilled from.
 
 ### A company that never backs up never trims
 
@@ -258,6 +261,76 @@ object. Reads make the same comparison: a node below the floor whose missing
 records the log still holds refuses them as `behind` while it replays them,
 and a node whose missing records are gone from the log itself refuses them as
 `below_floor` and adopts a snapshot.
+
+### Anchors below the log are removed by a record
+
+Every node keeps, per object, the position of the last record it consumed on
+that object's subject, whatever that record then did — the **arbitration
+anchor** a new write's expectation is formed from
+([replication](replication.md)). Once the log no longer holds an
+object's records, its anchor names a record that is gone: all it can do is send
+the object's next write to the broker to be refused before the write asks the
+log what the object holds. Kept, the anchors would grow by every object the log
+ever carried, on every data node, for the life of the deployment.
+
+So after each tick's purge, on each log that writes anchors — the tracker's and
+the knowledge base's — the trim holder counts the anchors its own copy holds
+below the log's **first surviving record** and appends one `trimmed` record per
+250 of them, at most 128 a tick. Every node's applier removes up to 250
+anchors per record, lowest first, in the transaction that applies it — the
+same rows on every node, because it is a record on the log rather than a sweep
+each node runs on its own schedule
+([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)).
+
+- **A tick with nothing below appends nothing**, so an idle fleet's log gains no
+  record. A tick whose purge was blocked still counts below the log's own first
+  record, so a backlog the cap of 128 or the time budget left — or one whose
+  sweep failed — goes on the following ticks without waiting for another purge.
+- **The holder counts only once its own copy has applied the whole log.** It
+  reads the log's end and waits for its applier to commit it — up to five
+  seconds, and never past the sweep's time budget; a copy that is behind —
+  catching up after adopting a snapshot, or with a backlog — would count
+  anchors that the records already on the log remove, so it appends nothing
+  that tick and says so.
+- **One record at a time.** Each record is appended only once the holder's own
+  applier has committed the one before it (again waiting up to five seconds),
+  so a seat's write or a read's barrier that lands behind the sweep on the
+  holder waits for one record's apply, never for the whole run.
+- **Within a time budget.** The trim holder evaluates its own alarms on the
+  same loop that sweeps, so a tick's sweeps share one alarm interval (ten
+  seconds) equally — five seconds each for the tracker's and the knowledge
+  base's logs — and each stops appending when its share is spent, leaving the
+  rest to the next tick. That bounds two things. The holder's alarms are
+  evaluated at most one interval late, however slow its applier is. And a data
+  node that applies the records more slowly than the holder, which builds the
+  difference up in front of its own writes and reads, is left at most about
+  (k − 1) budgets behind them when it is k times slower — about one budget at
+  half the holder's speed — and never more than 128 records behind.
+- **The floor is the log's first surviving record, not the published floor.**
+  The published floor can run ahead of the log after a purge that failed, and
+  an anchor of a record the log still holds is one the object's next write uses.
+- **What it means for writes:** the next write to such an object asks the log
+  what the object holds, finds nothing, and passes the same zero fence it
+  always did — one refused append cheaper. Removing an anchor never lets a
+  write past that fence; it only changes which way the write reaches it.
+- **What it costs:** a record is a few hundred bytes on the log and is trimmed
+  like any other. Applying one holds each node's writer for 21 ms at the 99th
+  percentile with 20,000 anchors on the log, 56 ms with 300,000 and 75 ms with
+  a million (measured on a 4-vCPU container's virtio disk —
+  `go test ./internal/statelog -run '^$' -bench BenchmarkATrimmedRecordsSweep -benchtime 200x`
+  re-measures it on yours). A backlog drains at up to 128 records — 32,000
+  anchors — per log per tick where records apply quickly. On a large table the
+  time budget binds first: at a million anchors a record's apply and append
+  take about 45 ms, so a five-second share appends about a hundred records a
+  tick, two and a half million anchors a day.
+- **What to watch:** the duty logs `retention_anchors_swept` (`domain`,
+  `generation`, `below`, `records`, and `more_remain` when the cap or the time
+  budget stopped it with anchors still below) when it appends, and
+  `retention_anchor_sweep_failed` (`WARN`) when it could not, its own copy
+  being behind the log included — the purge and the floor have landed by then,
+  and the next tick retries.
+  Each node counts what its applier removed as `crewlet.statelog.anchors.swept`.
+  An evicted node appends none.
 
 ## The cross-field rule
 

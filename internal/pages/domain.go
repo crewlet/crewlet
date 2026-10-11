@@ -71,11 +71,12 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxBytes:      PagesLogMaxBytes,
 		Duplicates:    PagesLogDuplicates,
 		Replay:        statelog.ReplayStrict,
-		// FIVE OF THE SIX KINDS. A barrier shares one subject across
+		// FIVE OF THE SEVEN KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
 		// anchor row per read into the transaction holding this store's
-		// only writer.
+		// only writer; and the trim's trimmed record removes anchors, so
+		// arbitrated it would write one of its own (ADR-0032).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }

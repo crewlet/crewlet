@@ -49,6 +49,8 @@ var unmarkedByDesign = map[string]string{
 	"tracker: op %q is not one this build writes":          "decoding a record off the log",
 	"tracker: %q is not a barrier envelope":                "decoding a record off the log",
 	"tracker: a barrier carries no op id":                  "decoding a record off the log",
+	"tracker: a %q envelope on %q is not a trimmed ":       "the trim's own record, which no caller sends",
+	"tracker: a trimmed record carries no op id":           "the trim's own record, which no caller sends",
 	"tracker: a thread read names no task":                 "the builtin always names the task it resolved",
 	"tracker: the %s record on %s must be readable ":       "a record version is the encoder's, never the caller's",
 	"tracker: the %s record on %s is stamped version ":     "a record version is the encoder's, never the caller's",

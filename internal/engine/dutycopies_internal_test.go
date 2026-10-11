@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -55,7 +56,7 @@ func wrongCopyNode(domain string) *Engine {
 func everyLog() *stateLog {
 	var runs []*runningLog
 	for _, d := range registeredDomains() {
-		runs = append(runs, &runningLog{domain: d})
+		runs = append(runs, &runningLog{domain: d, spec: d.Stream()})
 	}
 	return &stateLog{logs: newLogSet(runs)}
 }
@@ -145,7 +146,8 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 
 // EVERY DUTY NAMES THE DOMAINS IT DECIDES FROM, each a registered domain: the
 // embedding duty the vectors and the domain of every corpus the engine embeds,
-// the trim every log whose evictions it counts, and the collector every domain
+// the trim every log whose evictions or anchors it counts from this node's
+// rows, and the collector every domain
 // whose rows name its objects. A corpus whose source maps to no domain, or a
 // declaration in a domain this list missed, would be a duty deciding from a
 // copy nobody asked the verdict of.
@@ -160,14 +162,25 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 		t.Errorf("the embedding duty decides from %v, want %v", embed, want)
 	}
 
-	var claiming []string
+	var counted []string
 	for _, d := range registeredDomains() {
-		if d.ClaimsIdentity() {
-			claiming = append(claiming, d.Name())
+		if d.ClaimsIdentity() || statelog.WritesAnchors(d.Stream()) {
+			counted = append(counted, d.Name())
 		}
 	}
-	if trim := (&retention{state: everyLog()}).decidesFrom(); !slices.Equal(trim, claiming) {
-		t.Errorf("the trim decides from %v, want the logs whose evictions it counts, %v", trim, claiming)
+	if trim := (&retention{state: everyLog()}).decidesFrom(); !slices.Equal(trim, counted) {
+		t.Errorf("the trim decides from %v, want the logs whose evictions or "+
+			"anchors it counts, %v", trim, counted)
+	}
+	// A LOG THAT WRITES ANCHORS AND CLAIMS NO IDENTITY, which no registered
+	// domain is today: the trim still counts its anchors from this node's
+	// rows, so it still decides from its copy.
+	anchored := anchorsWithoutIdentity{tracker.Domain{}}
+	only := &stateLog{logs: newLogSet([]*runningLog{{domain: anchored, spec: anchored.Stream()}})}
+	if trim := (&retention{state: only}).decidesFrom(); !slices.Equal(trim, []string{anchored.Name()}) {
+		t.Errorf("the trim decides from %v over a log that writes anchors and claims "+
+			"no identity, want %s — it counts that log's anchors from this node's rows",
+			trim, anchored.Name())
 	}
 
 	var named []string
@@ -187,6 +200,12 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 		}
 	}
 }
+
+// anchorsWithoutIdentity is a domain whose log writes arbitration anchors and
+// which claims no identity.
+type anchorsWithoutIdentity struct{ statelog.Domain }
+
+func (anchorsWithoutIdentity) ClaimsIdentity() bool { return false }
 
 // sameNames is whether two lists name the same domains, in any order.
 func sameNames(a, b []string) bool {

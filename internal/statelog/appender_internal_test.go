@@ -57,12 +57,12 @@ func TestABarrierOnAFullLogRefusesReadsAsAFullLog(t *testing.T) {
 		Description: "maximum bytes exceeded"}
 	var refused *Refused
 	if err := barrierRefusal(ReadLinearizable,
-		barrierAppendError("crewlet.probe.barrier", full)); !errors.As(err, &refused) ||
+		frameworkAppendError(BarrierKind, "crewlet.probe.barrier", full)); !errors.As(err, &refused) ||
 		refused.Code != RefuseLogFull {
 		t.Fatalf("a full log's barrier refused the read with %v, want %s", err, RefuseLogFull)
 	}
 	if err := barrierRefusal(ReadLinearizable,
-		barrierAppendError("crewlet.probe.barrier", nats.ErrNoResponders)); !errors.As(err, &refused) ||
+		frameworkAppendError(BarrierKind, "crewlet.probe.barrier", nats.ErrNoResponders)); !errors.As(err, &refused) ||
 		refused.Code != RefuseNoQuorum {
 		t.Fatalf("an unanswered barrier refused the read with %v, want %s", err, RefuseNoQuorum)
 	}

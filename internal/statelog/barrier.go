@@ -19,7 +19,8 @@ const BarrierKind = "barrier"
 
 // FrameworkScope is the one-byte scope sentinel every FRAMEWORK record
 // declares — a record whose whole effect is the framework's own and which
-// writes no domain row on any node, such as the read index's barrier.
+// writes no domain row on any node: the read index's barrier, and the trim's
+// trimmed record ([TrimmedKind]).
 //
 // Chosen so it can never intersect any read's closure: such a record makes
 // nothing stale, so a scope that overlapped a real object would make every
@@ -274,7 +275,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
 		release()
 		if err != nil {
-			run.err = barrierAppendError(r.subject, err)
+			run.err = frameworkAppendError(BarrierKind, r.subject, err)
 			return
 		}
 		if duplicate {
@@ -297,21 +298,22 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	}()
 }
 
-// barrierAppendError is what a barrier append that did not land tells the
-// readers waiting on it.
+// frameworkAppendError is what an append of a framework record — a barrier, a
+// trimmed record — that did not land tells its caller.
 //
-// A FULL LOG IS NAMED AS ONE. The append's own error was handed on raw, and
-// the read path's mapping ([barrierRefusal]) only knows a full log by its
-// refusal reason — so every linearizable read on a full log was refused
+// A FULL LOG IS NAMED AS ONE. The barrier's append handed its own error on
+// raw, and the read path's mapping ([barrierRefusal]) only knows a full log by
+// its refusal reason — so every linearizable read on a full log was refused
 // `no_quorum`, a majority that did not agree and a thing worth coming back
-// for, where the truth was a byte ceiling an operator has to raise.
-func barrierAppendError(subject string, err error) error {
+// for, where the truth was a byte ceiling an operator has to raise. The trim's
+// line names it `log_full` by the same rule.
+func frameworkAppendError(record, subject string, err error) error {
 	if f, detail := classify(err); f == faultFull {
 		return &Unavailable{
 			Reason: ReasonLogFull,
-			Detail: fmt.Sprintf("the broker refused the barrier on %s: %s", subject, detail),
+			Detail: fmt.Sprintf("the broker refused the %s record on %s: %s", record, subject, detail),
 			Cause:  err,
 		}
 	}
-	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
+	return fmt.Errorf("statelog: append a %s record on %s: %w", record, subject, err)
 }

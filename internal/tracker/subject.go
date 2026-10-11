@@ -114,6 +114,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ObjectKind is what an object on the mutation log is.
@@ -192,10 +193,10 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, and the applier has a
-	// case for it all the same: a kind with no case faults
-	// (TestAKindNobodyDeclaredFaults), so a barrier is applied as nothing
-	// on purpose rather than by omission.
+	// One of the two kinds that write no row of this domain's on any node —
+	// the other is [KindTrimmed] — and the applier has a case for it all the
+	// same: a kind with no case faults (TestAKindNobodyDeclaredFaults), so a
+	// barrier is applied as nothing on purpose rather than by omission.
 	KindBarrier ObjectKind = "barrier"
 
 	// KindFile is one file in a project: where it lives, what it is and
@@ -214,6 +215,15 @@ const (
 	// write naming one key, which is the race the collector's lock-free
 	// deletion rests on there being none of.
 	KindFile ObjectKind = "file"
+
+	// KindTrimmed is the trim's record that removes the arbitration
+	// anchors below what the log no longer holds — [statelog.TrimmedKind],
+	// ADR-0032 — on one subject per floor, which the subject's id names.
+	//
+	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
+	// the record; this domain writes nothing for it, and has the case
+	// that says so, for the barrier's reason.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
 // ObjectKinds are every kind this build writes, in the order they are
@@ -229,7 +239,7 @@ var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
-	KindFile,
+	KindFile, KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -238,14 +248,17 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// EVERY KIND BUT TWO DOES. A turn is ADDITIVE — it records spend that happened
-// and races nobody — and a barrier is arbitrated by nothing at all: every
-// barrier shares one subject, so an expectation there would serialise the
+// EVERY KIND BUT THREE DOES. A turn is ADDITIVE — it records spend that
+// happened and races nobody — and a barrier is arbitrated by nothing at all:
+// every barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
-// row per read into the transaction holding this store's only writer.
+// row per read into the transaction holding this store's only writer. A
+// trimmed record REMOVES anchors, and identical ones are each meant to land, so
+// an expectation would refuse every one after the first and an anchor of its
+// own would be the one row it exists not to leave behind.
 func (k ObjectKind) Arbitrated() bool {
 	switch k {
-	case KindTurn, KindBarrier:
+	case KindTurn, KindBarrier, KindTrimmed:
 		return false
 	}
 	return k.Valid()
@@ -362,6 +375,13 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]) — the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // FileSubject names one file by its address: the project it is in and the
 // path it has there, which is what two writers of one path contend on.
