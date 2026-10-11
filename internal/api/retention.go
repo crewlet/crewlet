@@ -51,10 +51,8 @@ type retentionWriter interface {
 // each log, and answered per log with the same three-valued outcome every other
 // write has. See [engine.NodeGate].
 //
-// EXPORTED, unlike its neighbour, because the caller has to convert a typed
-// nil to a genuine one before handing it over: a nil *engine.NodeGate inside a
-// non-nil interface passes this route's own check and panics on the first
-// press.
+// EXPORTED, unlike its neighbour, because [NativeRoutes] answers it and an
+// implementation of that seam outside this package has to name it.
 type NodeGate interface {
 	// Evict answers a [*statelog.EvictionRefusal], wrapped, for a node
 	// still holding a live presence lease — which this route reports as a
@@ -203,9 +201,10 @@ func (a *App) mountRetention(mux httpjson.Router) {
 	// every row it produced. Both are guarded, both echo their subject
 	// back as a confirmation, and both answer the three-valued write
 	// outcome whole.
-	if a.purger != nil {
-		mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
-	}
+	//
+	// MOUNTED ON EVERY API and asked of the engine per request, for
+	// [NativeRoutes]' reason.
+	mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
 }
 
 // servePurge answers POST /work/{id}/purge.
@@ -226,10 +225,17 @@ func (a *App) mountRetention(mux httpjson.Router) {
 // in the ticket they were asked to act on. Echoing the id back would be a
 // value copied from the same URL that carries it, which confirms nothing —
 // where the key has to be looked up, which is the point of asking.
+//
+// # Where the node hands out no tracker writer
+//
+// The route is absent — the mux's own 404, byte for byte — rather than refused:
+// an operator who cannot purge here must not be told the gesture exists and
+// failed. Asked before anything else, so a request to such a node is judged
+// for nothing and never told which of its parameters it lacked.
 func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
-	if a.purger == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_tracker"})
+	purger, served := a.native.Purger()
+	if !served {
+		httpjson.NoRoute(w, r)
 		return
 	}
 	id := r.PathValue("id")
@@ -289,7 +295,7 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
+	result, err := purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
 			"error", err)
@@ -385,7 +391,11 @@ func gateVerb(evict bool) string {
 // again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.nodes == nil {
+		// ASKED PER REQUEST, for [NativeRoutes]' reason: a node that
+		// booted with no company starts its state log at the first apply
+		// whose company runs one.
+		nodes, runs := a.native.Nodes()
+		if !runs {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "no_state_log",
 				"detail": "this node runs no state log, so there is no log to " +
@@ -432,9 +442,9 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		var result engine.GateResult
 		var err error
 		if evict {
-			result, err = a.nodes.Evict(r.Context(), req)
+			result, err = nodes.Evict(r.Context(), req)
 		} else {
-			result, err = a.nodes.Readmit(r.Context(), req)
+			result, err = nodes.Readmit(r.Context(), req)
 		}
 		if refusal, ok := RenderGateRefusal(node, opID, err); ok {
 			// A REFUSAL IS AN ANSWER, NOT A FAULT: nothing was judged, or

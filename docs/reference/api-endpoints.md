@@ -98,10 +98,16 @@ A node with a [public listener](#which-listener-serves-what) drains both by this
 Every answer the API writes other than a success is JSON with an `error` code:
 the auth guard's `401 invalid_token`, each route's own refusals, and a request
 nothing on the node serves — `404 no_route` for a path (one this node's build
-does not have, or one its configuration leaves unmounted, such as
+does not have, or one it does not serve now, such as
 `POST /work/{id}/purge` on a company with no native tracker) and
-`405 method_not_allowed`, with an `Allow` header, for a served path under
-another method. Both of those carry a `detail` naming the method and path.
+`405 method_not_allowed` for a path this build's routes take under other
+methods. Both of those carry a `detail` naming the method and path, and the
+405 an `Allow` header naming the methods this build's route table holds for
+the path — which is not a promise that this node serves them now: a route it
+does not serve now still answers a wrong method `405`, and then `404 no_route`
+under the methods `Allow` named. On a node that runs no native tracker, for
+one, `GET /work/{id}/purge` answers `405` naming `POST`, and `POST` answers
+`404`.
 
 The CLI and the dashboard rely on it. A non-2xx answer with no code was written
 by something **in front of** the node — most often a reverse proxy's read
@@ -152,7 +158,7 @@ node means nothing was done.
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives — carried WHOLE on the one line the project's lead is told, so a reason that would not fit that 600-byte line is refused `400` before anything is destroyed, rather than cut, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker, where it answers `404 no_route` like any path the node does not serve |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives — carried WHOLE on the one line the project's lead is told, so a reason that would not fit that 600-byte line is refused `400` before anything is destroyed, rather than cut, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a node that runs no native tracker — or hands out no tracker writer, as in a maintenance mode — where it answers `404 no_route` like any path the node does not serve. Which it is is asked at every request, so a node that booted with no company serves the purge from its first revision on the native tracker, with no restart |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -3516,8 +3522,13 @@ origin.
 | `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
 | `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now |
 
-The byte routes are mounted only where the tracker is native **and** the node
-runs the object store. A company on Jira has no project files to serve.
+The byte routes are served only where the tracker is native, the node hands out
+its writer **and** it runs the object store; anywhere else they answer
+`404 no_route`, like any path the node does not serve. A company on Jira has no
+project files to serve. Whether the node serves them is asked at every request
+rather than once when the API starts, so a node that booted with no company
+serves a project's files from its first revision on the native tracker, with no
+restart.
 
 ### `GET /work/retention` — what the log is holding
 
@@ -3795,7 +3806,9 @@ company uses: a company on an external tracker still runs both logs. A node
 running no state log has no log to write a gate to and answers
 `503 no_state_log` rather than `404` — the routes exist on this build, and
 telling an operator they do not sends them looking for a version mismatch that
-is not there.
+is not there. Whether the node runs one is asked at every request: a node that
+booted with no company starts its state log with the first revision that runs
+one, and serves both routes from then on with no restart.
 
 ### The capacity window
 

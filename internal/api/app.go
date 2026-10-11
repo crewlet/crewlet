@@ -64,22 +64,10 @@ type App struct {
 	// acknowledgement.
 	retention retentionWriter
 
-	// nodes installs and lifts the eviction gate. A RECORD on the log
-	// rather than a coordination write, which is why it is a different
-	// seam from the one above. Nil on a process with no native tracker.
-	nodes NodeGate
-
-	// purger destroys a task, as the operator on the request. Its own
-	// field rather than a third method on the seam above, because it is
-	// the one write here attributed to a PERSON — see [TaskPurger]. Nil
-	// leaves the route absent, which is honest on a build that cannot
-	// serve it: an operator who cannot purge must not be told they can.
-	purger TaskPurger
-
-	// files serves a project's file bytes — the streamed download and
-	// upload, and the removal. Nil leaves the routes unmounted, on a build
-	// with no native tracker or no object store.
-	files ProjectFiles
+	// native is the engine's native runtime as the file bytes, the purge
+	// and the eviction gate reach it, ASKED ON EVERY REQUEST — see
+	// [NativeRoutes].
+	native NativeRoutes
 
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
@@ -141,13 +129,53 @@ type routeMounter interface {
 	Routes(mux httpjson.Router)
 }
 
+// NativeRoutes is the engine's native runtime as the routes that need it reach
+// it — a project's file bytes, the purge and the eviction gate — ASKED ON EVERY
+// REQUEST, each answering false where this node has none NOW.
+//
+// PER REQUEST, never once, for [queries.Sources.Native]'s reason: the native
+// runtime is built at boot OR at the first apply whose company runs a state
+// log, and on a node that booted with no company that apply runs after [New].
+// A seam read at assembly described such a node as one with no tracker and no
+// state log for the life of the process — the byte routes and the purge never
+// mounted, the gate answering `no_state_log` — so the quickstart's live
+// bootstrap could not upload a file, purge a task or evict a node until a
+// restart.
+//
+// So the routes are MOUNTED from the one fact known at assembly — an engine is
+// beside this API — and each handler asks here before anything else. A request
+// that finds nothing answers exactly what the route answered when it was left
+// unmounted or handed nothing: the mux's own 404 for the byte routes and the
+// purge (a route this node does not serve is absent rather than refused), and
+// `503 no_state_log` for the gate (the routes exist on every build, and saying
+// otherwise sends an operator looking for a version mismatch).
+//
+// AN INTERFACE ANSWERING A PAIR rather than three nil-able fields, for the
+// conversion [EngineReads] states: a typed nil inside an interface passes a
+// nil check and panics on the first call, and a pair cannot hold one by
+// mistake.
+type NativeRoutes interface {
+	// Files is a project's file bytes — the streamed download and upload,
+	// and the removal — or false where this node runs no native tracker or
+	// no object store, or hands out no tracker writer.
+	Files() (ProjectFiles, bool)
+
+	// Purger destroys a task as the operator who asked, or false where this
+	// node hands out no tracker writer.
+	Purger() (TaskPurger, bool)
+
+	// Nodes installs and lifts the eviction gate, or false where this node
+	// runs no state log.
+	Nodes() (NodeGate, bool)
+}
+
 // Options configure the app.
 //
 // # What is required, and why a nil is refused rather than served around
 //
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, Sources.Coord,
 // Sources.Native, Sources.Retention, the Inbound edge's Publisher, Claims,
-// Secrets and AppFlow, Config, Secrets, Setup, Retention, Capacity,
+// Secrets and AppFlow, Config, Secrets, Setup, Retention, Native, Capacity,
 // FleetBroker, Backup and Audit are REQUIRED, and [New] refuses a missing one
 // by name.
 //
@@ -159,12 +187,13 @@ type routeMounter interface {
 // would hide that mistake behind something an operator reads as deliberate.
 //
 // That holds for the native tracker and knowledge base too, and for the state
-// log's retention answer: what a real node can lack there is the BACKEND (a
-// company on Jira, a node whose first company has not been applied yet), which
-// [queries.Sources.Native] and [queries.Sources.Retention] answer per question —
-// never the seam that asks. Left nil, every native question answered
-// `unknown_query` for the life of the process, the very symptom of a runtime
-// read once at assembly, and nothing said it was the wiring.
+// log's retention answer and the routes over them: what a real node can lack
+// there is the BACKEND (a company on Jira, a node whose first company has not
+// been applied yet), which [queries.Sources.Native],
+// [queries.Sources.Retention] and [NativeRoutes] answer per request — never the
+// seam that asks. Left nil, every native question answered `unknown_query` and
+// every native route was absent for the life of the process, the very symptom
+// of a runtime read once at assembly, and nothing said it was the wiring.
 //
 // What stays optional is what a real node can lack outright: an operator MCP
 // surface, a telemetry receiver or a tool bridge (an unset environment
@@ -284,17 +313,10 @@ type Options struct {
 	// operator's backup acknowledgement.
 	Retention retentionWriter
 
-	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
-	// readmit routes answering 503.
-	Nodes NodeGate
-
-	// Purger destroys a task as the operator who asked. Nil leaves the
-	// purge route unmounted.
-	Purger TaskPurger
-
-	// Files serves a project's file bytes. Nil leaves the byte routes
-	// unmounted; the listing is [queries.Native.Files].
-	Files ProjectFiles
+	// Native serves a project's file bytes, the purge and the eviction
+	// gate, asked of the engine on every request — see [NativeRoutes]. The
+	// file listing is a question, [queries.Native.Files].
+	Native NativeRoutes
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
@@ -446,8 +468,7 @@ func New(opts Options) (*App, error) {
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
-	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
-	a.files = opts.Files
+	a.retention, a.native = opts.Retention, opts.Native
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
@@ -625,6 +646,7 @@ func (o Options) missing() error {
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
 		{"Retention", o.Retention == nil},
+		{"Native", o.Native == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},

@@ -42,7 +42,7 @@ func (f *fakePurger) PurgeAs(_ context.Context, operator, opID, id, project,
 func purgeApp(t *testing.T, p *fakePurger) *api.App {
 	t.Helper()
 	b := closedPosture()
-	return newApp(t, api.Options{Bootstrap: &b, Purger: p})
+	return newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{purger: p}})
 }
 
 // post runs one authenticated request against the purge route.
@@ -170,7 +170,7 @@ func TestAGestureRefusesAnOperationIdTheEngineDidNotMint(t *testing.T) {
 
 	b := closedPosture()
 	gate := &fakeNodeGate{}
-	code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+	code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}}),
 		"/work/retention/evict/node-4?confirm=node-4&op_id=op-abc")
 	if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
 		t.Fatalf("an invented gate op_id answered %d %v, want 400 op_id_invalid",
@@ -215,7 +215,7 @@ func TestAnOperationIDTheBrokerWouldRewriteIsRefused(t *testing.T) {
 
 		b := closedPosture()
 		gate := &fakeNodeGate{}
-		code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}}),
 			"/work/retention/evict/node-4?confirm=node-4&"+query)
 		if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
 			t.Errorf("an eviction under an op_id with %s answered %d %v, want "+

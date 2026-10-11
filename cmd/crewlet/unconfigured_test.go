@@ -154,22 +154,30 @@ func (n *unconfiguredNode) settle(epoch int64) error {
 // and the body.
 func (n *unconfiguredNode) get(t *testing.T, path string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, n.base+path, nil)
+	return n.send(t, http.MethodGet, path)
+}
+
+// send makes one request with no body to path as the operator, answering the
+// status and the body — JSON, as every answer this API writes is.
+func (n *unconfiguredNode) send(t *testing.T, method, path string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, n.base+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+n.token)
 	res, err := n.client.Do(req)
 	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	if !json.Valid(body) {
-		t.Fatalf("GET %s answered %d with a body that is not JSON: %q", path, res.StatusCode, body)
+		t.Fatalf("%s %s answered %d with a body that is not JSON: %q", method, path,
+			res.StatusCode, body)
 	}
 	return res.StatusCode, string(body)
 }

@@ -197,10 +197,12 @@ func wireAPI(
 		FleetBroker: e.FleetBroker(),
 		Backup:      copier,
 		Audit:       backends.Queue,
-		// THE FILE BYTE ROUTES, through the adapter `crewlet run` uses, so
-		// an upload on one member and a download from another cross the
-		// object store the way a deployment's do.
-		Files: api.EngineFiles(e),
+		// THE ROUTES OVER THE NATIVE RUNTIME — the file bytes, the purge
+		// and the eviction gate — through the adapter `crewlet run` uses,
+		// asked per request: an upload on one member and a download from
+		// another cross the object store the way a deployment's do, and a
+		// harness node serves the purge and the gate a deployment's does.
+		Native: api.EngineNative(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

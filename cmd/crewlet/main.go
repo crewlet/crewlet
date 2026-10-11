@@ -38,7 +38,6 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -51,7 +50,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -1809,11 +1807,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
 		Retention: e.Backends().Fleet,
-		// And the eviction gate, which is a RECORD on every
-		// identity-claiming log rather than a coordination write —
-		// judged once, written to each log, and answered per log with
-		// the same three-valued outcome every write has.
-		Nodes: nativeNodes(e),
+		// THE ROUTES OVER THE NATIVE RUNTIME, ASKED PER REQUEST for the
+		// read surface's reason (Sources.Native above): a project's file
+		// bytes, streamed through this node's object store with the rows
+		// through its tracker and attributed to the operator; the purge,
+		// the one operation nothing undoes; and the eviction gate, a
+		// RECORD on every identity-claiming log judged once and answered
+		// per log. Each was read here once, so a company applied after
+		// boot could not upload a file, purge a task or evict a node
+		// until a restart. Through the one adapter the end-to-end harness
+		// serves its node's routes with too.
+		Native: api.EngineNative(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
 		// answers "you are in the wrong one" rather than 404 — which is
@@ -1825,14 +1829,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// and the removal of one gone for good through a member's system
 		// account — which is reachable only from inside a member.
 		FleetBroker: e.FleetBroker(),
-		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
-		// all until this line: no verb, no route, no tool. A company
-		// could not destroy a task under any circumstances.
-		Purger: nativePurger(e),
-		// A PROJECT'S FILE BYTES, streamed: the download and the upload
-		// read and write objects through this node's object store and
-		// the rows through its tracker, attributed to the operator.
-		Files: api.EngineFiles(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -2644,50 +2640,6 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 		out = append(out, key.ID+":"+key.Material)
 	}
 	return out
-}
-
-// nativeNodes is the eviction gate over every identity-claiming log, or nil
-// where this node runs no state log — converted for [api.EngineReads]' reason:
-// a typed nil would pass the route's registration check and panic on the first
-// press.
-//
-// NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
-// log alone, so an eviction lifted one log's pin and left the pages log
-// counting the node for ever — and a company whose tracker is external, which
-// still runs both logs, could not evict anybody at all.
-func nativeNodes(e *engine.Engine) api.NodeGate {
-	if g := e.NodeGate(); g != nil {
-		return g
-	}
-	return nil
-}
-
-// nativePurger is the purge route's writer, or nil.
-//
-// AN ADAPTER RATHER THAN THE WRITER ITSELF, because the API's seam takes the
-// operator as an argument: every other write on that surface is the fleet's
-// and the process's own writer is the right author, while a purge destroys a
-// company's data and the record has to carry the person who asked for it.
-// `As` is where that identity is bound, and it is a tracker concept the API
-// package deliberately does not import a concrete type for.
-func nativePurger(e *engine.Engine) api.TaskPurger {
-	as, ok := engine.OperatorWorkWriter(e)
-	if !ok {
-		return nil
-	}
-	return purgeAdapter{as: as}
-}
-
-type purgeAdapter struct {
-	as func(estate.Actor) estate.WorkWriter
-}
-
-func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
-	reason string) (tracker.WriteResult, error) {
-
-	return p.as(estate.Actor{Handle: operator, Kind: tracker.AuthorOperator,
-		Provenance: tracker.Provenance{OperatorID: operator}}).
-		PurgeTask(ctx, opID, id, project, reason)
 }
 
 // memoryReads is the engine's memory reader as the read surface's seam, or nil

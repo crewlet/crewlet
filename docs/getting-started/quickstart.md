@@ -490,7 +490,8 @@ The first revision brings up everything the company needs, the engine's own
 tracker and knowledge base included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — and the API that was already serving answers the board's
-and the pages' questions from that revision on, with no restart:
+and the pages' questions, and takes and serves a project's files, from that
+revision on, with no restart:
 
 ```bash
 curl -X PUT http://localhost:8000/config \

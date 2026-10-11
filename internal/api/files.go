@@ -56,14 +56,30 @@ type ProjectFiles interface {
 		ifMatch uint64) (tracker.WriteResult, error)
 }
 
-// mountFiles registers the byte routes, where the engine serves files.
+// mountFiles registers the byte routes on every API, each asking the engine on
+// every request whether it serves files NOW — see [NativeRoutes].
 func (a *App) mountFiles(mux httpjson.Router) {
-	if a.files == nil {
-		return
-	}
-	mux.Handle("GET /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileDownload))
-	mux.Handle("PUT /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileUpload))
-	mux.Handle("DELETE /work/files/{project}/{path...}", http.HandlerFunc(a.serveFileRemove))
+	mux.Handle("GET /work/files/{project}/{path...}", a.withFiles(a.serveFileDownload))
+	mux.Handle("PUT /work/files/{project}/{path...}", a.withFiles(a.serveFileUpload))
+	mux.Handle("DELETE /work/files/{project}/{path...}", a.withFiles(a.serveFileRemove))
+}
+
+// withFiles resolves the file surface for one request and hands it to serve,
+// or answers the mux's own 404 where this node serves no files now — byte for
+// byte what the route answered when it was left unmounted, because a route
+// this node does not serve is absent rather than refused.
+//
+// ONE RESOLUTION PER REQUEST, at its top, so a request is served by one view
+// of the runtime from its first read to its last.
+func (a *App) withFiles(serve func(http.ResponseWriter, *http.Request, ProjectFiles)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		files, ok := a.native.Files()
+		if !ok {
+			httpjson.NoRoute(w, r)
+			return
+		}
+		serve(w, r, files)
+	})
 }
 
 // filePace is how long each mebibyte of a file is given to cross the
@@ -207,14 +223,14 @@ const downloadHead = 32 << 10
 
 // serveFileDownload answers GET /work/files/{project}/{path...}: the file's
 // bytes, streamed.
-func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
+func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
 	fresh, err := tracker.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_params", "detail": err.Error()})
 		return
 	}
 	fresh.Level = statelog.LevelFor(statelog.SurfaceDashboard, fresh.Level)
-	detail, err := a.files.File(r.Context(), r.PathValue("project"), r.PathValue("path"), fresh)
+	detail, err := files.File(r.Context(), r.PathValue("project"), r.PathValue("path"), fresh)
 	if err != nil {
 		fileRefusal(w, err)
 		return
@@ -230,7 +246,7 @@ func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": stream.CodeQueryFailed})
 		return
 	}
-	body, err := a.files.Open(r.Context(), object)
+	body, err := files.Open(r.Context(), object)
 	if err == nil {
 		defer body.Close()
 		head := make([]byte, min(int64(downloadHead), f.Size))
@@ -359,7 +375,7 @@ func writeAnswer(result tracker.WriteResult, extra map[string]any) map[string]an
 
 // serveFileUpload answers PUT /work/files/{project}/{path...}: the body is the
 // file, streamed into one new object and then recorded.
-func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
+func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
 	operator, ok := operatorFor(w, r)
 	if !ok {
 		return
@@ -392,7 +408,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	// than guessed at. Only an early refusal — the write's decide is what
 	// actually judges the project.
 	accepts := statelog.Freshness{Level: statelog.LevelFor(statelog.SurfaceDashboard, "")}
-	if refused := a.files.AcceptsFiles(r.Context(), project, accepts); refused != nil {
+	if refused := files.AcceptsFiles(r.Context(), project, accepts); refused != nil {
 		fileRefusal(w, refused)
 		return
 	}
@@ -401,7 +417,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 		contentType = mime.TypeByExtension(path.Ext(filePath))
 	}
 	// THE BYTES FIRST — see the file's head — paced as they arrive.
-	object, err := a.files.Put(r.Context(), newPacedBody(r.Body, http.NewResponseController(w), a.pace),
+	object, err := files.Put(r.Context(), newPacedBody(r.Body, http.NewResponseController(w), a.pace),
 		tracker.MaxFileBytes, objstore.PutMeta{ContentType: contentType})
 	if err != nil {
 		fileRefusal(w, err)
@@ -411,7 +427,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	// operation id can be refused here after another node committed it,
 	// and the object would be that file's content. What no row names, the
 	// collector removes a day later.
-	result, err := a.files.PutFileAs(r.Context(), operator, opID, tracker.FilePut{
+	result, err := files.PutFileAs(r.Context(), operator, opID, tracker.FilePut{
 		Project: project, Path: filePath, ContentType: contentType,
 		Object: object, IfMatch: version,
 	})
@@ -426,7 +442,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveFileRemove answers DELETE /work/files/{project}/{path...}.
-func (a *App) serveFileRemove(w http.ResponseWriter, r *http.Request) {
+func (a *App) serveFileRemove(w http.ResponseWriter, r *http.Request, files ProjectFiles) {
 	operator, ok := operatorFor(w, r)
 	if !ok {
 		return
@@ -445,7 +461,7 @@ func (a *App) serveFileRemove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := a.files.RemoveFileAs(r.Context(), operator, opID, project, filePath, version)
+	result, err := files.RemoveFileAs(r.Context(), operator, opID, project, filePath, version)
 	if err != nil {
 		fileRefusal(w, err)
 		return

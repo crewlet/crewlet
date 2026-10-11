@@ -227,7 +227,7 @@ func (w working) Read(p []byte) (int, error) {
 func filesApp(t *testing.T, fake *fakeFiles) *api.App {
 	t.Helper()
 	b := closedPosture()
-	return newApp(t, api.Options{Bootstrap: &b, Files: fake, PaceClock: fake.clock.Now})
+	return newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{files: fake}, PaceClock: fake.clock.Now})
 }
 
 // content is n bytes of no repeating shape.

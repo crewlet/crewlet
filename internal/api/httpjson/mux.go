@@ -79,9 +79,14 @@ func (m *muxRefusal) WriteHeader(status int) {
 	case http.StatusMethodNotAllowed:
 		m.refused = true
 		// The mux set `Allow` before it wrote the status, so it is still
-		// on the header this answer is written with.
+		// on the header this answer is written with. It names the methods
+		// the ROUTE TABLE holds for the path, which is not a promise that
+		// this node serves them now: a route mounted on every API and
+		// served only where the node holds what it needs ([NoRoute]) is
+		// in the table either way, so the sentence names the build's
+		// routes rather than claiming the node takes them.
 		FailWith(m.ResponseWriter, status, CodeMethodNotAllowed, map[string]string{
-			"detail": fmt.Sprintf("%s does not take %s on this node; it takes %s",
+			"detail": fmt.Sprintf("%s does not take %s; this build's routes for it take %s",
 				m.r.URL.Path, m.r.Method, m.Header().Get("Allow")),
 		})
 	default:
@@ -97,17 +102,29 @@ func (m *muxRefusal) Write(p []byte) (int, error) {
 	return m.ResponseWriter.Write(p)
 }
 
-// NoRoute answers r with the mux's own 404: the path is served by nothing here.
+// NoRoute answers r with the mux's own 404: the path is served by nothing here
+// now.
 //
-// Exported for the one other answer that must be INDISTINGUISHABLE from it: the
-// public listener's refusal of a route that exists on api.port. A different
-// wording there would tell anybody on the internet that a private admin port
-// exists and which paths it serves, so that refusal is this one, byte for byte.
+// Exported for the two other answers that must be INDISTINGUISHABLE from it.
+// The public listener's refusal of a route that exists on api.port: a
+// different wording there would tell anybody on the internet that a private
+// admin port exists and which paths it serves, so that refusal is this one,
+// byte for byte. And a route mounted on every API that this node does not
+// serve NOW — a route over the engine's native runtime (internal/api's
+// NativeRoutes), asked at every request — which answers exactly as it did when
+// a node that did not serve it left it unmounted: absent rather than refused.
+//
+// THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
+// fault. A node that has not applied its first company yet, or that started in
+// a maintenance mode, has the route and is asked at the right path; sending its
+// operator to check the path, or the company's configuration, sends them to the
+// one place nothing is wrong.
 func NoRoute(w http.ResponseWriter, r *http.Request) {
 	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
 		"detail": fmt.Sprintf("this node serves nothing at %s %s", r.Method, r.URL.Path),
-		"hint": "Check the path. A route this node's build does not have, " +
-			"or one its configuration does not enable, is absent rather " +
-			"than refused.",
+		"hint": "Check the path. A route this node's build does not have is " +
+			"absent rather than refused, and so is one this node does not " +
+			"serve now: its configuration or the mode it started in does not " +
+			"enable it, or no company has been applied to it yet.",
 	})
 }

@@ -57,7 +57,8 @@ var adminRoutes = []struct{ method, path string }{
 
 // listenerApp is a configured, authenticated node with every optional surface
 // mounted — the webhook edge, the telemetry receiver, the tool bridge and the
-// operator surface — and the public listener set or not.
+// operator surface — and every native route served, and the public listener
+// set or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
 	b := closedPosture()
@@ -79,6 +80,11 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		Operator: operatorSurface(t, operator.Options{
 			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 		}),
+		// SERVED, not merely mounted: a native route over a runtime that
+		// holds nothing answers the mux's own 404, which the walk below
+		// could not tell from a route mounted on the wrong listener.
+		Native: fixedNative{files: newFakeFiles(t), purger: &fakePurger{},
+			nodes: &fakeNodeGate{}},
 		Sources: queries.Sources{Company: active()},
 	})
 }
