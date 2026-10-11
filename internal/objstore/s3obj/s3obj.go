@@ -111,8 +111,9 @@
 // BenchmarkBackend's `bucket=real` arm runs only when CREWLET_BENCH_S3_BUCKET
 // names a bucket, and otherwise skips, saying so under `go test -v` (which
 // `make bench` passes). No real bucket's figures are recorded here: none has
-// been measured. The variables are read by the benchmark and never by the
-// engine:
+// been measured. The variables are read by s3fake.RealBucket — the one parser
+// of them, which every benchmark that measures a real bucket calls, so each
+// reads them alike — and never by the engine:
 //
 //   - CREWLET_BENCH_S3_BUCKET, the bucket; setting it turns the arm on.
 //   - CREWLET_BENCH_S3_REGION, required with it.

@@ -2,8 +2,6 @@ package s3obj_test
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -66,7 +64,7 @@ func BenchmarkBackend(b *testing.B) {
 		})
 	}
 	b.Run("bucket=real", func(b *testing.B) {
-		cfg, ok := realBucket(b)
+		cfg, ok := s3fake.RealBucket(b)
 		if !ok {
 			b.Skip("CREWLET_BENCH_S3_BUCKET names no bucket, so no real bucket is measured; " +
 				"internal/objstore/s3obj's package doc lists the variables that name one")
@@ -104,38 +102,3 @@ const s3PageSize = 1000
 // hundred thousand objects, deleted 64 at a time — about half a minute at a
 // 20 ms round trip — and ten minutes is a hang detector rather than a pace.
 const clearBudget = 10 * time.Minute
-
-// realBucket is the bucket the CREWLET_BENCH_S3_* variables name, or false
-// where CREWLET_BENCH_S3_BUCKET names none.
-//
-// NO CREDENTIAL IS A CREWLET_ VARIABLE: the access key and secret are left
-// empty, so [s3obj.Open] takes the SDK's own chain — AWS_ACCESS_KEY_ID and
-// AWS_SECRET_ACCESS_KEY, AWS_PROFILE, a web identity, the instance's role —
-// exactly as a node holding none does.
-func realBucket(b *testing.B) (s3obj.Config, bool) {
-	b.Helper()
-	cfg := s3obj.Config{
-		Bucket:   os.Getenv("CREWLET_BENCH_S3_BUCKET"),
-		Region:   os.Getenv("CREWLET_BENCH_S3_REGION"),
-		Endpoint: os.Getenv("CREWLET_BENCH_S3_ENDPOINT"),
-		Prefix:   os.Getenv("CREWLET_BENCH_S3_PREFIX"),
-	}
-	if cfg.Bucket == "" {
-		return cfg, false
-	}
-	if cfg.Region == "" {
-		b.Fatal("CREWLET_BENCH_S3_BUCKET names a bucket and CREWLET_BENCH_S3_REGION no region; " +
-			"the signature needs one even where the provider ignores it (R2 takes auto, MinIO us-east-1)")
-	}
-	if cfg.Prefix == "" {
-		cfg.Prefix = "crewlet-bench/"
-	}
-	if v := os.Getenv("CREWLET_BENCH_S3_PATH_STYLE"); v != "" {
-		style, err := strconv.ParseBool(v)
-		if err != nil {
-			b.Fatalf("CREWLET_BENCH_S3_PATH_STYLE=%q is not true or false: %v", v, err)
-		}
-		cfg.PathStyle = style
-	}
-	return cfg, true
-}
