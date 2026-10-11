@@ -1,8 +1,9 @@
 // Package gitproc is THE ONE GIT SUBPROCESS WRAPPER. Every git process the
 // engine starts — a clone's upload-pack, a push's receive-pack, the cache's
 // multi-pack-index, the receive pipeline's reads — is started by [Pool.Run],
-// and nothing else under internal/ may exec git: TestOnlyGitprocExecsGit
-// holds that, and ADR-0008 is why it is a gate.
+// and nothing else in the module but cmd/'s operator commands may start git
+// or one of its git-* programs: TestOnlyGitprocExecsGit holds that, and
+// ADR-0008 is why it is a gate.
 //
 // # Why one wrapper
 //
