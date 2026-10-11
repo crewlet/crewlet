@@ -738,9 +738,11 @@ type halves struct {
 	// halves on vendors.
 	tracker, wiki bool
 	// own is this data node's own runtime, for a reader that needs more of
-	// it than which halves it runs (the ranked item search, [OperatorNative])
-	// — and nil on a node without `data`, which holds no runtime of its own
-	// and reaches every half through a data node, and on a node running none.
+	// it than which halves it runs (the ranked item search, [OperatorNative];
+	// whether a half is reached through this node's copy or a data node's,
+	// [Engine.skillSource]) — and nil on a node without `data`, which holds
+	// no runtime of its own and reaches every half through a data node, and
+	// on a node running none.
 	// Taken in the same reading as the halves, so the two never describe
 	// different runtimes.
 	own *native
@@ -748,11 +750,18 @@ type halves struct {
 
 // nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
 // halves a node runs, read by seat admission ([Engine.NativeHydrated]), by
-// whether a node may keep its seats ([Engine.serviceable]) and by every read
-// seam the operator's surfaces are handed ([OperatorNative]) — so a change to
-// what counts as running a half (a new kind of runtime, a half that needs more
-// than its reader) is made here once and cannot reach one of them and not the
-// others.
+// whether a node may keep its seats ([Engine.serviceable]), by every read seam
+// the operator's surfaces are handed ([OperatorNative]), by the seats' own
+// tracker and knowledge-base seams ([Engine.trackerHalves],
+// [Engine.pageHalves]), by the inbound parsers ([Engine.nativeParsers]), by the
+// knowledge searcher ([Engine.Knowledge]) and by where the skills are read
+// ([Engine.skillSource]) — so a change to what counts as running a half (a new
+// kind of runtime, a half that needs more than its reader) is made here once
+// and cannot reach one of them and not the others. Each of those used to read
+// the two runtime pointers itself, and the parsers counted a data node's
+// halves by its WRITERS where everything else counted its readers: the same
+// fact today, because one block builds both, and two facts the first time a
+// runtime is built with one and not the other.
 //
 // One atomic load on a node without `data` and two on a data node, which holds
 // no remote runtime: the two pointers are never both set, since a node builds
@@ -1054,19 +1063,12 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
 	// a data node does.
-	var runTracker, runWiki bool
-	if r := e.remote.Load(); r != nil {
-		runTracker, runWiki = r.tracker, r.wiki
-	} else if n := e.native.Load(); n != nil {
-		runTracker, runWiki = n.writer != nil, n.pages != nil
-	} else {
-		return nil, nil
-	}
+	run := e.nativeHalves()
 	var (
 		parsers []notify.Parser
 		prompts []notify.Prompt
 	)
-	if runTracker {
+	if run.tracker {
 		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
 		// record's routing snapshot, which the WRITER resolved at commit
 		// — a mention resolved at read time names whoever holds the role
@@ -1074,7 +1076,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
 		prompts = append(prompts, tracker.Prompt{})
 	}
-	if runWiki {
+	if run.wiki {
 		parsers = append(parsers, pages.NewParser(pagesParserOptions(e.resolver(), c)))
 		prompts = append(prompts, pages.Prompt{})
 	}
@@ -1695,16 +1697,14 @@ type trackerSeams struct {
 // publish nothing ([Engine.writeSide]) — hands out no tracker tools either,
 // rather than tools whose every write is taken to a peer.
 func (e *Engine) trackerHalves() (trackerSeams, bool) {
-	if r := e.remote.Load(); r != nil {
-		if !r.tracker {
-			return trackerSeams{}, false
-		}
-	} else {
-		n := e.native.Load()
-		writer, _ := e.writeSide()
-		if n == nil || n.trackerReader == nil || writer == nil {
-			return trackerSeams{}, false
-		}
+	run := e.nativeHalves()
+	if !run.tracker {
+		return trackerSeams{}, false
+	}
+	// A DATA NODE'S OWN WRITE SIDE; a node without `data` writes through a
+	// data node, whose mode is that node's to answer for.
+	if writer, _ := e.writeSide(); run.own != nil && writer == nil {
+		return trackerSeams{}, false
 	}
 	r := e.router
 	return trackerSeams{
@@ -1962,16 +1962,12 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 // [Engine.trackerHalves] gives: the router's on every node.
 func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 	func(context.Context, statelog.Position) error, bool) {
-	if r := e.remote.Load(); r != nil {
-		if !r.wiki {
-			return nil, nil, nil, false
-		}
-	} else {
-		n := e.native.Load()
-		_, store := e.writeSide()
-		if n == nil || n.pageReader == nil || store == nil {
-			return nil, nil, nil, false
-		}
+	run := e.nativeHalves()
+	if !run.wiki {
+		return nil, nil, nil, false
+	}
+	if _, store := e.writeSide(); run.own != nil && store == nil {
+		return nil, nil, nil, false
 	}
 	return e.router.Pages(), e.router.Pages(), e.router.Await, true
 }
