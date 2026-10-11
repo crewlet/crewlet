@@ -200,8 +200,8 @@ promises, and its size is the provider's problem rather than any node's disk.
   150–230 MB/s with the bucket 20–50 ms away, where one part at a time
   managed 80–120. An upload holds at most four parts (32 MiB) in memory
   whatever the file's size, and every upload past its first part draws on one
-  allowance the node's uploads share (96 MiB), so a fifth large upload at once
-  goes a part at a time rather than waiting for memory. An upload that fails
+  allowance the node's uploads and reads share (96 MiB), so a fifth large
+  upload at once goes a part at a time rather than waiting for memory. An upload that fails
   part of the way through stops at once — a part the bucket refuses ends the
   read of the file and the other parts on their way — and is aborted, once
   every part it sent has answered; one a process was killed in the middle of
@@ -210,6 +210,35 @@ promises, and its size is the provider's problem rather than any node's disk.
   given the time its share of that link takes at the slowest rate the store
   accepts, so a large upload is held to that rate as a whole, as it was when
   its parts went one at a time.
+- **A read of more than 8 MiB is read in 8 MiB ranges too, handed out in
+  order, and as many at once as its reader keeps up with — up to four**, so
+  a provider that limits what one connection carries (about 80–90 MB/s from
+  S3) does not limit a large download, a backup's copy of a large file or a
+  git node's sync of a large push. Each range is asked for a little before
+  it is needed, so a bucket's first byte is paid once a read rather than
+  once a range. Measured against a bucket that sent each connection at most
+  80 MB/s, a 128 MiB file read at 335–353 MB/s, at 284–310 with the bucket
+  20 ms away and at 219–246 at 50 ms, against 78–80 MB/s for one stream; with
+  every byte checked against its SHA-256 on the way out it read at 178–244
+  MB/s, which is about how fast the CPU it ran on hashes. A file of 8 MiB or
+  less is still one request.
+- **A read takes memory only as fast as its reader uses it.** Its ranges are
+  read into buffers from the same allowance the uploads' extra parts draw on:
+  one to begin with, another only while the reader is waiting on the bucket,
+  and one given back once a range sits landed with the reader still behind
+  it. A download to somebody on a slow link therefore holds one 8 MiB buffer
+  however long it runs, instead of four that every other transfer on the node
+  could have used — measured, a 128 MiB upload beside three such downloads
+  ran at 407–472 MB/s, where downloads holding four buffers each had left it
+  one part at a time at 166–192. That allowance (96 MiB), plus each upload's
+  own first part, bounds a node's memory for transfers however uploads and
+  downloads mix. A read that finds no buffer free reads its ranges one after
+  another rather than waiting, each one's request already on its way. Every
+  range after the first must still carry the first one's `ETag`, so a file
+  whose object is overwritten while it is read fails the read rather than
+  handing out pieces of two objects — which needs a provider that answers an
+  `ETag`, as S3 and every compatible store do; and a range that fails ends
+  the ranges after it at once.
 - **Credentials** are `${VAR}` references resolved at boot, or neither, which
   takes the SDK's default chain: the environment (`AWS_ACCESS_KEY_ID`…), a
   shared profile, a web identity token or the instance's role.

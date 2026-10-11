@@ -53,6 +53,41 @@
 // rather than when the upload next needs a buffer, which was after up to
 // three more parts of a client's body.
 //
+// # So are a large read's ranges
+//
+// A read that may run past one part — a whole object, or the rest of one — is
+// read as consecutive part-sized ranges handed out strictly in order: the git
+// cache's largest bundle at the tail of a sync, a person's download of a large
+// file, a backup's copy of every object. Read as one stream it moved at one
+// connection's rate, and a provider limits each connection's. The FIRST range
+// is streamed straight through and says how large the object is, so an object
+// the first range holds whole — every object of a part or less — costs the one
+// request and the memory a read cost before there were ranges. Every later
+// range is held to the first one's ETag (If-Match): a bucket written into
+// while it was read fails the read rather than stitching two objects
+// together, and an object the bucket gives no tag is refused past its first
+// range.
+//
+// A READ IS AS WIDE AS ITS READER. Ranges are read ahead into buffers from the
+// SAME allowance the uploads draw on ([spareParts]), never waited for, and
+// handed out a piece at a time as they land, so the store's stall watchdog
+// sees a moving read moving. A read holds one to begin with and then as many
+// as its reader keeps busy, up to [partsInFlight]: more while the reader waits
+// on the bucket, one fewer once a range read ahead had landed whole before
+// the reader got there. A download paced to a person's link so holds one
+// buffer for as long as it runs, where one holding four took a third of the
+// node's allowance for hours; and a read that finds no buffer free streams
+// its ranges one after another, taking one as soon as one is free. EVERY
+// RANGE IS ASKED FOR AHEAD of the moment its answer is needed — a buffer
+// freeing for it, or the reader reaching it — by twice the bucket's first byte
+// at the reader's pace, its answer waiting on its connection meanwhile: a
+// range asked for only once its buffer was free left a whole first byte
+// between ranges, which held a wide read well under its connections' rate and
+// one streaming its ranges under a single stream's. A range that fails ends
+// the ranges after it at once, every range before it still handed out, and
+// the read asks for nothing more. Closing a read cancels every range in
+// flight, waits for each, and gives its buffers back before it returns.
+//
 // # Every request is bounded
 //
 // The bucket is reached through the engine's shared transport with no
@@ -61,8 +96,9 @@
 // moves no body gets [callBudget]; a body sent as one put gets that plus its
 // size at [objstore.MiBPace]; a part of an upload gets that plus its size at
 // the floor once for every part the upload may keep in flight, because they
-// share one link and the floor is the upload's ([partBudget]); and a read is
-// bounded by the deadline its caller must carry ([objstore.CheckRead]).
+// share one link and the floor is the upload's ([partBudget]); and a read —
+// every range of it — is bounded by the deadline its caller must carry
+// ([objstore.CheckRead]).
 //
 // # What it costs the node, measured
 //
@@ -76,15 +112,21 @@
 //     signature, TLS and the store's own hashing, with the fake's half of
 //     every request on the same CPUs, and none of the provider's — no round
 //     trip, no per-prefix request rate, no link. A 64 KiB put took 0.73 ms and
-//     larger ones ran at 177–229 MB/s; a whole read — of an object written
+//     larger ones ran at 177–229 MB/s. A whole read — of an object written
 //     moments before, held in the fake's memory, as every read figure here
-//     is — at 670–1,020 MB/s from 1 MiB up, and 215–245 MB/s verified
-//     ([objstore.Store.Open]), which is this CPU's SHA-256 rate; eight
-//     verified reads at once at 660–700 MB/s together; a 64 KiB page at a
-//     random offset of a 128 MiB object took 0.49 ms — ONE ranged request
-//     wherever the page is. A HEAD across ten thousand objects ran 3,200–3,600
-//     a second from one goroutine and 19,300–22,700 at 32 in flight, and a
-//     listing named 117,000–123,000 objects a second, a thousand to a request.
+//     is — ran (2026-10-11, reads in ranges as wide as their reader, the VM
+//     loaded by other work) at 730–820 MB/s at 1 MiB, one request, and at
+//     1,100–1,300 MB/s at 16 MiB and 1,270–1,680 at 128 MiB; verified
+//     ([objstore.Store.Open]) at 190–220 MB/s at 1 MiB and 255–275 from
+//     16 MiB up — this CPU's SHA-256 rate less the decryption of the ranges
+//     it streams, since a link this fast keeps a read one range wide, where
+//     four ranges taken whatever the reader's pace decrypted beside the hash
+//     and ran at 300; eight verified reads at once at 300–670 MB/s together;
+//     a 64 KiB page at a random offset of a 128 MiB object took 0.49 ms — ONE
+//     ranged request wherever the page is. A HEAD across ten thousand
+//     objects ran 3,200–3,600 a second from one goroutine and 19,300–22,700
+//     at 32 in flight, and a listing named 117,000–123,000 objects a second,
+//     a thousand to a request.
 //   - A ROUND TRIP AWAY — the fake holding every request 20 or 50 ms before it
 //     answers (`rtt=`) — every loop of one request at a time is the round
 //     trip's, and the node's CPU stops being what it waits on. A HEAD runs 47
@@ -98,13 +140,40 @@
 //     128 MiB put, eighteen requests, ran at 220–228 MB/s at 20 ms and 153–196
 //     at 50 with [partsInFlight] parts in flight — 192–229 on loopback — where
 //     one part at a time had run at 121 and 79, and 166 on loopback.
+//   - A CONNECTION'S CEILING — the fake sending an object's bytes at no more
+//     than 80 MB/s a connection (`bw=80MB`), about what one S3 connection
+//     carries — is what reading in ranges is for (2026-10-11, the VM loaded
+//     by other work, so each pair below was measured interleaved). A 128 MiB
+//     whole read with the node's spares free (`read=wide`) ran at 335–353
+//     MB/s at loopback's first byte, 284–310 with the bucket 20 ms away and
+//     219–246 at 50 ms, against one GetObject's 80, 79 and 78
+//     (`read=stream`) — and against 310–317, 220–255 and 196–199 when its
+//     four ranges were each asked for only once a buffer was free. What 50 ms
+//     still costs is the read's start: it widens once its reader has been
+//     handed half the first range, and the ranges it then asks for pay their
+//     first byte. With every spare taken (`read=narrow`), a range at a time
+//     with the next one's request on its way, it ran at 82, 121 and 102 MB/s,
+//     where asked for only when the reader reached it a range at a time had
+//     run at 80, 67 and 54 — above one stream at a round trip because the
+//     next range's answer starts arriving into its connection's buffers while
+//     the range before is read, which a real link's window bounds. Verified,
+//     the 128 MiB read ran at 220–244, 205–225 and 178–186 MB/s against
+//     217–263, 196–227 and 157–182 before: this CPU hashes at about four
+//     connections' rate, so the read narrows and widens around its reader.
+//     Two ranges, 16 MiB, ran at 157, 113 and 81 either way — the second is
+//     asked for once the first's answer has named the object, so it pays a
+//     first byte of its own. And a 128 MiB upload beside three downloads
+//     paced to 4 MB/s (BenchmarkUploadBesideSlowReads, 20 ms) ran at 407–472
+//     MB/s, each download holding one spare, where reads that held four each
+//     left it a part at a time at 166–192.
 //
 // OVER PLAIN HTTP THE SDK SIGNS EVERY BODY: it hashes each byte it uploads to
 // put the digest in the signature, where over https it sends UNSIGNED-PAYLOAD
 // instead. On this CPU, where the hash is what a put waits on, puts from
 // 1 MiB up ran at 105–175 MB/s over http against 177–229 over https; reads
-// over http, with no TLS to decrypt, ran at 1.8–2.1 GB/s unverified. Reach a
-// bucket over https.
+// over http, with no TLS to decrypt, ran unverified at 1.7 GB/s at 1 MiB and,
+// in ranges, 1.5–2.5 at 16 MiB and 1.4–2.9 at 128 MiB (2026-10-11, the VM
+// loaded by other work). Reach a bucket over https.
 //
 // # Measuring a real bucket
 //
@@ -202,7 +271,11 @@ const PartBytes = 8 * objstore.MiB
 // maxParts is the most parts S3 assembles into one object.
 const maxParts = 10_000
 
-// partsInFlight is the most parts of one upload sent at once.
+// partsInFlight is the most parts of one upload sent at once, and the most
+// ranges of one read read ahead at once — each in a buffer of its own, with at
+// most one more range for each asked for and waiting for one, and at most
+// twice this many ranges in all, the one the read streams among them, so a
+// read has at most twice this many requests at the bucket.
 //
 // FOUR, which is where a bucket a round trip away stops being what an upload
 // waits on and the node's own hashing starts to be. A part costs its round
@@ -215,18 +288,50 @@ const maxParts = 10_000
 // (internal/objstore's BenchmarkHashOf). It is also four connections'
 // throughput from a provider that limits each connection's, and 32 MiB of
 // parts held by the largest upload.
+//
+// FOUR FOR A READ TOO, measured on its own rather than borrowed: against a
+// bucket sending each connection 80 MB/s (`bw=80MB`), four ranges read a
+// 128 MiB object at 335–353 MB/s, 284–310 with the bucket 20 ms away and
+// 219–246 at 50, against one stream's 80, 79 and 78 — four connections'
+// throughput, the round trip hidden by asking for each range before its
+// buffer frees ([askAhead]). What holds a read at four rather than more is
+// MEMORY, not the hash: four ranges are 32 MiB of buffers, and three reads
+// that wide hold the node's whole allowance ([spareParts]). On the CPU
+// measured, without SHA instructions, a verified read is bound by its hash
+// near four connections' rate anyway (178–244 MB/s); on a CPU with them,
+// which hashes past a gigabyte a second a core, a fifth range would add about
+// 80 MB/s to every read the link bounds — bought with a fifth more of a
+// read's buffers and a quarter fewer reads at full width at once.
 const partsInFlight = 4
 
 // spareParts is the most part buffers the node's uploads hold BEYOND the one
-// each holds for its own first part — 96 MiB, room for four uploads at full
-// width at once.
+// each holds for its own first part, together with every buffer its reads
+// hold — 96 MiB, room for four uploads, or three reads, at full width at once.
 //
-// AN ALLOWANCE, NEVER A QUEUE: an upload takes a spare only while one is free
-// and otherwise goes on with the buffers it has, so the fifth large upload at
-// once runs a part at a time rather than waiting for memory, and none ever
-// waits on another to finish. What bounds the memory is then one part per
-// upload in progress — what the uploads before this allowance held — plus
-// this.
+// AN ALLOWANCE, NEVER A QUEUE: an upload or a read takes a spare only while one
+// is free and otherwise goes on with the buffers it has, so the fifth large
+// upload at once runs a part at a time, and a read that finds none streams its
+// ranges one after another, rather than either waiting for memory — and none
+// ever waits on another to finish. What bounds the memory is then one part
+// per upload in progress — what the uploads before this allowance held — plus
+// this: a read streams its first range straight through and holds nothing
+// outside it.
+//
+// ONE ALLOWANCE FOR BOTH DIRECTIONS, because it is one node's memory: the wide
+// reads and the wide uploads then happen exactly when few large objects are
+// in flight — a git cache's sync down to its largest bundle, a lone large
+// download — which is when a wide one is worth most.
+//
+// TAKEN AS FAST AS IT IS USED, in both directions: an upload takes a spare
+// once its part in flight is still on its way when the client's body has
+// filled the next, and a read takes one beyond its first only once its reader
+// has waited on the bucket ([wideRead.fit]). So an upload whose client sends
+// slowly and a read whose reader takes slowly — a download paced to a
+// person's link, for hours — hold ONE spare each, however long they last, and
+// the allowance stays with the transfers a wider one speeds up. A read that
+// took four whatever its reader's pace let three slow downloads hold the
+// node's whole allowance, and every upload on the node went a part at a time
+// for as long as they lasted.
 const spareParts = 3 * partsInFlight
 
 // callBudget bounds a request that carries no object's bytes: a head, a
@@ -672,27 +777,25 @@ func call[T any](ctx context.Context, budget time.Duration, fn func(context.Cont
 
 // Get implements [objstore.Backend].
 //
-// A WHOLE OBJECT IS ASKED FOR WITH NO RANGE: a range is refused on an empty
-// object, every range there is, so a read of one that carried `bytes=0-`
-// would fail where it should answer nothing.
+// A READ OF A PART OR LESS — a page of a file — is ONE ranged request. A read
+// that may run past a part — a whole object, or the rest of one — is read as
+// consecutive part-sized ranges, up to [partsInFlight] at once and handed out
+// in order ([Backend.getWide]), whose first range alone answers any object
+// that fits it. A range that begins at or past the end is refused by S3 —
+// an empty object's whole read included, since every range of one is — and
+// answered as the empty stream the contract says it is.
 func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	if err := objstore.CheckRead(ctx, off, n); err != nil {
 		return nil, fmt.Errorf("s3obj: get %s: %w", name, err)
 	}
-	in := &s3.GetObjectInput{Bucket: aws.String(b.bucket), Key: aws.String(b.key(name))}
-	switch {
-	case n > 0:
-		in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+n-1))
-	case off > 0:
-		in.Range = aws.String(fmt.Sprintf("bytes=%d-", off))
+	if n < 0 || n > int64(b.partBytes) {
+		return b.getWide(ctx, name, off, n)
 	}
-	out, err := b.client.GetObject(ctx, in)
+	out, err := b.client.GetObject(ctx, b.rangeInput(name, off, n, nil))
 	switch {
 	case missing(err):
 		return nil, objstore.ErrNotFound
 	case status(err) == http.StatusRequestedRangeNotSatisfiable:
-		// A RANGE THAT BEGINS AT OR PAST THE END: nothing to read,
-		// which the contract says is an empty stream.
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	case err != nil:
 		return nil, fmt.Errorf("s3obj: get %s: %w", name, err)
