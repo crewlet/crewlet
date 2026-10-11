@@ -7,232 +7,127 @@ name: main image
 # and moves `main` to it. Nothing else is ever pushed: no tag per commit, never
 # `latest`, never a release's tag — an image of main is not a release. The
 # binary inside reports `main-` and the first twelve hex digits of the commit
-# (internal/version), which no release version can be, and the image's
-# org.opencontainers.image.revision label carries the whole commit.
+# (internal/version), which no release version can be.
 #
-# A newer push cancels the run before it (see `concurrency`), so of pushes
-# that land close together only the newest is built. A commit that reaches
-# main without starting a push run is never built: Dependabot's bumps are
-# merged by dependabot-merge.yml with GITHUB_TOKEN, and GitHub starts no
-# workflow for a push that token made, so `main` stays on the last pushed
-# commit's image until the next push.
+# A PUSH TO MAIN IS ITS ONLY TRIGGER. A pull request has nothing to publish.
+# One touching the Dockerfile, go.mod, internal/version or scripts/notices
+# runs release.yml's snapshot job, which builds the release image from this
+# same Dockerfile and checks its binary's version; nothing runs this file's
+# own build before a merge, so a change here is first exercised on main. The
+# job has no event condition, so any other trigger would hand the registry
+# and a signing identity to a run no merge started.
 #
-# THE RELEASE'S IMAGE, BUILT PLAINLY. The same Dockerfile, the same two
-# platforms and the same compiler settings as .goreleaser.yaml's build
-# (CGO_ENABLED=0, -trimpath, -s -w, the version stamped with -X), staged in
-# the layout goreleaser stages — with `go build` and `docker buildx build`
-# rather than goreleaser itself, because goreleaser fits neither way it runs:
-# a release run needs a semver tag on the commit, and a snapshot run loads
-# one image per platform into the local daemon and pushes nothing, so a
-# `main` index built from it would need a pushed tag per platform first.
-# Change the build in .goreleaser.yaml and change it here.
+# THE RELEASE'S BUILD, without goreleaser: a release run needs a semver tag
+# on the commit, and a snapshot run pushes nothing. The binaries are built
+# with .goreleaser.yaml's settings and staged in the layout it stages, and the
+# image from the same Dockerfile for the same two platforms. Change the build
+# in .goreleaser.yaml and change it here.
 #
-# PROVED BEFORE IT IS PUSHED. Each platform's image is built into the local
-# daemon and run, and must report the commit's version. Only then is the
-# two-platform image pushed — the same builder and context, every step a
-# cache hit — by digest, signed keyless by that digest, and only then tagged
-# `main`, so `main` never names an image that is unsigned.
-#
-# THIS IS ITS OWN WORKFLOW rather than a job in release.yml: docs-publish.yml
-# fires on every completed `release` run whose event was a push and reads that
-# as "a v* tag", so a push to main there would republish the docs site on
-# every merge.
-#
-# WHO CAN REACH THE PUSH. Only the `publish` job holds the registry or a
-# signing identity, and it runs only on a push to this repository's main — a
-# fork's pull request cannot produce that event here, and a fork's own main
-# fails the repository check. A pull request, from a fork or not, reaches
-# only `dry-run`: `contents: read`, no secret, no OIDC token, nothing pushed.
-# There is no pull_request_target, workflow_run or workflow_dispatch trigger.
+# ITS OWN WORKFLOW rather than a job in release.yml: docs-publish.yml reads
+# every completed push run of `release` as a new v* tag.
 #
 # EVERY ACTION IS PINNED BY COMMIT SHA, as in release.yml and for its reason:
-# the publishing job holds the registry and a signing identity.
+# this job holds the registry and a signing identity.
 
 on:
   push:
     branches: [main]
-  pull_request:
-    # What the image is built from. A change to any of these builds and
-    # proves both platforms' images here, before main pushes one.
-    paths:
-      - ".github/workflows/main-image.yml"
-      - "Dockerfile"
-      - "go.mod"
-      - "internal/version/**"
-      - "scripts/notices/**"
 
 permissions:
   contents: read
 
-# A newer push to main CANCELS the run before it, in progress or pending: only
-# the newest commit's image is worth finishing, since `main` moves to it next.
-# A cancel before the retag leaves `main` where it was, and one after it
-# leaves `main` on the new image, already proved and signed. A pull request's
-# run is cancelled by its next push, as in ci.yml. Named after the workflow
-# because a concurrency group is shared by every workflow in the repository.
+# A newer push CANCELS the run before it, in progress or pending: only the
+# newest commit's image is worth finishing, since `main` moves to it next.
+# Named after the workflow because a concurrency group is shared by every
+# workflow in the repository.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-push', github.workflow) }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
-
-env:
-  IMAGE: ghcr.io/crewlet/crewlet
 
 jobs:
   publish:
-    name: build, prove, push and sign main's image
-    if: github.event_name == 'push' && github.repository == 'crewlet/crewlet'
+    name: build, push and sign main's image
+    # A fork's own push to its main would run with the fork's token and
+    # identity, so it could only fail here.
+    if: github.repository == 'crewlet/crewlet'
     runs-on: ubuntu-latest
-    # Two binaries, and three image builds whose arm64 legs run their package
-    # install under QEMU: a quarter of an hour on a normal day. Not the
-    # six-hour default, under which a hung step holds `main` back until the
-    # next push cancels it.
-    timeout-minutes: 45
+    # Two binaries and one two-platform image whose arm64 leg runs its
+    # package install under QEMU. Not the six-hour default, under which a hung
+    # step holds `main` back until the next push cancels it.
+    timeout-minutes: 30
     permissions:
       contents: read
       # The image, to this repository's own GHCR namespace.
       packages: write
-      # The keyless signature over the image: cosign mints a short-lived
-      # certificate from this run's OIDC identity, as the release does.
+      # The keyless signature: cosign mints a short-lived certificate from
+      # this run's OIDC identity, as the release does.
       id-token: write
     steps:
-      # No credential left in the checkout: nothing here pushes to git. One
-      # commit is all it needs, because the version is the commit's hash and
-      # nothing derived from tags.
-      - &checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # go.mod's own toolchain, the module cache main saved, read-only, and no
-      # build cache, on release.yml's policy and for its reasons.
-      - &setup-go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # No build cache, on release.yml's policy and for its reasons.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
-      - &gomodcache
-        name: locate the module cache
-        run: echo "GOMODCACHE=$(go env GOMODCACHE)" >> "${GITHUB_ENV}"
-      - &gomod-restore
-        name: restore the module cache main saved
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.GOMODCACHE }}
-          key: gomod-${{ runner.os }}-${{ hashFiles('go.sum') }}
-      # binfmt for the arm64 image's package install and its proof run.
-      - &qemu
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - &buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The two linux binaries the release builds, built as .goreleaser.yaml
-      # builds them, stamped `main-` and twelve hex digits of the commit: the
-      # length Go gives a commit in a pseudo-version, long enough never to
-      # name two commits of this repository. On a pull request the commit is
-      # GitHub's merge commit, which is what is built there. Staged as
-      # goreleaser stages a release image's context: each binary under its
-      # platform, beside the license and both notices files the Dockerfile
-      # copies — the Go notices for exactly the two targets the image carries.
-      - &build
-        name: build the linux binaries and the image context
+      # The two linux binaries, stamped `main-` and twelve hex digits of the
+      # commit (the length Go gives a commit in a pseudo-version), staged
+      # beside the license and both notices files the Dockerfile copies. The
+      # amd64 binary is run before anything is pushed: a -X flag that names
+      # nothing still links, and its only symptom is a binary that reports its
+      # module version instead of the commit.
+      - name: build the binaries and the image context
         run: |
           set -euo pipefail
           version="main-${GITHUB_SHA:0:12}"
-          context="${RUNNER_TEMP}/context"
+          context="${RUNNER_TEMP}/image"
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -trimpath \
               -ldflags "-s -w -X github.com/crewlet/crewlet/internal/version.value=${version}" \
               -o "${context}/linux/${arch}/crewlet" ./cmd/crewlet
           done
+          reported="$("${context}/linux/amd64/crewlet" --version | awk '{print $2}')"
+          if [ "${reported}" != "${version}" ]; then
+            echo "::error::the binary reports ${reported}; this commit is ${version}"
+            exit 1
+          fi
           go run ./scripts/notices -out "${context}/build/notices/THIRD_PARTY_NOTICES.txt" \
             -main ./cmd/crewlet -targets linux/amd64,linux/arm64
           install -D -m 0644 LICENSE "${context}/LICENSE"
           install -D -m 0644 static/dashboard/THIRD_PARTY_NOTICES.txt \
             "${context}/static/dashboard/THIRD_PARTY_NOTICES.txt"
-          {
-            echo "VERSION=${version}"
-            echo "CONTEXT=${context}"
-          } >> "${GITHUB_ENV}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
 
-      # THE PROOF, before anything is pushed: each platform's image, built
-      # into the local daemon and run, must report the commit's version. That
-      # catches a stamp that applies to nothing (a renamed or moved
-      # internal/version.value), which the link does not, and an image that
-      # did not take the binary it was given.
-      - &prove
-        name: build each platform's image and prove it reports the commit
-        run: |
-          set -euo pipefail
-          for platform in linux/amd64 linux/arm64; do
-            docker buildx build --platform "${platform}" --load \
-              --tag "crewlet-proof:${platform#linux/}" --file Dockerfile "${CONTEXT}"
-            reported="$(docker run --rm --platform "${platform}" "crewlet-proof:${platform#linux/}" --version | awk '{print $2}')"
-            echo "${platform}: the image reports ${reported}"
-            if [ "${reported}" != "${VERSION}" ]; then
-              echo "::error::the ${platform} image reports ${reported}; this commit is ${VERSION}"
-              exit 1
-            fi
-          done
-
-      # cosign is the installer's default, as in release.yml and for its
-      # reason: the pin Dependabot moves is the action's.
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/image
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/crewlet/crewlet:main
+          labels: |
+            org.opencontainers.image.title=crewlet
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
 
-      # ONLY WHILE THIS COMMIT IS MAIN'S TIP. A newer push cancels this run,
-      # but a re-run of an older run is a run like any other and would move
-      # `main` back to its commit. Read just before the push, main's tip says
-      # whether this commit is still the one `main` should follow.
-      #
-      # Then: the two-platform image pushed BY DIGEST, with no tag; signed by
-      # that digest, keyless, as docker_signs signs a release's image (the
-      # certificate names this workflow on main and this commit); and only
-      # then `main` pointed at the same manifest. The retag keeps the digest
-      # (asserted), so the signature covers what `main` names.
-      - name: push by digest, sign, and move main to it
-        run: |
-          set -euo pipefail
-          tip="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" refs/heads/main | awk '{print $1}')"
-          if [ "${tip}" != "${GITHUB_SHA}" ]; then
-            echo "::notice::main is now at ${tip}, not ${GITHUB_SHA}; this run pushes nothing and main stays where it is"
-            exit 0
-          fi
-          docker buildx build --platform linux/amd64,linux/arm64 --file Dockerfile \
-            --label "org.opencontainers.image.title=crewlet" \
-            --label "org.opencontainers.image.version=${VERSION}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.licenses=MIT" \
-            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
-            --metadata-file "${RUNNER_TEMP}/pushed.json" "${CONTEXT}"
-          digest="$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/pushed.json")"
-          cosign sign "${IMAGE}@${digest}" --yes
-          docker buildx imagetools create --tag "${IMAGE}:main" "${IMAGE}@${digest}"
-          moved="$(docker buildx imagetools inspect "${IMAGE}:main" --format '{{json .Manifest}}' | jq -er .digest)"
-          if [ "${moved}" != "${digest}" ]; then
-            echo "::error::${IMAGE}:main names ${moved} after the retag, not the signed ${digest}"
-            exit 1
-          fi
-          echo "${IMAGE}:main is ${digest}, ${VERSION}"
-
-  dry-run:
-    name: main image dry run
-    # Every pull request this file's paths match — a fork's included, which is
-    # why this job holds nothing beyond the workflow's `contents: read`. The
-    # same build and proof as `publish`; nothing pushed or signed.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    # Two binaries and two image builds, one under QEMU: well under this.
-    timeout-minutes: 30
-    steps:
-      - *checkout
-      - *setup-go
-      - *gomodcache
-      - *gomod-restore
-      - *qemu
-      - *buildx
-      - *build
-      - *prove
+      # Keyless, by the digest just pushed, as docker_signs signs a release's
+      # image; the certificate names this workflow on main and this commit.
+      # cosign is the installer's default, as in release.yml and for its
+      # reason: the pin Dependabot moves is the action's.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: sign the image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/crewlet/crewlet@${DIGEST}"

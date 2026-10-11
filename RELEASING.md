@@ -212,19 +212,17 @@ It is ONE tag, and it moves:
 - **Every push to `main` rebuilds it** from the push's head commit and moves
   `main` to that build. Nothing else is ever pushed: no tag per commit, never
   `latest`, never a release's tag.
-- **A newer push cancels the run before it.** Push runs share one concurrency
+- **A newer push cancels the run before it.** Every run shares one concurrency
   group with `cancel-in-progress`, so when pushes land close together only the
   newest commit is built.
 - **A commit that starts no run is never built.** Dependabot's bumps are merged
   with `GITHUB_TOKEN`, and GitHub starts no workflow for a push that token
   made, so `main` stays on the last pushed commit's image until the next push
   to `main`.
-- **A run pushes only while its commit is still `main`'s tip**, read just
-  before the push. A re-run of an older run would otherwise move `main`
-  backwards; it builds and proves, then pushes nothing. So does a run whose
-  commit had a bump merged on top of it while it built. A re-run joins the push
-  group too, so re-running an older run while a newer one is in flight cancels
-  the newer one: re-run the newest.
+- **Re-run only the newest run.** A re-run builds the commit it ran on and
+  moves `main` to it, so re-running an older one moves `main` backwards until
+  the next push. It also joins the concurrency group, cancelling a newer run
+  in flight.
 
 ### What the binary reports
 
@@ -241,32 +239,27 @@ whole commit too.
 ### How it is built
 
 Not by goreleaser, which fits neither way it runs: a release run needs a
-semver tag on the commit, and a snapshot run loads one image per platform into
-the local daemon and pushes nothing, so one `main` index could only be made
-from it by pushing a tag per platform first. The workflow runs the same build
-plainly — `go build` of the two linux targets with `.goreleaser.yaml`'s
-settings (`CGO_ENABLED=0`, `-trimpath`, `-s -w`, the version stamped with
-`-X`), the notices generator for those two targets, and `docker buildx build`
-of the same `Dockerfile`, for linux/amd64 and linux/arm64, from a context
-staged the way goreleaser stages a release's. A change to the release build is
-a change to both files, and `.goreleaser.yaml`, the `Dockerfile` and the
-workflow each say so. Then, in order:
+semver tag on the commit, and a snapshot run pushes nothing. The workflow runs
+the same build plainly, in three steps:
 
-1. **The proof, before anything is pushed.** Each platform's image is built
-   into the runner's Docker and run, and must report the commit's version.
-   That is also what catches a stamp that applies to nothing: an unstamped
-   build reports a module version, never `main-<commit>`.
-2. **The push, by digest.** The two-platform image — the same builder and
-   context, every step a cache hit from the proof — is pushed with no tag.
-3. **The signature**, keyless, by that digest, as `docker_signs` signs a
-   release's image.
-4. **The retag.** Only then does `main` move to the same manifest, and the job
-   asserts the digest is unchanged, so the signature covers what `main` names.
+1. **The binaries.** `go build` of the two linux targets with
+   `.goreleaser.yaml`'s settings (`CGO_ENABLED=0`, `-trimpath`, `-s -w`, the
+   version stamped with `-X`), staged with the license and both notices files
+   the way goreleaser stages a release's image context. The amd64 binary is
+   run and must report the commit's version before anything is pushed: an
+   unstamped build reports a module version, never `main-<commit>`, and that
+   is the only symptom a stamp that applies to nothing has.
+2. **The image.** `docker/build-push-action` builds the same `Dockerfile` for
+   linux/amd64 and linux/arm64, pushes it and tags it `main`.
+3. **The signature**, keyless, by the digest the push reported, as
+   `docker_signs` signs a release's image.
 
-So `main` never names an unsigned image: a cancel or a failure before the
-retag leaves `main` where it was, and one after leaves it on the new image,
-already signed. An image pushed by a run that stopped before the retag stays
-in the package untagged, and nothing names it.
+A change to the release build is a change to both `.goreleaser.yaml` and the
+workflow, and each says so. `main` moves at the push and is signed a moment
+later, so a run that fails or is cancelled between the two leaves `main` on
+an image `cosign verify` refuses until a later run signs one. A failed run is
+red on `main`'s commit; a cancelled one was superseded by a newer push, whose
+run is already on its way.
 
 ### Verifying the image of main
 
@@ -287,8 +280,8 @@ must keep running one build pins the digest it verified
 
 ### What it costs
 
-Each run compiles two targets and builds the arm64 image under QEMU, once:
-the push takes every step from the proof's cache. Cancelling a superseded run
+Each run compiles two targets and builds the two-platform image once, its
+arm64 leg under QEMU. Cancelling a superseded run
 keeps a burst of merges to one finished build. Every push leaves the image
 before it in the package, untagged, and nothing prunes those; one a
 deployment pins by digest must stay, so prune by age with a generous window,
@@ -296,16 +289,13 @@ and never touch a `v*` tag.
 
 ### Rehearsing it
 
-A pull request that touches `main-image.yml`, the `Dockerfile`, `go.mod`,
-`internal/version/**` or `scripts/notices/**` runs the workflow's **dry run**:
-the same build and the same proof on both platforms, with `contents: read`, no
-secret, nothing pushed and nothing signed. **What no pull request runs is the
-publish step** — the tip check, the push by digest, the signature and the
-retag. A change to it is first exercised on `main`; read the publish job's run
-after the merge. Locally, the build and proof steps are plain shell: run the
-build with `GITHUB_SHA`, `RUNNER_TEMP` and `GITHUB_ENV` set, export the
-`VERSION` and `CONTEXT` it writes there, and run the proof, with binfmt
-registered for the arm64 leg.
+The workflow runs only on a push to `main`; no pull request runs it. A pull
+request that changes what the image is built from — the `Dockerfile`,
+`go.mod`, `internal/version/**`, `scripts/notices/**` — runs release.yml's
+snapshot job, which builds the release image from the same `Dockerfile` and
+checks the binary's version. A change to `main-image.yml` itself is first
+exercised on `main`: read its run after the merge. Locally, the build step is
+plain shell; run it with `GITHUB_SHA`, `RUNNER_TEMP` and `GITHUB_ENV` set.
 
 ---
 
@@ -340,13 +330,11 @@ release pipeline does when it runs:
   is the tag itself, so the publish job's check proves the published binary
   names its tag but not that the `-X` flag put it there. Keep the snapshot
   job's paths covering `internal/version/**` for that reason.
-- **The image of `main` is proved before it is pushed, and `main` names only a
-  signed image.** Each platform's image is run and must report
-  `main-<commit>` — on every pull request touching its build, and on every
-  push before the push — then the image is pushed by digest and signed before
-  `main` moves to it, and the retag is checked to keep the digest. That proof
-  sees a stamp that applies to nothing as the snapshot job's does, since an
-  unstamped build never reports `main-<commit>`.
+- **The binary of `main` is checked before its image is pushed.** The amd64
+  binary must report `main-<commit>` on every push to `main`, which sees a
+  stamp that applies to nothing as the snapshot job's comparison does, since
+  an unstamped build never reports `main-<commit>`. Then the image is pushed
+  and signed by its digest.
 
 ### What nothing guards — check these by hand
 
@@ -381,28 +369,26 @@ doing the thing, or starts doing more — so read the file when you touch it:
   Release for one tag and the loser fails after its artifacts are built — and
   the opposite mistake, a trigger that ends up somewhere Actions ignores, means
   pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
-- **`main-image.yml` publishes only from a push to `main`.** Its `publish` job
-  is the only one holding `packages: write` and `id-token: write`, and it
-  requires a `push` event and this repository's name; there is no
-  `pull_request_target`, `workflow_run` or `workflow_dispatch` trigger. Adding
-  one, or loosening the `if:`, would hand the registry and an OIDC signing
-  identity to a run something other than a merge started. The `dry-run` job
-  must keep the workflow-level `contents: read` and no secret: it runs for
-  forks' pull requests.
-- **Push runs keep ONE concurrency group with `cancel-in-progress`, and the
-  publish step keeps its tip check.** Key the push group per run or per commit
-  and two runs push side by side, the older one able to land last; drop the tip
-  check and a re-run of an older run moves `main` backwards. Every run stays
-  green either way.
-- **The publish step pushes by digest, signs, and only then retags.** Tag
-  `main` in the push itself and `main` names an unsigned image until the
-  signature lands — and for good, if the run is cancelled or fails first. It
-  stays green.
+- **`main-image.yml` runs only on a push to `main`.** Its job holds
+  `packages: write` and `id-token: write`, and the trigger list is the only
+  guard: the job has no event condition, so adding a `pull_request`,
+  `pull_request_target`, `workflow_run` or `workflow_dispatch` trigger would
+  hand the registry and an OIDC signing identity to a run something other than
+  a merge started. Its `if:` checks only the repository's name, which keeps a
+  fork's own `main` from running a job that holds the fork's token and could
+  only fail.
+- **Its runs keep ONE concurrency group with `cancel-in-progress`.** Key the
+  group per run or per commit and two runs push side by side, the older one
+  able to land last and move `main` backwards. Every run stays green either
+  way.
+- **The sign step signs the digest the push reported.** Sign `:main` by tag
+  instead and a newer run's push landing in between gets this run's signature
+  over an image it did not build. It stays green.
 - **`main-image.yml` builds as `.goreleaser.yaml` does.** The flags, the `-X`
   stamp's path, the platforms and the staged context are written in both, and
   nothing compares them: a change to one alone gives the image of `main` a
-  different build from a release's, and the dry run passes it as long as the
-  image still reports its version.
+  different build from a release's, and the run passes as long as the binary
+  still reports its version.
 - **The image of `main` is its own workflow, named `main image`.** Fold it into
   `release.yml` and `docs-publish.yml`, which reads every completed `release`
   run whose event was a push as a new tag, republishes the docs site on every
