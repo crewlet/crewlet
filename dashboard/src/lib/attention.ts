@@ -60,7 +60,7 @@ export const SUBJECTS: Record<Subject, string> = {
  * WHERE A CONDITION IS SHOWN — one home per subject, so no condition is drawn
  * twice and none is drawn nowhere.
  *
- *  - `seat`: the Inbox's "Needs a decision" group and Home's count of
+ *  - `seat`: the Inbox's "Needs you" group and Home's count of
  *    conditions that need a look. A person decides these — raise a ceiling,
  *    resume a paused seat, look at one that failed.
  *  - `engine`: the sidebar's health card and Home's status sentence, which
@@ -95,7 +95,7 @@ export function watchedIn(where: Where): string {
 }
 
 /**
- * The conditions a PERSON decides — the Inbox's "Needs a decision" rows beside
+ * The conditions a PERSON decides: the Inbox's "Needs you" rows beside
  * the asks and runs, and what Home counts as needing a look.
  *
  * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine

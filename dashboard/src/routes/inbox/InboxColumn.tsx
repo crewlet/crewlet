@@ -1,0 +1,309 @@
+/**
+ * The Inbox's list: Needs you, then Updates, then the two quiet links to what
+ * was snoozed and what was read already.
+ *
+ * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (the person or
+ * seat behind it, never a token id), WHAT, in up to three lines and never cut
+ * at the edge, and the TASK it is about, as a quiet link of its own under the
+ * row that opens the task beside the inbox. A row that drew its kind in a
+ * different shape would make a reader learn four lists to read one.
+ */
+
+import type { ReactNode } from "react";
+import {
+  Button,
+  EmptyState,
+  InboxGroup,
+  InboxList,
+  InboxMore,
+  InboxRow as Row,
+  InboxToggle,
+  Skeleton,
+  Text,
+} from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { Mark } from "~/ui/glyph.tsx";
+import { firstLine } from "~/lib/format.ts";
+import type { OrgIndex } from "~/lib/seats.ts";
+import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
+import {
+  askQuestion,
+  budgetLine,
+  moment,
+  noticeText,
+  noticeTitle,
+  rowKey,
+  rowName,
+  rowWho,
+  shortWhen,
+  type InboxRow,
+  type Who,
+} from "./model.ts";
+import { TaskLink } from "./TaskLink.tsx";
+
+/** What the list holds beyond its two groups, read only when opened. */
+export interface Later {
+  /** The rows, or null until the read answers. */
+  rows: InboxRow[] | null;
+  /** The read stopped at its page with more behind it. */
+  more: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function InboxColumn({
+  needs,
+  updates,
+  snoozed,
+  snoozedCount,
+  earlier,
+  onEarlierMore,
+  settled,
+  selected,
+  onOpen,
+  titles,
+  index,
+  now,
+  loading,
+  quiet,
+  more,
+  bound,
+  refusal,
+}: {
+  needs: readonly InboxRow[];
+  updates: readonly InboxRow[];
+  snoozed: Later;
+  /** How many notices are snoozed, as a count and whether it is a floor; null until read. */
+  snoozedCount: { count: number; floor: boolean } | null;
+  earlier: Later;
+  /** Read the page of earlier updates after the ones shown. */
+  onEarlierMore: () => void;
+  /** The rows answered or resolved here, kept in place as done until the list is left. */
+  settled: ReadonlyMap<string, string>;
+  selected: string;
+  onOpen: (key: string) => void;
+  /** Task titles by key, where the row does not carry its own. */
+  titles: ReadonlyMap<string, string>;
+  index: OrgIndex;
+  now: number;
+  /** Nothing has answered yet. */
+  loading: boolean;
+  /** What to say instead of rows, or null where rows (or a refusal) are drawn. */
+  quiet: { title: string; hint: string } | null;
+  /** More unread updates lie past the page. */
+  more: boolean;
+  /** The reader is a person, so there are notices to read at all. */
+  bound: boolean;
+  /** A read's refusal, drawn where its rows would be. */
+  refusal?: ReactNode;
+}) {
+  const item = (row: InboxRow) => (
+    <InboxItem
+      key={row.key}
+      row={row}
+      index={index}
+      now={now}
+      title={titles.get(rowKey(row))}
+      settled={settled.get(row.key)}
+      selected={row.key === selected}
+      onOpen={() => onOpen(row.key)}
+    />
+  );
+  const snoozedLabel = snoozedCount
+    ? `${snoozedCount.count}${snoozedCount.floor ? "+" : ""} snoozed`
+    : "";
+  return (
+    <InboxList label="Inbox" className="inbox-list">
+      {refusal}
+      {needs.length > 0 && <InboxGroup label="Needs you">{needs.map(item)}</InboxGroup>}
+      {updates.length > 0 && <InboxGroup label="Updates">{updates.map(item)}</InboxGroup>}
+      {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
+      {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}
+      {more && (
+        <Text as="p" variant="caption" className="inbox-note">
+          {`More unread updates lie past these ${INBOX_PAGE}. Read these and the next ones come up.`}
+        </Text>
+      )}
+      {bound && (
+        // SNOOZED AND EARLIER ARE TWO WORDS AT THE END, never a filter at the
+        // top: a filter bar is read every time, and these are opened rarely.
+        <InboxMore>
+          {snoozedLabel && snoozedCount && snoozedCount.count > 0 && (
+            <InboxToggle
+              expanded={snoozed.open}
+              onClick={() => snoozed.onOpenChange(!snoozed.open)}
+            >
+              {snoozedLabel}
+            </InboxToggle>
+          )}
+          <InboxToggle expanded={earlier.open} onClick={() => earlier.onOpenChange(!earlier.open)}>
+            Earlier updates
+          </InboxToggle>
+        </InboxMore>
+      )}
+      {snoozed.open && (
+        <LaterRows label="Snoozed" later={snoozed} empty="Nothing is snoozed." item={item} />
+      )}
+      {earlier.open && (
+        <LaterRows
+          label="Earlier updates"
+          later={earlier}
+          empty="Nothing here is read yet."
+          item={item}
+          onMore={onEarlierMore}
+        />
+      )}
+    </InboxList>
+  );
+}
+
+/** The rows a quiet link opened, named for a screen reader by the link's own words. */
+function LaterRows({
+  label,
+  later,
+  empty,
+  item,
+  onMore,
+}: {
+  label: string;
+  later: Later;
+  empty: string;
+  item: (row: InboxRow) => ReactNode;
+  onMore?: () => void;
+}) {
+  if (later.rows === null) return <Skeleton variant="text" rows={2} label={`Loading ${label}`} />;
+  return (
+    <>
+      {later.rows.length > 0 ? (
+        <InboxGroup label={label} hideLabel>
+          {later.rows.map(item)}
+        </InboxGroup>
+      ) : (
+        !later.more && (
+          <Text as="p" variant="caption" className="inbox-note">
+            {empty}
+          </Text>
+        )
+      )}
+      {later.more && onMore && (
+        <InboxMore>
+          {/* A READ OF THE NEXT PAGE, not a disclosure: it opens nothing that
+              closes again, so it is a plain button rather than a toggle. */}
+          <Button size="small" variant="ghost" onClick={onMore}>
+            Show more
+          </Button>
+        </InboxMore>
+      )}
+    </>
+  );
+}
+
+/** What a row says under the name, and the quieter words after it. */
+function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: string } {
+  switch (row.kind) {
+    case "decision":
+      switch (row.subject.kind) {
+        case "ask":
+          return { text: askQuestion(row.subject.ask) };
+        case "run":
+          return { text: firstLine(row.subject.run.question ?? "") || "Parked on a question" };
+        case "seat":
+          return { text: budgetLine(row.subject.seat.window?.period) };
+      }
+      break;
+    case "condition":
+      return { text: row.item.title };
+    case "notice": {
+      const said = noticeText(row.notice, index);
+      return said
+        ? { text: noticeTitle(row.notice), excerpt: said }
+        : { text: noticeTitle(row.notice) };
+    }
+  }
+  return { text: "" };
+}
+
+/** The word after the name, where the row is not a plain question or update. */
+function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
+  if (row.kind !== "decision") return null;
+  if (row.subject.kind === "run") return { word: "coding run", danger: false };
+  if (row.subject.kind === "seat") return { word: "stopped", danger: true };
+  return null;
+}
+
+/** When, as the row's end says it: back at a snooze's end, since a condition began. */
+function whenOf(row: InboxRow, now: number): string {
+  if (row.kind === "notice" && row.notice.snoozed && row.notice.snoozed_until) {
+    return `back ${moment(row.notice.snoozed_until, now)}`;
+  }
+  if (row.kind === "condition") return row.at ? `since ${moment(row.at, now)}` : "";
+  return shortWhen(row.at, now);
+}
+
+function InboxItem({
+  row,
+  index,
+  now,
+  title,
+  settled,
+  selected,
+  onOpen,
+}: {
+  row: InboxRow;
+  index: OrgIndex;
+  now: number;
+  title: string | undefined;
+  /** How the row was settled here ("Answered"), or undefined. */
+  settled: string | undefined;
+  selected: boolean;
+  onOpen: () => void;
+}) {
+  const who = rowWho(row, index);
+  const key = rowKey(row);
+  const words = rowWords(row, index);
+  const qualifier = settled ? null : qualifierOf(row);
+  const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
+  return (
+    <Row
+      title={rowName(row, who)}
+      qualifier={qualifier?.word}
+      qualifierTone={qualifier?.danger ? "danger" : "default"}
+      meta={whenOf(row, now) || undefined}
+      leading={<Badge row={row} who={who} />}
+      excerpt={words.excerpt}
+      unread={unread}
+      actionable={row.kind !== "notice" && !settled}
+      done={settled !== undefined}
+      doneLabel={settled}
+      selected={selected}
+      onClick={onOpen}
+      aside={key ? <TaskLink item={key} title={title ?? taskTitleOf(row)} /> : undefined}
+    >
+      {words.text}
+    </Row>
+  );
+}
+
+/** The title a row carries for its own task, where it carries one. */
+export function taskTitleOf(row: InboxRow): string | undefined {
+  return row.kind === "decision" && row.subject.kind === "ask" ? row.subject.ask.title : undefined;
+}
+
+/** The badge a row leads with: its seat, the engine's mark for a condition, or nobody. */
+export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null; size?: number }) {
+  if (who) {
+    return (
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} size={size} decorative />
+    );
+  }
+  if (row.kind === "condition") {
+    return (
+      <span className="attention-icon inbox-badge" data-severity={row.item.severity}>
+        <Mark name={row.item.icon} size="sm" />
+      </span>
+    );
+  }
+  // AN OPERATOR'S TOKEN BOUND TO NOBODY is a person all the same, drawn as one
+  // with no name behind it rather than as the credential.
+  return <SeatAvatar name="Operator" kind="human" size={size} decorative />;
+}

@@ -314,7 +314,6 @@ export function Activity({
                   ? `Leave a comment — Ask… to put a question to ${assignee} directly`
                   : "Leave a comment — @mention to bring someone in"
             }
-            onReply={() => setReplyTo(null)}
           />
         </div>
       )}

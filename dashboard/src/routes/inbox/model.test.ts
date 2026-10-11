@@ -1,22 +1,26 @@
 /**
- * The Inbox's rules as values: the rows, the chips, the day groups, the read
- * position "Mark all read" sends, the snooze presets and the quiet sentences.
+ * The Inbox's rules as values: the rows, where the selection goes once an
+ * item is settled, what a notice is called, the read position "Mark all
+ * read" sends, the snooze presets and the quiet sentences.
  */
 
 import { describe, expect, test } from "vitest";
 
 import {
-  chipCounts,
-  dayGroups,
+  askContext,
+  askQuestion,
+  earlierOf,
+  firstSentence,
   inboxQuiet,
   inboxRows,
+  nextAfter,
+  noticeNote,
+  noticeTitle,
   readThrough,
-  rowMatches,
   snoozePresets,
-  type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/components/DecisionRow.tsx";
-import type { WorkInboxNotice } from "~/protocol/index.ts";
+import type { WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
 
 function notice(id: string, extra: Partial<WorkInboxNotice> = {}): WorkInboxNotice {
   return {
@@ -28,43 +32,40 @@ function notice(id: string, extra: Partial<WorkInboxNotice> = {}): WorkInboxNoti
     reason: "watcher",
     primary: false,
     addressed: false,
-    kind: "comment_added",
+    kind: "comment",
     subject_id: "t",
     read: false,
     ...extra,
   };
 }
 
-const ASK: DecisionSubject = {
-  kind: "ask",
-  at: "2026-09-27T09:00:00Z",
-  ask: {
-    id: "t",
-    key: "LEAD-12",
-    project: "LEAD",
-    title: "t",
-    type: "task",
-    status: "todo",
-    comment: "c-12",
-    asked_by: "cto",
-    asked_at: "2026-09-27T09:00:00Z",
-    body: "?",
-    answer_with: "",
-    decision: {
-      question: "?",
-      options: [
-        { id: "a", label: "A" },
-        { id: "b", label: "B" },
-      ],
-      role: "approver",
-    },
-  } as never,
-};
+const ASK_ROW = {
+  id: "t",
+  key: "LEAD-12",
+  project: "LEAD",
+  title: "Q4 release plan",
+  type: "task",
+  status: "todo",
+  comment: "c-12",
+  asked_by: "cto",
+  asked_at: "2026-09-27T09:00:00Z",
+  body: "2.4 is scheduled for Thursday.",
+  answer_with: "",
+  decision: {
+    question: "Hold the release?",
+    options: [
+      { id: "a", label: "A" },
+      { id: "b", label: "B" },
+    ],
+    role: "approver",
+  },
+} as unknown as WorkAskRow;
+
+const ASK: DecisionSubject = { kind: "ask", at: "2026-09-27T09:00:00Z", ask: ASK_ROW };
 
 describe("the rows", () => {
-  test("an ask's notices ride on its decision and leave the notice rows", () => {
+  test("an ask's notices ride on its row in Needs you and leave Updates", () => {
     const rows = inboxRows({
-      scope: "unread",
       subjects: [ASK],
       conditions: [],
       notices: [
@@ -72,74 +73,95 @@ describe("the rows", () => {
         notice("r-2"),
       ],
     });
-    expect(rows.decisions).toHaveLength(1);
+    expect(rows.needs).toHaveLength(1);
     expect(
-      rows.decisions[0]!.kind === "decision" && rows.decisions[0]!.notices.map((n) => n.record_id),
+      rows.needs[0]!.kind === "decision" && rows.needs[0]!.notices.map((n) => n.record_id),
     ).toEqual(["r-1"]);
-    expect(rows.notices.map((r) => r.key)).toEqual(["r-2"]);
+    expect(rows.updates.map((r) => r.key)).toEqual(["r-2"]);
   });
 
-  test("the Snoozed scope holds no decisions", () => {
-    const rows = inboxRows({
-      scope: "snoozed",
-      subjects: [ASK],
-      conditions: [],
-      notices: [notice("r-1")],
-    });
-    expect(rows.decisions).toEqual([]);
-    expect(rows.notices).toHaveLength(1);
-  });
-
-  test("Reviews are the asks put to the reader as approver, and Decisions every non-notice", () => {
-    const rows = inboxRows({
-      scope: "all",
-      subjects: [
-        ASK,
-        {
-          kind: "ask",
-          at: ASK.at!,
-          ask: {
-            ...(ASK.kind === "ask" ? ASK.ask : ({} as never)),
-            comment: "c-2",
-            decision: { question: "?", options: [], role: "contributor" },
-          },
-        },
-      ],
-      conditions: [],
-      notices: [notice("r-1", { reason: "mention" }), notice("r-2", { reason: "assignee" })],
-    });
-    const counts = chipCounts(rows);
-    expect(counts).toEqual({ "": 4, decisions: 2, reviews: 1, mentions: 1, assigned: 1 });
-    const all: InboxRow[] = [...rows.decisions, ...rows.notices];
-    expect(all.filter((r) => rowMatches(r, "assigned")).map((r) => r.key)).toEqual(["r-2"]);
+  test("Earlier lists only what is read, since the engine answers read and unread alike", () => {
+    expect(
+      earlierOf([notice("a"), notice("b", { read: true }), notice("c", { read: true })]).map(
+        (n) => n.record_id,
+      ),
+    ).toEqual(["b", "c"]);
   });
 });
 
-describe("the day groups", () => {
-  // THE COMPANY'S MIDNIGHT: at 03:00 UTC on the 27th it is still 23:00 on the
-  // 26th in New York, so a notice from 05:00 UTC on the 26th — 01:00 there —
-  // is yesterday for a company on UTC and today for one on New York time.
-  test("are cut at the company's midnight, not the reader's", () => {
-    const now = Date.parse("2026-09-27T03:00:00Z");
-    const rows: InboxRow[] = [
-      { kind: "notice", key: "a", at: "2026-09-27T02:00:00Z", notice: notice("a") },
-      { kind: "notice", key: "b", at: "2026-09-26T05:00:00Z", notice: notice("b") },
-      { kind: "notice", key: "c", at: "2026-09-24T12:00:00Z", notice: notice("c") },
-    ];
-    const utc = dayGroups(rows, now, "UTC").map((g) => [g.label, g.rows.map((r) => r.key)]);
-    expect(utc).toEqual([
-      ["Today", ["a"]],
-      ["Yesterday", ["b"]],
-      ["Earlier", ["c"]],
-    ]);
-    const ny = dayGroups(rows, now, "America/New_York").map((g) => [
-      g.label,
-      g.rows.map((r) => r.key),
-    ]);
-    expect(ny).toEqual([
-      ["Today", ["a", "b"]],
-      ["Earlier", ["c"]],
-    ]);
+// THE NEXT ITEM OPENS once the open one is settled, and it is the one AFTER it
+// in the list as it stood, not the first of the list as it now is.
+describe("where the selection goes next", () => {
+  test("to the row after it, in the order it had", () => {
+    expect(nextAfter("b", ["a", "b", "c", "d"], ["a", "b", "c", "d"], new Set(["b"]))).toBe("c");
+  });
+
+  test("past a row that has left the list since", () => {
+    // `b` was read and left Updates; `c` was read elsewhere meanwhile.
+    expect(nextAfter("b", ["a", "b", "c", "d"], ["a", "d"], new Set())).toBe("d");
+  });
+
+  test("past a row already settled here", () => {
+    expect(nextAfter("a", ["a", "b", "c"], ["a", "b", "c"], new Set(["a", "b"]))).toBe("c");
+  });
+
+  test("back to the first unsettled row when nothing follows it", () => {
+    expect(nextAfter("c", ["a", "b", "c"], ["a", "b", "c"], new Set(["a", "c"]))).toBe("b");
+  });
+
+  test("nowhere when nothing is left to open", () => {
+    expect(nextAfter("a", ["a"], [], new Set(["a"]))).toBeNull();
+    expect(nextAfter("a", ["a", "b"], ["a", "b"], new Set(["a", "b"]))).toBeNull();
+  });
+});
+
+describe("what a notice is called", () => {
+  test("a notice the reader is on the hook for is named by its reason", () => {
+    expect(noticeTitle(notice("a", { reason: "mention", primary: true }))).toBe("Mentioned you");
+    expect(noticeTitle(notice("a", { reason: "assignee", primary: true, kind: "assignee" }))).toBe(
+      "Assigned to you",
+    );
+  });
+
+  test("any other notice is named by what the change did", () => {
+    expect(noticeTitle(notice("a", { kind: "comment" }))).toBe("Commented");
+    expect(noticeTitle(notice("a", { kind: "status" }))).toBe("Changed its status");
+    // A KIND THIS BUILD HAS NO WORDS FOR is still said, never dropped.
+    expect(noticeTitle(notice("a", { kind: "brand_new_kind" }))).toBe("Brand new kind");
+  });
+
+  test("says why it reached the reader only where its title does not", () => {
+    const until = (at: string) => `at ${at}`;
+    expect(noticeNote(notice("a", { reason: "watcher" }), until)).toBe("you follow this task");
+    expect(noticeNote(notice("a", { reason: "mention", primary: true }), until)).toBe("");
+    expect(noticeNote(notice("a", { primary: true, fallback: true }), until)).toBe(
+      "nobody better was found for it",
+    );
+    expect(
+      noticeNote(notice("a", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" }), until),
+    ).toBe("snoozed until at 2030-01-01T09:00:00Z");
+  });
+});
+
+describe("what an ask says", () => {
+  test("a structured ask states its question apart from its body", () => {
+    expect(askQuestion(ASK_ROW)).toBe("Hold the release?");
+    expect(askContext(ASK_ROW)).toBe("2.4 is scheduled for Thursday.");
+  });
+
+  test("a free-text ask's question is its first line, and the rest its context", () => {
+    const words = {
+      ...ASK_ROW,
+      decision: undefined,
+      body: "\nShould we ship Friday?\nThe webinar moved.\n",
+    } as unknown as WorkAskRow;
+    expect(askQuestion(words)).toBe("Should we ship Friday?");
+    expect(askContext(words)).toBe("The webinar moved.");
+  });
+
+  test("a heading is the first sentence of a longer text", () => {
+    expect(firstSentence("May I delete it? It holds the fixtures.")).toBe("May I delete it?");
+    expect(firstSentence("v1.2 ships today")).toBe("v1.2 ships today");
   });
 });
 
@@ -202,28 +224,22 @@ describe("the quiet sentences", () => {
   const base = { bound: true, error: false, shown: 0, watched: "every seat's own state" };
   const answer = { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 };
 
-  test("say nothing before an answer or beside a refusal", () => {
-    expect(inboxQuiet({ ...base, answer: null, scope: "unread", chip: "" })).toBeNull();
-    expect(inboxQuiet({ ...base, answer, error: true, scope: "unread", chip: "" })).toBeNull();
+  test("say nothing before an answer, beside a refusal or over rows", () => {
+    expect(inboxQuiet({ ...base, answer: null })).toBeNull();
+    expect(inboxQuiet({ ...base, answer, error: true })).toBeNull();
+    expect(inboxQuiet({ ...base, answer, shown: 1 })).toBeNull();
   });
 
   test("claim no read history for a person who never marked one", () => {
-    expect(inboxQuiet({ ...base, answer, scope: "unread", chip: "" })?.title).toBe(
-      "Nothing has reached you yet",
+    expect(inboxQuiet({ ...base, answer })?.title).toBe("Nothing has reached you yet");
+    expect(inboxQuiet({ ...base, answer: { ...answer, seen_through: { seq: 4 } } })?.title).toBe(
+      "You are caught up",
     );
-    expect(
-      inboxQuiet({
-        ...base,
-        answer: { ...answer, seen_through: { seq: 4 } },
-        scope: "unread",
-        chip: "",
-      })?.title,
-    ).toBe("You are caught up");
   });
 
   test("name what the conditions were measured over for a reader who is nobody", () => {
-    expect(
-      inboxQuiet({ ...base, bound: false, answer: null, scope: "unread", chip: "" })?.hint,
-    ).toContain("every seat's own state");
+    expect(inboxQuiet({ ...base, bound: false, answer: null })?.hint).toContain(
+      "every seat's own state",
+    );
   });
 });

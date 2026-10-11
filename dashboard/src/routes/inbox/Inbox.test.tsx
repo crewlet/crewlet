@@ -1,21 +1,21 @@
 /**
- * The Inbox: what a person decides and what reached them, and the gestures
- * they make on it as themselves.
+ * The Inbox: what a person decides and what reached them, read one item at a
+ * time beside the list, and the gestures they make on it as themselves.
  *
- * Its failure modes are quiet ones. A Done that sent the whole inbox back
+ * Its failure modes are quiet ones. A mark that sent the whole inbox back
  * erased a snooze made in another tab; a row drawn with the token's id put a
- * credential where a person belongs; a Snoozed tab that listed everything;
- * an option button that sent something other than the choice; a snooze preset
- * the engine refuses every time it is pressed; and "posts it to #leadership"
- * promised on an ask that promised nothing.
+ * credential where a person belongs; a Snoozed list that listed everything;
+ * an option that sent something other than the choice, or answered beside the
+ * one write every surface answers through; an answered question that came
+ * back as an update; and "posted to #leadership" promised on an ask that
+ * promised nothing.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { Inbox } from "./Inbox.tsx";
-import { PAGE_LOCAL_CHIPS } from "./NoticeList.tsx";
+import { ADVANCE_MS, Inbox } from "./Inbox.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -104,7 +104,7 @@ function notice(id: string, extra: Record<string, unknown> = {}) {
     reason: "watcher",
     primary: false,
     addressed: false,
-    kind: "comment_added",
+    kind: "comment",
     subject_id: "t-91",
     subject_key: "PROD-91",
     excerpt: `something about ${id}`,
@@ -132,6 +132,7 @@ const QUIET: Record<string, Answer> = {
     max_snooze_ahead: 30 * 86_400,
   },
   work_comments: { item: "t", key: "LEAD-12", title: "Q4 release plan", comments: [] },
+  work_items: { items: [], total_hint: 0 },
   sandbox_runs: { runs: [] },
 };
 
@@ -141,11 +142,10 @@ let posted: { tool: string; args: Record<string, unknown> }[];
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
  *
- * THE DAY GROUPS CUT AT THE COMPANY'S MIDNIGHT, and every fixture notice is
- * stamped a minute (an ask twelve) before `Date.now()`: on the real clock a run
- * that reached the "Today" case in the first minute after midnight filed its
- * notice under Yesterday and failed. Only `Date` is faked — the suite's own
- * waits keep real timers.
+ * Every fixture notice is stamped a minute (an ask twelve) before
+ * `Date.now()`, so the time a row draws and the day a snooze preset lands on
+ * are the same on every run. Only `Date` is faked: the suite's own waits, and
+ * the moment before the next item opens, keep real timers.
  */
 const PINNED_NOW = "2026-09-30T12:00:00Z";
 
@@ -239,273 +239,329 @@ function reasonOf(button: HTMLElement): string {
     .join(" ");
 }
 
+/** A `work_inbox` answer per question: Updates, Snoozed and Earlier ask apart. */
+function inboxes({
+  unread = [],
+  snoozed = [],
+  all,
+}: {
+  unread?: unknown[];
+  snoozed?: unknown[];
+  all?: unknown[];
+}): Answer {
+  return (p: Record<string, unknown>) =>
+    Promise.resolve(
+      inboxOf(p.snoozed === "only" ? snoozed : p.unread === false ? (all ?? unread) : unread),
+    );
+}
+
+const ASKED = {
+  reason: "asked",
+  addressed: true,
+  primary: true,
+  ask: { comment: "c-12", asked_of: "jane", open: true },
+};
+
+function decisionsOf(...items: unknown[]) {
+  return { handle: "jane", items, total: items.length, capped: false };
+}
+
+/** The open item's one-sentence byline, as it reads. */
+function byline(): string {
+  return document.querySelector(".crewlet-reading-pane__byline")?.textContent ?? "";
+}
+
+async function wait(ms: number) {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  });
+}
+
 describe("the list", () => {
-  test("a decision leads the list, and its notice is not listed a second time", async () => {
+  test("a decision leads the list under Needs you, and its notice is not listed again", async () => {
     mount({
       answers: {
-        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
-        work_inbox: inboxOf([
-          notice("r-1", {
-            reason: "asked",
-            addressed: true,
-            ask: { comment: "c-12", asked_of: "jane", open: true },
-          }),
-          notice("r-2"),
-        ]),
+        decisions: decisionsOf(askItem()),
+        work_inbox: inboxes({ unread: [notice("r-1", ASKED), notice("r-2")] }),
       },
     });
     await settle();
-    const groups = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
-    expect(groups.slice(0, 2)).toEqual(["Needs a decision", "Today"]);
-    const today = within(screen.getByRole("region", { name: "Today" }));
-    // THE ASK'S NOTICE rides on the decision row; only the other notice is a notice row.
-    expect(today.getAllByRole("button")).toHaveLength(1);
-    expect(today.getByText("something about r-2")).toBeTruthy();
+    const list = within(screen.getByRole("navigation", { name: "Inbox" }));
+    const needs = within(list.getByRole("region", { name: "Needs you" }));
+    const updates = within(list.getByRole("region", { name: "Updates" }));
+    expect(needs.getAllByRole("listitem")).toHaveLength(1);
+    // THE ASK'S NOTICE rides on its row; only the other notice is an update.
+    expect(updates.getAllByRole("listitem")).toHaveLength(1);
+    expect(updates.getByText("something about r-2")).toBeTruthy();
+  });
+
+  // NO FILTER BAR: what was snoozed and what was read are two words at the end.
+  test("Snoozed and Earlier are two links at the end, each read when it is opened", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxes({
+          unread: [notice("r-1")],
+          snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
+          all: [notice("r-1"), notice("r-5", { read: true, excerpt: "an old one" })],
+        }),
+      },
+    });
+    await settle();
+    expect(screen.queryByRole("radio")).toBeNull();
+    const reads = () => asked.filter((a) => a.kind === "work_inbox").map((a) => a.params);
+    expect(reads().some((p) => p.unread === true && p.snoozed === "exclude")).toBe(true);
+    expect(reads().some((p) => p.snoozed === "only")).toBe(true);
+    // EARLIER IS NOT READ until somebody opens it.
+    expect(reads().some((p) => p.unread === false)).toBe(false);
+
+    const snoozed = screen.getByRole("button", { name: "1 snoozed" });
+    expect(snoozed.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("something about r-9")).toBeNull();
+    fireEvent.click(snoozed);
+    await settle();
+    expect(snoozed.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      within(screen.getByRole("region", { name: "Snoozed" })).getByText("something about r-9"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Earlier updates" }));
+    await settle();
+    expect(reads().some((p) => p.unread === false && p.snoozed === "exclude")).toBe(true);
+    const earlier = within(screen.getByRole("region", { name: "Earlier updates" }));
+    expect(earlier.getByText("an old one")).toBeTruthy();
+    // THE UNREAD ONE IS AN UPDATE ALREADY, and is not listed twice.
+    expect(earlier.queryByText("something about r-1")).toBeNull();
   });
 
   // THE PERSON, NEVER THE CREDENTIAL.
   test("a row is drawn as the seat behind a token, never as the token", async () => {
     mount({
       answers: {
-        work_inbox: inboxOf([
-          notice("r-1", { actor: "U0MAYA", actor_kind: "operator", actor_seat: "maya" }),
-          notice("r-2", { actor: "U0ANON", actor_kind: "operator" }),
-        ]),
+        work_inbox: inboxes({
+          unread: [
+            notice("r-1", { actor: "U0MAYA", actor_kind: "operator", actor_seat: "maya" }),
+            notice("r-2", { actor: "U0ANON", actor_kind: "operator" }),
+          ],
+        }),
       },
     });
     await settle();
     expect(screen.getAllByText("Maya Ops").length).toBeGreaterThan(0);
-    expect(screen.getByText("An operator")).toBeTruthy();
+    expect(screen.getAllByText("An operator").length).toBeGreaterThan(0);
     expect(screen.queryByText("U0MAYA")).toBeNull();
     expect(screen.queryByText("U0ANON")).toBeNull();
   });
 
   // AND THE SENTENCE NAMES THEM AS THE ROW DOES. The engine writes a lead's
-  // reorder with the person's HANDLE, for the seat it wakes; the row's head said
-  // "Maya Ops" over "maya put PROD-91 at position 1 of your priorities".
+  // reorder with the person's HANDLE, for the seat it wakes.
   test("a sentence the engine wrote names its author as the row does", async () => {
     mount({
       answers: {
-        work_inbox: inboxOf([
-          notice("r-1", {
-            kind: "prioritised",
-            reason: "prioritised",
-            subject_kind: "person",
-            subject_id: "jane",
-            actor: "U0MAYA",
-            actor_kind: "operator",
-            actor_seat: "maya",
-            excerpt: "maya put PROD-91 at position 1 of your priorities",
-          }),
-          // A COMMENT IS SOMEBODY'S OWN WORDS, and a handle in it stays.
-          notice("r-2", { excerpt: "maya will pick this up" }),
-        ]),
+        work_inbox: inboxes({
+          unread: [
+            notice("r-1", {
+              kind: "prioritised",
+              reason: "prioritised",
+              primary: true,
+              subject_kind: "person",
+              subject_id: "jane",
+              actor: "U0MAYA",
+              actor_kind: "operator",
+              actor_seat: "maya",
+              excerpt: "maya put PROD-91 at position 1 of your priorities",
+            }),
+            // A COMMENT IS SOMEBODY'S OWN WORDS, and a handle in it stays.
+            notice("r-2", { excerpt: "maya will pick this up" }),
+          ],
+        }),
       },
     });
     await settle();
-    // THE ROW AND THE PANE IT OPENS, both.
     const said = "Maya Ops put PROD-91 at position 1 of your priorities";
-    expect(document.querySelector(".inbox-row-line")?.textContent).toBe(said);
-    expect(screen.getAllByText(said).length).toBeGreaterThan(0);
+    expect(document.querySelector(".crewlet-inbox-row__excerpt")?.textContent).toBe(said);
     expect(screen.queryByText(/^maya put/)).toBeNull();
     expect(screen.getAllByText("maya will pick this up").length).toBeGreaterThan(0);
   });
 
-  test("the Snoozed scope asks for only what was put off, and lists no decisions", async () => {
+  test("each row names its task, as a link that opens it beside the inbox", async () => {
     mount({
       answers: {
-        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
-        work_inbox: (p: Record<string, unknown>) =>
-          Promise.resolve(
-            inboxOf(
-              p.snoozed === "only"
-                ? [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })]
-                : [notice("r-1")],
-            ),
-          ),
+        work_inbox: inboxes({ unread: [notice("r-1")] }),
+        work_items: { items: [{ key: "PROD-91", title: "Ledger export" }], total_hint: 1 },
       },
     });
     await settle();
-    // THE SCREEN'S OWN READ, not the frame's badge count beside it.
-    const own = () => asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only);
-    const first = own().at(-1)!;
-    expect(first.params.snoozed).toBe("exclude");
-    fireEvent.click(screen.getByRole("radio", { name: /Snoozed/ }));
+    // ONE READ for the titles of every row that names its task by key alone.
+    const read = asked.filter((a) => a.kind === "work_items").at(-1)!;
+    expect(read.params).toMatchObject({ key: "PROD-91", show_closed: true });
+    const list = within(screen.getByRole("navigation", { name: "Inbox" }));
+    const task = list.getByRole("link", { name: "PROD-91 Ledger export" });
+    // A REAL LINK, so a modified click opens the task's own page in a tab.
+    expect(task.getAttribute("href")).toBe("#/work/PROD-91");
+    // AND NOT INSIDE THE ROW'S OWN BUTTON, which would make it unreachable.
+    expect(task.closest("button")).toBeNull();
+    fireEvent.click(task);
     await settle();
-    const last = own().at(-1)!;
-    expect(last.params.snoozed).toBe("only");
-    expect(last.params.unread).toBe(false);
-    expect(screen.queryByRole("region", { name: "Needs a decision" })).toBeNull();
-    expect(screen.getByText(/Snoozed until/)).toBeTruthy();
-    expect(screen.queryByText("something about r-1")).toBeNull();
+    expect(decodeURIComponent(location.hash)).toContain("peek=item:PROD-91");
   });
 
-  test("the chips narrow the rows loaded, and a whole page draws no page note", async () => {
+  // THE OPEN ROW WAS DRAWN TWICE: a tint on the row and a rail beside it.
+  test("the open row is the one row marked current, with one highlight", async () => {
+    location.hash = "#/inbox?row=r-2";
+    mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
+    await settle();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    const current = list.querySelectorAll("[aria-current]");
+    expect(current).toHaveLength(1);
+    expect(current[0]!.textContent).toContain("something about r-2");
+    expect(list.querySelectorAll(".crewlet-inbox-row--selected")).toHaveLength(1);
+  });
+
+  test("j and k step through the rows, opening each in the pane", async () => {
+    location.hash = "#/inbox?row=r-1";
     mount({
       answers: {
-        decisions: {
-          handle: "jane",
-          items: [
-            askItem(),
-            {
-              ...askItem(),
-              ask: {
-                ...askItem().ask,
-                comment: "c-13",
-                decision: { ...DECISION, role: "contributor" },
-              },
-            },
-          ],
-          total: 2,
-          capped: false,
-        },
-        work_inbox: inboxOf([
-          notice("r-1", { reason: "mention" }),
-          notice("r-2", { reason: "assignee" }),
-        ]),
+        work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }),
       },
     });
     await settle();
-    const chip = (name: RegExp) => screen.getByRole("radio", { name });
-    // THE PAGE IS THE WHOLE (no cursor behind it), so the counts are totals
-    // and nothing says otherwise — neither the stray muted line the row once
-    // carried under it, nor a description on any chip.
-    expect(screen.queryByText(/on this page/)).toBeNull();
-    expect(chip(/Mentions/).getAttribute("aria-describedby")).toBeNull();
-    expect(chip(/Mentions/).getAttribute("title")).toBeNull();
-    expect(chip(/Decisions/).textContent).toContain("2");
-    expect(chip(/Reviews/).textContent).toContain("1");
-    expect(chip(/Mentions/).textContent).toContain("1");
-    fireEvent.click(chip(/Mentions/));
-    fireEvent.keyDown(chip(/Mentions/), { key: "Enter" });
+    fireEvent.keyDown(window, { key: "j" });
     await settle();
-    expect(location.hash).toContain("reason=mentions");
-    expect(screen.queryByRole("region", { name: "Needs a decision" })).toBeNull();
-    const today = within(screen.getByRole("region", { name: "Today" }));
-    expect(today.getByText("something about r-1")).toBeTruthy();
-    expect(screen.queryByText("something about r-2")).toBeNull();
-  });
-});
-
-// WHERE THE PAGE STOPPED WITH MORE BEHIND IT the chip counts are the page's,
-// and each chip SAYS so — in its accessible description, which is read with it,
-// and in its title — rather than in a line of muted text under the row, which
-// read like debug output and was read by nobody with the chip.
-test("a page with more behind it says so on each chip, not under the row", async () => {
-  mount({
-    answers: {
-      work_inbox: inboxOf([notice("r-1", { reason: "mention" })], { next_cursor: "c-50" }),
-    },
-  });
-  await settle();
-  const mentions = screen.getByRole("radio", { name: /Mentions/ });
-  expect(mentions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
-  const described = mentions.getAttribute("aria-describedby");
-  expect(described).toBeTruthy();
-  expect(document.getElementById(described!)?.textContent).toBe(PAGE_LOCAL_CHIPS);
-  // NOT ONE LINE BESIDE THE ROW: the sentence is only the chips' own.
-  expect(screen.queryByText(PAGE_LOCAL_CHIPS, { selector: ":not(.sr-only)" })).toBeNull();
-});
-
-// AND A DECISIONS PAGE THAT IS NOT THE WHOLE is the other read the chips count
-// over: its Decisions and Reviews counts are the page's too.
-test("a decisions page short of its total says so on the chips", async () => {
-  mount({
-    answers: { decisions: { handle: "jane", items: [askItem()], total: 30, capped: false } },
-  });
-  await settle();
-  const decisions = screen.getByRole("radio", { name: /Decisions/ });
-  expect(decisions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
-});
-
-// THE UNREAD COUNT IS INSIDE THE UNREAD OPTION, as the approved Inbox draws it
-// ("Unread 5") — beside the group it read as a fact about all three — and where
-// the page stopped with more behind it the option draws a floor, never an
-// exact figure.
-describe("the unread count", () => {
-  test("is drawn inside the Unread option", async () => {
-    mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2"), notice("r-3")]) } });
+    expect(location.hash).toContain("row=r-2");
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "k" });
     await settle();
-    const unread = screen.getByRole("radio", { name: /Unread/ });
-    expect(unread.querySelector(".count-chip")?.textContent).toBe("3");
-    expect(screen.queryByText(/unread$/)).toBeNull();
-  });
-
-  test("is a floor inside the option where the page has more behind it", async () => {
-    mount({
-      answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")], { next_cursor: "c-50" }) },
-    });
-    await settle();
-    const unread = screen.getByRole("radio", { name: /Unread/ });
-    expect(unread.querySelector(".count-chip")?.textContent).toBe("2+");
-    expect(unread.getAttribute("title")).toContain("more lie past this page");
-    // AND NOTHING BESIDE THE GROUP: the old "2+ unread" caption is gone.
-    expect(screen.queryByText("2+ unread")).toBeNull();
+    expect(location.hash).toContain("row=r-2");
   });
 });
 
 describe("the pane", () => {
-  test("an option answers the ask's own comment with that choice, and nothing else", async () => {
+  test("the byline is one sentence: who, what is asked of you, and the task", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(byline()).toBe("CTO asks for your approval on LEAD-12 Q4 release plan");
+    // THE ROLE LINE IT REPLACED, with its doubled info glyph, is gone.
+    expect(screen.queryByText(/You are the/)).toBeNull();
+    expect(screen.getByRole("heading", { name: DECISION.question })).toBeTruthy();
+    // AND THE REASONING SITS WITH WHAT IT RECOMMENDS.
+    expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
+  });
+
+  test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
-      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
+      answers: {
+        decisions: decisionsOf(askItem()),
+        work_inbox: inboxes({ unread: [notice("r-1", ASKED)] }),
+      },
     });
     await settle();
-    expect(screen.getByRole("heading", { name: DECISION.question })).toBeTruthy();
+    // ONE SET OF ANSWERS, AnswerAsk's: the pane draws no options of its own.
+    expect(screen.getAllByRole("group", { name: "Answers" })).toHaveLength(1);
+    const options = within(screen.getByRole("group", { name: "Answers" })).getAllByRole("button");
+    // THE RECOMMENDED ONE FIRST, and marked.
+    expect(options[0]!.textContent).toBe("Hold release Recommended");
     fireEvent.click(screen.getByRole("button", { name: /Ship anyway/ }));
     await settle();
     expect(posted).toEqual([
       { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
+      // AN ANSWERED QUESTION DOES NOT COME BACK AS AN UPDATE.
+      { tool: "mark_inbox", args: { read: ["r-1"] } },
     ]);
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
+      "Answered Ship anyway",
+    );
+  });
+
+  test("Something else answers in words, in the options' place", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+    await settle();
+    expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply to CTO" }), {
+      target: { value: "Hold it a week." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "comment_on_work_item",
+        args: { item: "LEAD-12", answers: "c-12", body: "Hold it a week." },
+      },
+    ]);
+  });
+
+  test("an answered item stays in its place as done, and the next one opens a moment later", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    // WHAT HAPPENED, FIRST: the open item shows its answer, and its row is
+    // struck through and read as answered.
+    expect(location.hash).toContain("row=ask%3Ac-12");
+    const needs = within(screen.getByRole("region", { name: "Needs you" }));
+    expect(needs.getAllByRole("button", { name: /Answered$/ })).toHaveLength(1);
+    await wait(ADVANCE_MS + 50);
+    expect(location.hash).toContain("row=ask%3Ac-13");
   });
 
   // THE E-W9 LINE: only an ask that promised a channel says it posts to one.
   test("the posts-to line is drawn only for an ask that promised a channel", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
-    mount({
-      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
-    });
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
-    expect(screen.queryByText(/posts it to #/)).toBeNull();
+    expect(screen.queryByText(/also posted to #/)).toBeNull();
     cleanup();
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
       answers: {
-        decisions: {
-          handle: "jane",
-          items: [askItem({ ...DECISION, inform: { surface: "slack", channel: "leadership" } })],
-          total: 1,
-          capped: false,
-        },
+        decisions: decisionsOf(
+          askItem({ ...DECISION, inform: { surface: "slack", channel: "leadership" } }),
+        ),
       },
     });
     await settle();
-    expect(
-      screen.getByText("CTO is woken with your answer and posts it to #leadership."),
-    ).toBeTruthy();
-    // AND THE COMPOSER SAYS IT TOO, once it is the answer.
-    fireEvent.click(screen.getByRole("button", { name: /Reply with instructions/ }));
-    await settle();
-    expect(screen.getByText("Also posts to Slack #leadership")).toBeTruthy();
+    expect(screen.getByText("Your answer is also posted to #leadership.")).toBeTruthy();
   });
 
-  test("Done marks the one notice read and never sends the whole inbox", async () => {
+  test("Mark as read marks the one update, and turns into its undo", async () => {
     location.hash = "#/inbox?row=r-2";
-    mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")]) } });
+    mount({ answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
     expect(posted).toEqual([{ tool: "mark_inbox", args: { read: ["r-2"] } }]);
+    expect(screen.getByRole("button", { name: "Mark as unread" })).toBeTruthy();
   });
 
-  test("Mark all read reads through the newest notice loaded, not past it", async () => {
+  // DONE AND SNOOZE ARE AN UPDATE'S: a question leaves when it is answered.
+  test("a question carries no Mark as read and no Snooze", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    expect(screen.queryByRole("button", { name: "Mark as read" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Snooze/ })).toBeNull();
+  });
+
+  test("Mark all read reads through the newest update loaded, not past it", async () => {
     mount({
       answers: {
-        work_inbox: inboxOf([
-          notice("r-7", { log_seq: 7 }),
-          notice("r-12", { log_seq: 12 }),
-          notice("r-3", { log_seq: 3, read: true }),
-        ]),
+        work_inbox: inboxes({
+          unread: [
+            notice("r-7", { log_seq: 7 }),
+            notice("r-12", { log_seq: 12 }),
+            notice("r-3", { log_seq: 3, read: true }),
+          ],
+        }),
       },
     });
     await settle();
@@ -516,22 +572,45 @@ describe("the pane", () => {
     ]);
   });
 
-  test("a decision that is not a notice cannot be snoozed, and says why", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+  // THE HEADING WAS THE WHOLE COMMENT, cut at its first line.
+  test("an update's heading says what it did, and a comment is quoted under it", async () => {
+    const long =
+      "Can you check the rounding on the last line? It drops a cent when three people split ten dollars, and the fix touches the ledger.";
+    location.hash = "#/inbox?row=r-1";
     mount({
-      answers: { decisions: { handle: "jane", items: [askItem()], total: 1, capped: false } },
+      answers: {
+        work_inbox: inboxes({
+          unread: [
+            notice("r-1", { reason: "mention", primary: true, comment_id: "c-40", excerpt: long }),
+          ],
+        }),
+      },
     });
     await settle();
-    const snooze = screen.getByRole("button", { name: "Snooze" });
-    expect(snooze.getAttribute("aria-disabled")).toBe("true");
-    expect(reasonOf(snooze)).toContain("This is not a notice");
+    expect(screen.getByRole("heading", { name: "Mentioned you" })).toBeTruthy();
+    expect(document.querySelector("blockquote")?.textContent).toBe(long);
+    expect(byline()).toBe("CTO on PROD-91");
+    expect(screen.getByRole("region", { name: "Replies to this comment" })).toBeTruthy();
   });
 
-  test("the thread is read a page at a time and names the person behind a token", async () => {
+  test("an update that only informs says why it reached you", async () => {
+    location.hash = "#/inbox?row=r-1";
+    mount({
+      answers: {
+        work_inbox: inboxes({ unread: [notice("r-1", { kind: "status", excerpt: "" })] }),
+      },
+    });
+    await settle();
+    expect(screen.getByRole("heading", { name: "Changed its status" })).toBeTruthy();
+    expect(byline()).toBe("CTO on PROD-91 · you follow this task");
+    expect(screen.getByRole("region", { name: "Conversation on this task" })).toBeTruthy();
+  });
+
+  test("the conversation is read a page at a time and names the person behind a token", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
       answers: {
-        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
+        decisions: decisionsOf(askItem()),
         work_comments: {
           item: "t-12",
           key: "LEAD-12",
@@ -556,19 +635,76 @@ describe("the pane", () => {
     const read = asked.find((a) => a.kind === "work_comments")!;
     expect(read.params).toMatchObject({ item: "LEAD-12", limit: 50 });
     expect(read.params.cursor).toBeUndefined();
-    const thread = within(screen.getByRole("region", { name: "Thread" }));
+    const thread = within(screen.getByRole("region", { name: "Replies to this question" }));
     expect(thread.getByText("Maya Ops")).toBeTruthy();
     expect(thread.queryByText("U0MAYA")).toBeNull();
-    expect(thread.getByText("Thread · 1 reply loaded")).toBeTruthy();
+    // THE REPLY BOX, at the end, for words that answer nothing.
+    expect(
+      thread.getByPlaceholderText("Reply without answering. @mention to bring someone in."),
+    ).toBeTruthy();
     fireEvent.click(thread.getByRole("button", { name: "Earlier comments" }));
     await settle();
     expect(asked.some((a) => a.kind === "work_comments" && a.params.cursor === "1:c-19")).toBe(
       true,
     );
   });
+
+  test("a parked run's question heads the pane, quoted whole, and is answered by its turn", async () => {
+    const run = {
+      kind: "run",
+      at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      run: {
+        turn_id: "turn-7",
+        agent_handle: "cto",
+        status: "paused",
+        question: "May I delete the fixtures directory? It is regenerated by make fixtures.",
+        paused_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        pause_ttl_seconds: 3_600,
+        work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+      },
+    };
+    location.hash = "#/inbox?row=run%3Aturn-7";
+    mount({ answers: { decisions: decisionsOf(run) } });
+    await settle();
+    expect(
+      screen.getByRole("heading", { name: "May I delete the fixtures directory?" }),
+    ).toBeTruthy();
+    expect(document.querySelector("blockquote")?.textContent).toBe(run.run.question);
+    expect(byline()).toBe("CTO’s coding run on LEAD-12");
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      target: { value: "Yes, delete it." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+    await settle();
+    expect(posted).toEqual([
+      { tool: "answer_run", args: { turn_id: "turn-7", answer: "Yes, delete it." } },
+    ]);
+  });
+
+  // NO EM DASH SHIPS: the copy the inbox draws is written with commas,
+  // parentheses and full stops.
+  test("nothing the inbox draws is written with an em dash", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({ ...DECISION, inform: { surface: "slack", channel: "leadership" } }),
+        ),
+        work_inbox: inboxes({
+          unread: [notice("r-1"), notice("r-2", { kind: "status", excerpt: "" })],
+          snoozed: [notice("r-9", { snoozed: true, snoozed_until: "2030-01-01T09:00:00Z" })],
+        }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "1 snoozed" }));
+    await settle();
+    expect(document.body.textContent).not.toContain("\u2014");
+  });
 });
 
-// THREE VIEWER STATES, three sentences, and every control drawn for each —
+// THREE VIEWER STATES, three sentences, and every control drawn for each,
 // enabled only where the engine makes the change for this person.
 describe("who is looking", () => {
   const NOBODY = { operator_id: "", operator: false, handle: "", name: "", kind: "", acts: [] };
@@ -594,20 +730,31 @@ describe("who is looking", () => {
   });
 
   test("a bound person the engine does not serve sees every control, disabled with the reason", async () => {
+    const unserved = { ...JANE, acts: [] };
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
-      viewer: { ...JANE, acts: [] },
+      viewer: unserved,
       answers: {
-        viewer: { ...JANE, acts: [] },
-        decisions: { handle: "jane", items: [askItem()], total: 1, capped: false },
-        work_inbox: inboxOf([notice("r-1")]),
+        viewer: unserved,
+        decisions: decisionsOf(askItem()),
+        work_inbox: inboxes({ unread: [notice("r-1")] }),
       },
     });
     await settle();
-    for (const name of ["Mark all read", /Hold release/, "Done"]) {
+    for (const name of ["Mark all read", /Hold release/]) {
       const button = screen.getByRole("button", { name });
       expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(reasonOf(button)).toContain(WRITE_REASONS.not_served);
     }
+    cleanup();
+    location.hash = "#/inbox?row=r-1";
+    mount({
+      viewer: unserved,
+      answers: { viewer: unserved, work_inbox: inboxes({ unread: [notice("r-1")] }) },
+    });
+    await settle();
+    const read = screen.getByRole("button", { name: "Mark as read" });
+    expect(read.getAttribute("aria-disabled")).toBe("true");
+    expect(reasonOf(read)).toContain(WRITE_REASONS.not_served);
   });
 });

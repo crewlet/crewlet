@@ -57,20 +57,22 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "the Inbox's Mark all read, which reads through the newest notice loaded",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/SnoozeMenu.tsx": {
+  "routes/inbox/NoticeActions.tsx": {
     why:
-      "the open row's Snooze, Done and Mark unread — a kit Menu where the reader can act, " +
-      "and the same control disabled with its reason where they cannot",
+      "an update's Mark as read, Mark as unread, Snooze and Unsnooze, a kit Menu where the " +
+      "reader can act, and the same control disabled with its reason where they cannot",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/DecisionPane.tsx": {
-    why: "a decision's option cards and a parked run's answer, made in the pane",
+  "routes/inbox/InboxPane.tsx": {
+    why:
+      "a parked run's answer, made in the pane, and the read that marks an answered " +
+      "question's notices (an ask is answered through components/writes.tsx)",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "components/Composer.tsx": {
     why:
-      "the Inbox pane's reply or answer and the task page's comment or ask, and the " +
-      "task link and page either can attach",
+      "the Inbox pane's reply and the task page's comment or ask, and the task link and " +
+      "page either can attach",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "routes/work/item/edit.tsx": {
