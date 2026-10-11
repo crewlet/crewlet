@@ -354,8 +354,8 @@ func (p *objectPass) readLog(ctx context.Context, js jetstream.JetStream, l decl
 		// THE ASSERTION REFUSES THIS for a log the copy holds a cursor on;
 		// this is the one it cannot see, a copy with none on a log already
 		// trimmed.
-		return fmt.Errorf("backup: %s starts at %d and the copy stands at %d: the records "+
-			"a restore replays from the copy are gone, so what they name cannot be read",
+		return fmt.Errorf("%w: %s starts at %d and the copy stands at %d, so what the "+
+			"records a restore replays from the copy name cannot be read", ErrLogGap,
 			l.stream, first, from)
 	}
 	records, err := readRange(ctx, js, l.stream, from, last, func(seq uint64, payload []byte) error {
@@ -417,9 +417,9 @@ func readRange(ctx context.Context, js jetstream.JetStream, stream string, from,
 			return read, fmt.Errorf("backup: place a record of %s: %w", stream, err)
 		}
 		if got := meta.Sequence.Stream; got != next {
-			return read, fmt.Errorf("backup: %s holds no record %d between the copy and the "+
+			return read, fmt.Errorf("%w: %s holds no record %d between the copy and the "+
 				"snapshot (the next it holds is %d), so what a restore replays cannot all be read",
-				stream, next, got)
+				ErrLogGap, stream, next, got)
 		}
 		if err := each(next, msg.Data()); err != nil {
 			return read, err

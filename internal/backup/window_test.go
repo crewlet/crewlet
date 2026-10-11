@@ -469,8 +469,8 @@ func TestABackupRefusesAWindowWithAHole(t *testing.T) {
 	files, _ := filesStore(t)
 	dir := filepath.Join(t.TempDir(), "hole")
 	_, err := windowService(t, db, nc, &backup.Objects{Open: files.Open}).Take(t.Context(), dir)
-	if err == nil || !strings.Contains(err.Error(), " 5 ") {
-		t.Fatalf("Take = %v; want it refused naming record 5", err)
+	if !errors.Is(err, backup.ErrLogGap) || !strings.Contains(err.Error(), " 5 ") {
+		t.Fatalf("Take = %v; want ErrLogGap naming record 5", err)
 	}
 	noManifest(t, dir)
 }

@@ -172,12 +172,14 @@ What is worth knowing about it:
   records name. A record this build cannot read that may write a file — a
   newer build's, during a rolling upgrade: a file record, one of a kind this
   build has never heard of, or one whose writer said it may touch a whole
-  project — **refuses the backup**, since it may name a file the backup would
-  not carry: take it from a node running the newer build. So does a record
-  missing from the log between the copy and the snapshot, and a copy whose
-  position is on an earlier instance of a log that has since been recreated.
-  A newer record whose writer said it touches no file — a task's, say —
-  refuses nothing.
+  project — **refuses the backup** (`409 record_unreadable`), since it may
+  name a file the backup would not carry: take it from a node running the
+  newer build. So does a record missing from the log between the copy and the
+  snapshot (`503 log_gap`: take it again), and a copy whose position is on an
+  earlier instance of a log that has since been recreated (`409
+  log_recreated`: take it once this node has re-keyed to the live log). A
+  newer record whose writer said it touches no file — a task's, say — refuses
+  nothing.
 - **A backup takes what its previous one holds** (`s3`). A key is minted for
   one upload and never names other bytes, so an object this node's previous
   backup already holds is the same object: when that backup's directory is

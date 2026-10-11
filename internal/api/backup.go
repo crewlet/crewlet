@@ -9,7 +9,9 @@ import (
 	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Taking a backup over HTTP.
@@ -95,25 +97,15 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// the thing to fix is in their command rather than in this
 		// process, and sending them to the engine's logs to find it
 		// would be the wrong instruction.
-		answer := map[string]string{"error": "backup_failed"}
-		status := backupStatus(err)
-		switch status {
-		case http.StatusBadRequest:
+		refusal := backupRefusal(err)
+		answer := map[string]string{"error": refusal.code}
+		switch {
+		case refusal.status == http.StatusBadRequest:
 			answer["detail"] = err.Error()
-		case http.StatusConflict:
-			answer["error"] = "backup_running"
-			answer["hint"] = "a backup is already running on this node; take this " +
-				"one when it finishes"
-		case http.StatusServiceUnavailable:
-			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
-			// fixed hint, never the list of objects, which is the log's.
-			answer["error"] = "objects_unreachable"
-			answer["hint"] = "the company's files name objects the object store " +
-				"did not answer for; check that this node reaches the store " +
-				"store.objects names (the S3 bucket, or the data nodes' NATS " +
-				"bucket) and take the backup again"
+		case refusal.hint != "":
+			answer["hint"] = refusal.hint
 		}
-		writeJSON(w, status, answer)
+		writeJSON(w, refusal.status, answer)
 		return
 	}
 	log.Info("backup_taken", "operator", operator, "dir", dir,
@@ -121,31 +113,72 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, manifest)
 }
 
-// backupStatus separates the caller's mistakes from the engine's failures.
+// refusal is how POST /backup answers a backup it did not finish: a status, a
+// code, and — for a state of the fleet with a remedy the engine knows — a
+// fixed hint saying what to do. The hint is a sentence of this route's own,
+// never the error's text, which names files, objects and positions and is the
+// log's.
+type refusal struct {
+	status     int
+	code, hint string
+}
+
+// backupRefusal separates the caller's mistakes and the fleet's states from
+// the engine's failures.
 //
 // A destination that is occupied, relative or one this host cannot prepare is
 // a 400: nothing is wrong with the node, the request named somewhere it cannot
 // write, and answering 500 would send an operator looking at the engine
 // instead of at their own command.
 //
-// A copy naming objects the object store did not answer for is a 503: this
-// node is sound and so is the command, and what fails is the store holding the
-// company's files — which clears when it answers again, so it is one failure
-// here that trying again later can fix.
-//
 // A backup asked for while another runs on this node is a 409: the node is
 // busy with exactly what was asked for, and the request can be made again once
-// that one finishes.
-func backupStatus(err error) int {
+// that one finishes. So are the two refusals A ROLLING UPGRADE or a rebuilt
+// log makes — a record on a log the backup replays that this build cannot
+// read, and a copy keyed to an earlier instance of a log — because this node
+// is sound and so is the command: what it holds conflicts with the fleet's
+// newer state, and another node, or this one once it has caught up, takes the
+// backup.
+//
+// A copy naming objects the object store did not answer for is a 503, and so
+// is a log a restore could not replay to the snapshot: what failed is the
+// store holding the company's files, or the log the copy needed, and each
+// clears — the store answers again, the next copy stands past the gap — so
+// these are the failures here that trying again later can fix.
+//
+// EVERY OTHER FAILURE IS A 500, whose reason is in this node's log alone.
+func backupRefusal(err error) refusal {
 	switch {
 	case errors.Is(err, backup.ErrBadDestination):
-		return http.StatusBadRequest
+		return refusal{status: http.StatusBadRequest, code: "backup_failed"}
 	case errors.Is(err, backup.ErrBackupRunning):
-		return http.StatusConflict
+		return refusal{status: http.StatusConflict, code: "backup_running",
+			hint: "a backup is already running on this node; take this one when it finishes"}
+	case errors.Is(err, objstore.ErrRecordUnreadable):
+		return refusal{status: http.StatusConflict, code: "record_unreadable",
+			hint: "a log this backup replays holds a record a newer build wrote, which may " +
+				"name a file this node's build cannot read; take the backup from a node " +
+				"running that build, or from this one once it is upgraded"}
+	case errors.Is(err, statelog.ErrStreamRecreated):
+		return refusal{status: http.StatusConflict, code: "log_recreated",
+			hint: "this node's copy is keyed to an earlier instance of a log that has " +
+				"since been recreated; take the backup once this node has re-keyed to the " +
+				"live log, or from a node that has"}
 	case errors.Is(err, backup.ErrObjectsUnreachable):
-		return http.StatusServiceUnavailable
+		// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
+		// fixed hint, never the list of objects, which is the log's.
+		return refusal{status: http.StatusServiceUnavailable, code: "objects_unreachable",
+			hint: "the company's files name objects the object store did not answer for; " +
+				"check that this node reaches the store store.objects names (the S3 " +
+				"bucket, or the data nodes' NATS bucket) and take the backup again"}
+	case errors.Is(err, backup.ErrLogGap):
+		return refusal{status: http.StatusServiceUnavailable, code: "log_gap",
+			hint: "a log a restore would replay from the store copy no longer holds every " +
+				"record the copy needs; take the backup again, whose copy stands past them, " +
+				"and if it is refused the same way look for backup_hold_not_renewed in " +
+				"this node's log"}
 	}
-	return http.StatusInternalServerError
+	return refusal{status: http.StatusInternalServerError, code: "backup_failed"}
 }
 
 // auditBackup publishes the backup's runtime audit record: who asked, the
