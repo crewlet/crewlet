@@ -373,7 +373,7 @@ type Actor struct {
 	// (`contact.crewlet_operator_id`), and empty for an unbound token and for
 	// every other kind, whose Handle is already a seat.
 	//
-	// THE TOKEN STAYS THE AUTHOR — Handle, which [Actor.Name] records — because
+	// THE TOKEN STAYS THE AUTHOR (Handle, which [Actor.Name] records) because
 	// a knowledge base whose author field is chosen by the writer is not an
 	// audit trail. The seat is what everything about the PERSON reads: whose
 	// subscription a watch changes, who is not woken by their own write, and

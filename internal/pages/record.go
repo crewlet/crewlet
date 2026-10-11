@@ -58,8 +58,8 @@ const baseRecordVersion = 1
 // been released" does not exempt a new field from its row.
 var versionedFields = statelog.RecordFields{
 	// A history row stores it, so a build with no column for it must retain
-	// the record rather than apply it without the person — on every op,
-	// because every op that changes a page writes a history row.
+	// the record rather than apply it without the person. That holds on every
+	// op, because every op that changes a page writes a history row.
 	{Name: "MutationRecord.ActorSeat", Since: 2, Path: []string{"actor_seat"}},
 }
 

@@ -1428,9 +1428,9 @@ and a key and continues in Edit org, where saving the key creates the project.
   have loaded are held still while you page through them — change the window or
   a facet to pick up what has landed since. One project's changes are that
   project's own History lens, a switch away in the trail.
-- **A project** (`#/work/{KEY}`) opens on its work — the **Tasks** lens, which
+- **A project** (`#/work/{KEY}`) opens on its work (the **Tasks** lens, which
   says how many are open, is the page's first content, with the lenses on the
-  page bar beside the project's name — with an
+  page bar beside the project's name), with an
   **About** lens for the container itself (who leads it, the unit that owns it,
   its target, its census and what it declares: its statuses, its types, its
   labels and its fields) and a **History** lens narrowed to it. About's first
@@ -1971,8 +1971,8 @@ and the page says before the press that the reorder is stamped with the
 reader's name and tells them what is now first.
 
 **The Queue is the work list, narrowed to one person.** It is the same
-screen `#/work/tasks` is — the five shapes, the Filter and Display menus, the
-scope switch, Group by and Sort, the columns, the count line — with the assignee fixed
+screen `#/work/tasks` is (the five shapes, the Filter and Display menus, the
+scope switch, Group by and Sort, the columns, the count line), with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
 what the section *is* rather than something you narrowed it to. Whose day it is

@@ -40,7 +40,7 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE, and a record carrying each
 			// field, built through the writer's own encoder with the
-			// version left for it to stamp — which is what certifies the
+			// version left for it to stamp, which is what certifies the
 			// table's path is the one the encoder writes.
 			Fields:   pages.VersionedFields(),
 			Carrying: carryingSuiteRecord,

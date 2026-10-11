@@ -791,7 +791,7 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 // history row, and empty when the author was not a token bound to somebody.
 //
 // FROM THE CREATE ROW rather than from the chart's CURRENT binding, because a
-// token re-bound since would name somebody who wrote nothing — and only when
+// token re-bound since would name somebody who wrote nothing, and only when
 // that row's actor IS the author, which the create sets and nothing rewrites.
 func authorSeat(ctx context.Context, tx *sql.Tx, pageID, author string) (string, error) {
 	if author == "" {
