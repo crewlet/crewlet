@@ -22,6 +22,7 @@ import type {
   BackupPolicy,
 } from "~/contract/backups.ts";
 import { RestError } from "~/protocol/rest.ts";
+import { sentence } from "./format.ts";
 
 /**
  * How long the dashboard waits for a copy, in milliseconds.
@@ -172,6 +173,16 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
       field: false,
       message:
         "A backup is already running on this node, and two at once would share its one trim hold. Nothing was written; take this one once it finishes — the history on this page records it.",
+    };
+  }
+  // THE OBJECT STORE DID NOT ANSWER: the fleet's state rather than this
+  // node's, and the engine says what to check in its hint. The hint is a
+  // CLAUSE — lower-case and unstopped — so it is made a sentence before the
+  // one that follows it, or the two run together.
+  if (err.code === "objects_unreachable") {
+    return {
+      field: false,
+      message: `${err.hint ? sentence(err.hint) : "The object store did not answer for the company's files."} Whatever was written there has no manifest, so it is not a backup.`,
     };
   }
   return {
