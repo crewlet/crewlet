@@ -51,7 +51,7 @@ integrations:
     token: "${GITLAB_ROUTING_TOKEN}"             # optional read credential → participants-based routing
     webhook_name: crewlet                       # which hooks on the instance are this deployment's
     provisioning:                # read by the engine's reconcile loop AND by `crewlet gitlab provision`
-      group: nimbus-hq           # top-level group the agent service accounts join
+      group: nimbus-hq           # required: top-level group the agent service accounts join
       access_level: developer    # default group membership (developer | maintainer)
       access_levels:             # per-handle overrides
         tech-lead: maintainer
