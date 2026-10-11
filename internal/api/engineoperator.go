@@ -121,96 +121,35 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 		Asker: e.Backends().Queue,
 		Actor: operator.WorkActor(opts.Org, opts.Env),
 	}
+	// THE READS WHEREVER THIS NODE SERVES THEM, THE WRITES ONLY WHERE IT
+	// HANDS OUT A WRITER: two facts, so two gates. A node in a maintenance
+	// mode serves the tracker's and the knowledge base's reads and hands no
+	// writer to any surface ([engine.OperatorWorkWriter], behind the engine's
+	// one writer gate). Gated on both at once, this catalogue offered such a
+	// node's operator no read at all, so for the whole of a capacity window
+	// their assistant could not read a board the dashboard beside it was
+	// drawing, nor list a project's files the REST route was answering. Every
+	// tool is gated on its own seam ([builtin.OperatorTools]), so a reader
+	// handed without a writer serves exactly the reads.
 	reader, readable := engine.OperatorWork(e)
-	writer, writable := engine.OperatorWorkWriter(e)
-	if readable && writable {
+	if readable {
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,
-			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
-			// from the request's context rather than from the call: a
-			// tracker whose author field is chosen by the writer is not
-			// an audit trail, and there is deliberately no way to name a
-			// seat to act as.
-			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND THE TWO SEQUENCES, which this surface went
-			// without — so an operator's assistant was refused
-			// `waiting_on` and `blocking` by name on a tool whose
-			// own description offers them, and would not have been
-			// served the fold at all. Both need the replicated
-			// estate, which this writer has; nothing else about
-			// them differs from a seat's.
-			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return engineOperatorWriter(writer, actor)
-			},
-			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND THE CROSS-PROJECT MOVE, a sequence of its own: a
-			// top-level item and its subtree re-keyed into another
-			// project. A seat holds it too, behind the project lead's
-			// gate; see internal/agent/builtin/workmove.go.
-			Moves: func(actor builtin.Actor) builtin.WorkMover {
-				return engineOperatorWriter(writer, actor)
-			},
 			// AND THE PROJECT'S FILES — the rows through the estate
 			// router, the bytes through this node's object client.
-			Files: reader,
-			FileWriter: func(actor builtin.Actor) builtin.FileWriter {
-				return engineOperatorWriter(writer, actor)
-			},
+			Files:   reader,
 			Objects: e.ObjectStore(),
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
 			// to attribute — and without it the operator catalogue
 			// listed a verb this surface could never register.
 			Search: engine.WorkSearcher(e),
-			// THE SAVED-VIEW WRITER, which only this surface has: a
-			// view is furniture a person arranges, and no seat is
-			// given the tools that reach it.
-			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND THE CATALOGUE WRITER: the company's own vocabulary is
-			// a person's to set, never a seat's to widen so its own
-			// create succeeds.
-			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND THE PERSON WRITER. Who may write what is the
-			// tracker's own rule; what this surface supplies is the
-			// identity it is judged against.
-			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return engineOperatorWriter(writer, actor)
-			},
 			// AND THE INBOX READ. It takes no actor for the reason
 			// Search takes none — it reads, and whose inbox is an
 			// argument rather than an identity — and it is this
 			// surface's alone beside the person writer, because a
 			// seat has a mailbox rather than an inbox.
 			Inbox: reader,
-			// AND THE TRASH. A removal takes an item off every board in
-			// the company and a restore puts it back at any age; neither
-			// destroys anything, which is what separates both from the
-			// purge the CLI guards with a typed confirmation. No seat
-			// holds either — see internal/agent/builtin/worktrash.go.
-			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND THE BOARD DRAG. A card's place in its project's order is
-			// a person's arrangement, so no seat holds it either — see
-			// internal/agent/builtin/workplace.go.
-			Placer: func(actor builtin.Actor) builtin.WorkPlacer {
-				return engineOperatorWriter(writer, actor)
-			},
-			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
-			// this one is on every surface — declaring a tag is open
-			// to every seat — and what an operator adds here is the
-			// credential the archive facet asks for.
-			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return engineOperatorWriter(writer, actor)
-			},
 			// THE ROSTER, so an operator's assistant is refused a
 			// handle nobody has rather than silently filing work for
 			// one — the same check every seat's tools make.
@@ -259,22 +198,28 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			// this surface is built once and an apply can move the clock
 			// (ADR-0018).
 			Zone: e.Zone,
-			// THE ROUTER'S SESSION FLOOR, which every write above
-			// raises — never this node's own applier, which is not the
-			// one that answers the next read once its copy is out of
-			// service.
+			// THE ROUTER'S SESSION FLOOR, which every write raises
+			// ([operatorWorkWriters]) — never this node's own applier,
+			// which is not the one that answers the next read once its
+			// copy is out of service.
 			Await: e.AwaitEstate,
 		}
+		if writer, writable := engine.OperatorWorkWriter(e); writable {
+			operatorWorkWriters(&opts.Work, writer)
+		}
 	}
-	pageReader, pagesReadable := engine.OperatorPages(e)
-	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
-	if pagesReadable && pagesWritable {
+	// THE KNOWLEDGE BASE ON THE TRACKER'S RULE: its reads wherever this node
+	// serves them, its writer only beside them where one is handed out.
+	if pageReader, readable := engine.OperatorPages(e); readable {
 		opts.Pages = builtin.PageDeps{
-			Reader: pageReader, Writer: pageWriter,
+			Reader:   pageReader,
 			Actor:    operator.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Reserved: engineReserved(e),
 			Await:    e.AwaitEstate,
+		}
+		if pageWriter, writable := engine.OperatorPageWriter(e); writable {
+			opts.Pages.Writer = pageWriter
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
@@ -307,6 +252,78 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	// about a person's line, the other about who plans a container's work.
 	opts.LeadsProject = engine.LeadsProjectOf(e)
 	return opts
+}
+
+// operatorWorkWriters hands deps every tracker seam that WRITES — each one
+// resolved for the one operator a call names, through [engineOperatorWriter] —
+// and nothing that reads, which [EngineOperatorOptions] hands on a fact of
+// its own: a node serves the reads where it hands out no writer.
+func operatorWorkWriters(deps *builtin.WorkDeps, writer func(estate.Actor) estate.WorkWriter) {
+	// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes from the
+	// request's context rather than from the call: a tracker whose author
+	// field is chosen by the writer is not an audit trail, and there is
+	// deliberately no way to name a seat to act as.
+	deps.Writer = func(actor builtin.Actor) builtin.WorkWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE TWO SEQUENCES, which this surface went without — so an
+	// operator's assistant was refused `waiting_on` and `blocking` by name
+	// on a tool whose own description offers them, and would not have been
+	// served the fold at all. Both need the replicated estate, which this
+	// writer has; nothing else about them differs from a seat's.
+	deps.Dependencies = func(actor builtin.Actor) builtin.WorkDepender {
+		return engineOperatorWriter(writer, actor)
+	}
+	deps.Merges = func(actor builtin.Actor) builtin.WorkMerger {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE CROSS-PROJECT MOVE, a sequence of its own: a top-level item
+	// and its subtree re-keyed into another project. A seat holds it too,
+	// behind the project lead's gate; see internal/agent/builtin/workmove.go.
+	deps.Moves = func(actor builtin.Actor) builtin.WorkMover {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND A PROJECT FILE'S UPLOAD AND REMOVAL: the row through the router,
+	// the bytes through the object client the reads already hold.
+	deps.FileWriter = func(actor builtin.Actor) builtin.FileWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// THE SAVED-VIEW WRITER, which only this surface has: a view is
+	// furniture a person arranges, and no seat is given the tools that
+	// reach it.
+	deps.ViewWriter = func(actor builtin.Actor) builtin.ViewWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE CATALOGUE WRITER: the company's own vocabulary is a person's
+	// to set, never a seat's to widen so its own create succeeds.
+	deps.CatalogueWriter = func(actor builtin.Actor) builtin.CatalogueWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE PERSON WRITER. Who may write what is the tracker's own rule;
+	// what this surface supplies is the identity it is judged against.
+	deps.PersonWriter = func(actor builtin.Actor) builtin.PersonWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE TRASH. A removal takes an item off every board in the company
+	// and a restore puts it back at any age; neither destroys anything,
+	// which is what separates both from the purge the CLI guards with a
+	// typed confirmation. No seat holds either — see
+	// internal/agent/builtin/worktrash.go.
+	deps.TrashWriter = func(actor builtin.Actor) builtin.TrashWriter {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND THE BOARD DRAG. A card's place in its project's order is a
+	// person's arrangement, so no seat holds it either — see
+	// internal/agent/builtin/workplace.go.
+	deps.Placer = func(actor builtin.Actor) builtin.WorkPlacer {
+		return engineOperatorWriter(writer, actor)
+	}
+	// AND A PROJECT'S OWN SETTINGS. Unlike the five above, this one is on
+	// every surface — declaring a tag is open to every seat — and what an
+	// operator adds here is the credential the archive facet asks for.
+	deps.ProjectWriter = func(actor builtin.Actor) builtin.ProjectWriter {
+		return engineOperatorWriter(writer, actor)
+	}
 }
 
 // engineLeads answers whether one handle leads another, walking the chart's own

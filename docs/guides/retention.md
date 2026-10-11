@@ -1018,14 +1018,18 @@ A node in either maintenance mode **keeps its presence lease** — the process i
 running, and `crewlet fleet broker list`, the fleet view and the participant set
 below all read it — while it claims **no seat** and hands **no writer** to any
 surface, whether or not it holds data (a write a stateless node routes to a
-data node is still one it starts): the operator's MCP endpoint offers only its
-search tool, the purge route and a project file's upload and removal are not
-served, the chart's projects and containers are applied at the next normal
-boot, and a data node in the mode answers "not here" to the writes a stateless
-node still in normal mode routes to it. Its reads are still served — a project
-file's download among them — at every level but `linearizable`, which proves the
-log's end by appending a barrier to it and is refused
-[`maintenance`](consistency.md#the-thirteen-refusals). The operator gestures
+data node is still one it starts): the operator's tools — the dashboard's and
+an assistant's over MCP alike — offer no work-item or page write, the purge
+route and a project file's upload and removal are not served, the chart's
+projects and containers are applied at the next normal boot, and a data node
+in the mode answers "not here" to the writes a stateless node still in normal
+mode routes to it. What appends to no log is still offered: a parked coding
+run's answer (it waits on the seat's mailbox until a node holds the seat
+again), a seat's pause and resume, a note to a running turn, and an answer
+from the company's knowledge. Its reads are still served — the operator's read
+tools and a project file's download among them — at every level but
+`linearizable`, which proves the log's end by appending a barrier to it and is
+refused [`maintenance`](consistency.md#the-thirteen-refusals). The operator gestures
 that append a record are refused the same way: an eviction and a readmission
 answer `409 not_publishing`, and a reanchor `409 reanchor_refused` naming the
 mode. None of them is what a window needs — a participant that will not

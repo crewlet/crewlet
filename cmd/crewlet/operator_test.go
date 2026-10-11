@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -129,6 +130,95 @@ func TestAMaintenanceNodeServesAFilesBytesAndWritesNone(t *testing.T) {
 	if _, ok := routes.Purger(); ok {
 		t.Error("a node in a maintenance mode serves the purge, a write")
 	}
+}
+
+// A NODE IN A MAINTENANCE MODE OFFERS ITS OPERATOR EVERY READ A NODE IN SERVICE
+// OFFERS, AND OF THE REST ONLY THE GESTURES THAT APPEND TO NO STATE LOG. Both
+// transports serve this one catalogue, the dashboard's act transport and an
+// operator's own assistant over MCP, so this is what a person can do through
+// either during a capacity window:
+//
+//   - every READ, as the REST routes and the dashboard serve this node's reads
+//     in the mode. Gated on the writer as well, the catalogue offered no work-
+//     item or page tool at all, so an assistant could not read the board the
+//     dashboard beside it was drawing.
+//   - no WRITE TO A LOG. The work-item and page writers are handed only behind
+//     the engine's one writer gate, which hands none out in a mode that
+//     publishes nothing, whatever the node holds.
+//   - what moves no log, which the mode has no reason to withhold: a parked
+//     run's answer (a message on the seat's own mailbox, read once a node
+//     holds the seat again), a seat's pause and resume (one coordination
+//     record), a note to a running turn (an ephemeral scatter), and an answer
+//     from the company's knowledge (a charge to the coordination store's token
+//     counters). The retention guide said the endpoint offered the search
+//     alone, and sent an operator looking mid-window for a way to pause a seat
+//     that was there all along.
+//
+// THE READS ARE A NODE IN SERVICE'S, not a list kept here, so a read tool the
+// catalogue gains is held to this without anybody adding it. The writes are
+// the EXACT set, both ways: one appearing here is a new gesture somebody must
+// judge against the window, and one going missing is a gesture the guide
+// promises and the node no longer serves.
+func TestAMaintenanceNodeOffersItsOperatorEveryReadAndNoLogWrite(t *testing.T) {
+	t.Parallel()
+	inService, err := api.NewEngineOperator(testEngine(t))
+	if err != nil {
+		t.Fatalf("the operator surface of a node in service: %v", err)
+	}
+	e := testEngineWith(t, engine.Options{Mode: statelog.ModeMaintenance})
+	opts := api.EngineOperatorOptions(e)
+	if opts.Work.Reader == nil || opts.Pages.Reader == nil {
+		t.Errorf("a node in a maintenance mode does not hand its operator the reads it "+
+			"serves (tracker %v, knowledge base %v)",
+			opts.Work.Reader != nil, opts.Pages.Reader != nil)
+	}
+	if opts.Work.Writer != nil || opts.Work.FileWriter != nil || opts.Pages.Writer != nil {
+		t.Error("a node in a maintenance mode hands its operator a writer")
+	}
+	surface, err := api.NewEngineOperator(e)
+	if err != nil {
+		t.Fatalf("the operator surface of a node in a maintenance mode: %v", err)
+	}
+
+	want := operatorReads(inService)
+	for _, read := range []string{builtin.ListWorkItemsTool, builtin.GetPageTool,
+		tracker.ReadProjectFileTool} {
+		if !slices.Contains(want, read) {
+			t.Fatalf("the premise: a node in service offers its operator %v, without %s",
+				want, read)
+		}
+	}
+	if got := operatorReads(surface); !slices.Equal(got, want) {
+		t.Errorf("a node in a maintenance mode offers its operator the reads %v, "+
+			"want a node in service's %v", got, want)
+	}
+	acts := slices.Sorted(slices.Values(surface.Acts()))
+	noLog := slices.Sorted(slices.Values([]string{
+		builtin.AnswerKnowledgeTool, builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool,
+	}))
+	if !slices.Equal(acts, noLog) {
+		t.Errorf("a node in a maintenance mode offers its operator the writes %v, "+
+			"want exactly those that append to no log %v", acts, noLog)
+	}
+}
+
+// operatorReads is every tool an operator surface offers that its act
+// transport does not — its proven reads, by the catalogue's own hint — sorted.
+func operatorReads(surface interface {
+	Tools() []string
+	Acts() []string
+},
+) []string {
+	acts := surface.Acts()
+	var out []string
+	for _, name := range surface.Tools() {
+		if !slices.Contains(acts, name) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // A PERSON IS BOUND THROUGH THE NODE'S OWN CHAIN ON EVERY SURFACE `crewlet run`
