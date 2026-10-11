@@ -95,7 +95,35 @@ func TestTheRetentionTrimRunsOnANode(t *testing.T) {
 	// has to be told what to do, and the remedy travels on the report rather
 	// than being looked up beside it.
 	t.Run("TheReportNamesTheBackupTermsRemedy", func(t *testing.T) {
-		for _, domain := range report.Domains {
+		// READ ONCE THE TRIM HAS CONCLUDED ABOUT EVERY DOMAIN, never the
+		// report read at boot. Prose is the sentence a BLOCKED trim leads
+		// with, and a domain the trim's first tick has not published a
+		// floor for yet is not blocked: it is one the trim has concluded
+		// nothing about (`none_at_generation`), which leads with nothing
+		// by design. The boot read raced that tick, so a node whose usage
+		// floor landed a moment after it failed here about a report that
+		// was right. Waited on the floor STATE rather than on the prose,
+		// so a published floor that still leads with nothing fails.
+		var concluded statelog.Report
+		waitFor(t, "the trim to conclude about every domain", func() bool {
+			concluded, _ = n.engine.RetentionReport(t.Context())
+			if len(concluded.Domains) < len(report.Domains) {
+				return false
+			}
+			for _, domain := range concluded.Domains {
+				if domain.TrimFloorState != statelog.TrimFloorPublished {
+					return false
+				}
+			}
+			return true
+		}, func() string {
+			states := map[string]statelog.TrimFloorState{}
+			for _, domain := range concluded.Domains {
+				states[domain.Domain] = domain.TrimFloorState
+			}
+			return fmt.Sprintf("trim floor state per domain: %v", states)
+		})
+		for _, domain := range concluded.Domains {
 			if domain.Prose == "" {
 				t.Fatalf("the report for %s leads with nothing: the blocking term "+
 					"in prose is the answer to the only question anybody runs this "+
@@ -117,7 +145,7 @@ func TestTheRetentionTrimRunsOnANode(t *testing.T) {
 				t.Fatalf("the report for %s omits the backup term", domain.Domain)
 			}
 		}
-		if len(report.Alarms) == 0 {
+		if len(concluded.Alarms) == 0 {
 			t.Fatal("a node that has never backed up raises no alarm — `backup_age` " +
 				"is the one condition that turns \"this company never backs up and " +
 				"therefore never trims\" into something that reaches a person")
