@@ -313,7 +313,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	// below and moves where they land. Stopping it mid-pass is not enough:
 	// a barrier's publish outlives the read that asked for it.
 	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
-		_, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
+		_, found, err := e.backends.ObjectCollection(t.Context())
 		return err == nil && found
 	})
 	e.stopObjectCollector()

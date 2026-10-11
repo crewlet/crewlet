@@ -164,10 +164,11 @@ func wireAPI(
 		// object collector's recorded report, as cmd/crewlet reads it: the
 		// seat states the dashboard is served read placement from the
 		// leases, and a member that ran no pass reads the collector's
-		// report off the store every member reads.
+		// report off the store every member reads, as a report on the
+		// object store it agreed with the fleet.
 		Coord:   backends.Coord,
 		Plane:   backends.Fleet,
-		Objects: backends.Fleet,
+		Objects: backends,
 		// WHAT A PERSON MAY DO, off the same surface the act route
 		// serves, as cmd/crewlet wires it.
 		OperatorActs: operators.Acts,

@@ -9,6 +9,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 )
 
@@ -19,12 +21,32 @@ func (f failingRecord) ObjectCollection(context.Context) ([]byte, bool, error) {
 	return nil, false, f.err
 }
 
-// fleetObjects asks the fleet question and returns its objects block as a
-// client reads it.
-func fleetObjects(t *testing.T, record queries.ObjectsReader) map[string]any {
+// thisStore is the object store every node in these tests agreed at boot.
+const thisStore = "nats"
+
+// agreedOn is the fleet's record read by a node that agreed store at boot —
+// the engine's one reader of it, as a node's Backends reads it.
+type agreedOn struct {
+	records engine.CollectionRecords
+	store   string
+}
+
+func (a agreedOn) ObjectCollection(ctx context.Context) (engine.CollectionReport, bool, error) {
+	return engine.ObjectCollection(ctx, a.records, a.store)
+}
+
+// fleetObjects asks the fleet question of a node that agreed thisStore at
+// boot, over records, and returns its objects block as a client reads it.
+func fleetObjects(t *testing.T, records engine.CollectionRecords) map[string]any {
+	t.Helper()
+	return fleetObjectsOf(t, records, thisStore)
+}
+
+// fleetObjectsOf is [fleetObjects] on a node that agreed store at boot.
+func fleetObjectsOf(t *testing.T, records engine.CollectionRecords, store string) map[string]any {
 	t.Helper()
 	body := asMap(t, answer(t, queries.Sources{Coord: coordmemory.New(), NodeID: "data-a",
-		Objects: record}, "fleet", nil))
+		Objects: agreedOn{records: records, store: store}}, "fleet", nil))
 	objects, _ := body["objects"].(map[string]any)
 	if objects == nil {
 		t.Fatalf("no objects in %v", body)
@@ -69,7 +91,7 @@ func TestTheFleetNamesEachStateOfTheRecordApart(t *testing.T) {
 	t.Parallel()
 	down := coordmemory.NewFleet()
 	for name, tc := range map[string]struct {
-		record queries.ObjectsReader
+		record engine.CollectionRecords
 		want   string
 	}{
 		"a store that would not answer": {failingRecord{errors.New("down")}, "unavailable"},
@@ -85,6 +107,45 @@ func TestTheFleetNamesEachStateOfTheRecordApart(t *testing.T) {
 	}
 	if queries.ObjectsState("gone").Valid() {
 		t.Error("an undeclared state reads valid")
+	}
+}
+
+// A REPORT OF ANOTHER STORE IS NO REPORT. The record names the store its
+// passes ran on and outlives a move of the fleet's files — the documented move
+// deletes the backend record beside it and leaves the report, and so does an
+// external cluster restored whole and the record deleted. Rendered, it showed
+// every node's card and `crewlet objects status` the OLD store as the one the
+// files are in, with the old store's audit and lost files, until the new
+// store's first pass recorded — and for as long as no data node took the duty.
+func TestTheFleetShowsNoReportOfAnotherStore(t *testing.T) {
+	t.Parallel()
+	const oldStore = "s3:https://old.example.com/acme-files/crewlet/"
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	fleet := coordmemory.NewFleet()
+	raw, err := json.Marshal(map[string]any{
+		"node": "data-b", "backend": oldStore,
+		"status": collect.Status{
+			Collect: collect.CollectionReport{Completed: true, Listed: 40, At: at},
+			Audit: collect.AuditReport{Completed: true, Referenced: 38, Missing: 1, At: at,
+				Found: &collect.AuditFindings{At: at, Completed: true, Referenced: 38, Missing: 1,
+					MissingFiles: []collect.MissingFile{{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md",
+						Finding: collect.FindingMissing}}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := fleetObjects(t, fleet); got["state"] != "not_yet" || len(got) != 1 {
+		t.Errorf("a node on %q renders the record of %q as %v; want only state not_yet",
+			thisStore, oldStore, got)
+	}
+	// The control: a node on the store the record names reads it as the report it is.
+	if got := fleetObjectsOf(t, fleet, oldStore); got["state"] != "reported" || got["backend"] != oldStore {
+		t.Errorf("a node on %q renders that store's own record as %v", oldStore, got)
 	}
 }
 

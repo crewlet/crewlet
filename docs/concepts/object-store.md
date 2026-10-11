@@ -291,7 +291,12 @@ fleet still ran is named by a row and absent from the new store, and its file
 cannot be read. The copy is of the old store's whole `files/` corner, never of
 a backup's `objects/`, which holds only the objects a backup's restore point
 names — [live](#live-and-retired-references) rows of its copy and the records
-it replays — and none a retired row still keeps for a reader catching up.
+it replays — and none a retired row still keeps for a reader catching up. The
+collector's last report stays in the same bucket and describes the old store,
+so the first node to take the collector's duty
+[sets it aside](#collection-and-audit) and collects and then audits the new
+store straight away — and that audit is the check that every file's object
+came across.
 
 Deleting the record reaches the broker from outside the engine, and so does
 the copy when either store is `nats`, so a move needs a broker that listens:
@@ -426,8 +431,18 @@ in the coordination store, so every node's [`/fleet`](../reference/api-endpoints
 and `crewlet objects status` show the same report, naming the node that ran it,
 and a node taking the duty over picks up the schedule and the last audit's
 findings where the last holder left them, rather than running both passes
-again or forgetting what was missing. An audit that fails, or is stopped part
-way, never hides what the last one to run to its end found.
+again or forgetting what was missing. It runs no pass until it has read that
+report: one the coordination store does not give up is asked for again at the
+duty's next turn, a minute later, rather than taken for a fleet with nothing
+recorded — which would write the last audit's findings out of the report. An
+audit that fails, or is stopped part way, never hides what the last one to run
+to its end found. A report names the store its passes ran on, and one of
+**another store** — left behind when the fleet
+[moved its files](#one-store-per-fleet) — is no report of this one: the node
+taking the duty collects and then audits the new store as its first two passes
+rather than picking up the old store's schedule and findings, and `/fleet` and
+`crewlet objects status` show no report yet (`not_yet`) until the first of
+those passes records one, rather than the old store's under its name.
 
 **A pass keeps the duty while it runs.** The duty's lease is renewed four
 times a lease — every 45 seconds — through the pass, so an audit of a few
