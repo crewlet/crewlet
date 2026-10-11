@@ -44,11 +44,15 @@ import (
 // rather than only the pages edited since.
 
 // Applier writes this node's copy of the knowledge base.
+//
+// It carries NO NODE IDENTITY, and that is the purity rule rather than an
+// omission: [statelog.Applier] forbids one, because an applier that could
+// read which node it runs on could write rows its peers do not. The eviction
+// gate needs none either — it compares the record's own
+// [statelog.Record.Writer] against the eviction rows in this transaction —
+// so what it holds is this build's skill parser, a post-commit callback and
+// the flag that fires it, and none of them is a fact about the node.
 type Applier struct {
-	// NodeID is this node's own id, which the eviction gate compares a
-	// record's writer against.
-	NodeID string
-
 	// skills is the tool-skill parser, and may be nil.
 	skills SkillDetector
 
@@ -80,14 +84,14 @@ type Applier struct {
 	skillMoved bool
 }
 
-// NewApplier builds the knowledge base's applier for one node.
+// NewApplier builds the knowledge base's applier.
 //
 // onSkillChange is called after a committed batch that touched a tool-skill
 // page. AFTER THE COMMIT, never inside the transaction: the store re-runs the
 // body of an attempt that failed transiently, so a callback inside Apply would
 // fire twice for one record.
-func NewApplier(nodeID string, skills SkillDetector, onSkillChange func()) *Applier {
-	return &Applier{NodeID: nodeID, skills: skills, touched: onSkillChange}
+func NewApplier(skills SkillDetector, onSkillChange func()) *Applier {
+	return &Applier{skills: skills, touched: onSkillChange}
 }
 
 // Committed is the post-commit half.

@@ -166,7 +166,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	}
 	r := &roundTrip{
 		t: t, db: db, log: log, store: kb,
-		applier: pages.NewApplier(nodeID, nil, nil),
+		applier: pages.NewApplier(nil, nil),
 		reader:  reader, waiter: waiter,
 	}
 	// THIS NODE'S APPLIER RUNS WHILE A WRITE WAITS, as a running node's
