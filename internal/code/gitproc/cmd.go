@@ -82,7 +82,8 @@ type Cmd struct {
 	// change what the process is. The engine passes no argument a client
 	// wrote except validated object ids and refs — never a path or an
 	// option; that rule is the call site's, since a path the engine built
-	// itself is an ordinary argument.
+	// itself is an ordinary argument. A receive-pack's options are the
+	// pool's to read, so each is one of receivePackOptions, in full.
 	Args []string
 
 	// Config is the call site's configuration, after the pool's base. Each
@@ -134,14 +135,20 @@ type Cmd struct {
 	// check-ref-format 1 for "not a valid name". 0 always is. Each 1..255.
 	Answers []int
 
-	// Indexed is a receive-pack's, closed by the call site once the
+	// Indexed is a push's receive-pack's, closed by the call site once the
 	// receive-pack's index-pack has finished: the cores it was lent
 	// (MaxLentCores) are repaid then rather than when it exits, so the hook,
 	// the object-store upload and the wait for the push's record hold no
 	// loan. The host closes it when the proc-receive hook first reaches its
-	// relay, which receive-pack starts only once its index-pack has exited.
-	// nil holds a loan to the end; set on any other command it is
-	// ErrInvalid, since nothing else is lent a core.
+	// relay, which receive-pack starts only once its index-pack has exited;
+	// a push that never gets there (its pack refused) repays at its exit.
+	// REQUIRED on a receive-pack that receives a pack — in the transfer
+	// lane, and not a push's ADVERTISEMENT (--advertise-refs), which writes
+	// the refs and exits with no index-pack and no hook — and ErrInvalid on
+	// every other command, the advertisement included, since nothing else
+	// is lent a core: a call site that left it nil would hold every push's
+	// loan to the end, and nothing but the lent-cores gauge would ever say
+	// so.
 	Indexed <-chan struct{}
 }
 
@@ -231,6 +238,53 @@ var allowedConfig = map[string]string{
 // subcommand is what Args[0] must be.
 var subcommand = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
+// receivePackOptions is every option a receive-pack may be given, by the one
+// spelling the pool reads, each with whether it makes the run a push's
+// ADVERTISEMENT — the refs a push's GET is answered with — rather than the
+// receive-pack of its POST, which receives a pack.
+//
+// The pool has to know which of the two a receive-pack is, EXACTLY: only the
+// one that receives a pack runs an index-pack, so only it is lent cores and
+// must carry Cmd.Indexed, and an advertisement taken for a push would hold a
+// loan of three cores for as long as its client takes to read the refs while
+// carrying an Indexed nothing ever closes (lane.go). A rule that looked for
+// one spelling would guess, because git reads more than one: any unambiguous
+// ABBREVIATION (--adv, --http — whose meaning moves the day git adds an option
+// sharing the prefix), a NEGATION (--no-advertise-refs, which makes the run a
+// push again), "--", after which an option is a directory, and an option after
+// the directory as well as before it (all measured on git 2.43). So every
+// argument of a receive-pack that begins with a dash must be a key here,
+// spelled in full, and one is read wherever it stands, as git reads it. Both
+// full names of the advertisement option are read: --advertise-refs is git's
+// alias of http-backend-info-refs, the name git's own http-backend passes.
+var receivePackOptions = map[string]bool{
+	"--stateless-rpc":          false,
+	"--advertise-refs":         true,
+	"--http-backend-info-refs": true,
+}
+
+// checkReceivePack holds a receive-pack's options to receivePackOptions.
+func checkReceivePack(args []string) error {
+	if args[0] != "receive-pack" {
+		return nil
+	}
+	for _, a := range args[1:] {
+		if _, ok := receivePackOptions[a]; strings.HasPrefix(a, "-") && !ok {
+			return fmt.Errorf("%w: git receive-pack is given %q, which is not an option the pool reads: a receive-pack takes only "+
+				"--stateless-rpc and --advertise-refs (or its other name, --http-backend-info-refs), spelled in full, beside its directory, "+
+				"because the pool must know exactly whether it receives a pack — git also reads abbreviations, negations and --",
+				ErrInvalid, textcut.Ellipsis(a, 64))
+		}
+	}
+	return nil
+}
+
+// advertises reports whether a receive-pack's arguments, held to
+// receivePackOptions, make it a push's advertisement.
+func advertises(args []string) bool {
+	return slices.ContainsFunc(args[1:], func(a string) bool { return receivePackOptions[a] })
+}
+
 // protocolValue is a GIT_PROTOCOL a client may send: version=2, and the
 // colon-separated key=value extensions git defines after it.
 var protocolValue = regexp.MustCompile(`^version=[0-9]+(:[a-z0-9=.-]+)*$`)
@@ -262,6 +316,10 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 			return prepared{}, fmt.Errorf("%w: git %s has an argument holding a NUL byte", ErrInvalid, c.Args[0])
 		}
 	}
+	// Before the Indexed checks, which read a receive-pack's options.
+	if err := checkReceivePack(c.Args); err != nil {
+		return prepared{}, err
+	}
 	if c.Deadline <= 0 {
 		return prepared{}, fmt.Errorf("%w: git %s has none: pick one from gitproc's deadlines.go", ErrNoDeadline, c.Args[0])
 	}
@@ -274,8 +332,20 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		}
 	}
 	if c.Indexed != nil && !lendsCores(c) {
-		return prepared{}, fmt.Errorf("%w: git %s in the %s lane carries Cmd.Indexed, which is a transfer receive-pack's: nothing else is lent a core to repay",
-			ErrInvalid, c.Args[0], c.Class)
+		what := "git " + c.Args[0] + " in the " + string(c.Class) + " lane"
+		if c.Args[0] == "receive-pack" && advertises(c.Args) {
+			what = "a push's advertisement (git receive-pack --advertise-refs), which runs no index-pack,"
+		}
+		return prepared{}, fmt.Errorf("%w: %s carries Cmd.Indexed, which belongs only to a receive-pack in the transfer lane that receives a pack: "+
+			"nothing else is lent a core to repay", ErrInvalid, what)
+	}
+	// Refused whatever the node: a call site checked only on a node with no
+	// core to lend would pass, and hold every loan to the end everywhere
+	// else (lane.go).
+	if c.Indexed == nil && lendsCores(c) {
+		return prepared{}, fmt.Errorf("%w: git receive-pack carries no Cmd.Indexed: a receive-pack that receives a pack is lent free read cores for its index-pack, "+
+			"and without it the loan is held through the hook, the object-store upload and the wait for the push's record — "+
+			"close it once the index-pack is done, when the proc-receive hook first reaches its relay", ErrInvalid)
 	}
 	hooks := noHooks
 	if c.Hooks != "" {

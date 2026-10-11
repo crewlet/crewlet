@@ -599,8 +599,10 @@ func Catalogue() []Instrument {
 			Name: CodeGitLentCores, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Cores of this node's read lane lent right now to pushes as " +
 				"extra index-pack threads — up to three a push, never the last " +
-				"free core. A loan is made when a push starts and repaid once " +
-				"its pack is indexed, so it covers the client's whole upload: " +
+				"free core. A loan is made when a push's receive-pack starts — " +
+				"the one that receives its pack, never the refs advertisement " +
+				"its first request is answered with — and repaid once its pack " +
+				"is indexed, so it covers the client's whole upload: " +
 				"lent cores held high while `crewlet.code.git.processes` for " +
 				"`read` sits low is slow uploads holding loans, and the reason " +
 				"a later push on this node indexes on one core.",

@@ -10,10 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// MaxLentCores is how many of the READ lane's free cores a receive-pack may be
-// lent, each one more thread for its index-pack.
+// MaxLentCores is how many of the READ lane's free cores a push's receive-pack
+// may be lent, each one more thread for its index-pack.
 //
-// # Why a receive-pack, and why three
+// # Why a push's receive-pack, and why three
 //
 // Every git process runs at pack.threads=1, because a READ or MAINTENANCE slot
 // IS one core and a transfer shares one. The exception is the one phase of a
@@ -27,7 +27,14 @@ import (
 // receiving phase before resolution is single-threaded whatever the setting.
 //
 // Not upload-pack: pack-objects holds pack.windowMemory PER THREAD, which the
-// transfer lane's memory bound ([TransfersPerProcess]) counts once.
+// transfer lane's memory bound ([TransfersPerProcess]) counts once. Nor a
+// push's ADVERTISEMENT, the receive-pack --advertise-refs every push's GET is
+// answered with before its POST: it writes the refs and exits, with no pack,
+// no index-pack and no hook, so a loan would buy it nothing — and would hold
+// up to three cores for as long as its client takes to read the refs, so a
+// push whose POST starts meanwhile would be lent less, or nothing, and index
+// on one core. Which of the two a receive-pack is, is read from its options
+// (cmd.go's receivePackOptions), held to the spellings the pool reads exactly.
 //
 // # What a lent thread costs in memory
 //
@@ -75,14 +82,19 @@ import (
 // process starts, before a byte of the pack has arrived, so a loan is made at
 // the start and its count covers the client's whole upload: while a slow push
 // uploads, a later push on that node is lent less. What CAN end early is the
-// tail. A call site that knows when the index-pack has finished closes
-// [Cmd.Indexed], and the loan is repaid then rather than when the process
-// exits — the host closes it when the proc-receive hook first reaches its
-// relay, which receive-pack starts only once its index-pack has exited, so
-// the object-store upload of up to 1.25 GiB and the wait for the push's
-// record hold no loan. The cores lent right now are the gauge
-// crewlet.code.git.lent_cores, which is how pushes indexing on one core
-// because the loans are parked in uploads is seen rather than guessed.
+// tail. The call site of every push's receive-pack closes [Cmd.Indexed] once
+// the index-pack has finished, and the loan is repaid then rather than when the
+// process exits — the host closes it when the proc-receive hook first reaches
+// its relay, which receive-pack starts only once its index-pack has exited, so
+// the object-store upload of up to 1.25 GiB and the wait for the push's record
+// hold no loan. A push's receive-pack without one is REFUSED rather than lent
+// to its exit, on every node, one with no core to lend included: a call site
+// that forgot it would park every push's loan in its upload and record wait, so
+// every later push on the node would index on one core — and that call site's
+// own tests, run on a node with nothing to lend or no second push behind the
+// first, would still pass. The cores lent right now are the gauge
+// crewlet.code.git.lent_cores, which is how pushes indexing on one core because
+// the loans are parked in slow clients' uploads is seen rather than guessed.
 const MaxLentCores = 3
 
 // loan is the cores one receive-pack was lent: repaid exactly once, when its
@@ -94,9 +106,9 @@ type loan struct {
 	once  sync.Once
 }
 
-// lend lends c the READ lane's free cores when it is a receive-pack, or
-// returns nil: nothing lent and nothing to repay. The gauge is set under the
-// pool's gauge mutex, as every change to the loans out is, so a later Set
+// lend lends c the READ lane's free cores when it is a push's receive-pack,
+// or returns nil: nothing lent and nothing to repay. The gauge is set under
+// the pool's gauge mutex, as every change to the loans out is, so a later Set
 // never carries an older count.
 func (p *Pool) lend(c Cmd) *loan {
 	if !lendsCores(c) {
@@ -130,9 +142,12 @@ func (p *Pool) recordLent(out int64) {
 }
 
 // lendsCores reports whether c is a run the READ lane lends to: a receive-pack
-// in the transfer lane.
+// in the transfer lane that RECEIVES a pack — never a push's advertisement,
+// which writes the refs and exits with no index-pack to thread. prepare holds
+// a receive-pack's options to the spellings it reads first
+// (receivePackOptions), so which of the two c is, is exact.
 func lendsCores(c Cmd) bool {
-	return c.Class == ClassTransfer && c.Args[0] == "receive-pack"
+	return c.Class == ClassTransfer && c.Args[0] == "receive-pack" && !advertises(c.Args)
 }
 
 // threadsBase is pack.threads' index in the base configuration.

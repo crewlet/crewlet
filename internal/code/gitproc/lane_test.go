@@ -3,9 +3,11 @@ package gitproc_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,12 +17,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// loanBody is a stand-in whose receive-pack writes its environment to "$2"
-// and holds until "$3" exists, and whose other commands hold the same way —
-// so a case can read the pack.threads a receive-pack started with while it
-// still runs, beside the reads it holds.
+// loanBody is a stand-in whose receive-pack, past its options, writes its
+// environment to its first path and holds until its second exists, and whose
+// other commands hold the same way — so a case can read the pack.threads a
+// receive-pack started with while it still runs, beside the reads it holds.
 const loanBody = `case "$1" in
-receive-pack) env > "$2.tmp"; mv "$2.tmp" "$2"; while [ ! -e "$3" ]; do sleep 0.05; done;;
+receive-pack) shift; while [ "${1#-}" != "$1" ]; do shift; done
+	env > "$1.tmp"; mv "$1.tmp" "$1"; while [ ! -e "$2" ]; do sleep 0.05; done;;
 hold) ` + holdBody + `;;
 esac`
 
@@ -30,24 +33,48 @@ type receive struct {
 	env string
 }
 
-// startReceive starts a receive-pack that holds, and waits until it runs.
+// toExit is a Cmd.Indexed nobody closes: its receive-pack holds its loan to
+// its exit, the latest a loan is ever repaid.
+func toExit() <-chan struct{} { return make(chan struct{}) }
+
+// startReceive starts a receive-pack that holds, and holds its loan, and
+// waits until it runs.
 func startReceive(t *testing.T, p *gitproc.Pool) receive {
 	t.Helper()
-	return startIndexing(t, p, nil)
+	return startReceivePack(t, p, []string{"--stateless-rpc"}, toExit())
 }
 
 // startIndexing is startReceive with a Cmd.Indexed the case closes.
 func startIndexing(t *testing.T, p *gitproc.Pool, indexed <-chan struct{}) receive {
 	t.Helper()
+	return startReceivePack(t, p, []string{"--stateless-rpc"}, indexed)
+}
+
+// startAdvertisement starts a push's advertisement — the receive-pack the
+// host runs for a push's GET, as it runs it — that holds.
+func startAdvertisement(t *testing.T, p *gitproc.Pool) receive {
+	t.Helper()
+	return startReceivePack(t, p, []string{"--stateless-rpc", "--advertise-refs"}, nil)
+}
+
+// startReceivePack starts a holding receive-pack in the transfer lane with
+// the options and Cmd.Indexed given, and waits until it runs.
+func startReceivePack(t *testing.T, p *gitproc.Pool, options []string, indexed <-chan struct{}) receive {
+	t.Helper()
 	dir := t.TempDir()
 	r := receive{holder: holder{started: filepath.Join(dir, "env"), release: filepath.Join(dir, "release")}}
 	r.env = r.started
-	r.done = start(t.Context(), p, gitproc.Cmd{Args: []string{"receive-pack", r.env, r.release}, Class: gitproc.ClassTransfer,
-		Deadline: time.Minute, Indexed: indexed})
+	args := append(append([]string{"receive-pack"}, options...), r.env, r.release)
+	r.done = start(t.Context(), p, gitproc.Cmd{Args: args, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: indexed})
 	deadline := time.Now().Add(hang)
 	for {
 		if _, err := os.Stat(r.env); err == nil {
 			return r
+		}
+		select {
+		case o := <-r.done:
+			t.Fatalf("%v ended before it ran: %v", args[:1+len(options)], o.err)
+		default:
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("a receive-pack had not started after %v", hang)
@@ -191,7 +218,7 @@ func TestALoanNeverMakesAReadWait(t *testing.T) {
 	var barrier sync.WaitGroup
 	barrier.Add(2)
 	hook := &nested{p: hookPool, ctx: t.Context(), barrier: &barrier}
-	push := start(t.Context(), hookPool, gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: hook, Class: gitproc.ClassTransfer, Deadline: time.Minute})
+	push := start(t.Context(), hookPool, gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: hook, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()})
 	awaitLent(t, hookPool, 1)
 	other := hold(t, hookPool, gitproc.ClassRead)
 	barrier.Done() // the hook's read now runs, beside the loan and the other read
@@ -224,10 +251,7 @@ func awaitLent(t *testing.T, p *gitproc.Pool, want int64) {
 // is lent them — and the lent-cores gauge says so at each step.
 func TestALoanIsRepaidOnceItsIndexPackIsDone(t *testing.T) {
 	t.Parallel()
-	rec, err := metrics.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+	rec := newRecorder(t)
 	p := fakePool(t, loanBody, gitproc.Options{MaxProcesses: 4, Metrics: rec})
 	lentGauge := func() float64 {
 		for _, s := range rec.Read() {
@@ -274,32 +298,115 @@ func TestALoanIsRepaidOnceItsIndexPackIsDone(t *testing.T) {
 	}
 }
 
-// ONLY A RECEIVE-PACK IN THE TRANSFER LANE IS LENT: upload-pack's
-// pack-objects holds its delta window per thread, and a read or maintenance
-// run is a core by definition.
+// ONLY A RECEIVE-PACK THAT RECEIVES A PACK, IN THE TRANSFER LANE, IS LENT:
+// upload-pack's pack-objects holds its delta window per thread, a push's
+// advertisement — by either full name of its option, wherever it stands —
+// starts no index-pack, and a read or maintenance run is a core by
+// definition. Each runs without a Cmd.Indexed and starts at one thread on an
+// idle eight-core node, where the push run last — the control — is lent three
+// cores.
 func TestOnlyAReceivePackIsLent(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, "exec env", gitproc.Options{MaxProcesses: 8})
-	for _, c := range []gitproc.Cmd{
-		{Args: []string{"upload-pack"}, Class: gitproc.ClassTransfer},
-		{Args: []string{"receive-pack"}, Class: gitproc.ClassRead},
-		{Args: []string{"receive-pack"}, Class: gitproc.ClassMaintenance},
-		{Args: []string{"index-pack"}, Class: gitproc.ClassRead},
+	for _, tc := range []struct {
+		cmd  gitproc.Cmd
+		want int
+	}{
+		{cmd: gitproc.Cmd{Args: []string{"upload-pack"}, Class: gitproc.ClassTransfer}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", "/r"}, Class: gitproc.ClassTransfer}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--http-backend-info-refs", "/r"}, Class: gitproc.ClassTransfer}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "/r", "--advertise-refs"}, Class: gitproc.ClassTransfer}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassRead}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassMaintenance}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"index-pack"}, Class: gitproc.ClassRead}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "/r"}, Class: gitproc.ClassTransfer, Indexed: toExit()},
+			want: 1 + gitproc.MaxLentCores},
 	} {
-		c.Deadline = time.Minute
-		res, err := p.Run(t.Context(), c)
+		tc.cmd.Deadline = time.Minute
+		res, err := p.Run(t.Context(), tc.cmd)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := packThreads(t, envOf(res.Stdout)); got != 1 {
-			t.Errorf("%s in the %s lane started with %d threads, want 1", c.Args[0], c.Class, got)
+		if got := packThreads(t, envOf(res.Stdout)); got != tc.want {
+			t.Errorf("git %v in the %s lane started with %d threads, want %d", tc.cmd.Args, tc.cmd.Class, got, tc.want)
+		}
+	}
+}
+
+// A PUSH'S ADVERTISEMENT IS NEVER LENT. Every push a client makes sends a GET
+// before its POST, and the host answers it with receive-pack
+// --advertise-refs, which writes the refs and exits: no pack arrives, no
+// index-pack runs, no hook reaches a relay. So it carries no Cmd.Indexed,
+// starts at one thread and claims no core — and a push started beside it, as
+// the next client's POST is, is lent everything an idle node lends, where a
+// lent advertisement would hold three cores of four for as long as its client
+// takes to read the refs.
+func TestAnAdvertisementIsNeverLent(t *testing.T) {
+	t.Parallel()
+	p := fakePool(t, loanBody, gitproc.Options{MaxProcesses: 4})
+	adv := startAdvertisement(t, p)
+	if got := adv.threads(t); got != 1 {
+		t.Fatalf("a push's advertisement started with %d threads, want 1", got)
+	}
+	if held, lent := gitproc.ReadLane(p); held != 0 || lent != 0 {
+		t.Fatalf("with an advertisement running the read lane holds %d and lends %d", held, lent)
+	}
+	push := startReceive(t, p)
+	if got := push.threads(t); got != 4 {
+		t.Fatalf("a push beside an advertisement on an idle four-core node started with %d threads, want 4", got)
+	}
+	for _, r := range []receive{adv, push} {
+		if o := r.end(t); o.err != nil {
+			t.Fatal(o.err)
+		}
+	}
+}
+
+// A RECEIVE-PACK IS READ AS GIT READS IT: every form the pool takes for a
+// push's advertisement, the real git answers with the refs and nothing more,
+// and every form it takes for a push, the real git answers by waiting for the
+// commands a push sends (here, finding none: "the remote end hung up") and
+// writing no advertisement — the host's own two calls first among them. So
+// whether a receive-pack is lent cores, and must carry Cmd.Indexed, is
+// decided by what git will do with it rather than by a spelling the pool
+// hoped for.
+func TestAReceivePackIsReadAsGitReadsIt(t *testing.T) {
+	t.Parallel()
+	p := realPool(t, gitproc.Options{})
+	repo := gittest.Empty(t)
+	for _, args := range [][]string{
+		{"--stateless-rpc", "--advertise-refs", repo}, // the host's advertisement
+		{"--stateless-rpc", "--http-backend-info-refs", repo},
+		{repo, "--advertise-refs", "--stateless-rpc"},
+		{"--advertise-refs", repo},
+	} {
+		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: repo, Args: append([]string{"receive-pack"}, args...),
+			Class: gitproc.ClassTransfer, Deadline: time.Minute})
+		if err != nil || !strings.Contains(string(res.Stdout), "capabilities^{}") {
+			t.Errorf("git receive-pack %v, taken for an advertisement: %q, stderr %q, %v; want the refs advertised",
+				args, res.Stdout, res.Stderr, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"--stateless-rpc", repo}, // the host's push
+		{repo, "--stateless-rpc"},
+	} {
+		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: repo, Args: append([]string{"receive-pack"}, args...),
+			Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit(), Answers: []int{128}})
+		if err != nil || len(res.Stdout) != 0 || !strings.Contains(res.Stderr, "the remote end hung up") {
+			t.Errorf("git receive-pack %v, taken for a push: %q, stderr %q, %v; want it waiting for a push's commands, advertising nothing",
+				args, res.Stdout, res.Stderr, err)
 		}
 	}
 }
 
 // EVERY LOAN IS REPAID, on every way a receive-pack can end: its exit, its
 // deadline, its caller going away, its input or output failing, and a process
-// that never started.
+// that never started — each with a Cmd.Indexed that never closes, as a push
+// whose pack is refused before its hook runs has. Each case proves first that
+// a loan WAS made (the gauge reached three on an idle four-core node), so a
+// run refused before its admission, which lends nothing and so leaves nothing
+// to repay, can never pass for one that repaid.
 func TestEveryLoanIsRepaid(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -319,7 +426,7 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		"its deadline": {
 			body: "sleep 600",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: 200 * time.Millisecond}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: 200 * time.Millisecond, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrDeadline) },
 		},
@@ -331,24 +438,25 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		"its input": {
 			body: "cat >/dev/null",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: &failingReader{}, Class: gitproc.ClassTransfer, Deadline: time.Minute}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: &failingReader{}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrInput) },
 		},
 		"its output": {
 			body: "yes",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Deadline: time.Minute}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrOutput) },
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := fakePool(t, tc.body, gitproc.Options{MaxProcesses: 4})
+			rec := newRecorder(t)
+			p := fakePool(t, tc.body, gitproc.Options{MaxProcesses: 4, Metrics: rec})
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			c := gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute}
+			c := gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
 			if tc.cmd != nil {
 				c = tc.cmd(ctx)
 			}
@@ -359,25 +467,58 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 			if !tc.want(o.err) {
 				t.Fatalf("the receive-pack answered %v", o.err)
 			}
-			if held, lent := gitproc.ReadLane(p); held != 0 || lent != 0 {
-				t.Fatalf("after it ended the read lane holds %d and lends %d", held, lent)
-			}
+			lentAndRepaid(t, p, rec)
 		})
 	}
 
 	t.Run("a process that never started", func(t *testing.T) {
 		t.Parallel()
+		rec := newRecorder(t)
 		fake := gittest.Fake(t, fakeVersion, "exit 0")
-		p := newPool(t, gitproc.Options{Path: fake, MaxProcesses: 4})
+		p := newPool(t, gitproc.Options{Path: fake, MaxProcesses: 4, Metrics: rec})
 		if err := os.Remove(fake); err != nil {
 			t.Fatal(err)
 		}
-		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute})
-		if err == nil {
-			t.Fatal("a receive-pack whose binary is gone started")
+		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()})
+		// The START's failure, and only that: a refusal (ErrInvalid) comes
+		// before any loan, and would prove nothing about repaying one.
+		if !errors.Is(err, fs.ErrNotExist) || errors.Is(err, gitproc.ErrInvalid) || !strings.Contains(err.Error(), "starting git receive-pack") {
+			t.Fatalf("a receive-pack whose binary is gone answered %v, want its start's failure", err)
 		}
-		if held, lent := gitproc.ReadLane(p); held != 0 || lent != 0 {
-			t.Fatalf("after it failed to start the read lane holds %d and lends %d", held, lent)
-		}
+		lentAndRepaid(t, p, rec)
 	})
+}
+
+// newRecorder is a metrics recorder of the case's own.
+func newRecorder(t *testing.T) *metrics.Recorder {
+	t.Helper()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// lentAndRepaid fails t unless, on a pool of four idle cores whose one run
+// has returned, a loan of three cores was made — the lent-cores gauge's peak
+// over the window — and every core is back: the gauge reads zero now and the
+// read lane holds and lends nothing. Run repays before it returns, so neither
+// reading is polled.
+func lentAndRepaid(t *testing.T, p *gitproc.Pool, rec *metrics.Recorder) {
+	t.Helper()
+	peak := -1.0
+	for _, s := range rec.ReadWindow() {
+		if s.Name == metrics.CodeGitLentCores {
+			peak = s.Value
+		}
+	}
+	if peak != gitproc.MaxLentCores {
+		t.Fatalf("the lent-cores gauge peaked at %v, want %d: no loan was made, so its repayment proves nothing", peak, gitproc.MaxLentCores)
+	}
+	if now := reading(rec, metrics.CodeGitLentCores, ""); now.Name != metrics.CodeGitLentCores || now.Value != 0 {
+		t.Fatalf("after the run returned the lent-cores gauge reads %v, want 0", now.Value)
+	}
+	if held, lent := gitproc.ReadLane(p); held != 0 || lent != 0 {
+		t.Fatalf("after the run returned the read lane holds %d and lends %d", held, lent)
+	}
 }
