@@ -7863,10 +7863,6 @@ a.work-cal-chip {
   gap: 6px;
   min-width: 0;
 }
-.home-date {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
 .home-greeting {
   margin: 0;
   font-size: var(--font-size-2xl);

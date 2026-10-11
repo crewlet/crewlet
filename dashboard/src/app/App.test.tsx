@@ -758,12 +758,12 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
 });
 
 // ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, and "More" holds the rest: the
-// frame's star and Copy link, and what the screen folds — a project's Edit
+// frame's star, and what the screen folds — a project's Edit
 // project, which opens the same dialog its inline button does. Laid out inline
 // at 390px a project's bar stood three rows tall. (What is SHOWN at which
 // width is the stylesheet's container query, which this DOM does not
 // evaluate; what the menu HOLDS, and that its entries act, is asserted here.)
-test("the page bar's More holds the star, the link and what the screen folded", async () => {
+test("the page bar's More holds the star and what the screen folded, and no Copy link", async () => {
   location.hash = "#/work/ENG";
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
@@ -805,7 +805,7 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
-  expect(names).toEqual(["Edit project", "Keep in Starred", "Copy link"]);
+  expect(names).toEqual(["Edit project", "Keep in Starred"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Edit project" }));
   expect(await screen.findByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
   cleanup();
@@ -836,7 +836,6 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",
     "Keep in Starred",
-    "Copy link",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
   expect(location.hash).toContain("#/work/ENG");

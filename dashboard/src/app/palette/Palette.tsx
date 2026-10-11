@@ -59,6 +59,7 @@ import {
   type CommandPaletteGroup,
   type CommandPaletteItem,
   type CommandPaletteScopeProps,
+  useToast,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
@@ -97,6 +98,7 @@ import { statusLabel } from "~/lib/work.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { requestToken } from "~/protocol/index.ts";
+import { copyPageLink } from "~/lib/pageLink.ts";
 import type { ActResult } from "~/protocol/act.ts";
 import type { SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
 import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
@@ -177,6 +179,7 @@ export function CommandPalette({
   const agents = useAgents();
   const org = useOrg();
   const tools = useTools();
+  const toast = useToast();
   const index = useMemo(() => indexOrg(org), [org]);
 
   // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
@@ -843,9 +846,18 @@ export function CommandPalette({
       "Commands",
       asItems(
         commandHits(prefs, lower, {
-          // THE WHOLE URL, not the hash: a link is pasted into a message, and
-          // a fragment alone resolves against whatever the reader has open.
-          copyLink: () => void navigator.clipboard?.writeText(window.location.href),
+          // WHAT THE BROWSER DID IS SAID, in a toast because the palette
+          // closes on the press: see `lib/pageLink.ts`.
+          copyLink: () =>
+            void copyPageLink().then((word) =>
+              word === "Copied"
+                ? toast.ok("Copied the link to this page")
+                : toast.show({
+                    variant: "warning",
+                    title: "The browser refused the clipboard",
+                    message: "Copy the address from the address bar instead.",
+                  }),
+            ),
           setToken: requestToken,
           clearRecents: forgetAll,
           showKeys: onShowKeys,

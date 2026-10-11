@@ -15,7 +15,7 @@ import { DESTINATIONS } from "../nav.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
-import { DATE_FORMATS, DENSITIES, THEMES, type DateFormat, type ViewerPrefs } from "~/lib/prefs.ts";
+import { DENSITIES, THEMES, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { utf8Bytes } from "~/lib/format.ts";
@@ -295,12 +295,6 @@ export function searchHits(term: string, nav: Navigator): Hit[] {
   ];
 }
 
-const DATE_WORDS: Record<DateFormat, string> = {
-  auto: "this browser's own",
-  iso: "2026-09-22",
-  long: "September 22, 2026",
-};
-
 /**
  * The per-browser commands.
  *
@@ -340,28 +334,6 @@ export function commandHits(
       label: `Density: ${choice}`,
       hint: "how much air every list has",
       go: () => prefs.setDensity(choice),
-    });
-  }
-  for (const choice of DATE_FORMATS) {
-    if (choice === prefs.dateFormat) continue;
-    out.push({
-      id: `cmd-dates-${choice}`,
-      icon: "calendar",
-      label: `Dates: ${DATE_WORDS[choice]}`,
-      hint: "how every date is written, in this browser",
-      go: () => prefs.setDateFormat(choice),
-    });
-  }
-  // THE ZONE HAS FOUR HUNDRED VALUES, so the palette offers only the one
-  // choice that is a command rather than a search: going back to following
-  // the browser. Picking a zone is the preferences panel's searchable list.
-  if (prefs.timezoneChosen) {
-    out.push({
-      id: "cmd-zone-browser",
-      icon: "globe",
-      label: "Time zone: this browser's",
-      hint: `instead of ${prefs.timezone.replace(/_/g, " ")}`,
-      go: () => prefs.setTimezone(""),
     });
   }
   out.push(

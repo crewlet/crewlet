@@ -1368,8 +1368,8 @@ screens rather than one:
   who won it; a checklist tick and following are gestures applied to the task
   as it is when they land, so they never lose a race that was not one. A reader
   who cannot act sees every control, disabled with the sentence that says why.
-- **New task** — on the sidebar's head, beside the Projects heading, at the
-  end of every work screen's bar and on a board lane — opens one sheet that
+- **New task** — beside the sidebar's Projects heading, at the end of every
+  work screen's bar and on a board lane — opens one sheet that
   files a whole task in one `create_work_item`: its project, title and
   description, type, the status it starts in, who holds it, its priority, due
   date and labels. A lane's **+** files into that lane: it presets the lane's

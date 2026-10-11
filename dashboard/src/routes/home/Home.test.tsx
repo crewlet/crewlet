@@ -18,7 +18,7 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { reloadForTest, setZone } from "~/lib/prefs.ts";
+import { reloadForTest, pinZoneForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
@@ -777,13 +777,13 @@ describe("the feed", () => {
 });
 
 describe("the head", () => {
-  test("the greeting is in the zone the reader chose", () => {
+  test("the greeting is in the zone timestamps are drawn in", () => {
     const at = Date.parse("2026-09-22T20:00:00Z");
-    setZone("Asia/Tokyo");
+    pinZoneForTest("Asia/Tokyo");
     reloadForTest();
     // 05:00 in Tokyo; 22:00 in the browser's own Berlin.
     expect(greeting(at, "Ada Lovelace")).toBe("Good morning, Ada");
-    setZone("");
+    pinZoneForTest("");
     reloadForTest();
     expect(greeting(at, "Ada Lovelace")).toBe("Good evening, Ada");
     expect(greeting(at, "")).toBe("Good evening");

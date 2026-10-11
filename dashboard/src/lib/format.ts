@@ -19,7 +19,7 @@
 // constant rather than the component keeps this module free of React, which is
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { dates, zone } from "./prefs.ts";
+import { zone } from "./prefs.ts";
 
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
 
@@ -70,37 +70,16 @@ export function oldestFirst(
 // ---------------------------------------------------------------------------
 
 /**
- * The zone and the date shape every formatter below renders in.
+ * The zone every formatter below renders in, and the date's shape: the
+ * browser's own zone and its locale's own spelling of a date.
  *
- * READ FROM THE MODULE rather than taken as an argument, which is the one
- * place this file departs from its own "pass what you need" rule. A zone is a
- * preference held by one browser and read by three hundred call sites; passing
- * it would mean threading it through every component that renders a timestamp,
- * and the ones that forgot would silently render in a different zone from the
- * ones beside them — the exact inconsistency the preference exists to end.
- *
- * `lib/prefs.ts` announces a change, so a component that must re-render on one
- * subscribes with `useViewerPrefs()`. The formatters themselves stay pure
- * functions of (timestamp, preference): same inputs, same output.
+ * THE ZONE IS READ FROM THE MODULE rather than taken as an argument, which is
+ * the one place this file departs from its own "pass what you need" rule: a
+ * suite pins it (`pinZoneForTest`) to reach a date-line edge, and threading it
+ * through three hundred call sites would let the ones that forgot render in a
+ * different zone from the ones beside them.
  */
-function dateParts(): Intl.DateTimeFormatOptions {
-  switch (dates()) {
-    case "iso":
-      // 2026-06-15. `en-CA` is the locale whose numeric date IS ISO order,
-      // which is how this is spelled without hand-assembling the string and
-      // losing the runtime's own calendar handling.
-      return { year: "numeric", month: "2-digit", day: "2-digit" };
-    case "long":
-      return { year: "numeric", month: "long", day: "numeric" };
-    default:
-      return { year: "numeric", month: "short", day: "2-digit" };
-  }
-}
-
-/** The locale each date shape is written in. */
-function dateLocale(): string | undefined {
-  return dates() === "iso" ? "en-CA" : undefined;
-}
+const DATE_PARTS: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "2-digit" };
 
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
@@ -117,8 +96,8 @@ export function fmtTime(ts: string | null | undefined): string {
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -130,7 +109,7 @@ export function fmtDateTime(ts: string | null | undefined): string {
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
+  return d.toLocaleDateString(undefined, { ...DATE_PARTS, timeZone: zone() });
 }
 
 /**
@@ -145,8 +124,8 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

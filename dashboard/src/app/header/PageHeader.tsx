@@ -60,7 +60,6 @@ import {
   ArrowUpRightGlyph,
   ChevronDownGlyph,
   ChevronRightGlyph,
-  CopyGlyph,
   EllipsisGlyph,
   KeyGlyph,
   StarGlyph,
@@ -138,12 +137,11 @@ export function PageHeader({
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
           {working && <WorkingNow />}
-          {/* THE FRAME'S OWN QUIET PAIR, drawn inline on a wide bar and folded
+          {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
               action in view. */}
           <span className="page-frame-actions">
             <StarPage path={route.path} label={title} workspace={workspace} />
-            <CopyLink />
           </span>
           {/* BEFORE THE SLOT IN THE DOCUMENT, so the screen's controls stay the
               bar's last element on a wide bar (where this is not drawn); on a
@@ -714,37 +712,6 @@ function useOverflows(el: RefObject<HTMLElement | null>, content: unknown): bool
 }
 
 /**
- * Copy this page's own address.
- *
- * THE WHOLE URL, not the hash: what a reader pastes into chat has to open on
- * somebody else's machine, and a bare `#/work/ENG-42` opens nothing.
- */
-export function CopyLink({ label = "Copy link" }: { label?: string }) {
-  const [said, setSaid] = useState("");
-  const copy = useCallback(() => {
-    void copyPageLink().then((word) => {
-      setSaid(word);
-      window.setTimeout(() => setSaid(""), 1_600);
-    });
-  }, []);
-  // NOT `Copyable`, which is the right part for an identifier: it DRAWS the
-  // value it copies, and what this copies is the page's whole URL. A page bar
-  // that rendered `http://host:8000/#/work/ENG-42?peek=seat:ada` where "Copy
-  // link" is would push the breadcrumb off the bar.
-  return (
-    <Button
-      size="small"
-      variant="ghost"
-      leadingIcon={<CopyGlyph size="sm" />}
-      onClick={copy}
-      title={label}
-    >
-      {said || label}
-    </Button>
-  );
-}
-
-/**
  * Keep a shortcut to this page, or drop the one you have.
  *
  * THE ONLY PRODUCER OF A STAR. `lib/starred.ts` was written whole — the cap,
@@ -814,39 +781,17 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
 }
 
 /**
- * Copy this page's whole address, and say what the browser did with it.
- *
- * The clipboard is refused outright on an insecure origin and by permission
- * policy, and a control that silently did nothing would read as a broken
- * button rather than as a browser that said no. BOTH REFUSALS ARE SAID:
- * permission policy rejects the write, but an insecure origin — this engine
- * serves plain HTTP on `api.port` unless something terminates TLS in front of
- * it — has no `navigator.clipboard` at all, and an optional call on it skipped
- * the whole chain, so the ordinary deployment was exactly the one where the
- * button did nothing and said nothing.
- */
-export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
-  if (!navigator.clipboard) return "Blocked";
-  try {
-    await navigator.clipboard.writeText(location.href);
-    return "Copied";
-  } catch {
-    return "Blocked";
-  }
-}
-
-/**
  * "More": the page bar's secondary actions, in one menu, on a phone.
  *
  * DRAWN ONLY UNDER THE PHONE'S WIDTH (`.page-more`), where the frame's star
- * and Copy link — and whatever a screen folds with [usePageMenu] — leave the
+ * and whatever a screen folds with [usePageMenu] leave the
  * bar for this one control, so the screen's primary action stays in view
  * beside it and an object's lenses and its actions share a line. On a wider
  * bar every one of them is drawn inline and this is not drawn at all, so no
  * action is ever in two places a reader can see at once.
  *
  * What a press did is said in a toast, because the menu closes on it: the
- * inline controls say "Copied" or "50 is the limit" on themselves, and a menu
+ * inline star says "50 is the limit" on itself, and a menu
  * item has no self left to say it on.
  */
 export function PageMore({
@@ -892,22 +837,6 @@ export function PageMore({
           },
     );
   }
-  items.push({
-    key: "copy-link",
-    label: "Copy link",
-    icon: <CopyGlyph size="sm" />,
-    onSelect: () => {
-      void copyPageLink().then((word) =>
-        word === "Copied"
-          ? toast.ok("Copied the link to this page")
-          : toast.show({
-              variant: "warning",
-              title: "The browser refused the clipboard",
-              message: "Copy the address from the address bar instead.",
-            }),
-      );
-    },
-  });
   return (
     <span className="page-more">
       <Menu

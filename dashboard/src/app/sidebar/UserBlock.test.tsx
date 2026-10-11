@@ -3,17 +3,16 @@
  *
  * THREE STATES, ONE OF THEM A PERSON, each a sentence rather than a blank
  * avatar — because "who does the engine think I am" is the question every
- * write this dashboard makes turns on. And the zone and the date format had
- * no control anywhere before this block: `lib/prefs.ts` kept both and nothing
- * could set them.
+ * write this dashboard makes turns on. The preferences are the theme, the
+ * density and the token; the zone and the date's shape are the browser's.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { Preferences, UserBlock, supportedZones, whoLine } from "./UserBlock.tsx";
+import { Preferences, UserBlock, whoLine } from "./UserBlock.tsx";
 import { Router } from "~/app/router.tsx";
-import { dates, reloadForTest, zone, zoneIsChosen } from "~/lib/prefs.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 
@@ -206,39 +205,13 @@ describe("the preferences", () => {
     expect(localStorage.getItem(STORAGE_KEYS.density)).toBe("normal");
   });
 
-  // THE ZONE AND THE DATE FORMAT HAD NO CONTROL. Both were read by every
-  // timestamp in the product, and a reader could set neither.
-  test("the date format is a control, and it writes the preference", async () => {
+  // THE ZONE AND THE DATE'S SHAPE ARE THE BROWSER'S, so the panel offers
+  // neither: a control here would be a setting nothing reads.
+  test("offers no time zone and no date format", () => {
     open();
-    fireEvent.click(screen.getByRole("combobox", { name: "Dates" }));
-    // The kit's listbox commits on the press, as a native select does.
-    fireEvent.mouseDown(await screen.findByRole("option", { name: "2026-09-22" }));
-    await waitFor(() => expect(dates()).toBe("iso"));
-  });
-
-  test("the zone is a control, empty is the browser's, and a choice is kept", async () => {
-    open();
-    expect(zoneIsChosen()).toBe(false);
-    // A SEARCHABLE select: the trigger is a button, and the field inside the
-    // list is the combobox.
-    fireEvent.click(screen.getByRole("button", { name: "Time zone" }));
-    fireEvent.change(await screen.findByPlaceholderText("Find a zone"), {
-      target: { value: "UTC" },
-    });
-    const utc = await screen.findAllByRole("option", { name: "UTC" });
-    fireEvent.mouseDown(utc[0]!);
-    await waitFor(() => expect(zone()).toBe("UTC"));
-    expect(zoneIsChosen()).toBe(true);
-  });
-
-  test("every zone offered is one this runtime can format in, UTC among them", () => {
-    const zones = supportedZones();
-    expect(zones.length).toBeGreaterThan(0);
-    // The runtime's canonical list omits it; the reader reading logs wants it.
-    expect(zones).toContain("UTC");
-    for (const z of zones.slice(0, 50)) {
-      expect(() => new Intl.DateTimeFormat("en", { timeZone: z }), z).not.toThrow();
-    }
+    expect(screen.queryByText("Time zone")).toBeNull();
+    expect(screen.queryByText("Dates")).toBeNull();
+    expect(screen.queryAllByRole("combobox")).toEqual([]);
   });
 
   test("the token is set or changed from here, and says which", () => {
