@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
+import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS } from "./hits.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -174,7 +175,10 @@ function mount({
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <Router>
-            <CommandPalette onClose={closed} onShowKeys={keys} />
+            {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
+            <ProjectSwitcherProvider>
+              <CommandPalette onClose={closed} onShowKeys={keys} />
+            </ProjectSwitcherProvider>
           </Router>
         </ClientContext.Provider>
       </LayerHost>
@@ -1119,5 +1123,75 @@ describe("the theme step", () => {
     await p.type("zzz");
     expect(screen.getByText(/No theme matches/)).toBeTruthy();
     expect(root().hasAttribute("data-palette")).toBe(false);
+  });
+});
+
+// THE COMPANY'S PROJECTS ARE A GROUP IN ALL, ranked as the switcher ranks
+// them, and the switcher itself is a row, Switch project…, which opens the
+// panel over wherever the palette was. And the company's work has its full
+// ranked search one row away.
+describe("projects, the switcher and the full search", () => {
+  const listing = async () => ({
+    projects: [
+      {
+        key: "ENG",
+        name: "Core platform",
+        unit: { name: "Engineering" },
+        task_counts: { todo: 2, active: 1, done: 0, closed: 0 },
+        version: 1,
+      },
+      {
+        key: "OPS",
+        name: "Operations",
+        unit: { name: "Platform" },
+        task_counts: { todo: 0, active: 0, done: 4, closed: 0 },
+        version: 1,
+      },
+    ],
+    total: 2,
+    census: { active: 2, archived: 0 },
+    complete: true,
+  });
+
+  test("a term ranks the projects as the switcher does, each going to its page", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    await act(async () => Promise.resolve());
+    await p.type("o");
+    const group = screen.getByRole("group", { name: "Projects" });
+    const rows = within(group).getAllByRole("option");
+    // A KEY THAT STARTS WITH IT before a name that merely contains it.
+    expect(rows.map((r) => r.querySelector(".crewlet-key-chip")?.textContent)).toEqual([
+      "OPS",
+      "ENG",
+    ]);
+    expect(rows[1]!.textContent).toContain("3 open");
+    fireEvent.click(rows[0]!);
+    expect(location.hash).toBe("#/work/OPS");
+    expect(p.closed).toHaveBeenCalled();
+  });
+
+  test("Switch project… is a place to go, and opens the switcher as the palette closes", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    const go = screen.getByRole("group", { name: "Go to" });
+    const row = within(go).getByRole("option", { name: /Switch project…/ });
+    expect(row.textContent).toContain("or G then P, from anywhere");
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(p.closed).toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "Switch project" })).toBeTruthy();
+  });
+
+  test("it is a command too, found by its name", async () => {
+    const p = mount();
+    await p.type(">switch");
+    expect(p.row("Switch project…")).toBeTruthy();
+  });
+
+  test("Search all work for a term goes to the ranked search", async () => {
+    const p = mount();
+    await p.type("invoice");
+    fireEvent.click(p.row("Search all work for “invoice”"));
+    expect(location.hash).toBe("#/work/search?q=invoice");
   });
 });

@@ -56,6 +56,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import {
   CommandPalette as KitPalette,
   Kbd,
+  KeyChip,
   ThemeSwatch,
   type CommandPaletteGroup,
   type CommandPaletteItem,
@@ -66,6 +67,7 @@ import { isThemeId, themeGroups, themeRegistry } from "@crewlethq/tokens";
 import {
   BookOpenGlyph,
   CircleAlertGlyph,
+  Columns3Glyph,
   FileTextGlyph,
   FolderGlyph,
   GlobeGlyph,
@@ -97,7 +99,9 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
-import { statusLabel } from "~/lib/work.ts";
+import { statusLabel, unfinished } from "~/lib/work.ts";
+import { rankProjects } from "~/lib/projectRank.ts";
+import { useOpenProjectSwitcher } from "../header/ProjectSwitcher.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -128,7 +132,9 @@ import {
   recentHits,
   routeProject,
   routeTask,
+  score,
   searchHits,
+  switchProjectHit,
   toolHits,
   type Hit,
   type ScopeId,
@@ -273,6 +279,10 @@ export function CommandPalette({
   const projectsRead = useQuery("work_projects", { limit: PROJECT_PAGE });
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
+  // THE SWITCHER, which "Switch project…" opens over whatever the palette
+  // leaves behind it as it closes.
+  const openSwitcher = useOpenProjectSwitcher();
+  const switchHit = switchProjectHit(openSwitcher);
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -490,7 +500,7 @@ export function CommandPalette({
       const why = !create.access.can
         ? create.access.reason
         : noProjects
-          ? "This company has no project yet — add one under Work › Projects to file work."
+          ? "This company has no project yet. Add one with New project, in Work, to file work."
           : "";
       const body = answeredMd ? answerBody(answeredMd) : "";
       const choose = hitProject
@@ -607,6 +617,23 @@ export function CommandPalette({
       onSelect: () => nav.to(["work", item.key]),
     }));
   };
+
+  // THE COMPANY'S PROJECTS, ranked as the switcher ranks them
+  // (`lib/projectRank.ts`), each going to its page.
+  const projectRows = (cap: number): CommandPaletteItem[] =>
+    rankProjects(projects ?? [], term)
+      .slice(0, cap)
+      .map((p) => ({
+        id: `project-${p.key}`,
+        icon: <Columns3Glyph size="sm" />,
+        label: (
+          <>
+            <KeyChip highlight={term}>{p.key}</KeyChip> {p.name || p.key}
+          </>
+        ),
+        hint: p.task_counts ? `${unfinished(p.task_counts)} open` : undefined,
+        onSelect: () => nav.to(["work", p.key]),
+      }));
 
   const pageRows = (cap: number): CommandPaletteItem[] =>
     (pageAnswer.data?.hits ?? []).slice(0, cap).map((page) => ({
@@ -848,10 +875,18 @@ export function CommandPalette({
     if (!term) {
       push("recent", "Recent", asItems(recentHits(recents, nav)));
       push("running", "Running now", runningRows());
-      push("go", "Go to", asItems(destinationHits("", nav, Infinity)));
+      push("go", "Go to", asItems([...destinationHits("", nav, Infinity), switchHit]));
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));
-      push("go", "Go to", asItems(destinationHits(lower, nav, GO_TO_ROWS)));
+      push(
+        "go",
+        "Go to",
+        asItems([
+          ...destinationHits(lower, nav, GO_TO_ROWS),
+          ...(score(switchHit.label, lower) >= 0 ? [switchHit] : []),
+        ]),
+      );
+      push("projects", "Projects", projectRows(allRows));
       push("tasks", "Tasks", taskRows(allRows));
       push("pages", "Pages", pageRows(allRows));
       for (const g of agentGroups(ALL_ROWS, true)) push(g.id, g.label, g.items);
@@ -908,6 +943,7 @@ export function CommandPalette({
           showKeys: onShowKeys,
           changeTheme: openThemeStep,
           themeName: themeEntry(prefs.palette).name,
+          switchProject: openSwitcher,
           hash: route.hash || "#/",
         }),
       ),
