@@ -6,9 +6,9 @@
 // HERMETIC because a developer's own configuration — a commit.gpgSign, a
 // url.<base>.insteadOf, a credential helper, an init.defaultBranch —
 // otherwise decides what a suite builds: every client runs with a HOME of its
-// own, no system configuration, and a fixed identity and clock, so a fixture
-// is the same bytes on every machine and every run, and an object id a test
-// asserts is stable.
+// own, no system configuration and no system attributes, and a fixed identity
+// and clock, so a fixture is the same bytes on every machine and every run,
+// and an object id a test asserts is stable.
 //
 // Git is a PREREQUISITE of the suite, not a property of the machine: [Require]
 // fails a test on a machine without git 2.40 or newer and never skips it,
@@ -147,6 +147,12 @@ func NewClient(t testing.TB) *Client {
 		"HOME=" + home,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
+		// The host's /etc/gitattributes, which GIT_CONFIG_NOSYSTEM does
+		// not reach: it decides what a commit stores (an eol, a
+		// working-tree-encoding), what a merge does and what check-attr
+		// answers. The global attributes file is the HOME's, which holds
+		// none.
+		"GIT_ATTR_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C",
 		"GIT_AUTHOR_DATE=" + clientDate,
