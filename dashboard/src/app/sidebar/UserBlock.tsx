@@ -50,10 +50,15 @@ export function whoLine(viewer: ViewerState, seatName: string): { name: string; 
     return { name: `Token ${viewer.operatorID}`, detail: "Not bound to a seat" };
   }
   const name = viewer.name || viewer.handle;
-  // THE SEAT'S ROLE AND KIND, never the handle with a bare `@`: the handle is
-  // an address, and the address is where the block links.
-  const kind = viewer.kind === "agent" ? "agent seat" : "human seat";
-  return { name, detail: seatName && seatName !== name ? `${seatName} · ${kind}` : kind };
+  // THE SEAT'S ROLE, never the handle with a bare `@`: the handle is an
+  // address, and the address is where the block links. A person is not
+  // labelled a "human seat", which says what the block already shows; a
+  // token bound to an agent's seat is named as one, because acting as an
+  // agent is the fact a reader must not miss.
+  const role = seatName && seatName !== name ? seatName : "";
+  if (viewer.kind === "agent")
+    return { name, detail: role ? `${role} · agent seat` : "agent seat" };
+  return { name, detail: role };
 }
 
 export function UserBlock({
@@ -80,7 +85,7 @@ export function UserBlock({
       />
       <span className="user-block-text">
         <span className="user-block-name truncate">{who.name}</span>
-        <span className="user-block-detail truncate">{who.detail}</span>
+        {who.detail ? <span className="user-block-detail truncate">{who.detail}</span> : null}
       </span>
     </>
   );

@@ -54,14 +54,28 @@ afterEach(() => {
 });
 
 describe("who the block says this is", () => {
-  test("a bound token is the person, with their seat and never a bare handle", () => {
-    expect(whoLine(ada, "Founder")).toEqual({
-      name: "Ada Lovelace",
-      detail: "Founder · human seat",
-    });
-    // A seat whose name IS the person's says so once.
-    expect(whoLine(ada, "Ada Lovelace").detail).toBe("human seat");
+  test("a bound token is the person, with their seat's role and never a bare handle", () => {
+    expect(whoLine(ada, "Founder")).toEqual({ name: "Ada Lovelace", detail: "Founder" });
+    // A seat whose name IS the person's says nothing more, and a person is
+    // never captioned "human seat", which says what the block already shows.
+    expect(whoLine(ada, "Ada Lovelace").detail).toBe("");
     expect(whoLine(ada, "Founder").detail).not.toContain("@");
+    // A token bound to an agent's seat says so: acting as an agent is the
+    // fact a reader must not miss.
+    expect(whoLine({ ...ada, kind: "agent" }, "Release Bot").detail).toBe(
+      "Release Bot · agent seat",
+    );
+  });
+
+  test("a person with no role to show draws no second line", () => {
+    render(
+      <Router>
+        <UserBlock viewer={ada} seatName="Ada Lovelace" onSetToken={() => {}} />
+      </Router>,
+    );
+    const who = screen.getByRole("link", { name: /Ada Lovelace/ });
+    expect(who.querySelector(".user-block-detail")).toBeNull();
+    expect(who.textContent).not.toContain("human seat");
   });
 
   test("an unbound token names the token, and says it is not a fault", () => {
