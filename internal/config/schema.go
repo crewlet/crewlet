@@ -107,11 +107,27 @@ func Schema(tier Tier) ([]byte, error) {
 	var rootType any
 
 	var g *schemaGen
+	// Each `$id` is where the documentation site serves the CURRENT STABLE
+	// copy (/engine/latest/schema/), never a version, because this tree
+	// cannot name its own: the tag is the version and nothing in the source
+	// records one, so a generated file stamped with a version would be a
+	// second record of it that every release made stale. The site serves
+	// each version's copy under that version's own path — /engine/next/ for
+	// main, /engine/vX.Y/ for an older line — and stamps the copy it serves
+	// with that path, so this spelling is read only from a file outside the
+	// site (a checkout, or what `crewlet schema` writes). latest/ is main's
+	// copy until a release of this code exists and the newest such release's
+	// from then on; the site never serves v0.1.0 there, which predates this
+	// engine and whose schema describes another program's configuration. So an
+	// editor resolving this `$id` gets the current release's field list,
+	// which a binary older or newer than that release does not share: the
+	// schema of the binary in hand is `crewlet schema <tier>`, and the
+	// company-architect skill says to prefer it whenever crewlet is installed.
 	switch tier {
 	case TierBootstrap:
 		root = reflect.TypeOf(Bootstrap{})
 		title = "Crewlet bootstrap config (Tier A)"
-		id = "https://docs.crewlet.ai/schema/bootstrap.schema.json"
+		id = "https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json"
 		g = newSchemaGen(true)
 		rules = g.bootstrapRules()
 		// An empty Tier A file is a node running on every default, and
@@ -120,7 +136,7 @@ func Schema(tier Tier) ([]byte, error) {
 	case TierCompany:
 		root = reflect.TypeOf(Company{})
 		title = "Crewlet company config (Tier B)"
-		id = "https://docs.crewlet.ai/schema/company.schema.json"
+		id = "https://docs.crewlet.ai/engine/latest/schema/company.schema.json"
 		g = newSchemaGen(false)
 		rules = companyRules()
 		// A company needs at least a name, and ParseCompanyNode refuses an
