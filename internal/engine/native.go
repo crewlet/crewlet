@@ -77,6 +77,12 @@ type native struct {
 	// need it after boot and the bootstrap it came from is not kept.
 	nodeID string
 
+	// built is the native-backend choices of the company that started this
+	// runtime, which are what it serves until the process restarts — the
+	// halves below exist exactly where it says so, and an activation that
+	// says otherwise is told so ([Engine.sayBackendSwitches]).
+	built builtWith
+
 	// log is this node's state-log runtime: every registered domain, each
 	// with its own apply loop and write authority. A native tracker or a
 	// native knowledge base starts it ([config.Company.RunsStateLog]) and
@@ -168,8 +174,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if !HoldsEstate(boot) {
 		return e.startRemote(c)
 	}
-	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
-	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
+	// ONE READING OF THE COMPANY'S CHOICES, kept on the runtime: the halves
+	// built below are derived from it, and so is what every later
+	// activation is compared against.
+	built := builtFrom(c.Config)
+	runTracker, wiki := built.runsTracker(), built.runsWiki()
 
 	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
 	// `${VAR}` reference, or come from the environment — and the value
@@ -184,7 +193,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		return err
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	n := &native{run: runCtx, stop: cancel, nodeID: nodeID}
+	n := &native{run: runCtx, stop: cancel, nodeID: nodeID, built: built}
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down only once the runtime is the
 	// engine's.
@@ -465,7 +474,8 @@ func (n *native) objectEstates() []collect.Estate {
 // with the previous epoch still serves that epoch correctly — and the retry
 // finds it already up. Which halves it has (the tracker, the knowledge base)
 // are the ones this company declared; a later revision that changes them
-// takes effect on restart, as switching a backend always has.
+// takes effect on restart, as switching a backend always has — and says so at
+// its activation ([Engine.sayBackendSwitches]).
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil || !c.Config.RunsStateLog() {
 		return false, nil
@@ -1001,11 +1011,20 @@ func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
 // built once per process, with the first company that runs one — so a
 // revision that changes it takes effect on restart, and the parser staying
 // registered until then is the honest state: the records are still there
-// and still reachable.
+// and still reachable. What this does instead is SAY so, first: see
+// [Engine.sayBackendSwitches].
 func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt time.Time) {
-	if e.native.Load() == nil && e.remote.Load() == nil {
+	built, runs := e.runtimeBuilt()
+	if !runs {
 		return
 	}
+	// THE CHOICES THIS RUNTIME WAS NOT BUILT WITH, said once per activation:
+	// the runtime is built once per process, so a revision that moves a
+	// native backend activates cleanly here and changes nothing until a
+	// restart — and before this line nothing said so. FIRST, and above the
+	// inbound edge's return below: the line is about the runtime, and a node
+	// with no edge (one in a maintenance mode) runs one all the same.
+	e.sayBackendSwitches(ctx, built, c)
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()

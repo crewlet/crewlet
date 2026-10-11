@@ -1642,6 +1642,8 @@ Which **work tracker** this company runs, on exactly the terms `knowledge.backen
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
+**Moving either one to or from `native` takes effect when each node restarts.** A node builds the engine's own tracker and knowledge base once, from the company it started with, so a revision that switches one activates normally and the node keeps serving what it was built with, saying so with a `native_backend_needs_restart` warning at every activation until it restarts (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Moving between two vendors, or the first native backend on a node that ran none, needs no restart.
+
 ### The native tracker's own policy
 
 ```yaml

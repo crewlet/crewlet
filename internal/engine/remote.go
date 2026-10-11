@@ -43,6 +43,10 @@ type remoteNative struct {
 	// the company runs on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
+
+	// built is the choices both are derived from, which a later activation
+	// is compared against — see [native.built].
+	built builtWith
 }
 
 // startRemote brings up a stateless node's native runtime, over the router
@@ -52,13 +56,13 @@ func (e *Engine) startRemote(c *Company) error {
 		return errors.New("engine: this node holds no data and has no router " +
 			"to reach a node that does")
 	}
+	// THE HALVES DERIVED FROM THE CHOICES, so the two cannot disagree.
+	built := builtFrom(c.Config)
 	e.remote.Store(&remoteNative{
-		tracker: c.Config.TrackerBackendFor() == config.TrackerNative,
-		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		tracker: built.runsTracker(), wiki: built.runsWiki(), built: built,
 	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", c.Config.TrackerBackendFor() == config.TrackerNative,
-		"knowledge", c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		"tracker", built.runsTracker(), "knowledge", built.runsWiki(),
 		"detail", "this node holds no data: its seats read and write the "+
 			"company's tracker and knowledge base through a data node")
 	return nil
