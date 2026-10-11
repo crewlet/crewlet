@@ -43,7 +43,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 			}
 			if e.objects == nil || len(e.native.Load().objectEstates()) == 0 {
 				t.Fatalf("the premise: the %s-mode node runs no object store or "+
-					"no tracker, so it would start no collector in any mode", mode)
+					"offers it no estate, so it would start no collector in any mode", mode)
 			}
 			if e.objects.duty.Load() != nil {
 				t.Errorf("the object collector runs in %s mode: every pass pins "+

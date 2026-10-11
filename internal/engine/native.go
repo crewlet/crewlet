@@ -110,9 +110,25 @@ type native struct {
 	writer *tracker.Writer
 	pages  *pages.Store
 
-	// trackerReader and pageReader are the read paths.
+	// trackerReader and pageReader are the read paths of the tool surfaces,
+	// each nil where the company keeps that half elsewhere — which is what
+	// every question about the TOOLS reads ([Engine.nativeHalves]).
 	trackerReader *tracker.Reader
 	pageReader    *pages.Reader
+
+	// trackerObjects is the tracker's rows as the object store's passes
+	// read them, set whenever this runtime runs a state log — the same
+	// reader as trackerReader where the company's tracker is native.
+	//
+	// ITS OWN FIELD because the question it answers is the LOG's, not the
+	// tools': the register runs the tracker's log whatever `tracker.backend`
+	// says, so a company on Jira, or on none, whose pages are the engine's
+	// own still applies every `tracker_files` row its log carries — and one
+	// that moved its tracker off native holds every project file it ever
+	// stored. Those rows name objects the collector must keep and the audit
+	// must check. Read from trackerReader, the answer was "no tracker" for
+	// exactly those companies, and their collector never started.
+	trackerObjects *tracker.Reader
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -300,6 +316,24 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
 	}
+	// THE TRACKER'S ROWS FOR THE OBJECT STORE, whatever the tools are: the
+	// tool surface's own reader where there is one, and otherwise one built
+	// for the estate alone, over the log the register runs regardless — see
+	// [native.trackerObjects].
+	n.trackerObjects = n.trackerReader
+	if n.trackerObjects == nil {
+		running := sl.Domain(tracker.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no tracker domain, so the " +
+				"object store has no estate to read project files from — the " +
+				"domain is in the register and its stream failed to come up")
+		}
+		objects, err := tracker.NewReader(sl.estate().Reader(), running.reader)
+		if err != nil {
+			return fmt.Errorf("engine: tracker reader for the object store: %w", err)
+		}
+		n.trackerObjects = objects
+	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
 	//
@@ -423,18 +457,34 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 }
 
 // objectEstates is every domain of this runtime whose rows may name objects,
-// as the object store's passes read them — empty where it runs none.
+// as the object store's passes read them — empty where it runs no state log.
 //
-// EVERY DOMAIN A DECLARATION NAMES must be here: [collect.Sources] refuses a
-// declared table whose domain has no estate, and the engine's own test builds
-// the sources from this list against internal/objstore/references, so a
-// consumer declaring a table in a new domain fails the build here rather
-// than leaving the passes unstarted in production.
+// ONE ESTATE PER DOMAIN A DECLARATION NAMES, whatever backends the company
+// chose: a domain's rows exist because its log runs, not because its tool
+// surface does, and the register runs every domain's log or none. Offered
+// only where the company's tools were, the tracker's estate was missing on
+// every company whose knowledge base is the engine's own and whose tracker is
+// not — Jira, or none — so the rows naming objects were read by nothing, and
+// there was no collector at all: nothing collected, nothing audited, and
+// NOTHING SAID SO. The empty list never reached [collect.Sources], which
+// would have refused it by name — [Engine.startNativeCollector] returned
+// before building the sources, with no warning and no status line, and the
+// only sign was a `crewlet objects status` that never showed a pass. That
+// early return is gone ([Engine.startCollectorOver]).
+//
+// The engine's own tests build the sources from this list against
+// internal/objstore/references, so a consumer declaring a table in a new
+// domain fails the build here rather than leaving the passes unstarted in
+// production.
 func (n *native) objectEstates() []collect.Estate {
-	if n.trackerReader == nil {
+	if n.trackerObjects == nil {
+		// A ZERO RUNTIME — a test's — holds no domain's rows. Every
+		// runtime [Engine.startNative] publishes runs a state log and
+		// sets the field, and a collector over one that did not is
+		// refused by name ([Engine.startCollectorOver]).
 		return nil
 	}
-	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
+	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerObjects}}
 }
 
 // startNativeFor brings the native runtime up for a company an APPLY hands a
@@ -493,9 +543,13 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 
 // startNativeCollector starts the object store's collector duty on this data
 // node: it deletes objects no row names and audits what the store has lost,
-// both against the files the tracker's rows name — without a tracker there are
-// no files, and nothing to collect against. ONE CALL FOR BOTH CALLERS, [New]
-// and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+// both against the rows of every domain a declared table names. It runs
+// wherever the node runs a state log, whatever backends the company chose
+// ([native.objectEstates]): a company that moved its tracker off native still
+// holds the rows that name its project files' objects. A runtime it cannot
+// start over is logged as `object_collector_not_started`, never passed over in
+// silence ([Engine.startCollectorOver]). ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
 //
 // # Only where the mode publishes
 //
@@ -517,21 +571,34 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 // them the audit checks and the backup carries, are the ones the schema gate
 // holds.
 func (e *Engine) startNativeCollector(ctx context.Context) {
-	n := e.native.Load()
-	if n == nil {
-		return
-	}
-	estates := n.objectEstates()
-	if len(estates) == 0 {
-		return
-	}
-	refs, err := collect.Sources(references.All, estates...)
-	if err == nil {
-		err = e.startObjectCollector(ctx, refs)
-	}
-	if err != nil {
+	if err := e.startCollectorOver(ctx, e.native.Load()); err != nil {
 		log.WarnContext(ctx, "object_collector_not_started", "error", err)
 	}
+}
+
+// startCollectorOver starts the collector over n's estates, and answers why it
+// did not — which [Engine.startNativeCollector] logs.
+//
+// A RUNTIME THAT OFFERS NO ESTATE IS REFUSED, NEVER SKIPPED. Every runtime
+// [Engine.startNative] publishes offers one per declaring domain
+// ([native.objectEstates]), so one that offers none is a wiring mistake, and
+// [collect.Sources] refuses it by name — the declared table no estate reads —
+// which is the line an operator can find. This step used to return early and
+// silently on an empty list, and that is how every company whose tracker was
+// not native went without a collector with nothing saying so. Only a node
+// with no native runtime at all starts none without a word — nil, because it
+// runs no state log to read rows through: it has no company yet, its company
+// runs none of the engine's own backends, or it holds no estate and asks a
+// data node for every row.
+func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
+	if n == nil {
+		return nil
+	}
+	refs, err := collect.Sources(references.All, n.objectEstates()...)
+	if err != nil {
+		return err
+	}
+	return e.startObjectCollector(ctx, refs)
 }
 
 // startNativeDuties arms the native runtime's two fleet-singleton duties — the
