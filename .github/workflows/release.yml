@@ -100,26 +100,27 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # goreleaser ITSELF IS PINNED EXACTLY, in every goreleaser step, and
-      # the same version in each, so the snapshot rehearses with the build
-      # that publishes. Not a range like `~> v2`: the action downloads the
-      # newest release in it on every run and checks it only against the
-      # checksums file of that same release, so a new goreleaser — broken or
-      # compromised — would run here unreviewed, in the job holding the
-      # Releases, the registry and the signing identity. The cost is that
-      # Dependabot never bumps a `with:` input, so this pin is moved by hand
-      # (CONTRIBUTING.md says how): take the newest v2 release from
-      # goreleaser's own releases.
+      # goreleaser ITSELF FLOATS within its major, `~> v2` in every step: the
+      # newest v2 on each run, so the snapshot rehearses with the goreleaser
+      # a tag pushed today would publish with. Not an exact version, because
+      # Dependabot bumps the action's ref and never a `with:` input — an
+      # exact goreleaser would be a version nothing watches, aging until
+      # somebody remembered, which is golangci-lint's reason in ci.yml. Not
+      # `latest`, because .goreleaser.yaml is a `version: 2` config and a v3
+      # is a migration of it, made by hand with the config rather than met
+      # at tag time. The cost: a release is built by whatever v2 was newest
+      # that day, which the action checks only against the checksums file of
+      # that same release.
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: v2.18.3
+          version: "~> v2"
           # `check` first so a config error is reported as a config error
           # rather than as whatever the build does with a bad field.
           args: check
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: v2.18.3
+          version: "~> v2"
           args: release --snapshot --clean --skip=sign
 
       - name: Prove the built binary reports the stamped version
@@ -225,12 +226,12 @@ jobs:
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: v2.18.3
+          version: "~> v2"
           args: check
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: v2.18.3
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

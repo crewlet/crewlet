@@ -634,15 +634,13 @@ worth knowing:
   with the pin: they hold the registry and the signing identity (and the
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
-- **One pin nothing watches: goreleaser itself.** Every goreleaser step in
-  `.github/workflows/release.yml` asks for an exact goreleaser
-  (`version: v2.18.3`), and Dependabot bumps the action's ref but never a
-  `with:` input. It is exact anyway, because a range would download whatever
-  goreleaser released last into the job that publishes and signs, with
-  nobody reviewing it. So move it by hand: take the newest release from
-  [goreleaser's releases](https://github.com/goreleaser/goreleaser/releases),
-  change every step together, and rehearse with `make snapshot` on that
-  version.
+- **goreleaser itself floats within its major.** Every goreleaser step in
+  `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
+  on each run, because Dependabot bumps the action's ref but never a `with:`
+  input, so an exact version would age with nothing watching it. The major
+  is held because `.goreleaser.yaml` is a `version: 2` config: moving to a
+  v3 is a migration of that file, made by hand in the same change, and
+  rehearsed with `make snapshot`.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
