@@ -40,11 +40,11 @@ type Applier struct {
 
 // NewApplier builds the vector applier.
 //
-// IT TAKES NOTHING, unlike the tracker's, and the emptiness is the claim: an
-// applier that needed a node id would be an applier whose rows depend on which
-// node ran it, which is the property the framework's purity rule exists to
-// protect. This domain does not claim identity, so nothing would have caught a
-// node id leaking into a row here — which is precisely why it must not.
+// IT TAKES NOTHING, and the emptiness is the claim: an applier that needed a
+// node id would be an applier whose rows depend on which node ran it, which is
+// the property the framework's purity rule exists to protect. This domain does
+// not claim identity, so nothing would have caught a node id leaking into a row
+// here — which is precisely why it must not.
 //
 // The memo it holds is not state a row can depend on: it is keyed by the
 // digest of the bytes it decoded, so what it answers is a pure function of the
