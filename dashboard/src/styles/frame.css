@@ -664,11 +664,13 @@ a.user-block-who:focus-visible {
   color: var(--color-text-tertiary);
 }
 
+/* AS WIDE AS ITS ROWS, the label column and the one control column, so the
+   token's button under them is no wider than the three controls it ends. */
 .preferences {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  width: 18rem;
+  width: max-content;
   max-width: calc(100vw - 2 * var(--spacing-4));
   padding: var(--spacing-3);
 }
