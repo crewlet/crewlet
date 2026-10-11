@@ -47,7 +47,7 @@ func BenchmarkAudit(b *testing.B) {
 		// object no row names — zero for none.
 		unnamed int
 	}{
-		{"by_name", false, 16 * eachPage, 0},
+		{"by_name", false, 16 * objstore.WalkPage, 0},
 		// MORE RANGES THAN THE BOUND, so the depth it keeps is measured.
 		{"ranged", true, 2 * auditConcurrency * rangeChunk, 50},
 		{"ranged_dense", true, 2 * auditConcurrency * rangeChunk, 5},
@@ -65,7 +65,7 @@ func BenchmarkAudit(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				src.refs = append(src.refs, Reference{Object: o, NamedBy: fmt.Sprintf("ENG/%06d.md", i)})
+				src.refs = append(src.refs, objstore.Reference{Object: o, NamedBy: fmt.Sprintf("ENG/%06d.md", i)})
 				names = append(names, o.Key.Name())
 				if store.unnamed > 0 && i%store.unnamed == 0 {
 					// MINTED NEXT, so its key falls between two
@@ -77,7 +77,7 @@ func BenchmarkAudit(b *testing.B) {
 					names = append(names, u.Key.Name())
 				}
 			}
-			slices.SortFunc(src.refs, func(x, y Reference) int { return x.Object.Key.Compare(y.Object.Key) })
+			slices.SortFunc(src.refs, func(x, y objstore.Reference) int { return x.Object.Key.Compare(y.Object.Key) })
 			slices.Sort(names)
 			slow := &latent{Backend: mem, stat: stat}
 			var backend objstore.Backend = slow
@@ -109,9 +109,9 @@ func BenchmarkAudit(b *testing.B) {
 }
 
 // paged is a source whose references, held sorted, are walked a page of
-// [eachPage] at a time, each page read taking read.
+// [objstore.WalkPage] at a time, each page read taking read.
 type paged struct {
-	refs []Reference
+	refs []objstore.Reference
 	read time.Duration
 }
 
@@ -123,19 +123,19 @@ func (*paged) Referenced(context.Context, []objstore.Key, statelog.Position) (ma
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (p *paged) Required(statelog.Position) []Walk { return []Walk{&pagedWalk{p: p}} }
+func (p *paged) Required(statelog.Position) []objstore.Walk { return []objstore.Walk{&pagedWalk{p: p}} }
 
 type pagedWalk struct {
 	p    *paged
 	next int
 }
 
-func (w *pagedWalk) Next(context.Context) ([]Reference, bool, error) {
+func (w *pagedWalk) Next(context.Context) ([]objstore.Reference, bool, error) {
 	if w.next >= len(w.p.refs) {
 		return nil, true, nil
 	}
 	time.Sleep(w.p.read)
-	end := min(w.next+eachPage, len(w.p.refs))
+	end := min(w.next+objstore.WalkPage, len(w.p.refs))
 	page := w.p.refs[w.next:end]
 	w.next = end
 	return page, true, nil

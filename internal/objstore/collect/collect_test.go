@@ -25,7 +25,7 @@ import (
 // retired table does, through the real declarations).
 type fakeSource struct {
 	mu    sync.Mutex
-	named map[objstore.Key]Reference
+	named map[objstore.Key]objstore.Reference
 	// incomplete is whether every read reports itself incomplete, and
 	// incompleteAfter how many judged batches answer complete first.
 	incomplete      bool
@@ -64,11 +64,11 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 }
 
 // Required is one walk over every reference the source names, in key order, a
-// page of [eachPage] at a time — read when the walk is asked, as an estate's
+// page of [objstore.WalkPage] at a time — read when the walk is asked, as an estate's
 // is, so a reference named after the walk began and before its page is read is
 // in it.
-func (s *fakeSource) Required(statelog.Position) []Walk {
-	return []Walk{&fakeWalk{s: s}}
+func (s *fakeSource) Required(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&fakeWalk{s: s}}
 }
 
 // fakeWalk is a [fakeSource]'s walk, keyset-paged on the key as a table's is.
@@ -79,7 +79,7 @@ type fakeWalk struct {
 	done  bool
 }
 
-func (w *fakeWalk) Next(context.Context) ([]Reference, bool, error) {
+func (w *fakeWalk) Next(context.Context) ([]objstore.Reference, bool, error) {
 	w.s.mu.Lock()
 	defer w.s.mu.Unlock()
 	if w.done {
@@ -88,19 +88,19 @@ func (w *fakeWalk) Next(context.Context) ([]Reference, bool, error) {
 	if w.s.pageRead != nil {
 		w.s.pageRead()
 	}
-	var page []Reference
-	for _, ref := range slices.SortedFunc(maps.Values(w.s.named), func(a, b Reference) int {
+	var page []objstore.Reference
+	for _, ref := range slices.SortedFunc(maps.Values(w.s.named), func(a, b objstore.Reference) int {
 		return a.Object.Key.Compare(b.Object.Key)
 	}) {
 		if w.begun && ref.Object.Key.Compare(w.after) <= 0 {
 			continue
 		}
 		page = append(page, ref)
-		if len(page) == eachPage {
+		if len(page) == objstore.WalkPage {
 			break
 		}
 	}
-	if len(page) < eachPage {
+	if len(page) < objstore.WalkPage {
 		w.done = true
 	}
 	if len(page) > 0 {
@@ -113,7 +113,7 @@ func (w *fakeWalk) Next(context.Context) ([]Reference, bool, error) {
 func (s *fakeSource) name(o objstore.Object, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.named[o.Key] = Reference{Object: o, NamedBy: "ENG/" + path}
+	s.named[o.Key] = objstore.Reference{Object: o, NamedBy: "ENG/" + path}
 }
 
 // unname drops the row naming k, as a file's removal or rewrite does.
@@ -282,7 +282,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &fakeSource{named: map[objstore.Key]Reference{}}
+	src := &fakeSource{named: map[objstore.Key]objstore.Reference{}}
 	c, err := New(Options{Store: store, References: References{src}, Now: clk.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -770,10 +770,10 @@ func TestALaggingNotFoundIsNotMissing(t *testing.T) {
 // longer counts reachable.
 func TestTheSecondLookQueueHoldsAtMostItsLimit(t *testing.T) {
 	t.Parallel()
-	ref := func(i int) Reference { return Reference{NamedBy: fmt.Sprintf("ENG/%d.md", i)} }
+	ref := func(i int) objstore.Reference { return objstore.Reference{NamedBy: fmt.Sprintf("ENG/%d.md", i)} }
 	one := func(i int) lookAgain { return lookAgain{ref: ref(i)} }
 	span := func(from, to int) lookAgain {
-		l := lookAgain{refs: []Reference{}}
+		l := lookAgain{refs: []objstore.Reference{}}
 		for i := from; i <= to; i++ {
 			l.refs = append(l.refs, ref(i))
 		}
@@ -818,7 +818,7 @@ func TestTheSecondLookQueueHoldsAtMostItsLimit(t *testing.T) {
 		if i >= q.head && i < len(q.queue) {
 			continue // held
 		}
-		if l.refs != nil || l.ref != (Reference{}) {
+		if l.refs != nil || l.ref != (objstore.Reference{}) {
 			t.Fatalf("slot %d, handed back, is still reachable from the queue's array: %v", i, names([]lookAgain{l}))
 		}
 	}

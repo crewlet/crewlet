@@ -93,14 +93,14 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 // that answered it has ended, since the audit asks the backend about each
 // reference and a read must not be held open across those round trips, and to
 // key order, which the audit's ranged listings are cut from.
-func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
+func (r *roundTrip) every(t *testing.T) map[objstore.Key][]objstore.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
 	sources, err := collect.Sources(references.All, watch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[objstore.Key][]collect.Reference{}
+	out := map[objstore.Key][]objstore.Reference{}
 	for _, w := range sources[0].Required(statelog.Position{}) {
 		var last objstore.Key
 		for {

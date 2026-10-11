@@ -133,13 +133,13 @@
 // never taken for one refusing each object it was asked about last.
 //
 // THE ESTATE IS READ A PAGE AT A TIME, BY ONE GOROUTINE, IN KEY ORDER — every
-// required table's keyset walk merged into one order ([Source.Required]),
-// holding a page of each — AND THE BACKEND IS ASKED OUTSIDE EVERY READ — up to
-// [auditConcurrency] questions at once while the walk reads on, never inside a
-// read: a read of the estate holds one of the node's few reader connections
-// and the snapshot under it, and a question to the backend is a network round
-// trip — tens of thousands of them inside one read would hold the connection
-// for the length of the audit.
+// required table's keyset walk merged into one order ([Source.Required],
+// [objstore.MergeWalks]), holding a page of each — AND THE BACKEND IS ASKED
+// OUTSIDE EVERY READ — up to [auditConcurrency] questions at once while the
+// walk reads on, never inside a read: a read of the estate holds one of the
+// node's few reader connections and the snapshot under it, and a question to
+// the backend is a network round trip — tens of thousands of them inside one
+// read would hold the connection for the length of the audit.
 //
 // A STORE THAT LISTS IN ORDER IS ASKED A RANGE AT A TIME ([objstore.Ranged]):
 // the walk is cut into chunks of [rangeChunk] references, and one listing of
@@ -276,8 +276,9 @@ const CollectInterval = time.Hour
 // grow with every object a live row names whatever the store:
 //
 //   - A WALK OF THE WHOLE REQUIRED ESTATE on the duty's data node, a page of
-//     [eachPage] rows a read on one of its few reader connections, and a pin
-//     appending a barrier to every declaring domain's log ([PinsPerDay]).
+//     [objstore.WalkPage] rows a read on one of its few reader connections,
+//     and a pin appending a barrier to every declaring domain's log
+//     ([PinsPerDay]).
 //   - A STAT OF EACH OBJECT on a store that keeps no order: on `nats` a read
 //     from the bucket stream's leader for each, two million of them a pass —
 //     some two minutes of the leader on a member and up to six from a
@@ -988,12 +989,12 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	asks.SetLimit(auditConcurrency)
 	var (
 		walkErr error
-		chunk   []Reference
+		chunk   []objstore.Reference
 		// after is the last key of the chunk before this one, so the
 		// chunks' ranges tile the key space: (after, chunk's last].
 		after objstore.Key
 	)
-	ask := func(ref Reference) { asks.Go(func() error { return a.first(actx, ref) }) }
+	ask := func(ref objstore.Reference) { asks.Go(func() error { return a.first(actx, ref) }) }
 	list := func() {
 		refs, from := chunk, after
 		asks.Go(func() error { return a.firstRange(actx, from, refs) })
@@ -1003,7 +1004,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		if aerr := actx.Err(); aerr != nil {
 			break // the audit is stopping: walk no further
 		}
-		ref, ok, err := m.next(actx)
+		ref, ok, err := m.Next(actx)
 		if err != nil {
 			walkErr = err
 			break
@@ -1072,7 +1073,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("objstore/collect: %w", context.Cause(ctx))
 	}
-	r.Completed = m.complete
+	r.Completed = m.Complete()
 	return a.shown, nil
 }
 
@@ -1107,11 +1108,11 @@ type auditor struct {
 	// [failedInARow] failed questions, since that many in a row stop the
 	// audit — each a stat, or a re-listing of a range of up to
 	// [rangeChunk].
-	unconfirmed []Reference
+	unconfirmed []objstore.Reference
 	// settled is the last reference the store's answer finished with —
 	// never one still waiting for a look, so never one of unconfirmed —
 	// which [auditor.confirm] asks about again.
-	settled    Reference
+	settled    objstore.Reference
 	hasSettled bool
 }
 
@@ -1140,7 +1141,7 @@ var errStoreFailing = errors.New("the object store is failing, rather than refus
 // the audit's error; so is the audit's context ending, which is never the
 // store's failure. Any other answer says the store is answering, which
 // confirms every second look it failed since the last one.
-func (a *auditor) look(ctx context.Context, ref Reference) (answer, error) {
+func (a *auditor) look(ctx context.Context, ref objstore.Reference) (answer, error) {
 	info, err := a.store.Stat(ctx, ref.Object.Key)
 	var got answer
 	switch {
@@ -1165,7 +1166,7 @@ func (a *auditor) look(ctx context.Context, ref Reference) (answer, error) {
 }
 
 // judged is what info, the store's account of ref's object, says of it.
-func judged(ref Reference, info objstore.Info) answer {
+func judged(ref objstore.Reference, info objstore.Info) answer {
 	if info.Size != ref.Object.Size || (info.Digest != "" && info.Digest != ref.Object.Hash) {
 		return damaged
 	}
@@ -1202,7 +1203,7 @@ func (a *auditor) failed(what string, cause error) error {
 // taken as it stands; the rest wait for a second look, and what the queue hands
 // back for one at once gets it here, in the slot this question already holds —
 // never in a slot of its own, which the walk may be waiting on.
-func (a *auditor) first(ctx context.Context, ref Reference) error {
+func (a *auditor) first(ctx context.Context, ref objstore.Reference) error {
 	got, err := a.look(ctx, ref)
 	if err != nil {
 		return err
@@ -1212,7 +1213,7 @@ func (a *auditor) first(ctx context.Context, ref Reference) error {
 
 // firstAnswer takes got as ref's first look, and answers what the queue for
 // second looks handed back for one at once ([auditor.wait]).
-func (a *auditor) firstAnswer(ref Reference, got answer) []lookAgain {
+func (a *auditor) firstAnswer(ref objstore.Reference, got answer) []lookAgain {
 	switch got {
 	case held:
 		a.settle(ref)
@@ -1270,7 +1271,7 @@ func (a *auditor) again(ctx context.Context, l lookAgain) error {
 // NOTHING IS ASKED WHILE THE LISTING RUNS: what the queue hands back to be
 // looked at once is looked at after it, so a question never holds another
 // request open beneath it.
-func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []Reference) error {
+func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []objstore.Reference) error {
 	if a.byName.Load() {
 		// HANDED ON BEFORE ANOTHER RANGE CAME BACK OUT OF ORDER, and only
 		// now given its slot: asked by name, not listed in vain.
@@ -1335,9 +1336,9 @@ func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []Re
 // UNANSWERED once the store answers after it ([auditor.unconfirmed]), as a
 // second stat that failed would; one the store cannot give in order after all
 // has each asked about by name.
-func (a *auditor) secondRange(ctx context.Context, after objstore.Key, refs []Reference) error {
+func (a *auditor) secondRange(ctx context.Context, after objstore.Key, refs []objstore.Reference) error {
 	i := 0
-	var passed []Reference
+	var passed []objstore.Reference
 	err := a.store.ListKeys(ctx, after, refs[len(refs)-1].Object.Key, func(k objstore.Key, info objstore.Info) error {
 		for ; i < len(refs) && refs[i].Object.Key.Compare(k) < 0; i++ {
 			passed = append(passed, refs[i])
@@ -1390,7 +1391,7 @@ func (a *auditor) unordered(ctx context.Context, err error) {
 // second is ref's second look, whose answer is the finding — but for a
 // failure, which is UNANSWERED only once the store answers after it
 // ([auditor.unconfirmed]).
-func (a *auditor) second(ctx context.Context, ref Reference) error {
+func (a *auditor) second(ctx context.Context, ref objstore.Reference) error {
 	got, err := a.look(ctx, ref)
 	switch {
 	case err != nil:
@@ -1410,7 +1411,7 @@ func (a *auditor) second(ctx context.Context, ref Reference) error {
 }
 
 // settle records that the store's answer finished with ref.
-func (a *auditor) settle(ref Reference) {
+func (a *auditor) settle(ref objstore.Reference) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.settled, a.hasSettled = ref, true
@@ -1455,14 +1456,14 @@ func (a *auditor) confirm(ctx context.Context) error {
 
 // found counts what the audit found of ref, and shows ref among the files that
 // cannot be read if it is among the first [MissingShown] by name.
-func (a *auditor) found(ref Reference, f Finding) {
+func (a *auditor) found(ref objstore.Reference, f Finding) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.foundLocked(ref, f)
 }
 
 // foundLocked is [auditor.found] with mu held.
-func (a *auditor) foundLocked(ref Reference, f Finding) {
+func (a *auditor) foundLocked(ref objstore.Reference, f Finding) {
 	switch f {
 	case FindingMissing:
 		a.r.Missing++
@@ -1476,7 +1477,7 @@ func (a *auditor) foundLocked(ref Reference, f Finding) {
 
 // eachByName is the first look of each of refs, asked by name one after
 // another in the slot of the range they were gathered for.
-func (a *auditor) eachByName(ctx context.Context, refs []Reference) error {
+func (a *auditor) eachByName(ctx context.Context, refs []objstore.Reference) error {
 	for _, ref := range refs {
 		if err := a.first(ctx, ref); err != nil {
 			return err
@@ -1485,78 +1486,17 @@ func (a *auditor) eachByName(ctx context.Context, refs []Reference) error {
 	return nil
 }
 
-// merged is every required reference of a pass's sources in ONE key order: a
-// merge of every required table's walk, holding one page of each — the
-// tables times a page, never the inventory.
-type merged struct {
-	heads []*head
-	// complete is whether every page read so far was read complete.
-	complete bool
-}
-
-// head is one walk's place in the merge: its current page and how far into
-// it the merge has handed references on.
-type head struct {
-	walk   Walk
-	source string
-	page   []Reference
-	next   int
-	done   bool
-	// last is the last key handed on, which the walk's next must not come
-	// before.
-	last objstore.Key
-}
-
-// mergeWalks merges the required walks of every source, each read no earlier
-// than the view pinned for its source.
-func mergeWalks(sources References, v view) *merged {
-	m := &merged{complete: true}
+// mergeWalks merges the required walks of every source into one key order
+// ([objstore.MergeWalks]), each read no earlier than the view pinned for its
+// source.
+func mergeWalks(sources References, v view) *objstore.Merge {
+	var walks []objstore.NamedWalk
 	for i, s := range sources {
 		for _, w := range s.Required(v[i]) {
-			m.heads = append(m.heads, &head{walk: w, source: s.Name()})
+			walks = append(walks, objstore.NamedWalk{Name: s.Name(), Walk: w})
 		}
 	}
-	return m
-}
-
-// next is the reference with the first key among every walk's next, and false
-// once every walk has ended. It reads a walk's next page — one read of the
-// estate — only when that walk's page is spent, and refuses a walk whose keys
-// go backwards: the ranges the audit lists are cut from this order, and a
-// reference out of it would be asked about in a range that cannot hold it.
-//
-// A SCAN OF THE HEADS rather than a heap: there is one head per required table
-// in the company, a handful, and a scan of a handful is cheaper than keeping a
-// heap of them.
-func (m *merged) next(ctx context.Context) (Reference, bool, error) {
-	var best *head
-	for _, h := range m.heads {
-		if h.next == len(h.page) && !h.done {
-			page, whole, err := h.walk.Next(ctx)
-			if err != nil {
-				return Reference{}, false, fmt.Errorf("audit %s's references: %w", h.source, err)
-			}
-			m.complete = m.complete && whole
-			h.page, h.next, h.done = page, 0, len(page) == 0
-		}
-		if h.next == len(h.page) {
-			continue
-		}
-		if best == nil || h.page[h.next].Object.Key.Compare(best.page[best.next].Object.Key) < 0 {
-			best = h
-		}
-	}
-	if best == nil {
-		return Reference{}, false, nil
-	}
-	ref := best.page[best.next]
-	best.next++
-	if ref.Object.Key.Compare(best.last) < 0 {
-		return Reference{}, false, fmt.Errorf("audit %s's references: %s came after %s, "+
-			"out of the key order a walk reads in", best.source, ref.Object.Key, best.last)
-	}
-	best.last = ref.Object.Key
-	return ref, true, nil
+	return objstore.MergeWalks(walks...)
 }
 
 // compareShown is the order the files that cannot be read are shown in: by the
@@ -1589,11 +1529,11 @@ func showFirst(shown []MissingFile, f MissingFile) []MissingFile {
 // after the key it is listed from.
 type lookAgain struct {
 	// ref is the reference, where refs is nil.
-	ref Reference
+	ref objstore.Reference
 	// after and refs are a range: the references (after, the last of
 	// them].
 	after objstore.Key
-	refs  []Reference
+	refs  []objstore.Reference
 }
 
 // size is how many references l holds.

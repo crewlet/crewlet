@@ -2,6 +2,7 @@ package objstore
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -236,6 +237,16 @@ func TestOnlyARequiredTableIsWalked(t *testing.T) {
 		if !strings.Contains(err.Error(), named) {
 			t.Errorf("the refusal %q does not name %q", err, named)
 		}
+	}
+	// AND ITS WALK IS REFUSED THE SAME WAY, from its first page, before
+	// anything is read: a pass that forgot to leave it out fails at once.
+	read := func(context.Context, func(*sql.Tx) error) (bool, error) {
+		t.Fatal("a retired table's walk read the estate")
+		return false, nil
+	}
+	if page, _, werr := retired.WalkOf(read).Next(t.Context()); werr == nil ||
+		!strings.Contains(werr.Error(), string(Retired)) {
+		t.Fatalf("a retired table's walk = %d references, %v; want the refusal", len(page), werr)
 	}
 
 	shields, err := retired.ObjectsAmong(3)

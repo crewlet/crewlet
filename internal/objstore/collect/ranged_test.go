@@ -143,7 +143,7 @@ func TestAnS3BucketIsAuditedAListingRequestAChunk(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			src := &fakeSource{named: map[objstore.Key]Reference{}}
+			src := &fakeSource{named: map[objstore.Key]objstore.Reference{}}
 			const files = 3*rangeChunk + 300
 			for i := range files {
 				put := func(body string) objstore.Object {
@@ -154,7 +154,7 @@ func TestAnS3BucketIsAuditedAListingRequestAChunk(t *testing.T) {
 					return o
 				}
 				o := put(fmt.Sprintf("object %d", i))
-				src.named[o.Key] = Reference{Object: o, NamedBy: fmt.Sprintf("ENG/%04d.md", i)}
+				src.named[o.Key] = objstore.Reference{Object: o, NamedBy: fmt.Sprintf("ENG/%04d.md", i)}
 				if c.every > 0 && i%c.every == 0 {
 					put(fmt.Sprintf("replaced %d", i)) // its key between two referenced ones
 				}
@@ -411,7 +411,7 @@ func TestARangedAuditStoppedMidWalkHasNotRunToItsEnd(t *testing.T) {
 	t.Parallel()
 	h, _ := newRangedHarness(t)
 	// Two pages of references and one chunk of them, at the default chunk.
-	for i := range eachPage + 10 {
+	for i := range objstore.WalkPage + 10 {
 		h.file(fmt.Sprintf("%04d.md", i), fmt.Sprintf("object %d", i))
 	}
 	ctx, stop := context.WithCancelCause(t.Context())
@@ -499,13 +499,13 @@ func TestTheAuditMergesEveryRequiredTableIntoOneKeyOrder(t *testing.T) {
 // keys of each interleaved with the other's.
 type twoTables struct{ *fakeSource }
 
-func (s *twoTables) Required(statelog.Position) []Walk {
+func (s *twoTables) Required(statelog.Position) []objstore.Walk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sorted := slices.SortedFunc(maps.Values(s.named), func(a, b Reference) int {
+	sorted := slices.SortedFunc(maps.Values(s.named), func(a, b objstore.Reference) int {
 		return a.Object.Key.Compare(b.Object.Key)
 	})
-	var even, odd []Reference
+	var even, odd []objstore.Reference
 	for i, ref := range sorted {
 		if i%2 == 0 {
 			even = append(even, ref)
@@ -513,14 +513,14 @@ func (s *twoTables) Required(statelog.Position) []Walk {
 			odd = append(odd, ref)
 		}
 	}
-	return []Walk{&heldWalk{pages: [][]Reference{even[:10], even[10:]}},
-		&heldWalk{pages: [][]Reference{odd}}}
+	return []objstore.Walk{&heldWalk{pages: [][]objstore.Reference{even[:10], even[10:]}},
+		&heldWalk{pages: [][]objstore.Reference{odd}}}
 }
 
 // heldWalk is a walk over pages held in memory.
-type heldWalk struct{ pages [][]Reference }
+type heldWalk struct{ pages [][]objstore.Reference }
 
-func (w *heldWalk) Next(context.Context) ([]Reference, bool, error) {
+func (w *heldWalk) Next(context.Context) ([]objstore.Reference, bool, error) {
 	if len(w.pages) == 0 {
 		return nil, true, nil
 	}
@@ -539,7 +539,7 @@ func TestAWalkOutOfKeyOrderFailsTheAudit(t *testing.T) {
 	if a.Compare(b) > 0 {
 		a, b = b, a
 	}
-	backwards := &heldSource{fakeSource: h.source, walk: &heldWalk{pages: [][]Reference{
+	backwards := &heldSource{fakeSource: h.source, walk: &heldWalk{pages: [][]objstore.Reference{
 		{h.source.named[b], h.source.named[a]},
 	}}}
 	c, err := New(Options{Store: h.store, References: References{backwards}, Now: h.clock.Now})
@@ -554,7 +554,7 @@ func TestAWalkOutOfKeyOrderFailsTheAudit(t *testing.T) {
 // heldSource is a fake source whose one required walk is given.
 type heldSource struct {
 	*fakeSource
-	walk Walk
+	walk objstore.Walk
 }
 
-func (s *heldSource) Required(statelog.Position) []Walk { return []Walk{s.walk} }
+func (s *heldSource) Required(statelog.Position) []objstore.Walk { return []objstore.Walk{s.walk} }
