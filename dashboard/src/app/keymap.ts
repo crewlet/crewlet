@@ -471,7 +471,7 @@ const CAP_NAMES: Record<string, string> = {
 
 /**
  * One press as the keys of a kit `Kbd` — `["Mod", "k"]` — so a hint drawn
- * anywhere (the legend, the sidebar's search trigger) is the table's own
+ * anywhere (the legend, the band's search trigger) is the table's own
  * press in the platform's own notation, never a hand-written "⌘K". A
  * sequence's prefix is not part of it: `g` then `h` is two caps.
  */

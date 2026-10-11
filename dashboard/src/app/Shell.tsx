@@ -71,6 +71,8 @@ import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { PersonSidebar } from "./sidebar/PersonSidebar.tsx";
 import { PageHeader, type PageMenuEntry } from "./header/PageHeader.tsx";
+import { Band } from "./header/Band.tsx";
+import { PhoneBar } from "./PhoneBar.tsx";
 import { PageContextValue, type PageContext } from "./page.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
@@ -318,29 +320,42 @@ function Frame({ children }: { children: ReactNode }) {
           sidebar={
             shell === "admin" ? (
               <ColumnBoundary what="The admin console's navigation" resetKey="console">
-                <ConsoleSidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />
+                <ConsoleSidebar onSetToken={openToken} />
               </ColumnBoundary>
             ) : (
-              <PersonSidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />
+              <PersonSidebar onSetToken={openToken} />
             )
           }
+          // THE BAND AND THE PANEL'S HEAD, in that order: the band is the
+          // frame's top arm — the trail and search, on the frame's ground —
+          // and the page header is the first thing inside the panel. Both in
+          // the kit's bar slot because both stand above the one scroller; the
+          // band leaves the sheet for the frame at the shell breakpoint
+          // (`.frame-band` in frame.css).
           topbar={
-            <PageHeader
-              crumbs={crumbs}
-              row={row}
-              counts={counts}
-              title={where}
-              workspace={workspace}
-              working={showWorking}
-              menu={menu}
-            >
-              <StateBar degraded={degraded} coverage={coverage} />
-            </PageHeader>
+            <>
+              <Band crumbs={crumbs} shell={shell} onSearch={() => setPaletteOpen(true)} />
+              <PageHeader
+                row={row}
+                counts={counts}
+                title={where}
+                workspace={workspace}
+                working={showWorking}
+                menu={menu}
+              >
+                <StateBar degraded={degraded} coverage={coverage} />
+              </PageHeader>
+            </>
           }
           footer={
-            <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
-              <PeekHost />
-            </PeekRestingWidth.Provider>
+            <>
+              <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
+                <PeekHost />
+              </PeekRestingWidth.Provider>
+              {/* THE PHONE'S TAB BAR, the person shell's alone, drawn under
+                  `breakpoint.phone` only (`PhoneBar.tsx`). */}
+              {shell === "person" && <PhoneBar onSearch={() => setPaletteOpen(true)} />}
+            </>
           }
         >
           {row && column > 0 ? (

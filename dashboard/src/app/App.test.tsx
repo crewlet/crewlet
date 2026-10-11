@@ -199,7 +199,7 @@ describe("routing", () => {
   // the console sidebar's Live row carries the count everywhere else. Drawn
   // in every bar it sat between a task's trail and its actions, and pushed a
   // profile's controls past a phone's edge.
-  test("the working chip is in the Overview's page bar and in no other", async () => {
+  test("the working chip is in the Overview's page header and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/admin", true],
       ["#/today", false],
@@ -215,7 +215,7 @@ describe("routing", () => {
       act(() => {
         rosterOf(store, [{ role: "Agent SWE", handle: "agent-swe", activity: "working" }]);
       });
-      const chip = view.container.querySelector(".page-bar .working-now");
+      const chip = view.container.querySelector(".page-row .working-now");
       expect(chip !== null, hash).toBe(drawn);
       view.unmount();
     }
@@ -435,7 +435,12 @@ describe("the console, for a reader who is not an admin", () => {
       const { view } = mountAs(Promise.resolve(anonymous));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
       expect(await screen.findByText(`${section.label} is for admins`), section.key).toBeDefined();
-      expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+      // IN A PERSON'S VOICE: sign in, and the way back to the reader's day.
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+      expect(screen.getByRole("link", { name: "Go to Today" }).getAttribute("href")).toBe(
+        "#/today",
+      );
+      expect(content().textContent, section.key).not.toMatch(/api\.auth|API key|role: admin/);
       // NEVER NOT FOUND: the address is right, and it is the key that does
       // not reach it.
       expect(content().textContent, section.key).not.toMatch(/there is no such screen/);
@@ -530,7 +535,8 @@ describe("the console, for a reader who is not an admin", () => {
       const { view } = mountAs(Promise.resolve(member));
       expect(await screen.findByText(`${section.label} is for admins`), section.key).toBeDefined();
       expect(view.container.textContent, section.key).toContain("ask Jane Founder");
-      expect(screen.queryByRole("button", { name: "Set token" }), section.key).toBeNull();
+      expect(screen.queryByRole("button", { name: "Sign in" }), section.key).toBeNull();
+      expect(screen.getByRole("link", { name: "Go to Today" }), section.key).toBeDefined();
       expect(view.container.querySelector(".crewlet-statcard"), section.key).toBeNull();
       view.unmount();
       cleanup();
@@ -933,12 +939,62 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   );
   for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
-  expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
-    "Open on the board",
-    "Keep in Favourites",
-    "Copy link",
-  ]);
+  const items = screen.getAllByRole("menuitem").map((el) => el.textContent ?? "");
+  expect(items.slice(0, 3)).toEqual(["Open on the board", "Keep in Favourites", "Copy link"]);
+  // AND THE ADMIN GROUP LAST, for an admin: the same task's turns in the
+  // console. (A project has no console twin, which is why the first page's
+  // menu above ends at Copy link.)
+  expect(items).toHaveLength(4);
+  expect(items[3]).toMatch(/^Open in the admin console/);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
   expect(location.hash).toContain("#/work/ENG");
   expect(location.hash).toContain("peek=");
+});
+
+// THE ADMIN GROUP ENDS AN OBJECT'S ⋯ MENU FOR AN ADMIN, AND FOR NOBODY ELSE:
+// a member has no console, so the menu holds no entry for one — not even a
+// held one.
+test("a task's menu ends with the way to its turns in the console, for an admin alone", async () => {
+  const task = {
+    task: { id: "t-1", key: "ENG-42", project: "ENG", title: "Fix it", status: "todo", version: 3 },
+    reassignment_budget: 8,
+    complete: true,
+  };
+  for (const [role, offered] of [
+    ["admin", true],
+    ["member", false],
+  ] as const) {
+    location.hash = "#/work/ENG-42";
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+      if (what === "viewer") {
+        return Promise.resolve({
+          token_id: "jane",
+          role,
+          reach: role,
+          linked: true,
+          handle: "jane",
+        });
+      }
+      if (what === "work_item") return Promise.resolve(task);
+      return Promise.reject(new QueryError("unauthorized"));
+    };
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+    fireEvent.click(screen.getByRole("button", { name: "More for ENG-42" }));
+    const crossing = screen.queryByRole("menuitem", { name: /Open in the admin console/ });
+    expect(crossing !== null, role).toBe(offered);
+    if (crossing) {
+      fireEvent.click(crossing);
+      expect(location.hash).toBe("#/admin/live/turns?item=ENG-42");
+    }
+    cleanup();
+  }
 });

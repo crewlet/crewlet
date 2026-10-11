@@ -619,7 +619,42 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-app-shell__rail-foot",
-    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the admin door's navigation inside it, which the foot already stands on. Another rule about OUR composition of the package's component.",
+    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the admin door's navigation inside it, which the foot already stands on, and draws its rule in the inverse ink on the console's ground. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell",
+    why: "uilet's AppShell writes it on the shell's root. styles/frame.css makes the root the containing block the band is positioned against from the shell breakpoint up (the L: the bar on the frame, the sheet a panel under it), and paints the console's root on the inverse ground. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__rail",
+    why: "uilet's AppShell writes it on the sidebar. styles/frame.css paints the console's rail on the inverse ground, which is how a reader tells the admin console from the person shell. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__rail-head",
+    why: "uilet's AppShell writes it on the sidebar's head. styles/frame.css stands it at the band's height with no inset above it, so the lockup is centred on the line the trail is written on once the band runs across the frame's top. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-nav-item__row",
+    why: "uilet's SidebarNav writes it on every sidebar row. styles/frame.css draws the console's rows in the inverse ink, and its current row with the accent bar, on the inverse ground the console's rail stands on. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-nav-group__label",
+    why: "uilet's SidebarNav writes it on a group's label. styles/frame.css draws the console's labels (Running) in the inverse ink's quiet step. See crewlet-nav-item__row.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-nav-item__count",
+    why: "uilet's SidebarNav writes it on a row's figure. styles/frame.css draws the console's figures (Live's working count) in the inverse ink's quiet step. See crewlet-nav-item__row.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-kbd",
+    why: "uilet's Kbd writes it on a key cap. styles/frame.css draws the console's caps (each section's chord, search's ⌘K) in the inverse ink, because the package's raised cap on the inverse ground reads as a light chip punched out of the rail. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -29,7 +29,7 @@
  */
 
 import { useMemo } from "react";
-import { AppShell, Kbd, SearchTrigger, SidebarNav, StatusDot, useAppShell } from "@crewlethq/ui";
+import { AppShell, Kbd, SidebarNav, StatusDot, useAppShell } from "@crewlethq/ui";
 import { ActivityGlyph, ChevronLeftGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import { personPathOf, workspaceOf, workspacesOf, type WorkspaceRow } from "~/app/nav.ts";
@@ -40,19 +40,13 @@ import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { inboxFigure, useInboxCounts, waitingWords } from "~/lib/useInboxCounts.ts";
-import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
+import { useKeymap } from "~/app/keymap.ts";
 import { RailBoundary } from "~/app/boundaries.tsx";
 import { HealthCard, healthReading } from "~/app/sidebar/HealthCard.tsx";
 import { NavRow } from "~/app/sidebar/NavRow.tsx";
 import { UserBlock } from "~/app/sidebar/UserBlock.tsx";
 
-export function ConsoleSidebar({
-  onSearch,
-  onSetToken,
-}: {
-  onSearch: () => void;
-  onSetToken: () => void;
-}) {
+export function ConsoleSidebar({ onSetToken }: { onSetToken: () => void }) {
   const route = useRoute();
   const viewer = useViewer();
   const shell = useAppShell();
@@ -153,16 +147,6 @@ export function ConsoleSidebar({
         <KeyGlyph size="sm" aria-hidden="true" />
         Admin console
       </p>
-      <div className="side-search">
-        <SearchTrigger
-          variant="rail"
-          label={`Search ${company} or jump to…`}
-          title="Search everything"
-          onClick={onSearch}
-          keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
-        />
-      </div>
       <SidebarNav label="Admin console">
         <SidebarNav.Group>{workspacesOf("admin").map(row)}</SidebarNav.Group>
         {/* LAST, so a turn starting or ending moves nothing above it. */}

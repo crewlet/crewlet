@@ -253,6 +253,14 @@ function mountShell(store: Store, socket: LiveSocket, child: ReactNode = <Bare /
   );
 }
 
+/**
+ * The person sidebar's navigation — never the phone's tab bar, which jsdom
+ * draws too (it evaluates no stylesheet) and which names the same places.
+ */
+function sideNav(): HTMLElement {
+  return screen.getByRole("navigation", { name: "Navigation" });
+}
+
 /** Let the queries the first render made answer, and the renders they cause land. */
 async function settle(): Promise<void> {
   await act(async () => {
@@ -291,7 +299,7 @@ describe("the Inbox badge", () => {
     await settle();
     const inbox = asked.find((a) => a.what === "work_inbox");
     expect(inbox?.params).toMatchObject({ handle: "ada", unread: true, primary_only: true });
-    const row = screen.getByRole("link", { name: /^Inbox/ });
+    const row = within(sideNav()).getByRole("link", { name: /^Inbox/ });
     expect(row.textContent).toContain("1");
   });
 
@@ -307,7 +315,7 @@ describe("the Inbox badge", () => {
     });
     mountShell(store, socket);
     await settle();
-    expect(screen.getByRole("link", { name: /^Inbox/ }).textContent).toContain("2+");
+    expect(within(sideNav()).getByRole("link", { name: /^Inbox/ }).textContent).toContain("2+");
   });
 
   // NOTHING TO ANSWER IS NO BADGE AT ALL. A zero in the accent is a mark a
@@ -318,7 +326,7 @@ describe("the Inbox badge", () => {
     });
     mountShell(store, socket);
     await settle();
-    expect(screen.getByRole("link", { name: /^Inbox/ }).textContent).toBe("Inbox");
+    expect(within(sideNav()).getByRole("link", { name: /^Inbox/ }).textContent).toBe("Inbox");
   });
 });
 
@@ -650,7 +658,7 @@ describe("the sidebars' figures", () => {
     );
     mountShell(store, socket);
     await settle();
-    expect(screen.getByRole("link", { name: /^My work/ }).textContent).toBe("My work");
+    expect(within(sideNav()).getByRole("link", { name: /^My work/ }).textContent).toBe("My work");
     expect(
       asked.some((a) => a.what === "work_items" && a.params?.limit === 1),
       "the frame asked for a queue count nothing draws",
@@ -1059,11 +1067,112 @@ test("the console's health card reads the push and links to the nodes", async ()
   expect(card?.textContent).toContain("3 nodes · config epoch 42");
 });
 
-// A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·
-// Items | About | History`. As a row of their own under it they cost the
-// first screenful a line the approved Board does not spend. And the row on
-// the bar still controls the region in the page, by id.
-test("an object's lenses sit on the page bar beside the breadcrumb and control the page", async () => {
+// THE BAND IS THE FRAME'S TOP ARM: the trail and search, and nothing a page
+// does. In the person shell that is all of it — search moved off the sidebar
+// to it — and in the console the trail starts "Admin ›" and the band carries
+// the way to the person twin of what is open.
+describe("the band", () => {
+  function band(): HTMLElement {
+    return document.querySelector<HTMLElement>(".frame-band")!;
+  }
+
+  test("in the person shell it holds the trail and search, and the sidebar holds no search", async () => {
+    location.hash = "#/work/projects";
+    const { store, socket } = answering({ org: undefined });
+    mountShell(store, socket);
+    await settle();
+    expect(band().tagName).toBe("HEADER");
+    expect(within(band()).getByRole("navigation", { name: "Breadcrumb" })).toBeDefined();
+    expect(within(band()).getByRole("button", { name: /^Search/ })).toBeDefined();
+    expect(band().querySelector(".band-cross")).toBeNull();
+    expect(band().querySelector(".crumb-prefix")).toBeNull();
+    // THE PAGE'S CONTROLS ARE THE PANEL'S, never the band's.
+    expect(band().querySelector(".page-controls")).toBeNull();
+    expect(document.querySelector(".crewlet-app-shell__rail .crewlet-search-trigger")).toBeNull();
+  });
+
+  test("in the console the trail starts Admin, and the band goes to the person twin", async () => {
+    location.hash = "#/admin/agents/seats/swe";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    const trail = within(band()).getByRole("navigation", { name: "Breadcrumb" });
+    expect(trail.querySelector(".crumb-prefix")?.textContent).toBe("Admin");
+    const cross = band().querySelector<HTMLAnchorElement>(".band-cross")!;
+    expect(cross.getAttribute("href")).toBe("#/team/seats/swe");
+    expect(cross.textContent).toMatch(/^Open in /);
+    expect(within(band()).getByRole("button", { name: /or jump to/ })).toBeDefined();
+    expect(document.querySelector(".crewlet-app-shell__rail .crewlet-search-trigger")).toBeNull();
+  });
+
+  test("the band's search opens the palette", async () => {
+    location.hash = "#/today";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    fireEvent.click(within(band()).getByRole("button", { name: /^Search/ }));
+    expect(await screen.findByRole("dialog")).toBeDefined();
+  });
+});
+
+// THE PHONE'S TAB BAR IS THE TABLE'S, and the person shell's alone: Today,
+// Inbox (with the badge) and My work, then Search and More — More holding the
+// rest of the table's person workspaces, the console for an admin, and the
+// way to the drawer. The console draws none.
+describe("the phone's tab bar", () => {
+  function bar(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".phone-bar");
+  }
+
+  test("its tabs are the table's, the Inbox wearing the frame's badge", async () => {
+    location.hash = "#/inbox";
+    const { store, socket } = answering({
+      work_inbox: { notices: [notice("assigned", 1), notice("mention", 2)], complete: true },
+    });
+    mountShell(store, socket);
+    await settle();
+    const tabs = within(bar()!).getAllByRole("link");
+    expect(tabs.map((a) => a.getAttribute("href"))).toEqual(["#/today", "#/inbox", "#/me"]);
+    const inbox = within(bar()!).getByRole("link", { name: /^Inbox/ });
+    expect(inbox.getAttribute("aria-current")).toBe("page");
+    expect(inbox.querySelector(".phone-tab-badge")?.textContent).toMatch(/^2/);
+    expect(within(bar()!).getByRole("button", { name: "Search" })).toBeDefined();
+  });
+
+  test("More holds the rest of the table, and the console for an admin alone", async () => {
+    for (const [role, admin] of [
+      ["admin", true],
+      ["member", false],
+    ] as const) {
+      location.hash = "#/today";
+      const { store, socket } = answering({
+        viewer: { token_id: "ada", role, reach: role, linked: true, handle: "ada" },
+      });
+      mountShell(store, socket);
+      await settle();
+      fireEvent.click(within(bar()!).getByRole("button", { name: "More" }));
+      const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+      expect(items.slice(0, 3), role).toEqual(["Work", "Team", "Knowledge"]);
+      expect(items.includes("Admin console"), role).toBe(admin);
+      expect(items.at(-1), role).toBe("Projects, favourites and you");
+      cleanup();
+    }
+  });
+
+  test("the console draws no tab bar", async () => {
+    location.hash = "#/admin/live";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    expect(bar()).toBeNull();
+  });
+});
+
+// A PROJECT'S LENSES LEAD THE PANEL'S FIRST ROW, under the name they are
+// lenses on (`Work › ENG Core` on the band), in the row the page's controls
+// end — so they cost the first screenful no line of their own. And the row
+// still controls the region in the page, by id.
+test("an object's lenses lead the panel's row, before its controls, and control the page", async () => {
   location.hash = "#/work/ENG?lens=about";
   const eng = {
     key: "ENG",
@@ -1082,9 +1191,12 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   const lenses = await waitFor(() => screen.getByRole("tablist", { name: "Lens" }));
   const slot = document.getElementById(PAGE_LENSES_SLOT);
   expect(slot?.contains(lenses)).toBe(true);
-  // IMMEDIATELY AFTER THE TRAIL, before the controls.
-  expect(slot?.previousElementSibling?.getAttribute("aria-label")).toBe("Breadcrumb");
+  // AT THE ROW'S START, before the controls — and never on the band, which
+  // is the trail's and search's.
+  expect(slot?.parentElement?.classList.contains("page-row")).toBe(true);
+  expect(slot?.previousElementSibling).toBeNull();
   expect(slot?.nextElementSibling?.classList.contains("page-controls")).toBe(true);
+  expect(slot?.closest(".frame-band")).toBeNull();
   // THE ROW CONTROLS THE PANEL IN THE PAGE.
   const about = screen.getByRole("tab", { name: "About" });
   expect(about.getAttribute("aria-selected")).toBe("true");

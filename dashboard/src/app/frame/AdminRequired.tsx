@@ -17,10 +17,15 @@
  * three-valued doctrine exists to prevent. So nothing is drawn but what is
  * true: this section is for admins, and here is what changes that.
  *
- * TWO READERS, TWO REMEDIES. With no key at all the remedy is a key, and the
- * token dialog is offered. With a MEMBER's key the key works — it reaches the
- * company's work, pages and chart — and another paste of it changes nothing,
- * so the remedy is a person: the first admin the engine named.
+ * TWO READERS, TWO REMEDIES — IN A PERSON'S VOICE. The reader is a person
+ * who followed a link into the console, so it speaks as the person shell does:
+ * no API, no `api.auth`, no role field. With no key at all the remedy is to
+ * sign in with an admin's access key, and the sign-in is offered. With a
+ * MEMBER's key the key works — it reaches the company's work, pages and chart
+ * — and another paste of it changes nothing, so the remedy is a person: the
+ * first admin the engine named, asked by name. Both carry the way back to the
+ * reader's own day, because a refusal with no way out is a dead end in the
+ * middle of somebody's morning.
  *
  * A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT REFUSED. `loading` covers a
  * viewer read that failed as well as one in flight, and treating either as
@@ -30,19 +35,26 @@
  * FAILED the screen mounts, and its own reads say what they find.
  */
 
-import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
 import { requestToken } from "~/protocol/index.ts";
 import { adminToAsk, useViewer } from "~/lib/viewer.ts";
 
 export function AdminRequired({ what }: { what: string }) {
   const viewer = useViewer();
+  const back = (
+    <ButtonLink variant="secondary" href={href(["today"])}>
+      Go to Today
+    </ButtonLink>
+  );
   if (!viewer.anonymous) {
     return (
       <EmptyState
         icon={<KeyGlyph />}
         title={`${what} is for admins`}
-        description={`Your key is a member's: it reaches the company's work, pages and chart. Only an admin can open this — ask ${adminToAsk(viewer.admins)}.`}
+        description={`It is part of the admin console. If you need something changed here, ask ${adminToAsk(viewer.admins)}.`}
+        action={back}
       />
     );
   }
@@ -50,17 +62,14 @@ export function AdminRequired({ what }: { what: string }) {
     <EmptyState
       icon={<KeyGlyph />}
       title={`${what} is for admins`}
-      description={
-        <>
-          It needs an admin&rsquo;s API key, reads included. Set a key matching one of your{" "}
-          <InlineCode>api.auth.tokens</InlineCode> entries with <InlineCode>role: admin</InlineCode>
-          .
-        </>
-      }
+      description="It is part of the admin console. Sign in with an admin's access key to open it."
       action={
-        <Button variant="primary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
-        </Button>
+        <span className="row gap-2 wrap">
+          <Button variant="primary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
+            Sign in
+          </Button>
+          {back}
+        </span>
       }
     />
   );

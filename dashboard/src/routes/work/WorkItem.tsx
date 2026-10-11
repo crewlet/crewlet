@@ -40,6 +40,7 @@ import {
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
+import { useAdminGroup } from "~/app/crossing.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
@@ -243,6 +244,7 @@ export function WorkItem({ id }: { id: string }) {
   const openOnBoard = () => {
     if (item) nav.to(["work", item.project], { peek: refToken({ kind: "item", id: item.key }) });
   };
+  const adminGroup = useAdminGroup();
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
   // link, rather than a second ellipsis next to the frame's.
   usePageMenu(
@@ -289,6 +291,9 @@ export function WorkItem({ id }: { id: string }) {
                   icon: <SquareKanbanGlyph size="sm" />,
                   onSelect: openOnBoard,
                 },
+                // THE ADMIN GROUP, an admin's alone: the turns charged to
+                // this task, in the console (`app/crossing.tsx`).
+                ...adminGroup,
               ]}
             />
           </span>
