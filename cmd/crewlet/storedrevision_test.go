@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -86,12 +90,27 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 // The engine stamps the chart and the knowledge spaces with it at boot and
 // writes neither without one, so a run that read the instant and did not pass
 // it on booted a node on its store's company with no projects until the next
-// apply. A Tier B file's company has no activation yet, and carries none.
+// apply. A Tier B file's company has no activation yet, and carries none —
+// and the engine boots on a file only where the seed is about to make it the
+// active revision: an `-import-company` override, or a `-company` seed into a
+// store that holds nothing.
 func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	boot := &config.Bootstrap{}
+	file := &config.Company{Name: "From a file"}
+
+	// AN EMPTY STORE boots on the bootstrap seed that is about to fill it.
+	opts, _, err := bootOptions(t.Context(), cfg, boot, seedOf(file), quiet())
+	if err != nil {
+		t.Fatalf("the options over an empty store: %v", err)
+	}
+	if opts.Company != file || !opts.ActivatedAt.IsZero() {
+		t.Errorf("a seed into an empty store boots as (%v, %s), want the file's "+
+			"with no activation", companyName(opts.Company), opts.ActivatedAt)
+	}
+
 	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
 	cs, closeStore, err := openConfigStore(t.Context(), cfg)
 	if err != nil {
@@ -106,26 +125,106 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 	}
 	closeStore()
 
-	opts, err := bootOptions(t.Context(), cfg, boot, nil)
-	if err != nil || opts.Company == nil {
-		t.Fatalf("the options from the store = (%+v, %v), want its company", opts, err)
-	}
-	if !opts.ActivatedAt.Equal(activated) {
-		t.Errorf("the engine is handed activation %s, want the stored revision's %s",
-			opts.ActivatedAt, activated)
-	}
-	if opts.Bootstrap != boot {
-		t.Error("the engine is not handed the Tier A the run loaded")
+	for _, tc := range []struct {
+		name string
+		seed tierBSeed
+	}{
+		{"no file", tierBSeed{Path: "company.yaml"}},
+		// A BOOTSTRAP SEED OVER A COMPANY is ignored by the seed, so the
+		// engine is never built from it.
+		{"a bootstrap seed", seedOf(file)},
+	} {
+		opts, _, err := bootOptions(t.Context(), cfg, boot, tc.seed, quiet())
+		if err != nil || opts.Company == nil || opts.Company.Name != "Nimbus" {
+			t.Fatalf("%s: the options from the store = (%v, %v), want its company",
+				tc.name, companyName(opts.Company), err)
+		}
+		if !opts.ActivatedAt.Equal(activated) {
+			t.Errorf("%s: the engine is handed activation %s, want the stored "+
+				"revision's %s", tc.name, opts.ActivatedAt, activated)
+		}
+		if opts.Bootstrap != boot {
+			t.Errorf("%s: the engine is not handed the Tier A the run loaded", tc.name)
+		}
 	}
 
-	file := &config.Company{Name: "From a file"}
-	if opts, err = bootOptions(t.Context(), cfg, boot, file); err != nil {
-		t.Fatalf("the options from a file: %v", err)
+	// AN OVERRIDE is about to replace the stored revision, so it is the file.
+	if opts, _, err = bootOptions(t.Context(), cfg, boot, overrideOf(file), quiet()); err != nil {
+		t.Fatalf("the options from an override: %v", err)
 	}
 	if opts.Company != file || !opts.ActivatedAt.IsZero() {
-		t.Errorf("a file's company boots as (%v, %s), want the file's with no "+
+		t.Errorf("an override boots as (%v, %s), want the file's with no "+
 			"activation — the stored revision's instant is not the file's",
-			opts.Company, opts.ActivatedAt)
+			companyName(opts.Company), opts.ActivatedAt)
+	}
+}
+
+// A RESTART WITH A STALE BOOTSTRAP FILE BOOTS THE ENGINE ON THE STORE'S
+// COMPANY, so what the engine builds once per process is built from what the
+// node serves.
+//
+// The quickstart's `crewlet run crewlet.yaml -company company.yaml` and the
+// default ./company.yaml both carry a file on every restart, and once the
+// store holds a company that file is ignored. The engine used to boot on it
+// anyway: the native runtime (and the store's embedding width) were built from
+// the file, the seed then ignored it, and the first tick applied the store's
+// revision — so a tracker turned native live came back as no tracker at every
+// restart, for ever, however many times the node was restarted.
+func TestABootstrapSeedBootsTheEngineOnTheStoresCompany(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "crewlet.yaml")
+	tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\nstream:\n"+
+		"  store_dir: %s\napi:\n  port: 0\n",
+		filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"))
+	if err := os.WriteFile(cfg, []byte(tierA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	boot, err := config.LoadBootstrap(cfg, config.EnvOnly())
+	if err != nil {
+		t.Fatalf("load Tier A: %v", err)
+	}
+	seedEngineStore(t, boot)
+
+	// THE STORE runs the engine's own tracker (an unset tracker.backend with
+	// no Jira derives native), as a live edit left it.
+	stored := parse(t, companyYAML)
+	payload, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateStored(t, cfg, string(payload))
+	_, storedAt, err := companyFromStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("read the stored revision back: %v", err)
+	}
+	// THE FILE is the one the deployment was started with, a month ago.
+	stale := parse(t, strings.Replace(companyYAML, "name: Acme", "name: Acme Stale", 1)+
+		"tracker:\n  backend: none\n")
+
+	opts, _, err := bootOptions(t.Context(), cfg, boot, seedOf(stale), quiet())
+	if err != nil {
+		t.Fatalf("bootOptions: %v", err)
+	}
+	if opts.Company == nil || opts.Company.Name != "Acme" {
+		t.Fatalf("a restart with a stale -company file boots the engine on %v, want "+
+			"the store's company: the seed is about to be ignored, so the file is "+
+			"never what this node serves", companyName(opts.Company))
+	}
+	if !opts.ActivatedAt.Equal(storedAt) {
+		t.Errorf("the engine is handed activation %s, want the stored revision's %s",
+			opts.ActivatedAt, storedAt)
+	}
+
+	opts.Mode = statelog.ModeNormal
+	e, err := engine.New(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if e.TrackerWriter() == nil {
+		t.Error("the engine's native runtime holds no tracker: it was built from the " +
+			"stale file's tracker.backend: none, not from the store's native tracker")
 	}
 }
 
