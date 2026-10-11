@@ -650,8 +650,8 @@ partial copy as a backup.
 object store their objects are in the `OBJ_crewlet_files` stream the backup
 snapshots after the rest, and the line counts the objects the backup owes that
 the stream holds, asked thirty-two at a time (lost ones are listed beneath); on
-`s3` each object it owes is read from the bucket into `objects/`, sixteen at a
-time, and checked against its file's size and SHA-256 as it is written, and the
+`s3` each object it owes is read from the bucket into `objects/`, thirty-two at
+a time, and checked against its file's size and SHA-256 as it is written, and the
 line gives their count and size. What it owes is every object a live row of the
 copy names and every object a record the restore replays from the copy names —
 a file written while the backup ran, counted as "(N written during the copy)".

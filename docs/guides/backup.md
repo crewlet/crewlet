@@ -140,11 +140,15 @@ What is worth knowing about it:
   the store holds after the snapshot finished is one the snapshot holds too. On
   `s3` the backup reads every object a **live** row of the replicated copy names
   — read from the copy itself, for the position's reason below — from the
-  bucket, **sixteen at a time**: a few hundred requests a second at most, under
-  a tenth of what S3 serves one prefix, so the company's own downloads keep the
-  rest, while a first copy of a large company's files comes sixteen streams
-  wide. Each is streamed to disk and checked against its file's size and
-  SHA-256 as it is written, and lands under `objects/files/<key>` — the
+  bucket, **thirty-two at a time**. A first copy is bound by how long each
+  request waits for its first byte rather than by the link, so thirty-two out
+  keep a 1 Gbit/s link busy at S3's 20 to 100 ms first byte — sixteen left it a
+  third idle, and the large model's first copy (about 2.1 million objects,
+  1.15 TB) took about five hours where thirty-two took about three on the
+  host it was measured on — while staying at most an eighth of what S3 serves
+  one prefix, so the company's own downloads keep the rest. Each is streamed
+  to disk and checked against its file's size and SHA-256 as it is written,
+  and lands under `objects/files/<key>` — the
   bucket's own layout under its prefix — first under a temporary name, renamed
   only once it has checked out. Either way the copy's rows are read **a page at
   a time**, in key order across every table, while the objects of the page
@@ -161,8 +165,8 @@ What is worth knowing about it:
   company has. Once the streams are snapshotted, the backup reads each log that
   writes a table of files from the copy's position to that last record, and
   the records the copy's applier had held back to apply later, and carries
-  every object those records name: on `s3` copied like the rest, sixteen at a
-  time; on `nats` asked after like the rest, since the `OBJ_crewlet_files`
+  every object those records name: on `s3` copied like the rest, thirty-two at
+  a time; on `nats` asked after like the rest, since the `OBJ_crewlet_files`
   stream is snapshotted **after every other stream** and so holds every object
   a captured record names. `objects.replayed` counts the ones only those
   records name. A record this build cannot read that may write a file — a

@@ -149,31 +149,50 @@ var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could
 // backupFetchConcurrency is how many objects a backup reads from the store at
 // once, on a store whose objects it copies (`s3`).
 //
-// SIXTEEN. S3 documents at least 5,500 GET and HEAD requests a second per
-// partitioned prefix, and every object the engine writes is under one
-// (`files/`). A backup's GETs are whole objects, tens to hundreds of
-// milliseconds each, so sixteen in flight are a few hundred requests a second —
-// under a tenth of the prefix's rate, leaving the rest to the company's own
-// downloads on the same prefix — while the bytes come sixteen streams wide,
-// which is what a FIRST copy is bound by: a company of the design's large
-// model holds about 1.15 TB of objects, which four streams carry in about 1.6
-// hours on a link that can take it and sixteen in about 25 minutes (the
-// design's arithmetic, not a measurement of this tree), and the trim hold
-// covers that whole copy. A later backup takes what its predecessor holds from
-// this host's disk ([reuseObject]) and reads only the objects written since.
+// THIRTY-TWO, because a first copy is bound by REQUEST LATENCY, not by how many
+// streams are open (Little's law: what is in flight is the rate times the time
+// each request takes). The design's large model holds about 2.1 million
+// objects in about 1.15 TB — a mean near 550 KB — and a GET of one from S3
+// spends 20 to 100 ms before its first byte. Filling a 1 Gbit/s link at that
+// mean is about 230 GETs a second, each holding its slot for its first byte
+// and its body — about 130 ms at a 100 ms first byte — so about thirty in
+// flight: sixteen leave the link a third idle and a first copy most of twice
+// as long as it need be. BenchmarkCarry measures exactly this, over the S3
+// backend and the model's mix of sizes with every request answered a first
+// byte late (two runs on a four-core host): at 100 ms sixteen carried 107 to
+// 117 objects a second (59–65 MB/s; the model's first copy about five hours)
+// and thirty-two 193 to 199 (107–111 MB/s — a 1 Gbit/s link's worth; about
+// three hours). At 20 ms both reached what the host's own writing, verifying
+// and syncing of each object allows, 200 to 290 a second. A later backup
+// takes what its predecessor holds from this host's disk ([reuseObject]) and
+// reads only the objects written since.
 //
-// UNDER httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides
-// a connection the shared transport keeps warm rather than paying a TLS
-// handshake of its own. Each worker streams one object through io.Copy's
-// buffer rather than holding it: sixteen buffers, never sixteen objects.
+// NOT MORE, although sixty-four carried more again at 100 ms where the host
+// had room past a 1 Gbit/s link (203 to 295 a second): thirty-two fill the
+// link a modest host has — the one the CLI's wait for a first copy is sized
+// on — and past it the link, not the bound, sets how long the copy and the
+// trim hold it spans take. A faster link to a slower bucket is where a deeper
+// bound would pay, and it would take the warm-connection bound below with it.
+//
+// UNDER THE PREFIX'S RATE: S3 serves at least 5,500 GET and HEAD requests a
+// second per partitioned prefix, and every object the engine writes is under
+// one (`files/`); thirty-two out are 320 to 640 requests a second at the first
+// bytes above — at most an eighth of it, the rest left to the company's own
+// downloads and the collector on the same prefix.
+//
+// AT httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides a
+// connection the shared transport keeps warm rather than paying a TLS
+// handshake of its own; past it, a GET opens a connection the pool then closes.
+// Each worker streams one object through io.Copy's buffer rather than holding
+// it: thirty-two buffers, never thirty-two objects.
 //
 // A CLOSED LOOP, like the collector's bounds: an object goes out only when one
 // in flight has finished, so a store that slows down is read more slowly by
 // itself, and the first object it still does not answer for once it has been
-// asked again ([fetchAttempts]) ends the copy with at most sixteen out — the
+// asked again ([fetchAttempts]) ends the copy with at most the bound out — the
 // backup is refused for that object anyway, and a store that stopped answering
 // is not sent the rest of a terabyte.
-const backupFetchConcurrency = 16
+const backupFetchConcurrency = 32
 
 // streamCheckConcurrency is how many objects a backup asks the store about at
 // once, on a store whose objects ride a stream snapshot (`nats`).
