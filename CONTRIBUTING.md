@@ -490,7 +490,9 @@ measured rather than derived: the object store on every backend
 (`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
 a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
-(`internal/statelog`), and the store's own drain (`internal/store`).
+(`internal/statelog`), the store's own drain (`internal/store`), and a git
+process through the pool and the index-pack a push runs
+(`internal/code/gitproc`).
 
 It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
 measures the runner's neighbours, and a gate on figures that noisy is one
@@ -500,7 +502,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
@@ -515,13 +517,15 @@ variables that do.
 **A figure the design argues from is recorded in the package doc of what it
 measures**, with the machine it was measured on — its CPUs and model, and
 whether it has SHA instructions, since every verified byte is hashed — the
-toolchain and the versions of the dependencies it ran through. A new object
-store backend runs `objstoretest.Bench` from a `BenchmarkBackend` of its own,
-as it runs `objstoretest.Run` from `TestContract`; its factory hands each case
-an empty store and takes away what the case put there — a backend the run
-starts goes with it, and one that outlives the run (a real bucket) gives each
-case a prefix of its own and `objstoretest.Clear`s it, since the suite's
-populations run to a hundred thousand objects and it deletes nothing itself.
+toolchain, the git version where the figure runs git (it is git's figure as
+much as the engine's), and the versions of the dependencies it ran through. A
+new object store backend runs `objstoretest.Bench` from a `BenchmarkBackend`
+of its own, as it runs `objstoretest.Run` from `TestContract`; its factory
+hands each case an empty store and takes away what the case put there — a
+backend the run starts goes with it, and one that outlives the run (a real
+bucket) gives each case a prefix of its own and `objstoretest.Clear`s it,
+since the suite's populations run to a hundred thousand objects and it
+deletes nothing itself.
 
 ## Project conventions
 

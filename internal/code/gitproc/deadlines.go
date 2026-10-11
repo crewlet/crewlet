@@ -65,11 +65,21 @@ const TransferStall = objstore.ReadStall
 // PackWorkPerMiB is the time local git work is given per mebibyte of the pack
 // or repository it works over.
 //
-// ONE SECOND: index-pack at pack.threads=1 was measured at 0.125–0.18 s a
-// mebibyte (a 97 MB pack in 12.1 s, and in 16.7 s on the same four shared
-// vCPUs under a resumed session's load). Five to eight times that is room for
-// --strict's fsck beside it and a disk shared with the store and the broker,
-// without letting a wedged process hold its slot for hours.
+// ONE SECOND: receive-pack's own index-pack at pack.threads=1 — the pack
+// read from stdin and written out, every object checked (--strict) and
+// looked up in the repository — was measured at 0.14 s a mebibyte by
+// BenchmarkIndexPack's worst case, a push whose every object the repository
+// already holds and so reads back and compares (an 18 MiB history whose
+// deltas chain 32 deep; the package doc's "Measured"), and at 0.11 s when
+// every object is new. A 97 MB pack was measured only in the lighter form,
+// index-pack over a file outside any repository, which is the delta
+// resolution alone: 0.125–0.18 s a mebibyte (12.1 s, and 16.7 s on the same
+// four shared vCPUs under a resumed session's load). On the 18 MiB history
+// that form is 1.3 times quicker than the worst case, so the 97 MB pack
+// pushed would take about 0.16–0.24 s a mebibyte. One second is seven times
+// the measured worst case and four times the slowest of those: room for a
+// disk shared with the store and the broker and a node under load, without
+// letting a wedged process hold its slot for hours.
 const PackWorkPerMiB = time.Second
 
 // CaptureMax is the most a run captures when its Cmd.Stdout is nil: one

@@ -134,6 +134,32 @@
 // cache that lost a pack print the same line — or none of those
 // ([ErrFailed]). LC_ALL=C, because the table matches git's English.
 //
+// # Measured
+//
+// On four vCPUs of a 2.8 GHz Xeon (no SHA extensions) shared with other
+// builds, with git 2.43.0 and Go 1.27 (make bench, six counts, medians;
+// bench_test.go says what each arm is): one process through the pool — slot,
+// environment, fork and exec, identity, reap and sweep — costs 2.1 ms, no
+// more than the same `git version` from a shell loop on that machine
+// (2.3 ms), so the pool's own share is lost in the fork; 2.3 ms for a
+// rev-parse that reads one object, and 2.5 ms for the same read in a
+// scratch, through its alternate and the guard's second repository; 0.70 ms
+// a process — about 1 400 a second — with every read slot busy; and 22 ms
+// for a cat-file --batch-check of a thousand ids streamed through [Lines]. A
+// clone of an 18 MiB pack of 2 178 objects streams through Run at
+// 146 MiB/s, which is git's own rate for the request (the same upload-pack
+// writing to /dev/null from a shell: about 140 MiB/s), so git and not the
+// pool is what bounds a clone: the same pack through the pool with git taken
+// out — a stand-in that cats it, its own process start included, so a lower
+// bound on the copy path — moves 860 MiB/s, about 7 Gbit/s and six times
+// git's rate. The index-pack every push runs inside receive-pack, measured
+// in receive-pack's own form at one thread — the pack on stdin and written
+// out, every object checked (--strict) and looked up in the repository —
+// indexes at 7.3 MiB/s (0.14 s a mebibyte) when every pushed object is
+// already in the repository and is read back and compared, the worst case
+// and the figure [PackWorkPerMiB] is anchored to (its one second a mebibyte
+// is seven times it), and at 8.8 MiB/s (0.11 s) when every object is new.
+//
 // git ≥ 2.40 ([MinVersion]); the engine image ships 2.47 (Debian trixie),
 // and a git CVE is an engine CVE on a git node: the image tracks Debian's
 // security updates through the Dependabot docker surface.

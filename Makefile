@@ -601,9 +601,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # measured rather than derived: the object store on every backend
 # (objstoretest.Bench, the broker's bucket at three replicas among them, and
 # the SHA-256 floor under every verified byte), an arbitrated write end to end
-# and the applier's drain (internal/statelog), and the store's own drain
-# (internal/store). Each package's doc records what it measured, and on what
-# machine.
+# and the applier's drain (internal/statelog), the store's own drain
+# (internal/store), and a git process through the pool end to end and
+# receive-pack's index-pack at one thread (internal/code/gitproc). Each
+# package's doc records what it measured, and on what machine.
 #
 # NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
 # the runner's neighbours, and a gate on figures that noisy is one somebody
@@ -631,13 +632,14 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
-                 ./internal/objstore/s3obj ./internal/statelog ./internal/store
+                 ./internal/objstore/s3obj ./internal/statelog ./internal/store \
+                 ./internal/code/gitproc
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 2h
 
-bench: ## measure the object store and the state log's write path (not a gate)
+bench: ## measure the object store, the state log's write path and git (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
