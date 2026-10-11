@@ -119,7 +119,7 @@ function Day({ viewer }: { viewer: ViewerState }) {
   // question to them — the engine's own `decisions`, and nothing about how
   // the machine is doing. A seat stopped on its budget is an admin's to
   // resolve, and it is the console's.
-  const subjects = decisionSubjects(decisions.data ?? null, []);
+  const subjects = decisionSubjects(decisions.data ?? null);
   const reached = (notices.data?.notices ?? []).filter((n) => !n.read).slice(0, TODAY_ROWS);
   return (
     <div className="col gap-4">

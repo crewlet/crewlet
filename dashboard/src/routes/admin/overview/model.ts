@@ -246,7 +246,7 @@ export function statusSentence(input: {
   /** Other conditions the engine raised that are not the reader's decisions. */
   conditions: number;
   /** Where those conditions are listed — a clause that says something needs
-   *  a look and not where would send the reader hunting. */
+   *  an admin and not where would send the reader hunting. */
   conditionsHref?: string;
   working: number;
 }): Segment[] {
@@ -294,7 +294,7 @@ export function statusSentence(input: {
   if (input.conditions > 0) {
     clauses.push([
       {
-        text: `${plural(input.conditions, "condition")} ${input.conditions === 1 ? "needs" : "need"} a look`,
+        text: `${plural(input.conditions, "condition")} ${input.conditions === 1 ? "needs" : "need"} an admin`,
         ...(input.conditionsHref ? { href: input.conditionsHref } : {}),
       },
     ]);

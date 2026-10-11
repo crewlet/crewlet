@@ -13,11 +13,17 @@
  * # What a wiki cannot tell you, and this can
  *
  * Its readers are seats, and every read is a recorded act — so the page says
- * who read it, how (the turn it was read in, the search it came up for) and
- * how many read it on the company's today; a tool-skill page says who it was
- * loaded by; and "linked from" is every page and task pointing at it. All of
- * it is the engine's (`page_reads`, `page.skill_loaded_by`,
- * `page.linked_from`); nothing here is counted in the browser.
+ * who read it, how often and how lately, and how many read it on the
+ * company's today; a tool-skill page says who it was loaded by; and "linked
+ * from" is every page and task pointing at it. All of it is the engine's
+ * (`page.readers`, `page.skill_loaded_by`, `page.linked_from`); nothing here
+ * is counted in the browser but which readers' last read fell on today.
+ *
+ * HOW each agent read it — the turn a read was in, the words a search used —
+ * is what the machine processed, which only an admin is served
+ * (`page_reads`). It is the console's view of this page
+ * (`#/admin/agents/pages/{id}`, `g .` from here), never a section of this
+ * one: a person's page asks only what a member is (`app/shell.test.ts`).
  *
  * # Edited as you
  *
@@ -51,7 +57,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { outline, renderMarkdown } from "~/lib/markdown.ts";
-import { loadedBy, readToday } from "~/lib/pageReads.ts";
+import { loadedBy, readersToday } from "~/lib/pageReads.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { PageDetail } from "~/protocol/index.ts";
@@ -71,9 +77,8 @@ import {
 
 type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
 
-/** How often a page re-reads itself, and how often who read it. */
+/** How often a page re-reads itself — its readers with it. */
 const PAGE_POLL_MS = 20_000;
-const READS_POLL_MS = 60_000;
 
 /**
  * The body without a first heading that only repeats the page's title.
@@ -182,7 +187,6 @@ export function PageView({ id }: { id: string }) {
     { id },
     { enabled: id !== "", pollMs: PAGE_POLL_MS },
   );
-  const reads = useQuery("page_reads", { page: id }, { enabled: id !== "", pollMs: READS_POLL_MS });
   const containers = useQuery("containers", undefined, { pollMs: 60_000 });
   const [edit, setEdit] = useParam("edit", "");
   const [versionParam, setVersion] = useParam("version", "");
@@ -220,9 +224,9 @@ export function PageView({ id }: { id: string }) {
     [page],
   );
   const headings = useMemo(() => outline(body), [body]);
-  const readers = reads.data?.readers;
-  const faces = useMemo(
-    () => (readers ? readToday(readers, now, org?.timezone) : []),
+  const readers = data?.readers;
+  const today = useMemo(
+    () => (readers ? readersToday(readers, now, org?.timezone) : null),
     [readers, now, org?.timezone],
   );
 
@@ -264,9 +268,14 @@ export function PageView({ id }: { id: string }) {
         {/* ON A PHONE THE COUNT AND HISTORY FOLD: the rail below the page
             lists who read it and every revision, and the bar's one line
             keeps Edit in view (`page-action-folds`). */}
-        {reads.data && (
+        {today && (
           <span className="page-action-folds">
-            <ReadToday count={reads.data.distinct_seats_today} faces={faces} who={who} />
+            <ReadToday
+              count={today.faces.length}
+              floor={today.floor}
+              faces={today.faces}
+              who={who}
+            />
           </span>
         )}
         {page && (
@@ -353,7 +362,7 @@ export function PageView({ id }: { id: string }) {
               </div>
               <aside className="kpage-rail" aria-label={`About “${page.title}”`}>
                 {!editing && version === 0 && <OnThisPage headings={headings} />}
-                <ReadBy reads={reads.data} error={reads.error} who={who} now={now} />
+                <ReadBy readers={readers} who={who} now={now} />
                 <LinkedFrom links={data.linked_from} status={data.linked_from_status} />
                 <Revisions
                   history={history}

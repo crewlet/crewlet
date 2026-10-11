@@ -5,7 +5,7 @@
  */
 
 import { expect, test } from "vitest";
-import { loadedBy, readToday, readVia } from "./pageReads.ts";
+import { loadedBy, readToday, readVia, readersToday } from "./pageReads.ts";
 import type { PageReadRow } from "~/contract/pages.ts";
 
 const row = (over: Partial<PageReadRow>): PageReadRow => ({
@@ -39,6 +39,31 @@ test("today's faces are cut on the company's midnight, not the browser's", () =>
   expect(readToday(readers, now, "Asia/Tokyo")).toEqual(["swe"]);
   // On UTC's clock the same reads are all on the 24th — yesterday.
   expect(readToday(readers, now, "UTC")).toEqual([]);
+});
+
+// A MEMBER'S FIGURE IS THE LIST'S OWN, and it says when it is only a floor:
+// every reader on a list cut at its cap read today, so one past the cap may
+// have too.
+test("today's count from a member's list is exact, or a floor where the list is cut", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  const today = { handle: "swe", reads: 2, last_at: "2026-09-25T09:00:00Z" };
+  const yesterday = { handle: "cto", reads: 1, last_at: "2026-09-24T09:00:00Z" };
+  const readers = (seats: (typeof today)[], total: number) => ({
+    since: "2026-08-27T00:00:00Z",
+    until: "2026-09-25T12:00:00Z",
+    days: 30,
+    seats,
+    total,
+    complete: true,
+  });
+  expect(readersToday(readers([today, yesterday], 2), now, "UTC")).toEqual({
+    faces: ["swe"],
+    floor: false,
+  });
+  // CUT, but an older reader is on it: every reader of today is listed.
+  expect(readersToday(readers([today, yesterday], 9), now, "UTC").floor).toBe(false);
+  expect(readersToday(readers([today], 9), now, "UTC")).toEqual({ faces: ["swe"], floor: true });
+  expect(readersToday(readers([today], 1), now, "UTC").floor).toBe(false);
 });
 
 test("a skill says who loaded it, or who it was offered to when nobody did", () => {

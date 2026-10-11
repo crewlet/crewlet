@@ -28,7 +28,12 @@ vi.mock("~/lib/useQuery.ts", () => ({
 // THE READER, AS THE FRAME WOULD HAVE READ IT: stated here rather than asked,
 // since every query this file answers is the report. An admin unless a case
 // says otherwise — the report is an admin's (ADR-0031).
-const reader = vi.hoisted(() => ({ loading: false, admin: true, anonymous: false }));
+const reader = vi.hoisted(() => ({
+  loading: false,
+  admin: true,
+  reach: "admin" as "admin" | "member",
+  anonymous: false,
+}));
 vi.mock("~/lib/viewer.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/viewer.ts")>()),
   useViewer: () => reader,
@@ -95,13 +100,13 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
-  Object.assign(reader, { loading: false, admin: true, anonymous: false });
+  Object.assign(reader, { loading: false, admin: true, reach: "admin", anonymous: false });
 });
 
 // THE REPORT IS AN ADMIN'S, so a member's key — which the viewer has named —
 // draws no panel at all rather than a red poll that will never answer.
 test("a member's key draws no retention panel", () => {
-  Object.assign(reader, { admin: false });
+  Object.assign(reader, { admin: false, reach: "member" });
   query.data = report([node()]);
   render(
     <Router>
@@ -110,7 +115,7 @@ test("a member's key draws no retention panel", () => {
   );
   expect(screen.queryByText("Replication")).toBeNull();
   cleanup();
-  Object.assign(reader, { admin: true });
+  Object.assign(reader, { admin: true, reach: "admin" });
   render(
     <Router>
       <RetentionPanels />

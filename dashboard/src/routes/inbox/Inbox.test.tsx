@@ -135,7 +135,6 @@ const QUIET: Record<string, Answer> = {
     max_snooze_ahead: 30 * 86_400,
   },
   work_comments: { item: "t", key: "LEAD-12", title: "Q4 release plan", comments: [] },
-  sandbox_runs: { runs: [] },
 };
 
 let asked: { kind: string; params: Record<string, unknown> }[];
@@ -554,10 +553,14 @@ describe("the pane", () => {
     expect(screen.getByText("Also posts to Slack #leadership")).toBeTruthy();
   });
 
-  // THE WINDOW AS EVERY OTHER SCREEN SAYS IT: by its span, turning over on the
-  // company clock. The pane printed the engine's label (`2026-W39`).
-  test("a seat stopped on its budget names the window in words", async () => {
-    location.hash = "#/inbox?row=seat%3Adevrel";
+  // THE ENGINE'S CONDITIONS ARE THE CONSOLE'S. A seat stopped on its budget,
+  // one that failed and one a person paused are about how the machine runs,
+  // and reading them took the durable runs and the meter's figures — which
+  // only an admin is served. They are the console Overview's "Needs an admin";
+  // a person's inbox lists what was put to them and what reached them, and
+  // asks nothing else. Mutation: put `useAttention` back in Inbox.tsx and
+  // this names the read it adds.
+  test("a stopped or failed seat is not a person's decision, and nothing about the machine is asked", async () => {
     mount({
       agents: [
         {
@@ -566,30 +569,22 @@ describe("the pane", () => {
           handle: "devrel",
           activity: "stopped",
           stopped_reason: "budget",
-          budget: {
-            windows: [
-              {
-                period: "week",
-                window: "2026-W39",
-                starts_at: "2026-09-21T00:00:00Z",
-                resets_at: "2026-09-28T00:00:00Z",
-                used: 1_200_000,
-                limit: 1_000_000,
-                state: "refusing",
-                refused_at: "2026-09-22T09:00:00Z",
-              },
-            ],
-          },
+        },
+        { id: "ops", role: "Ops", handle: "ops", activity: "stopped", stopped_reason: "paused" },
+        {
+          id: "swe",
+          role: "SWE",
+          handle: "swe",
+          activity: "idle",
+          last_error: { kind: "crash", message: "the model refused", at: "2026-09-30T11:00:00Z" },
         },
       ],
     });
     await settle();
-    expect(
-      screen.getByText(
-        "1,200,000 of 1,000,000 tokens are spent this week, so the engine turns this seat's charges away until the week turns over on Sep 28.",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/2026-W39/)).toBeNull();
+    expect(screen.queryByText(/DevRel|Ops|SWE/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Needs a decision" })).toBeNull();
+    const kinds = new Set(asked.map((a) => a.kind));
+    expect([...kinds].sort()).toEqual(["decisions", "viewer", "work_inbox", "work_person"]);
   });
 
   test("Done marks the one notice read and never sends the whole inbox", async () => {

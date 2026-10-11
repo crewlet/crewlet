@@ -36,6 +36,28 @@ var LIVE_CALL_DETAIL = {
 * that gave up first would report a slow answer as a failed one.
 */
 var QUERY_TIMEOUT_MS = 1e4;
+//#endregion
+//#region src/contract/reach.ts
+/**
+* Every kind the engine BROADCASTS, and the lowest reach it is pushed to — a
+* snapshot, a query's answer and the pong are sent to one client and have no
+* row. A kind pushed to a member may still carry less for one (the `agents`
+* row without its live call, the `budget` state without its figures): the
+* richer variant is the admin's, and which slice a screen reads it from is
+* `protocol/store.ts`'s `SLICES`.
+*/
+var PUSH_REACH = {
+	event: "admin",
+	agents: "member",
+	seats: "member",
+	sandboxes: "admin",
+	tokens: "admin",
+	budget: "member",
+	schedules: "member",
+	org: "public",
+	tools: "admin",
+	health: "open"
+};
 /** What a heavy field reads as while nothing of it is held. */
 var NOTHING_HELD = {
 	prompt: "",
@@ -116,6 +138,7 @@ function newerDetail(held, older) {
 	merged.versions = versions;
 	return merged;
 }
+PUSH_REACH.agents, PUSH_REACH.event, PUSH_REACH.event, PUSH_REACH.sandboxes, PUSH_REACH.org, PUSH_REACH.tools, PUSH_REACH.health, PUSH_REACH.tokens, PUSH_REACH.budget, PUSH_REACH.schedules;
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",

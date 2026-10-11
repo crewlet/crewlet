@@ -20,8 +20,8 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { PAGE_TITLE_MAX_BYTES, type PageReadsAnswer } from "~/contract/pages.ts";
-import type { PageDetail } from "~/protocol/index.ts";
+import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
+import type { PageDetail, PageReaders } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -86,34 +86,19 @@ const detail = (
   ...over,
 });
 
-const reads = (over: Partial<PageReadsAnswer> = {}): PageReadsAnswer => ({
-  page: ID,
-  since: "2026-08-27",
-  until: "2026-09-25",
+/** Who read the page, as a member is served it: who, how often, how lately. */
+const readers = (over: Partial<PageReaders> = {}): PageReaders => ({
+  since: "2026-08-27T00:00:00Z",
+  until: "2026-09-25T00:00:00Z",
   days: 30,
-  readers: [
-    {
-      handle: "swe",
-      via: "get_page",
-      count: 1,
-      // 01:00 on the 25th in Tokyo: today.
-      last_at: "2026-09-24T16:00:00Z",
-      last_turn_id: "run-2",
-      last_work_item: { id: "t-1", key: "ENG-412", title: "Retry PXE boot", ordinal: 2 },
-    },
-    {
-      handle: "cto",
-      via: "search",
-      count: 3,
-      // 23:00 on the 24th in Tokyo: yesterday, though it is the 24th in UTC.
-      last_at: "2026-09-24T14:00:00Z",
-      last_query: "DHCP lease",
-    },
+  seats: [
+    // 01:00 on the 25th in Tokyo: today.
+    { handle: "swe", reads: 1, last_at: "2026-09-24T16:00:00Z" },
+    // 23:00 on the 24th in Tokyo: yesterday, though it is the 24th in UTC.
+    { handle: "cto", reads: 3, last_at: "2026-09-24T14:00:00Z" },
   ],
-  readers_total: 2,
-  // THE ENGINE'S COUNT, which a list cut by its cap cannot be counted from.
-  distinct_seats_today: 3,
-  elided: 0,
+  total: 2,
+  complete: true,
   ...over,
 });
 
@@ -197,85 +182,86 @@ async function settle() {
   });
 }
 
-// A PAGE IS ADDRESSED BY ITS ID, which a rename does not move.
-test("the page is read by its id, and its readers by the same id", async () => {
-  const { asked } = mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+// A PAGE IS ADDRESSED BY ITS ID, which a rename does not move — and a
+// person's page asks nothing only an admin is served: how each agent read it
+// (`page_reads`) is the console's view of the page.
+test("the page is read by its id, and nothing an admin alone is served is asked", async () => {
+  const { asked } = mount(<PageView id={ID} />, { page: detail({ readers: readers() }) });
   await settle();
   expect(asked.find((a) => a.kind === "page")?.params).toEqual({ id: ID });
-  expect(asked.find((a) => a.kind === "page_reads")?.params).toEqual({ page: ID });
+  expect(asked.some((a) => a.kind === "page_reads")).toBe(false);
 });
 
-// "READ BY n AGENTS TODAY" IS THE ENGINE'S COUNT, cut on the company's day: the
-// list carries two readers and one of them read on the company's yesterday,
-// and the number drawn is still the engine's three.
-test("the read-by count is the engine's, on the company's day", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+// "READ BY n AGENTS TODAY" IS CUT ON THE COMPANY'S DAY: the list carries two
+// readers and one of them read on the company's yesterday — though on UTC's
+// clock both read on the same day.
+test("the read-by count is who read on the company's day", async () => {
+  mount(<PageView id={ID} />, { page: detail({ readers: readers() }) });
   await settle();
-  expect(screen.getByText("read by 3 agents today")).toBeTruthy();
+  expect(screen.getByText("read by 1 agent today")).toBeTruthy();
 });
 
-test("each reader says how it read the page and in which turn", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+// A LIST CUT AT ITS CAP, every reader of it today, is a floor: one the list
+// left out may have read today too.
+test("the read-by count is a floor where the list is cut and every reader read today", async () => {
+  mount(<PageView id={ID} />, {
+    page: detail({ readers: readers({ seats: [readers().seats[0]!], total: 9 }) }),
+  });
   await settle();
-  const readers = screen.getByRole("region", { name: /^Read by agents/ });
-  expect(
-    within(readers).getByRole("link", { name: "turn 2 on ENG-412" }).getAttribute("href"),
-  ).toBe("#/admin/live/turns/run-2");
-  expect(within(readers).getByText(/search: “DHCP lease”/)).toBeTruthy();
-  // TWO LINES, NEVER THREE: the count rides the name's line, and the age is
-  // held apart from the way-read text so an ellipsis cuts the query rather
-  // than wrapping the age ("12 / reads · 1h ago") onto a line of its own.
-  const count = within(readers).getByText("3 reads");
+  expect(screen.getByText("read by 1+ agents today")).toBeTruthy();
+});
+
+test("each reader says how often and how lately, and never how", async () => {
+  mount(<PageView id={ID} />, { page: detail({ readers: readers() }) });
+  await settle();
+  const list = screen.getByRole("region", { name: /^Read by agents/ });
+  expect(within(list).getByRole("link", { name: "SWE" }).getAttribute("href")).toBe(
+    "#/team/seats/swe",
+  );
+  // TWO LINES: the count rides the name's line, the age the line under it.
+  const count = within(list).getByText("3 reads");
   expect(count.closest(".kpage-reader-head")).not.toBeNull();
-  const how = within(readers).getByText(/search: “DHCP lease”/);
-  expect(how.classList.contains("kpage-reader-how")).toBe(true);
-  expect(how.getAttribute("title")).toBe(how.textContent);
-  const when = how.parentElement?.querySelector(".kpage-reader-when");
-  expect(when?.querySelector("time")).not.toBeNull();
-  expect(how.contains(when ?? null)).toBe(false);
+  expect(list.querySelectorAll(".kpage-reader-when time")).toHaveLength(2);
+  // NO TURN AND NO SEARCH: how a seat read it is the console's.
+  expect(list.querySelector('a[href^="#/admin"]')).toBeNull();
 });
 
 // THE WINDOW IS NAMED beside the page bar's "today": the list is 30 days, the
 // count is the company's day, and unlabelled the two read as a contradiction.
 test("the readers section names the window it lists", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  mount(<PageView id={ID} />, { page: detail({ readers: readers() }) });
   await settle();
-  const readers = screen.getByRole("region", { name: /^Read by agents/ });
-  expect(within(readers).getByRole("heading").textContent).toBe("Read by agents · last 30 days");
+  const list = screen.getByRole("region", { name: /^Read by agents/ });
+  expect(within(list).getByRole("heading").textContent).toBe("Read by agents · last 30 days");
 });
 
 test("a long list's Show more says what it expands and whether it has", async () => {
   const many = Array.from({ length: 7 }, (_, i) => ({
     handle: `seat-${i}`,
-    via: "get_page",
-    count: 1,
+    reads: 1,
     last_at: "2026-09-24T16:00:00Z",
   }));
-  mount(<PageView id={ID} />, {
-    page: detail(),
-    page_reads: reads({ readers: many, readers_total: 7 }),
-  });
+  mount(<PageView id={ID} />, { page: detail({ readers: readers({ seats: many, total: 7 }) }) });
   await settle();
-  const readers = screen.getByRole("region", { name: /^Read by agents/ });
-  const more = within(readers).getByRole("button", { name: "Show 2 more" });
+  const list = screen.getByRole("region", { name: /^Read by agents/ });
+  const more = within(list).getByRole("button", { name: "Show 2 more" });
   expect(more.getAttribute("aria-expanded")).toBe("false");
-  const list = document.getElementById(more.getAttribute("aria-controls") ?? "");
-  expect(list?.tagName).toBe("UL");
-  expect(within(list!).getAllByRole("listitem")).toHaveLength(5);
+  const ul = document.getElementById(more.getAttribute("aria-controls") ?? "");
+  expect(ul?.tagName).toBe("UL");
+  expect(within(ul!).getAllByRole("listitem")).toHaveLength(5);
   fireEvent.click(more);
   expect(more.getAttribute("aria-expanded")).toBe("true");
-  expect(within(list!).getAllByRole("listitem")).toHaveLength(7);
+  expect(within(ul!).getAllByRole("listitem")).toHaveLength(7);
 });
 
-// A SERVER WITHOUT THE USAGE DOMAIN DOES NOT SAY "NOBODY READ IT".
+// A NODE WITHOUT THE USAGE DOMAIN DOES NOT SAY "NOBODY READ IT": its answer
+// carries no `readers` at all.
 test("a node that cannot say who read the page draws no readers section", async () => {
-  mount(<PageView id={ID} />, {
-    page: detail(),
-    page_reads: () => Promise.reject(new Error("unknown_query")),
-  });
+  mount(<PageView id={ID} />, { page: detail() });
   await settle();
   expect(screen.queryByRole("region", { name: /^Read by agents/ })).toBeNull();
   expect(screen.queryByText(/No agent has read it/)).toBeNull();
+  expect(screen.queryByText(/agents? today/)).toBeNull();
 });
 
 test("the skill pill is drawn only on a tool-skill page, from both ways it loads", async () => {
@@ -285,7 +271,6 @@ test("the skill pill is drawn only on a tool-skill page, from both ways it loads
   ];
   mount(<PageView id={ID} />, {
     page: detail({ skill: true, skill_loaded_by: loads }),
-    page_reads: reads(),
   });
   await settle();
   expect(screen.getByText("Loaded as a skill by SWE")).toBeTruthy();
@@ -293,7 +278,6 @@ test("the skill pill is drawn only on a tool-skill page, from both ways it loads
 
   mount(<PageView id={ID} />, {
     page: detail({ skill: false, skill_loaded_by: loads }),
-    page_reads: reads(),
   });
   await settle();
   expect(screen.queryByText(/as a skill by/)).toBeNull();
@@ -304,13 +288,12 @@ test("an unloaded skill says so, and a node that cannot say draws the bare pill"
   // node that does not read the usage domain, which is not the same fact.
   mount(<PageView id={ID} />, {
     page: detail({ skill: true, skill_loaded_by: [] }),
-    page_reads: reads(),
   });
   await settle();
   expect(screen.getByText("Tool skill · not loaded in 30 days")).toBeTruthy();
   cleanup();
 
-  mount(<PageView id={ID} />, { page: detail({ skill: true }), page_reads: reads() });
+  mount(<PageView id={ID} />, { page: detail({ skill: true }) });
   await settle();
   expect(screen.getByText("Tool skill")).toBeTruthy();
   expect(screen.queryByText(/not loaded/)).toBeNull();
@@ -334,7 +317,6 @@ test("linked from lists the tasks and the pages that point here", async () => {
         pages_total: 1,
       },
     }),
-    page_reads: reads(),
   });
   await settle();
   const links = screen.getByRole("region", { name: "Linked from" });
@@ -354,7 +336,6 @@ test("linked from lists the tasks and the pages that point here", async () => {
 test("a node still building its index says so rather than that nothing links here", async () => {
   mount(<PageView id={ID} />, {
     page: detail({ linked_from_status: "building" }),
-    page_reads: reads(),
   });
   await settle();
   const links = screen.getByRole("region", { name: "Linked from" });
@@ -364,7 +345,6 @@ test("a node still building its index says so rather than that nothing links her
 
   mount(<PageView id={ID} />, {
     page: detail({ linked_from_status: "unavailable" }),
-    page_reads: reads(),
   });
   await settle();
   expect(
@@ -374,22 +354,22 @@ test("a node still building its index says so rather than that nothing links her
   ).toBeTruthy();
   cleanup();
 
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  mount(<PageView id={ID} />, { page: detail() });
   await settle();
   expect(screen.queryByRole("region", { name: "Linked from" })).toBeNull();
 });
 
-// THE CAP NOTE IS COMPANY-WIDE, and worded so: the engine's `elided` counts
-// what the cap dropped on every page, so it says the list MAY be short.
+// THE CAP NOTE: a seat's day keeps a bounded number of reads, and an answer
+// that dropped some says the list MAY be short rather than that it is whole.
 test("dropped reads are named as possibly missing, never as this page's", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads({ elided: 4 }) });
+  mount(<PageView id={ID} />, { page: detail({ readers: readers({ complete: false }) }) });
   await settle();
-  const readers = screen.getByRole("region", { name: /^Read by agents/ });
-  expect(within(readers).getByText(/this list may be missing some/)).toBeTruthy();
+  const list = screen.getByRole("region", { name: /^Read by agents/ });
+  expect(within(list).getByText(/this list may be missing some/)).toBeTruthy();
 });
 
 test("the outline lists the sections, and a body's first line that repeats the title is not drawn", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  mount(<PageView id={ID} />, { page: detail() });
   await settle();
   const toc = screen.getByRole("region", { name: "On this page" });
   expect(
@@ -411,7 +391,6 @@ function racing(bodies: Record<number, string>) {
   location.hash = `#/knowledge/pages/${ID}?edit=1`;
   mount(<PageView id={ID} />, {
     page: () => Promise.resolve(detail({}, { version, body: bodies[version] })),
-    page_reads: reads(),
   });
   return {
     save: async (next: number) => {
@@ -511,7 +490,7 @@ test("an overlapping change is settled by the person before the base moves", asy
 });
 
 test("a comment is written as the signed-in person", async () => {
-  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  mount(<PageView id={ID} />, { page: detail() });
   await settle();
   fireEvent.change(screen.getByRole("textbox", { name: /Comment on/ }), {
     target: { value: "Is step 2 still right?" },
@@ -578,7 +557,7 @@ test.each([
       <PageView id={ID} />
       <NewPageDialog container="ENG" onClose={() => {}} />
     </>,
-    { page: detail(), page_reads: reads(), viewer },
+    { page: detail(), viewer },
   );
   await settle();
   for (const name of ["Edit", "Comment", "Write the page"]) {

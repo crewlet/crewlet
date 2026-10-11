@@ -6,7 +6,10 @@
  * on a question to them (the engine's `decisions`), and the seats the engine
  * stopped for a spent token budget that THIS reader can resolve, by raising
  * the ceiling or handing the item on (`seatDecisionsFor` decides which).
- * Newest first, three of them, and the Inbox for the rest.
+ * Newest first, three of them, and the Inbox for the rest of the asks and the
+ * runs — the reader's own inbox, in the person shell. A stopped seat is not
+ * there: it is the console's (`seatDecisions.tsx`), so a reader with more of
+ * them than the card shows reads them on this page's "Needs an admin".
  *
  * NEVER A ZERO FOR NOBODY: an anonymous reader or a token bound to no seat has
  * no decisions, and the card says what would give them some rather than
@@ -16,13 +19,13 @@
 import { Card, Tag } from "@crewlethq/ui";
 import { InfoGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { DecisionRow, decisionsHref } from "~/components/DecisionRow.tsx";
 import {
-  DecisionRow,
-  decisionSubjects,
-  decisionsHref,
-  subjectKey,
+  SeatRow,
+  consoleSubjectKey,
+  consoleSubjects,
   type SeatCondition,
-} from "~/components/DecisionRow.tsx";
+} from "./seatDecisions.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { DecisionsAnswer } from "~/protocol/index.ts";
@@ -53,7 +56,7 @@ export function Decisions({
   seatConditions: readonly SeatCondition[];
   now: number;
 }) {
-  const subjects = decisionSubjects(answer, seatConditions);
+  const subjects = consoleSubjects(answer, seatConditions);
   const total = typeof answer?.total === "number" ? answer.total + seatConditions.length : null;
   const shown = subjects.slice(0, HOME_DECISIONS);
 
@@ -92,14 +95,18 @@ export function Decisions({
             </div>
           ) : (
             <ul className="decision-list">
-              {shown.map((subject) => (
-                <DecisionRow
-                  key={subjectKey(subject)}
-                  subject={subject}
-                  decider={{ handle: viewer.handle }}
-                  now={now}
-                />
-              ))}
+              {shown.map((subject) =>
+                subject.kind === "seat" ? (
+                  <SeatRow key={consoleSubjectKey(subject)} seat={subject.seat} now={now} />
+                ) : (
+                  <DecisionRow
+                    key={consoleSubjectKey(subject)}
+                    subject={subject}
+                    decider={{ handle: viewer.handle }}
+                    now={now}
+                  />
+                ),
+              )}
             </ul>
           )}
         </QueryState>

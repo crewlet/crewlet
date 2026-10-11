@@ -674,7 +674,8 @@ answered by the frame as an admin's page, never Not Found (see
   of what is open (`adminPathOf` / `personPathOf` in `app/nav.ts`): Today and
   the Overview, a teammate's profile and their seat in Agent setup, People and
   the seats, About and the Charter, a unit or the chart and Edit org (on that
-  unit), a task and the turns charged to it (`#/admin/live/turns?item=KEY`).
+  unit), a task and the turns charged to it (`#/admin/live/turns?item=KEY`),
+  a knowledge page and how the agents read it (`#/admin/agents/pages/{id}`).
   A place with no twin crosses to the other shell's first screen — Today, or
   the Overview — never to a screen that would read as being about it.
 - **`g .` is the doors as a key**, for an admin, from anywhere.
@@ -682,11 +683,12 @@ answered by the frame as an admin's page, never Not Found (see
   person twin of the console object that is open, quiet because it is a way
   out rather than the page's business.
 - **An object's ⋯ menu ends with an Admin group** in the person shell — a
-  task's and a teammate's (`app/crossing.tsx`) — and so does a phone's "More":
+  task's, a teammate's and a knowledge page's (`app/crossing.tsx`) — and so
+  does a phone's "More":
   **Open in the admin console**, wearing `g .` and saying it is an admin's, to
   the console twin of the page. There is no inline "Trace ↗" anywhere in the
   person shell: the crossing is one deliberate step, and a page that names no
-  twin (a project, Knowledge) offers none, since an entry that opens the
+  twin (a project, a space) offers none, since an entry that opens the
   Overview is not about the thing the reader was looking at. A member's menus
   carry no such entry, not even a held one — the console is not a write a
   member could be given.
@@ -925,6 +927,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/admin/agents/schedules` · `#/admin/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** *(admin)* — recurring work; one schedule | |
 | `#/admin/agents/skills` | **Agent skills** *(admin)* — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/admin/agents/memory` · `#/admin/agents/memory/{handle}` | **Memory** *(admin)* — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
+| `#/admin/agents/pages/{id}` | **A page as the agents read it** *(admin)* — who read a knowledge page, in which turn and for which search, and, for a tool skill, who it reached as one. NO LIST: a bare pages address is Not Found, saying a page is opened from the page itself or from Agent skills | |
 | `#/admin/spend` | **Spend › Overview** *(admin)* — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, the auxiliary model by purpose and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/admin/spend/tasks` | **Expensive tasks** *(admin)* — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/admin/spend/budgets` | **Budgets** *(admin)* — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place), and what is refusing | `window=` is not read here, and is carried through to the other sections |
@@ -1993,18 +1996,30 @@ company did.** Top to bottom:
 - **The greeting.** The company's day (on `org.timezone`, the one clock every
   due date and budget window is cut on), the reader's morning, and one sentence
   of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
-  you, 1 condition needs a look, and 4 agents are working right now." The
+  you, 1 condition needs an admin, and 4 agents are working right now." The
   decisions figure is weighted; an engine condition — a refused token, a lost
   connection, no configuration, a node that shed its seats — takes the sentence
   over rather than sitting beside it. **Prose never prints a zero as a digit or
   a wrong plural**: "nothing needs your decision", "no agents are working right
   now", "1 condition needs", "2 conditions need" — and a fleet the presence
-  read counted as none is "Nimbus is running.", never "on 0 nodes". "N
-  conditions need a look" is a link to where they are listed, the Inbox's
-  "Needs a decision" band (opened on the one when there is one). A reader
-  nobody bound is told nothing about decisions at all. The **Today · 7 days · 30 days** control
+  read counted as none is "Nimbus is running.", never "on 0 nodes". "1
+  condition needs an admin" is a link to that condition's own place — its
+  seat's page, or wherever the engine's row points; more than one is said
+  plainly, because the card under the sentence lists them. A reader nobody
+  bound is told nothing about decisions at all. The **Today · 7 days · 30 days** control
   (`range=`) sets the window the figures below read over; Today is one company
   day, cut at the company's midnight by the engine.
+- **Needs an admin** — the admin half of the attention queue, first, under
+  the sentence that counts it (`routes/admin/overview/Conditions.tsx`): every
+  condition a person decides (`conditionsToDecide` — a seat that failed or a
+  person paused, a budget refusing or nearly spent), each with its mark, what
+  it costs to leave and **Go to it**, and every seat stopped on its budget
+  that is NOT among this reader's decisions, drawn as the decision row with
+  its controls held and saying why. Computed from the live state; a row
+  leaves when its condition clears. Not drawn when it is empty — the
+  sentence already says nothing needs an admin. These were the Inbox's rows
+  once, and the sentence sent an admin to a person's inbox to read about the
+  machine; they are the console's, read from what only an admin is served.
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
   from the engine's `activity`, with the state bar of working, waiting,
   stopped and idle, and a sub-line naming only the states somebody is in);
@@ -2014,7 +2029,7 @@ company did.** Top to bottom:
   of its writers: `mayChangeConfig`), or hand the item on with
   `update_work_item` — the oldest wait in the warning ink, and **Review**
   into the Inbox's decisions view; a stopped seat the reader can do neither
-  about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
+  about is one of the conditions that "need an admin" instead — an em dash and "Not bound to a person" for a reader who is
   nobody); *Tasks in progress* (`work_flow.now.active`, its change over the
   week and what is blocked or overdue, with the fortnight's sparkline);
   *Completed* over the window, against the window before it; and *Tokens* over
@@ -2041,12 +2056,16 @@ company did.** Top to bottom:
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
   window focused (see [Spend › Budgets](#spend--budgets-raised-in-place)) —
-  and **Reassign** of the item it was on. An ask with no options is
+  and **Reassign** of the item it was on — a row of the console's own
+  (`seatDecisions.tsx`), since a budget and its ceiling are an admin's to read
+  and to raise, drawn in the shared decision row's shape. An ask with no
+  options is
   answered in words on its row: **Reply** opens the same dialog a parked run's
   **Answer** does and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. **Open inbox** and **Review** both land on
-  `#/inbox?reason=decisions`, which draws every one of them.
+  `#/inbox?reason=decisions` — the reader's own inbox, which draws every ask
+  and run; the stopped seats stay here.
 - **Live now**: how many seats the engine says are working, and for the
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
@@ -2082,15 +2101,13 @@ their share of the window first.
 ### The Inbox is where you act
 
 The Inbox is built around what waits on the person — the questions put to
-them, the runs parked on them, the seats they can unblock — and then what
-reached them and why. It is two columns, each its own scroller: the list, and
+them and the runs parked on them — and then what reached them and why. It is two columns, each its own scroller: the list, and
 the open row in full with the answer to it.
 
 **One list, in a fixed order.** "Needs a decision" leads: the asks put to this
 person and the coding runs parked on a question to them (`decisions`, the read
-Today's Needs you draws and the Overview's figure counts), the seats the engine stopped on a spent token budget,
-and the conditions a person decides (`lib/attention.ts`, the subjects whose
-home is `seat`). Then the notices, grouped **Today**, **Yesterday** and
+Today's Needs you draws and the Overview's figure counts). Then the notices,
+grouped **Today**, **Yesterday** and
 **Earlier** at the COMPANY's midnight — the day the engine counts its budgets
 and day charts in, so a notice filed at 23:00 company time is not "Today" on
 one screen and "Yesterday" on the next. Decisions are never interleaved with
@@ -2098,6 +2115,14 @@ notices by time, which would eventually rank "a task you watch moved" above
 the CEO asking whether to hold a release. An ask is ONE row: the notice that
 told the person they were asked rides on the decision it is about rather than
 being listed again under Today, and Done and Snooze on the decision mark it.
+
+**The machine's conditions are not here.** A seat stopped on its budget or
+failed, a budget refusing, a node draining — the attention queue — are read
+from what only an admin is served (the durable coding runs, the meter's
+figures) and answered in the console, so they are the Overview's **Needs an
+admin**, and the Inbox, a person-shell screen, asks only what a member is
+(rule 20). It listed them once, and a member's inbox drew "no seat is stopped"
+from a meter it was never pushed.
 
 **Every row has the same three lines.** Who — the seat behind it, drawn with
 its avatar and state ring; a token's change is drawn as the person
@@ -2108,9 +2133,8 @@ the engine writes "maya-ops put LEAD-3 at position 1 of your priorities" with a
 handle, for the seat it wakes, and the row reads "Maya Ops put LEAD-3 …" — a
 comment's excerpt is somebody's own words and is left as they typed it. A
 notice's pill is its wake reason in the engine's eighteen words
-(`contract/reasons.ts`); the rows that are not notices take theirs from
-`CONDITION_PILLS` beside the Inbox, kept out of that table because they are
-not reasons. Unread is heavier and carries the accent dot; read is quieter,
+(`contract/reasons.ts`); a parked run takes `RUN_PILL` beside the Inbox, kept
+out of that table because it is not a reason. Unread is heavier and carries the accent dot; read is quieter,
 never hidden.
 
 **Unread, All and Snoozed is a scope, not a facet.** Each is a different
@@ -2165,11 +2189,8 @@ Slack #channel" beside Send — the engine holds the asker to it
 (`ExternalNotification.owes`); an ask that promised nothing draws neither.
 
 A parked coding run's pane quotes its question, says how long its box is still
-held, and answers by its turn (`answer_run`). A stopped seat's names the
-window that is spent and offers the two ways out — raise the ceiling, or hand
-the item on. A condition's says what it costs to leave and where the answer
-is. A notice's says who, when and why ("You see this because you follow this
-task").
+held, and answers by its turn (`answer_run`). A notice's says who, when and
+why ("You see this because you follow this task").
 
 **The thread is read, not replayed.** Under an ask it is the replies in the
 ask's own thread; under a notice about a comment, that comment and its
@@ -2203,7 +2224,9 @@ them.
 the row count: nothing answered yet and a refusal draw no sentence; a chip
 that took every row says so; Snoozed says what a snooze is; and Unread tells
 "you are caught up" (the person's own `seen_through` watermark exists) from
-"nothing has reached you yet".
+"nothing has reached you yet". A reader nobody bound gets no such sentence:
+the screen already says what would make the inbox theirs, and a quiet band
+would claim to have looked on nobody's behalf.
 
 **Two panes above a phone, one below it.** Both columns are present from the
 first paint and the first row is open until the reader picks one, so the pane
@@ -2213,10 +2236,9 @@ are one place the reader has been. Under 640px the list is the screen and a
 row opens in its place, with Back.
 
 **Three viewer states, three sentences.** A reader with no credential, a
-reader whose credential no seat claims, and a bound reader. The conditions a
-person decides are listed for all three; a person's notices and decisions need
-a credential bound to their seat, and every write control is drawn for all
-three, disabled with the reason.
+reader whose credential no seat claims, and a bound reader. A person's notices
+and decisions need a credential bound to their seat, and every write control
+is drawn for all three, disabled with the reason.
 
 ### My work is one person's day
 
@@ -2734,16 +2756,19 @@ twice and none nowhere:
 
 | Home | Subjects | Why there |
 |---|---|---|
-| `seat` — the Inbox's "Needs a decision", and the Overview's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
+| `seat` — the console Overview's **Needs an admin**, and its "N conditions need an admin" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
 | `engine` — the console's health card and the Overview's status sentence | the engine and this node's link to it | a fact about the product an admin is running, on every console screen, not an item in anybody's queue — in the person shell it is the connection line alone, drawn only while the connection is in trouble |
 | `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
-On the Overview the queue is COUNTED, not drawn: the `seat` conditions that are not
-the reader's own decisions — a seat stopped for a reason other than its
-budget, a company budget near or at its ceiling — are the status sentence's
-"N conditions need a look", linked to the Inbox, and the engine's own
-conditions take the sentence over. What the reader can settle is the
-decisions card beside it.
+The queue is the CONSOLE's — every input it is read from beyond the seats'
+rows is what only an admin is served (the durable coding runs, the meter's
+figures), and `lib/useAttention.ts`, which gathers them, is imported by the
+console's door and its Overview and by no person screen (rule 20). On the
+Overview the `seat` conditions that are not the reader's own decisions — a
+seat stopped for a reason other than its budget, a company budget near or at
+its ceiling — are the status sentence's "N conditions need an admin" and the
+**Needs an admin** card under it, and the engine's own conditions take the
+sentence over. What the reader can settle is the decisions card below.
 
 **What a quiet list says is derived, not written.** Every condition names one
 of five subjects, `SUBJECTS` maps each to the phrase a reader sees, and a place
@@ -5844,25 +5869,29 @@ the middle and a rail beside it.
   that repeats the title is not drawn twice.
 - **The rail**, top to bottom: *On this page* (the headings, the current one
   marked as the document scrolls, a press moving focus to the heading so a
-  keyboard continues from it), *Read by* (`page_reads`: each seat and how it
-  reached the page — "turn 2 on ENG-412", `search: “DHCP lease”` — linking
-  the turn it happened in), *Read today* (the faces, and the engine's
-  `distinct_seats_today` rather than the length of the faces drawn),
+  keyboard continues from it), *Read by* (the page answer's `readers`: each
+  agent, how often and how lately — never how), *Read today* (the faces of
+  those whose last read fell on the company's today, and their number — "1+"
+  where the list stopped at its cap with every reader on it from today, since
+  one past the cap may have read today too),
   *Linked from* (`linked_from`: tasks by key with their status, then pages by
   title), *Revisions*, *Children* and *Watchers*. Readers, backlinks and
   revisions each draw five rows and "Show n more". A signal this node cannot answer is not drawn rather than
-  drawn empty: no `page_reads` on a node without the usage domain, no
+  drawn empty: no `readers` from a node without the usage domain, no
   *Linked from* on one without an index. A node that holds an index and
   cannot answer says why instead of "No page or task links here" —
   `linked_from_status` `building` ("still building its search index … look
-  again in a few minutes") or `unavailable` — and the capped-reads note is
-  worded company-wide ("this list may be missing some"), because `elided`
-  counts what the cap dropped on every page rather than this one. The
+  again in a few minutes") or `unavailable` — and an answer whose reads were
+  capped (`complete: false`) says "this list may be missing some". The
   readers section names its window ("Read by agents · last 30 days") beside
   the page bar's company-day count, and each row is two lines as the artboard
-  draws it: the seat with its read count, then how it read the page and when —
-  the way-read cut with an ellipsis (whole on hover) so the age is never pushed
-  onto a third line.
+  draws it: the agent with its read count, then when.
+- **How each agent read it is the console's.** The turn a read was in and the
+  words a search used (`page_reads`) are what the machine processed, which
+  only an admin is served, so they are never a section of this page — a
+  person screen asks only what a member is (rule 20). They are the page's
+  console twin, `#/admin/agents/pages/{id}` ([below](#a-page-as-the-agents-read-it)),
+  which an admin reaches with `g .` or the page's ⋯ menu.
 - **Comments and the change log sit under the document**, not in the rail —
   a reply is prose and a rail is 280 px wide.
 - **Edit writes as you.** The editor saves through `save_page` on
@@ -5898,9 +5927,26 @@ unavailable, never a button that fails.
 (`kind=pages`, the default) lists every published tool-skill page with who it
 reached over thirty company days — the `pages` listing's `skill_loaded_by`,
 read with the listing rather than per row — and the total the listing counts,
-with Load more past a window. **Learned** (`kind=learned&seat=`) is one agent
+with Load more past a window; a row opens the page as the agents read it,
+staying in the console. **Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
 the seat, with "n of total" when the page is cut.
+
+### A page as the agents read it
+
+`#/admin/agents/pages/{id}` is a knowledge page's console twin
+(`routes/admin/agents/PageReads.tsx`): **Read by agents** over the window
+`page_reads` covers — one row per agent and way of reading, each saying how
+it reached the page ("turn 2 on ENG-412", linking that turn in Live;
+`search: “DHCP lease”`) with its count and when, and the engine's own
+`distinct_seats_today` beside the title — and, on a tool skill, **Reached as
+a skill**: who loaded it and who was only offered it, from the page's
+`skill_loaded_by`. A node with no usage domain says it keeps no record of who
+read what rather than that nobody did, and the capped-reads note is worded
+company-wide ("this list may be missing some"), because `elided` counts what
+the cap dropped on every page rather than this one. It has no list, like a
+trace: it is opened from the page or from a tool skill's row, and the band's
+**Open in {company}** goes back to the page.
 
 ### Agent diaries
 
@@ -6040,10 +6086,12 @@ key, that it needs an admin's; with a member's, the admin to ask; on a managed
 document, who manages it.
 
 **There is no reset.** A window's `used` is what it spent; the room comes back
-when it turns over, or now by raising its ceiling. The Overview's and the Inbox's
-**Raise budget** open the same write as a dialog of one scope's three ceilings
-(`RaiseBudgetDialog`), each field captioned with what that window has spent and
-when it resets.
+when it turns over, or now by raising its ceiling. The Overview's **Raise
+budget**, on a seat the engine stopped, opens the same write as a dialog of one
+scope's three ceilings (`RaiseBudgetDialog`), each field captioned with what
+that window has spent and when it resets. Both live beside this screen
+(`routes/admin/spend/budgetWrite.tsx`): a ceiling is spend and a `/config`
+change, and no person screen draws either (rule 20).
 
 ## The console: Company, Connect and Engine
 
@@ -7427,3 +7475,31 @@ to.
     it; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans every
     module the engine serves, lazy chunks and `protocol.js` included, because
     the committed bundle is what a browser runs.
+20. **A shell asks only what its reach is served.** The person shell is opened
+    by every key, a member's included, so every screen in it is built from
+    what a member is served: a question, a push and a write each at `member`
+    or below, and none of the console's code. A read above that does not fail
+    loudly — the engine refuses the question with a refusal the screen cannot
+    explain, or a slice a member's socket is never pushed stays empty and the
+    screen reports a quiet nothing (the Inbox once told every member that no
+    seat was stopped, from a meter they were never sent). What the machine
+    processed and how it is run are the console's, and an admin crosses to
+    them with `g .`. `app/shell.test.ts` walks the import graph from every
+    person-shell chunk and refuses, in any module it reaches, a question above
+    `member` (`contract/reach.ts`'s `QUESTION_REACH`, held against the registry
+    by `internal/api/queries`), a store slice filled above it
+    (`protocol/store.ts`'s `SLICES`, held there to `PUSH_REACH`, which
+    `internal/api/stream` holds against the hub), a write above it (`ACTIONS`'
+    `reach`, held by `internal/api/operator`) and any import of a console
+    module; its three exemptions are the frame's own switches, each with its
+    reason and its suite.
+21. **The person shell speaks the person voice.** Its copy is about people and
+    their work — who is working on what, what is waiting on you, when an agent
+    can carry on — never the engine's machinery: no tokens, turns, rounds,
+    phases, seats, nodes, configuration keys or `snake_case` names in
+    Crewlet's own words (a company's own content is quoted as written). A
+    fact drawn in both shells comes from one derivation with a phrase for
+    each, and the voice is the SHELL's, read from the address, never the
+    reader's role: an admin reading Today reads it as a person, and the
+    console speaks the engine's own words because an admin there is running
+    the engine.

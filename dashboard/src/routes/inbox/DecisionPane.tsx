@@ -11,9 +11,8 @@
  * woken with it, and posts it to the channel the ask promised (`inform`),
  * which the engine holds the asker to.
  *
- * A parked coding run, a budget-stopped seat and an engine condition each get
- * the same frame with their own body, and a notice gets its reason, what
- * changed and the conversation around it.
+ * A parked coding run gets the same frame with its own body, and a notice gets
+ * its reason, what changed and the conversation around it.
  */
 
 import { useCallback, useRef, useState, type ReactNode } from "react";
@@ -33,20 +32,16 @@ import {
   WandSparklesGlyph,
 } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { Mark } from "~/ui/glyph.tsx";
 import { href } from "~/app/router.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { StatusMark } from "~/components/work.tsx";
-import { holdLine, ReassignItem, type SeatCondition } from "~/components/DecisionRow.tsx";
-import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
+import { holdLine } from "~/components/DecisionRow.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { PERIOD_ADJECTIVE, PERIOD_WORDS, turnsOverWords } from "~/lib/budget.ts";
 import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
-import { fmtDateTime, fmtExact, humanize, relTime } from "~/lib/format.ts";
+import { humanize, relTime } from "~/lib/format.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
-import type { Attention } from "~/lib/attention.ts";
 import type {
   DecisionRun,
   WorkAskRow,
@@ -154,16 +149,8 @@ function paneKind(row: InboxRow): {
             : { label: "Question", tone: "warning", icon: <TriangleAlertGlyph size="xs" /> };
         case "run":
           return { label: "Coding run", tone: "warning", icon: <SquareTerminalGlyph size="xs" /> };
-        case "seat":
-          return { label: "Seat stopped", tone: "danger", icon: <TriangleAlertGlyph size="xs" /> };
       }
       break;
-    case "condition":
-      return {
-        label: "Condition",
-        tone: row.item.severity === "critical" ? "danger" : "warning",
-        icon: <TriangleAlertGlyph size="xs" />,
-      };
     case "notice":
       return { label: reasonPhrase(row.notice.reason), tone: "neutral", icon: null };
   }
@@ -216,13 +203,7 @@ function OpenPane({
         case "run":
           body = <RunBody run={row.subject.run} who={who} now={now} />;
           break;
-        case "seat":
-          body = <SeatBody seat={row.subject.seat} who={who} now={now} zone={zone} />;
-          break;
       }
-      break;
-    case "condition":
-      body = <ConditionBody item={row.item} />;
       break;
     case "notice":
       body = <NoticeBody notice={row.notice} who={who} index={index} now={now} />;
@@ -588,90 +569,6 @@ function RunBody({ run, who, now }: { run: DecisionRun; who: Who | null; now: nu
           </WriteButton>
         </div>
       </section>
-    </>
-  );
-}
-
-function SeatBody({
-  seat,
-  who,
-  now,
-  zone,
-}: {
-  seat: SeatCondition;
-  who: Who | null;
-  now: number;
-  zone: string | undefined;
-}) {
-  const name = who?.name ?? seat.row.role;
-  const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
-  const w = seat.window;
-  const when = w ? turnsOverWords(w, zone) : "";
-  return (
-    <>
-      <div className="inbox-pane-head">
-        <h1 className="inbox-pane-question">
-          {`${name} stopped — ${w ? `${PERIOD_ADJECTIVE[w.period]} ` : ""}token budget exhausted`}
-        </h1>
-        <Byline who={who}>
-          <span>{item ? `Stopped mid-turn on ${item.key}` : "Stopped between turns"}</span>
-          {seat.at && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{`last refused ${relTime(seat.at, now)}`}</span>
-            </>
-          )}
-        </Byline>
-      </div>
-      <div className="inbox-pane-card">
-        <p>
-          {/* THE WINDOW BY ITS SPAN, AND ITS TURNOVER ON THE COMPANY CLOCK, as
-              the queue's row and the Budgets screen say them — it printed
-              the engine's label (`2026-W41`) here. */}
-          {w
-            ? `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens are spent ${PERIOD_WORDS[w.period]}, so the engine turns this seat's charges away until the ${w.period} turns over${when ? ` ${when}` : ""}.`
-            : "The engine turns this seat's charges away until its budget window resets."}
-        </p>
-        <p className="t-caption">
-          Two ways out: raise the ceiling, or hand the work to somebody with room.
-        </p>
-        <div className="row gap-2">
-          <RaiseBudgetButton
-            handle={seat.row.handle ?? seat.row.role}
-            name={name}
-            window={seat.window}
-          />
-          {item && <ReassignItem item={item.key} />}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function ConditionBody({ item }: { item: Attention }) {
-  return (
-    <>
-      <div className="inbox-pane-head">
-        <h1 className="inbox-pane-question">{item.title}</h1>
-        {item.at && <p className="inbox-pane-meta">{`Since ${fmtDateTime(item.at)}`}</p>}
-      </div>
-      <div className="inbox-pane-card">
-        <p className="row gap-2">
-          <span className="attention-icon" data-severity={item.severity}>
-            <Mark name={item.icon} size="sm" />
-          </span>
-          <span>{item.detail}</span>
-        </p>
-        {item.path && (
-          <a className="t-link row gap-1" href={href(item.path, item.query)}>
-            Go to it <ArrowRightGlyph size="sm" />
-          </a>
-        )}
-        <p className="t-caption">
-          Computed from the live state — nothing here is stored or marked. It leaves your inbox when
-          the condition clears.
-        </p>
-      </div>
     </>
   );
 }

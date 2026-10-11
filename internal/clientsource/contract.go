@@ -237,6 +237,10 @@ var contract = []Entry{
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 	{"NodeAuth", ReadInterface, "internal/api/queries.TestTheNodesScreenReadsTheKeyTableEveryRowSends"},
 
+	// reach.ts
+	{"QUESTION_REACH", ReadLiteral, "internal/api/queries.TestTheDashboardKnowsEveryQuestionsReach"},
+	{"PUSH_REACH", ReadLiteral, "internal/api/stream.TestTheDashboardKnowsEveryPushKindsReach"},
+
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},
 

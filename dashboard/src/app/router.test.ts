@@ -375,6 +375,11 @@ describe("the two shells", () => {
       ["work", "ENG-42"],
       { path: [ADMIN_HEAD, "live", "turns"], query: { item: "ENG-42" } },
     ],
+    [
+      "a knowledge page and how the agents read it",
+      ["knowledge", "pages", "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a"],
+      { path: [ADMIN_HEAD, "agents", "pages", "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a"] },
+    ],
   ])("%s are each other's twins", (_name, person, admin) => {
     expect(adminPathOf(person)).toEqual(admin);
     expect(personPathOf(admin.path, new URLSearchParams(admin.query))).toEqual({ path: person });
@@ -386,6 +391,11 @@ describe("the two shells", () => {
   test("a place with no twin crosses to the other shell's first screen, and every crossing resolves", () => {
     expect(adminPathOf(["work", "ENG"])).toEqual({ path: [ADMIN_HEAD] });
     expect(adminPathOf(["knowledge"])).toEqual({ path: [ADMIN_HEAD] });
+    expect(adminPathOf(["knowledge", "ENG"])).toEqual({ path: [ADMIN_HEAD] });
+    // A PAGE'S CONSOLE TWIN HAS NO LIST: the bare address is Not Found, and
+    // only an id resolves.
+    expect(resolve([ADMIN_HEAD, "agents", "pages"]).resolved).toBe(false);
+    expect(resolve([ADMIN_HEAD, "agents", "pages", "p-1"]).resolved).toBe(true);
     expect(personPathOf([ADMIN_HEAD, "spend"])).toEqual({ path: ["today"] });
     expect(personPathOf([ADMIN_HEAD, "live", "turns"])).toEqual({ path: ["today"] });
     for (const d of DESTINATIONS) {

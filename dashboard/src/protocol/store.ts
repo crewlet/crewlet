@@ -36,8 +36,10 @@ import type {
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
+import { LIVE_CALL_DETAIL, MAX_EVENTS, type PushKind } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import type { Reach } from "../contract/access.ts";
+import { PUSH_REACH } from "../contract/reach.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -217,6 +219,41 @@ export interface StoreState {
 }
 
 export type Slice = keyof StoreState;
+
+/**
+ * WHERE EACH SLICE COMES FROM, AND THE LOWEST REACH IT IS FILLED FOR.
+ *
+ * A slice is a push's answer held, so it is served exactly as its push is —
+ * read off `contract/reach.ts`'s `PUSH_REACH`, the engine's own
+ * classification, rather than written again here — or higher, where one push
+ * carries a richer variant for an admin and the store files that variant in a
+ * slice of its own: the `budget` push is a member's too, but the meter WITH
+ * ITS FIGURES is an admin's and lands in `budget`, while the state-only
+ * reading a member is pushed lands in `budgetStatus`. `connected` and
+ * `authRejected` are this tab's transport, pushed by nobody.
+ *
+ * READ BY THE PERSON SHELL'S GATE (`app/shell.test.ts`): a person screen that
+ * reads a slice above `member` draws, for every member, a slice that stays
+ * empty — not a refusal anybody sees, but a screen quietly reporting nothing —
+ * so the gate refuses it the way it refuses a question above `member`. The
+ * gate also holds every row here at or above the reach of the pushes it names.
+ */
+export const SLICES = {
+  agents: { from: ["agents", "seats"], reach: PUSH_REACH.agents },
+  events: { from: ["event"], reach: PUSH_REACH.event },
+  phases: { from: ["event"], reach: PUSH_REACH.event },
+  sandboxes: { from: ["sandboxes"], reach: PUSH_REACH.sandboxes },
+  org: { from: ["org"], reach: PUSH_REACH.org },
+  tools: { from: ["tools"], reach: PUSH_REACH.tools },
+  health: { from: ["health"], reach: PUSH_REACH.health },
+  tokens: { from: ["tokens"], reach: PUSH_REACH.tokens },
+  // THE ADMIN'S VARIANT of a push a member is sent too: the meter's figures.
+  budget: { from: ["budget"], reach: "admin" },
+  budgetStatus: { from: ["budget"], reach: PUSH_REACH.budget },
+  schedules: { from: ["schedules"], reach: PUSH_REACH.schedules },
+  connected: { from: [], reach: "open" },
+  authRejected: { from: [], reach: "open" },
+} as const satisfies Record<Slice, { from: readonly PushKind[]; reach: Reach }>;
 
 // What a snapshot replaces. `phases` is deliberately absent: a snapshot carries
 // payload-free feed rows and no phase payloads, so emitting it here would wake

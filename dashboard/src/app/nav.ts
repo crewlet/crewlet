@@ -922,6 +922,13 @@ export function adminPathOf(path: readonly string[]): Crossing {
         return { path: ["admin", "live", "turns"], query: { item: first } };
       }
       return { path: [ADMIN_HEAD] };
+    case "knowledge":
+      // A PAGE AS THE AGENTS READ IT: the turn each read was in and the words
+      // each search used, which the person's page does not draw.
+      if (first === "pages" && second && path.length === 3) {
+        return { path: ["admin", "agents", "pages", second] };
+      }
+      return { path: [ADMIN_HEAD] };
     default:
       return { path: [ADMIN_HEAD] };
   }
@@ -939,6 +946,7 @@ export function personPathOf(path: readonly string[], query?: URLSearchParams): 
       return { path: ["today"] };
     case "agents":
       if (second === "seats" && third) return { path: ["team", "seats", third] };
+      if (second === "pages" && third) return { path: ["knowledge", "pages", third] };
       if (second === undefined) return { path: ["team", "people"] };
       return { path: ["today"] };
     case "company": {

@@ -13,11 +13,12 @@ import { describe, expect, test } from "vitest";
 
 import {
   type Lang,
+  type NamedCall,
   type Node,
-  isLocalSource,
   lineOf,
   memberName,
   modules,
+  namedCalls,
   parse,
   stringValue,
   walk,
@@ -657,11 +658,6 @@ test("a column with no word in its head declares one", () => {
  * covering what it was written for.
  */
 
-/** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
-const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
-/** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
-const BOUND = new Set(["act", "useAct"]);
-
 /** The sites that hand on a kind somebody else named, and why. */
 const FORWARDS: readonly { path: string; callee: string; argument: string; why: string }[] = [
   {
@@ -689,86 +685,6 @@ const FORWARDS: readonly { path: string; callee: string; argument: string; why: 
     why: "the builder test kit's stub socket answers whatever kind a screen asks it, through the fixture the suite supplies; every screen asking is held to a literal here",
   },
 ];
-
-interface NamedCall {
-  line: number;
-  callee: string;
-  /** The kind the call names, or null when the engine's gates cannot read one. */
-  name: string | null;
-  /** The call as written, up to its first argument, for the report. */
-  written: string;
-  /** The first argument as written. */
-  argument: string;
-}
-
-interface Alias {
-  line: number;
-  imported: string;
-  local: string;
-}
-
-/**
- * Every call in one module that names a question, and every import that
- * renames one.
- */
-function namedCalls(source: string, lang: Lang): { calls: NamedCall[]; aliases: Alias[] } {
-  const line = lineOf(source);
-  const program = parse(source, lang);
-  const bound = new Map<string, string>();
-  const namespaces = new Set<string>();
-  const aliases: Alias[] = [];
-  for (const statement of program.body as Node[]) {
-    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
-    if (!isLocalSource(String((statement.source as Node).value))) continue;
-    for (const spec of statement.specifiers as Node[]) {
-      const local = String((spec.local as Node).name);
-      if (spec.type === "ImportNamespaceSpecifier") namespaces.add(local);
-      if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
-      const imported = spec.imported as Node;
-      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
-      if (!SPELLED.has(name) && !BOUND.has(name)) continue;
-      bound.set(local, name);
-      if (local !== name) aliases.push({ line: line(spec.start), imported: name, local });
-    }
-  }
-  const calls: NamedCall[] = [];
-  walk(program, (node) => {
-    if (node.type !== "CallExpression") return;
-    const callee = node.callee as Node;
-    // What the call is to, and whether the engine's gates can read that NAME
-    // at all: a computed key names the method in a string they do not read.
-    let named: string | null = null;
-    let readable = true;
-    if (callee.type === "Identifier") {
-      const name = String(callee.name);
-      named = SPELLED.has(name) ? name : (bound.get(name) ?? null);
-    } else {
-      const member = memberName(callee);
-      const object = callee.object as Node | undefined;
-      if (member !== null && SPELLED.has(member)) {
-        named = member;
-        readable = !callee.computed;
-      } else if (
-        member !== null &&
-        BOUND.has(member) &&
-        object?.type === "Identifier" &&
-        namespaces.has(String(object.name))
-      ) {
-        named = member;
-      }
-    }
-    if (named === null) return;
-    const first = (node.arguments as Node[])[0];
-    calls.push({
-      line: line(node.start),
-      callee: named,
-      name: readable ? stringValue(first) : null,
-      written: source.slice(callee.start, first ? first.start : node.end).replace(/\s+/g, " "),
-      argument: first ? source.slice(first.start, first.end) : "",
-    });
-  });
-  return { calls, aliases };
-}
 
 /** Whether a call is the named forward in `FORWARDS`. */
 const forwarded = (path: string, call: NamedCall) =>

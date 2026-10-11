@@ -66,7 +66,6 @@ describe("the rows", () => {
     const rows = inboxRows({
       scope: "unread",
       subjects: [ASK],
-      conditions: [],
       notices: [
         notice("r-1", { ask: { comment: "c-12", asked_of: "jane", open: true } }),
         notice("r-2"),
@@ -83,7 +82,6 @@ describe("the rows", () => {
     const rows = inboxRows({
       scope: "snoozed",
       subjects: [ASK],
-      conditions: [],
       notices: [notice("r-1")],
     });
     expect(rows.decisions).toEqual([]);
@@ -105,7 +103,6 @@ describe("the rows", () => {
           },
         },
       ],
-      conditions: [],
       notices: [notice("r-1", { reason: "mention" }), notice("r-2", { reason: "assignee" })],
     });
     const counts = chipCounts(rows);
@@ -191,7 +188,7 @@ describe("the snooze presets", () => {
 });
 
 describe("the quiet sentences", () => {
-  const base = { bound: true, error: false, shown: 0, watched: "every seat's own state" };
+  const base = { bound: true, error: false, shown: 0 };
   const answer = { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 };
 
   test("say nothing before an answer or beside a refusal", () => {
@@ -213,9 +210,20 @@ describe("the quiet sentences", () => {
     ).toBe("You are caught up");
   });
 
-  test("name what the conditions were measured over for a reader who is nobody", () => {
+  // NOBODY'S INBOX CLAIMS NOTHING: the screen says what would make it
+  // somebody's, and a quiet band would say it had looked on nobody's behalf.
+  // It used to name the engine's conditions here, which are the console's.
+  test("say nothing for a reader who is nobody", () => {
     expect(
-      inboxQuiet({ ...base, bound: false, answer: null, scope: "unread", chip: "" })?.hint,
-    ).toContain("every seat's own state");
+      inboxQuiet({ ...base, bound: false, answer: null, scope: "unread", chip: "" }),
+    ).toBeNull();
+    expect(inboxQuiet({ ...base, bound: false, answer, scope: "all", chip: "" })).toBeNull();
+  });
+
+  test("the decisions chip names only what is put to a person", () => {
+    const quiet = inboxQuiet({ ...base, answer, scope: "unread", chip: "decisions" });
+    expect(quiet?.hint).toBe(
+      "No question is put to you, and no coding run is waiting on your answer.",
+    );
   });
 });
