@@ -1808,7 +1808,7 @@ person actually says about their inbox, naming each notice by the `record_id`
 
 | Argument | What it does |
 |---|---|
-| `read` | Marks notices read — the inbox's *Done*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
+| `read` | Marks notices read: the Inbox's *Mark as read*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
 | `unread` | Marks notices unread again, including one you have already read past. |
 | `snooze` | `[{record_id, until}]` — puts notices off until an instant: in the future, and at most a year away, because a snooze past the horizon is a delete that does not say so. |
 | `unsnooze` | Brings snoozed notices back now. |
@@ -1823,16 +1823,18 @@ read" from a tab opened an hour earlier erased every mark made since. It also
 reads where each notice sits from the notice's own record rather than asking
 you, which is why a mark names nothing but the notice.
 
-**In the dashboard's Inbox these are the row's own controls.** *Done* marks
-the notices the open row stands for read — an ask's, when the row is a
-decision — and nothing else. *Snooze* offers an hour, tomorrow at 09:00 and next
-Monday at 09:00 on the company's clock, or a moment you pick, and only the ones
-inside the engine's bound: the person answer serves `max_snooze_ahead`, so a
-preset the write would refuse is never shown. *Mark all read* is `read_through`
-at the newest notice the screen LOADED, so a notice that arrived after you
-looked is still unread. A row that is not a notice — a parked coding run, a
-stopped seat, a condition — has nothing to mark; it leaves the list when it is
-answered or cleared, and its Done says so rather than disappearing.
+**In the dashboard's Inbox these are an update's own controls.** *Mark as
+read* marks the open update read and nothing else, and turns into *Mark as
+unread*. *Snooze* offers an hour, tomorrow at 09:00 and next Monday at 09:00 on
+the company's clock (each moment once, so on a Sunday, when next Monday is
+tomorrow, it is offered once), or a moment you pick, and only the ones inside
+the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
+the write would refuse is never shown. *Mark all read* is `read_through` at the
+newest notice the screen LOADED, so a notice that arrived after you looked is
+still unread. A question, a parked coding run, a stopped seat and a condition
+carry none of these: each leaves the list when it is answered or cleared, and
+answering a question in the Inbox marks the notices that asked it read, so it
+does not come back as an update.
 
 **Your read position is the rule, and the lists are the exceptions.** Everything
 at or below it reads as read and everything above it as unread, so your record

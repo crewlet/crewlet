@@ -836,7 +836,7 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox** — what waits on your decision, and what reached you and why | `scope=unread\|all\|snoozed` · `reason=decisions\|reviews\|mentions\|assigned` (the chip) · `row=` (which row the pane is on) |
+| `#/inbox` | **Inbox**: what waits on your decision, and what reached you | `row=` (which item the pane is on) |
 | `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
@@ -1438,8 +1438,8 @@ holding" the reader is being told something false about their own company.
 
 **The note is a caption on the numbers, so it is drawn only where a number is.**
 Printed unconditionally it appeared beside a rail that could never carry a count
-— the Inbox's unread/all/snoozed control, whose two other scopes are rows the
-loaded page does not hold — and qualified figures the reader could not see. A
+(a scope control, whose other scopes are rows the loaded page does not hold)
+and qualified figures the reader could not see. A
 dimension that cannot be counted at all is not a facet rail: it is one of N
 scopes, which is a `Segmented`, the same control the work toolbar's
 open/closed/everything uses.
@@ -1861,7 +1861,7 @@ company did.** Top to bottom:
   now", "1 condition needs", "2 conditions need" — and a fleet the presence
   read counted as none is "Nimbus is running.", never "on 0 nodes". "N
   conditions need a look" is a link to where they are listed, the Inbox's
-  "Needs a decision" band (opened on the one when there is one). A reader
+  "Needs you" group (opened on the one when there is one). A reader
   nobody bound is told nothing about decisions at all. The **Today · 7 days · 30 days** control
   (`range=`) sets the window the figures below read over; Today is one company
   day, cut at the company's midnight by the engine.
@@ -1917,7 +1917,7 @@ company did.** Top to bottom:
   and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. **Open inbox** and **Review** both land on
-  `#/inbox?reason=decisions`, which draws every one of them.
+  `#/inbox`, whose list opens with every one of them under Needs you.
 - **Live now**: how many seats the engine says are working, and for the
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
@@ -1955,126 +1955,134 @@ their share of the window first.
 
 ### The Inbox is where you act
 
-The Inbox is built around what waits on the person — the questions put to
-them, the runs parked on them, the seats they can unblock — and then what
-reached them and why. It is two columns, each its own scroller: the list, and
-the open row in full with the answer to it.
+The Inbox is built around what waits on the person (the questions put to
+them, the runs parked on them, the seats they can unblock) and then what
+reached them. It is two columns, each its own scroller: the list, and the open
+item read in full beside it with the answer to it. Every visual part of both
+is the kit's (`InboxList` and `ReadingPane` in `@crewlethq/ui`); the screen
+only places them.
 
-**One list, in a fixed order.** "Needs a decision" leads: the asks put to this
-person and the coding runs parked on a question to them (`decisions`, the read
-Home's figure counts), the seats the engine stopped on a spent token budget,
-and the conditions a person decides (`lib/attention.ts`, the subjects whose
-home is `seat`). Then the notices, grouped **Today**, **Yesterday** and
-**Earlier** at the COMPANY's midnight — the day the engine counts its budgets
-and day charts in, so a notice filed at 23:00 company time is not "Today" on
-one screen and "Yesterday" on the next. Decisions are never interleaved with
-notices by time, which would eventually rank "a task you watch moved" above
-the CEO asking whether to hold a release. An ask is ONE row: the notice that
-told the person they were asked rides on the decision it is about rather than
-being listed again under Today, and Done and Snooze on the decision mark it.
+**One list, in a fixed order, with no filter bar.** **Needs you** leads: the
+asks put to this person and the coding runs parked on a question to them
+(`decisions`, the read Home's figure counts), the seats the engine stopped on
+a spent token budget, and the conditions a person decides (`lib/attention.ts`,
+the subjects whose home is `seat`). **Updates** follows: what reached them and
+is not read yet (`work_inbox{unread, snoozed: exclude}`). Decisions are never
+interleaved with updates by time, which would eventually rank "a task you
+watch moved" above the CEO asking whether to hold a release. An ask is ONE
+row: the notice that told the person they were asked rides on the decision it
+is about rather than being listed again under Updates, and answering the ask
+marks it read, so an answered question never comes back as an update. What
+was snoozed and what was read already are two quiet links at the end of the
+list, **N snoozed** and **Earlier updates**, rather than a scope or a chip at
+its top: a filter bar is read every time, and these are opened rarely. The
+snoozed count is read whether or not its list is open (`snoozed: only`);
+Earlier is read only once it is opened (`unread: false`, of which the read
+ones are listed), and both page forward fifty at a time with **Show more**.
+Home's **Review** and **Open inbox** land on `#/inbox`, whose list opens with
+every decision they counted. A change the person made themselves, under
+either of their names, is never one of the updates.
 
-**Every row has the same three lines.** Who — the seat behind it, drawn with
-its avatar and its status glyph; a token's change is drawn as the person
-(`actor_seat`), never as the token id, and one bound to nobody as "An
-operator" — what (the question, the stop, the excerpt), and why (a pill). An
-excerpt the engine COMPOSED names its author by name as the row's head does:
-the engine writes "maya-ops put LEAD-3 at position 1 of your priorities" with a
-handle, for the seat it wakes, and the row reads "Maya Ops put LEAD-3 …" — a
-comment's excerpt is somebody's own words and is left as they typed it. A
-notice's pill is its wake reason in the engine's eighteen words
-(`contract/reasons.ts`); the rows that are not notices take theirs from
-`CONDITION_PILLS` beside the Inbox, kept out of that table because they are
-not reasons. Unread is heavier and carries the accent dot; read is quieter,
-never hidden.
+**Every row says the same three things.** Who: the seat behind it, with its
+avatar; a token's change is drawn as the person (`actor_seat`), never as the
+token id, and one bound to nobody as "An operator". What, in up to three
+lines, never cut at the edge: the question, the stop ("The daily token budget
+is spent", with **stopped** after the name in the danger ink), a run's
+question (with **coding run** after the name), or what an update did ("Mentioned
+you", "Changed its status") with its excerpt after it in the quiet ink. And
+the task it is about, as a quiet link of its own under the row: its key and
+title (one `work_items{key}` read resolves the titles of every row that names
+its task by key alone), which opens the task in the frame's side panel on a
+plain click and its own page on a modified one. An excerpt the engine
+COMPOSED names its author by name as the row's head does: the engine writes
+"maya-ops put LEAD-3 at position 1 of your priorities" with a handle, for the
+seat it wakes, and the row reads "Maya Ops put LEAD-3 …"; a comment's excerpt
+is somebody's own words and is left as they typed it. Unread is heavier;
+the open row takes the neutral pressed fill (never the accent, which made a
+column of rows read as a column of alerts) and is the one row marked current.
 
-**Unread, All and Snoozed is a scope, not a facet.** Each is a different
-question put to `work_inbox` (`unread`, and `snoozed=exclude|only`), so the
-engine narrows the scan rather than the page and an empty page is an empty
-scope. Snoozed lists only what was put off, each row saying "Snoozed until …",
-and no decisions: a decision leaves when it is answered, not when it is put
-off. An unknown `scope=` resolves to `unread`. The unread count is drawn
-INSIDE the Unread option ("Unread 5"), as the approved design draws it — beside
-the group it read as a fact about all three — and it is the page's, so where
-the page stopped with more behind it the option says `50+` and its title says
-the engine answers fifty at a time.
+**The pane reads one item top to bottom, with nothing to open.** One sentence
+says who is asking, what is asked of the reader and on which task ("CTO asks
+for your approval on LEAD-12 Q4 release plan"); the time is on the row, so it
+is not repeated. The question follows in large type, then its context, then
+the asker's reasoning on an inset ground ("CTO recommends **Hold release**")
+with the evidence it cites under it: a task, a page, a turn trace, a coding
+run or a link. An update's pane names what it did as its heading, quotes a
+comment whole under it, and says why it reached the reader where the heading
+does not ("· you follow this task", from the reason of an update that only
+informs, or "· snoozed until …").
 
-**The chips are four questions of the list** — Decisions (every row that is
-not a notice), Reviews (the asks put to the person as `approver`), Mentions
-and Assigned — and they narrow the rows LOADED. Where that is every row their
-counts are totals and nothing more is said; where the page stopped with more
-behind it, each chip says its count is the page's in its own description and
-title — read with the chip, rather than as a muted line under the row that read
-like debugging output. `reason=decisions` is where Home's **Review** and
-**Open inbox** land. Every notice still names its own reason on its row. A
-change the person made themselves — under either of their names — is never one
-of the notices.
+**An ask is answered in one press, through the one write every surface uses.**
+The pane draws `AnswerAsk` in its `buttons` layout: each option is a button
+that SENDS that choice as the answer (`comment_on_work_item{item, answers,
+choice}`), the recommended one first and filled, all through ONE write so a
+second choice cannot be sent while the first is in flight. **Something else**
+opens the field in their place and sends the answer in words
+(`{item, answers, body}`); an ask with no options is answered in that field
+from the start. Where the ask promised a channel (`decision.inform`) the line
+under the answer says "Your answer is also posted to #channel": the engine
+holds the asker to it (`ExternalNotification.owes`), and an ask that promised
+nothing draws no such line. A parked coding run's pane heads with its
+question's first sentence, quotes the question whole and verbatim, says how
+long its box is still held, and answers by its turn (`answer_run`). A stopped
+seat's names the window that is spent and offers the two ways out: raise the
+ceiling, or hand the item on. A condition's says what it costs to leave and
+where the answer is.
 
-**The pane is the decision, answered in place.** The question is the heading;
-under it who asked, when, and the role the person is asked in ("You are the
-approver on LEAD-12"), with "reports to you" derived from the chart. The card
-holds the context, what the asker recommends and why, and the evidence it
-cites — a task with its status as the board draws it, a page, a turn trace, a
-coding run or a link. Under "Your decision" each option is a card that SENDS
-that choice as the answer (`comment_on_work_item{item, answers, choice}`), the
-recommended one filled, all through ONE write so a second choice cannot be
-sent while the first is in flight. **Reply with instructions** turns the
-composer into the answer in words. Where the ask promised a channel
-(`decision.inform`) the line under the options says "<asker> is woken with
-your answer and posts it to #channel", and the composer says "Also posts to
-Slack #channel" beside Send — the engine holds the asker to it
-(`ExternalNotification.owes`); an ask that promised nothing draws neither.
+**What was done is shown, then the next item opens.** An answered question
+or run stays in its place in Needs you, struck through and read as
+"Answered", and its pane shows the answer where the controls were; a read or
+snoozed update shows its new state. 700 ms later (`ADVANCE_MS`) the next item
+after it in the list opens, unless the reader has moved on first.
 
-A parked coding run's pane quotes its question, says how long its box is still
-held, and answers by its turn (`answer_run`). A stopped seat's names the
-window that is spent and offers the two ways out — raise the ceiling, or hand
-the item on. A condition's says what it costs to leave and where the answer
-is. A notice's says who, when and why ("You see this because you follow this
-task").
-
-**The thread is read, not replayed.** Under an ask it is the replies in the
-ask's own thread; under a notice about a comment, that comment and its
-replies; under any other notice, the task's latest conversation. It is read a
-page at a time from `work_comments`, the newest page polled, and "Earlier
-comments" reads the page before — the detail's twenty are no longer where a
-long conversation ends. A token's comment is drawn as the person it was bound
-to (`comment_seats`).
-
-**The composer writes as you.** A reply is `comment_on_work_item{item, body,
-reply_to}` and answers nothing; an answer closes the ask. `@` opens a picker
-over the org that writes `@handle` into the text — the engine resolves
+**The conversation is the last part of the reading.** It is labelled by what
+it holds: "Replies to this question" under an ask, "Replies to this comment"
+under an update about a comment (whose comment is quoted above, so it is not
+listed again unless the update carries only a preview of it), and
+"Conversation on this task" under any other update. It is read a page at a
+time from `work_comments`, the newest page polled, and **Earlier comments**
+reads the page before. A token's comment is drawn as the person it was bound
+to (`comment_seats`). The reply box at its end writes as you:
+`comment_on_work_item{item, body, reply_to}`, which answers nothing. `@` opens
+a picker over the org that writes `@handle` into the text (the engine resolves
 mentions from the body, so the picker never sends a list that could disagree
-with it. `#` links another task (`update_work_item{linked}`); the paperclip
-attaches a page — an existing one, or what was written saved as a new page
-(`write_page`) and then attached (`linked_pages`). `Mod+Enter` sends.
+with it); `#` links another task (`update_work_item{linked}`); the paperclip
+attaches a page, an existing one or what was written saved as a new page
+(`write_page`) and then attached (`linked_pages`). `Mod+Enter` sends. A
+question answered in words has no second box: its own field above is the
+answer.
 
-**Every mark is a gesture on exactly what it names.** Done marks the open
-row's notices read; Snooze puts them off to one of three presets — in an hour,
-tomorrow at 09:00 and next Monday at 09:00 on the company's clock — or a moment
-the reader picks, and ONLY the presets inside the engine's
-`max_snooze_ahead` (from `work_person`) are offered, since the write refuses
-the rest. **Mark all read** is `read_through` at the newest notice LOADED: a
-notice that arrived after the page was drawn is one the person has not seen.
-None of them sends the inbox back whole, which is what the write they replaced
-did — a Done in one tab erased a snooze made in another. A row that is not a
-notice draws Snooze and Done disabled with that sentence rather than hiding
-them.
+**Every mark is a gesture on exactly what it names, and only an update has
+them.** **Mark as read** marks the open update read and turns into **Mark as
+unread**; **Snooze** puts it off to an hour from now, tomorrow at 09:00 or next
+Monday at 09:00 on the company's clock (each moment offered once, so a Sunday
+has no second Monday), or a moment the reader picks, and ONLY the presets
+inside the engine's `max_snooze_ahead` (from `work_person`) are offered, since
+the write refuses the rest. A question, a run, a seat and a condition carry
+none of them: each leaves the inbox when it is answered or cleared, which is
+the engine's rule for decisions. **Mark all read** is `read_through` at the
+newest update LOADED: an update that arrived after the page was drawn is one
+the person has not seen. None of them sends the inbox back whole, which is
+what the write they replaced did: a Done in one tab erased a snooze made in
+another.
 
-**What the list says when it is empty is derived from the answer**, never from
-the row count: nothing answered yet and a refusal draw no sentence; a chip
-that took every row says so; Snoozed says what a snooze is; and Unread tells
-"you are caught up" (the person's own `seen_through` watermark exists) from
-"nothing has reached you yet".
+**What the list says when it is empty is derived from the answer**, never
+from the row count: nothing answered yet and a refusal draw no sentence, and
+"you are caught up" (the person's own `seen_through` watermark exists) is told
+from "nothing has reached you yet". With nothing left to open, the pane says
+**All clear**.
 
 **Two panes above a phone, one below it.** Both columns are present from the
-first paint and the first row is open until the reader picks one, so the pane
-is never an empty box beside a list with something in it; stepping down the
-list — or `j` and `k` — replaces history, so four rows read through one pane
-are one place the reader has been. Under 640px the list is the screen and a
-row opens in its place, with Back.
+first paint and the first item not yet dealt with is open until the reader
+picks one, so the pane is never an empty box beside a list with something in
+it; stepping down the list, or `j` and `k`, replaces history, so four rows
+read through one pane are one place the reader has been. Under 640px the list
+is the screen and an item opens in its place, with Back at the start of its
+byline.
 
 **Three viewer states, three sentences.** A reader with no credential, a
 reader whose credential no seat claims, and a bound reader. The conditions a
-person decides are listed for all three; a person's notices and decisions need
+person decides are listed for all three; a person's updates and decisions need
 a credential bound to their seat, and every write control is drawn for all
 three, disabled with the reason.
 
@@ -2532,7 +2540,7 @@ twice and none nowhere:
 
 | Home | Subjects | Why there |
 |---|---|---|
-| `seat` — the Inbox's "Needs a decision", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
+| `seat`: the Inbox's "Needs you", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
 | `engine` — the sidebar's health card and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
 | `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
@@ -2995,12 +3003,12 @@ a tool arrives in it with the control that sends it. The controls
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
 | Pin / Unpin | A saved view's page | `set_pins` |
-| Done · Snooze · Mark unread | The open row in the Inbox | `mark_inbox` (exactly the notices that row holds; every other mark and your read position stay) |
-| Mark all read | The Inbox's page bar | `mark_inbox{read_through}` at the newest notice LOADED — never past it |
-| An option card | A decision in the Inbox's pane | `comment_on_work_item{item, answers, choice}` |
-| Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
-| Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
+| Mark as read · Mark as unread · Snooze · Unsnooze | An open update in the Inbox | `mark_inbox` (exactly that one notice; every other mark and your read position stay) |
+| Mark all read | The Inbox's page bar | `mark_inbox{read_through}` at the newest notice LOADED, never past it |
+| An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
+| Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
+| Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
+| Send answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 
