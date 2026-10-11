@@ -204,24 +204,25 @@ func (s SeatIdentity) Refused() bool {
 		s.Outcome != IdentityUnanswered
 }
 
-// HookOutcome is what happened at one webhook target, and it has THREE
-// values because two of them were indistinguishable and led to opposite
-// actions.
+// HookOutcome is what happened at one webhook target, and it has FOUR values
+// because three of them leave no hook and lead to three different actions.
 //
 // A hook that was attempted and refused is an ingress block: events reach
 // nobody and somebody has to widen a credential. A target with NOTHING TO
 // HOOK is not — an archived repository emits no events, so a hook on it
 // would be correct and pointless — and reporting it as a block put a company
 // permanently in [integration.PhaseDegraded], retried on the vendor-admin
-// backoff for ever, over a repository that is finished.
+// backoff for ever, over a repository that is finished. And a target GitHub
+// never ANSWERED about is neither: nothing was learned about the repository
+// or the credential, so the run raises, as [resolveSeats] does for a seat.
 //
-// Both used to be "URL is empty, Detail says why", which is why the
+// They used to be "URL is empty, Detail says why", which is why the
 // distinction has to be a value rather than a convention: an empty URL is
 // what a caller sees, and no amount of prose in Detail changes what
 // [Result.Findings] does with it.
 type HookOutcome string
 
-// The three outcomes.
+// The four outcomes.
 const (
 	// HookRegistered is a target this run left with a working hook.
 	HookRegistered HookOutcome = "registered"
@@ -231,16 +232,23 @@ const (
 	// run.
 	HookSkipped HookOutcome = "skipped"
 
-	// HookBlocked is a target this run tried and could not hook. This is
+	// HookBlocked is a target this run tried and GitHub refused. This is
 	// the one that becomes [integration.FindingIngressBlocked].
 	HookBlocked HookOutcome = "blocked"
+
+	// HookUnanswered is a target where a request got NO ANSWER: a dial
+	// that failed, a read that timed out, a cancelled pass. Not a finding;
+	// a run that holds one has raised, and the target is described only so
+	// the command line can print it beside the error rather than as
+	// blocked or skipped.
+	HookUnanswered HookOutcome = "unanswered"
 )
 
 // Valid reports an outcome this build knows, so one off the wire is a value
 // rather than a panic.
 func (o HookOutcome) Valid() bool {
 	switch o {
-	case HookRegistered, HookSkipped, HookBlocked:
+	case HookRegistered, HookSkipped, HookBlocked, HookUnanswered:
 		return true
 	default:
 		return false
@@ -449,14 +457,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res.NoIngress = noIngressReason(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
-		// stop halfway: the hook half reports a read's failure as a
-		// FINDING rather than raising — a repository whose hook listing
-		// failed becomes ingress_blocked — so a node draining mid-pass
-		// would record a page of sentences about the operator's
-		// repositories, every one of them actually about this engine
-		// shutting down. (The seat walk raises on a lookup that was never
-		// answered — see [resolveSeats] — so a cancellation there has
-		// already come back as an error.)
+		// always fail halfway. Every request a cancellation cuts off now
+		// raises — a seat lookup or a hook request GitHub never answered is
+		// a fault, see [answered] — but one already answered when the
+		// context died comes back fine, and the walk goes on describing a
+		// deployment this pass has stopped being entitled to read. A node
+		// draining would record that page as current.
 		err = interrupted(ctx)
 	}
 	if err != nil {
@@ -652,8 +658,10 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	return out, nil
 }
 
-// answered reports a lookup GitHub gave an answer to — a status, or a
+// answered reports a request GitHub gave an answer to — a status, or a
 // login-less 200 — as opposed to one that failed before any answer arrived.
+// The line between a finding and a fault, for a seat's lookup and a hook's
+// requests alike.
 //
 // THE ANSWER, NEVER THE ERROR'S WORDING: an [APIError] is the only shape a
 // status reaches this package in, and [ErrNoLogin] the only answer that
@@ -842,6 +850,19 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 
 	if org := strings.TrimSpace(pv.Org); org != "" && mode != config.ContainerWebhookNever {
 		state, err := ensureOrgWebhook(ctx, opts, org, target, secret, minted)
+		if err != nil && !answered(err) {
+			// NOT A REFUSAL, so neither arm below may read it as one: under
+			// `auto` it fell back to per-repository hooks over a request
+			// that never got there — and the next pass, reaching GitHub,
+			// registered the org hook beside them and removed none, so
+			// every event in those repositories arrived twice for as long
+			// as both lived (the second deduped, and waste on every event).
+			// Under `true` it failed the run saying the credential could
+			// not register the hook.
+			state.Outcome, state.Detail = HookUnanswered, err.Error()
+			return ingress{Hooks: append(hooks, state), Notes: notes}, fmt.Errorf(
+				"github: ask GitHub for the organization hooks on %s: %w", org, err)
+		}
 		switch {
 		case err == nil:
 			hooks = append(hooks, state)
@@ -906,10 +927,19 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 			"events should reach the engine")
 		return ingress{Hooks: hooks, Notes: notes}, nil
 	}
+	// EVERY TARGET IS WALKED before an unanswered one is raised, the first
+	// in list order: a hook registered on the next repository is as good
+	// after the blip as before it, and a pass that stopped at the first
+	// silence would name whichever target the outage reached first.
+	var unanswered error
 	for _, t := range targets {
-		hooks = append(hooks, ensureRepoWebhook(ctx, opts, t, target, secret, minted))
+		state, err := ensureRepoWebhook(ctx, opts, t, target, secret, minted)
+		hooks = append(hooks, state)
+		if err != nil && unanswered == nil {
+			unanswered = fmt.Errorf("github: ask GitHub about the hook on %s: %w", t, err)
+		}
 	}
-	return ingress{Hooks: hooks, Notes: notes}, nil
+	return ingress{Hooks: hooks, Notes: notes}, unanswered
 }
 
 // ensureOrgWebhook converges the organization's hook.
@@ -971,14 +1001,30 @@ func ensureOrgWebhook(
 
 // ensureRepoWebhook converges one repository's hook.
 //
-// A FAILURE HERE IS REPORTED, NOT RAISED. A company's repository list will
+// A REFUSAL HERE IS REPORTED, NOT RAISED. A company's repository list will
 // contain one that was renamed, archived or made private to a team this
 // credential is not in, and failing the whole run over it would leave every
 // other repository unhooked to punish one typo.
+//
+// A REQUEST GITHUB NEVER ANSWERED IS NOT A REFUSAL, and it is the one thing
+// returned as an error — beside a [HookUnanswered] state, so the target is
+// still described. It was filed as blocked, which [Result.Findings] reports
+// as an ingress block owed by a GitHub organization owner: a timeout read as
+// a repository the credential may not hook, re-asked on the vendor admin's
+// backoff, about a request that never reached GitHub. [answered] is the
+// line, as it is for a seat.
 func ensureRepoWebhook(
 	ctx context.Context, opts Options, t Target, target, secret string, minted bool,
-) HookState {
+) (HookState, error) {
 	state := HookState{Target: t, Outcome: HookBlocked}
+	failed := func(err error) (HookState, error) {
+		state.Detail = err.Error()
+		if !answered(err) {
+			state.Outcome = HookUnanswered
+			return state, err
+		}
+		return state, nil
+	}
 	repo, err := opts.Client.RepoOf(ctx, t.Owner, t.Repo)
 	if err != nil {
 		var apiErr *APIError
@@ -991,10 +1037,9 @@ func ensureRepoWebhook(
 			state.Detail = "not found, or not visible to this credential — " +
 				"GitHub answers 404 for both, so check the spelling and check " +
 				"that this token's account has access"
-			return state
+			return state, nil
 		}
-		state.Detail = err.Error()
-		return state
+		return failed(err)
 	}
 	if !repo.Permissions.Admin {
 		// Checked BEFORE the write, because the failure is otherwise a
@@ -1002,7 +1047,7 @@ func ensureRepoWebhook(
 		// repository, on a repository this run just read successfully.
 		state.Detail = "this credential has no admin access, and only an " +
 			"admin may register a webhook"
-		return state
+		return state, nil
 	}
 	if repo.Archived {
 		// NOTHING TO HOOK, which is not the same as failing to hook: an
@@ -1013,13 +1058,12 @@ func ensureRepoWebhook(
 		// for ever, on the vendor-admin backoff.
 		state.Outcome = HookSkipped
 		state.Detail = "archived, so it emits no events — no hook registered"
-		return state
+		return state, nil
 	}
 
 	hooks, err := opts.Client.RepoWebhooks(ctx, t.Owner, t.Repo)
 	if err != nil {
-		state.Detail = err.Error()
-		return state
+		return failed(err)
 	}
 	for _, hook := range hooks {
 		if hook.URL != target {
@@ -1027,8 +1071,7 @@ func ensureRepoWebhook(
 		}
 		if opts.RecreateWebhooks {
 			if err := opts.Client.DeleteRepoWebhook(ctx, t.Owner, t.Repo, hook.ID); err != nil {
-				state.Detail = err.Error()
-				return state
+				return failed(err)
 			}
 			break
 		}
@@ -1037,21 +1080,19 @@ func ensureRepoWebhook(
 			// branch exists and what `minted` covers that a URL
 			// comparison cannot.
 			state.Outcome, state.URL = HookRegistered, target
-			return state
+			return state, nil
 		}
 		if _, err := opts.Client.UpdateRepoWebhook(ctx, t.Owner, t.Repo, hook.ID, target, secret); err != nil {
-			state.Detail = err.Error()
-			return state
+			return failed(err)
 		}
 		state.Outcome, state.URL = HookRegistered, target
-		return state
+		return state, nil
 	}
 	if _, err := opts.Client.CreateRepoWebhook(ctx, t.Owner, t.Repo, target, secret); err != nil {
-		state.Detail = err.Error()
-		return state
+		return failed(err)
 	}
 	state.Outcome, state.URL, state.Created = HookRegistered, target, true
-	return state
+	return state, nil
 }
 
 // webhookSecret is the value every hook is registered with.

@@ -204,6 +204,11 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 				fmt.Fprintf(w, "  %-28s registered at %s\n", hook.Target, hook.URL)
 			case hook.Hooked():
 				fmt.Fprintf(w, "  %-28s already pointing at %s\n", hook.Target, hook.URL)
+			case hook.Outcome == github.HookUnanswered:
+				// NEITHER SKIPPED NOR REFUSED: GitHub never answered, the
+				// run stopped on it, and running it again is the remedy.
+				fmt.Fprintf(w, "  %-28s NO ANSWER — %s\n",
+					hook.Target, orDash(hook.Detail))
 			case !hook.Blocks():
 				// NOTHING TO HOOK, not a refusal. Printed as NOT HOOKED
 				// it reads as a problem and sends somebody to fix a

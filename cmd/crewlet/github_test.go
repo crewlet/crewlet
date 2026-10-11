@@ -48,3 +48,43 @@ func TestASeatGitHubNeverAnsweredForIsNotPrintedAsRefused(t *testing.T) {
 		t.Errorf("the refused seat printed as %q", line)
 	}
 }
+
+// AND A HOOK TARGET GITHUB NEVER ANSWERED ABOUT IS NEITHER SKIPPED NOR NOT
+// HOOKED. "Skipped" is what an archived repository prints and "NOT HOOKED" a
+// refusal somebody at GitHub has to widen; this one is a request that never
+// got there, beside the error the run exits with.
+func TestAHookGitHubNeverAnsweredAboutIsNotPrintedAsSkippedOrBlocked(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printGitHubResult(&out, &github.Result{
+		Login: "crewlet-engine",
+		Hooks: []github.HookState{
+			{
+				Target:  github.Target{Owner: "acme", Repo: "web"},
+				Outcome: github.HookUnanswered,
+				Detail:  "github: /repos/acme/web: EOF",
+			},
+			{
+				Target:  github.Target{Owner: "acme", Repo: "old"},
+				Outcome: github.HookSkipped,
+				Detail:  "archived, so it emits no events — no hook registered",
+			},
+		},
+	})
+	var web, old string
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		switch {
+		case strings.HasPrefix(strings.TrimSpace(line), "acme/web "):
+			web = line
+		case strings.HasPrefix(strings.TrimSpace(line), "acme/old "):
+			old = line
+		}
+	}
+	if !strings.Contains(web, "NO ANSWER") || strings.Contains(web, "skipped") ||
+		strings.Contains(web, "NOT HOOKED") {
+		t.Errorf("the unanswered target printed as %q", web)
+	}
+	if !strings.Contains(old, "skipped") {
+		t.Errorf("the archived target printed as %q", old)
+	}
+}
