@@ -17,13 +17,21 @@ import (
 // it did not know.
 const BarrierKind = "barrier"
 
-// BarrierScope is the one-byte scope sentinel a barrier declares.
+// FrameworkScope is the one-byte scope sentinel every FRAMEWORK record
+// declares — a record whose whole effect is the framework's own and which
+// writes no domain row on any node, such as the read index's barrier.
 //
-// Chosen so it can never intersect any read's closure: a barrier makes
+// Chosen so it can never intersect any read's closure: such a record makes
 // nothing stale, so a scope that overlapped a real object would make every
-// linearizable read look as though it had been invalidated by the very
-// append that establishes it.
-const BarrierScope = "s"
+// read of it wait behind the record — for a barrier, every linearizable read
+// invalidated by the very append that establishes it.
+//
+// ONE SENTINEL FOR EVERY FRAMEWORK RECORD rather than one each: a new
+// one-byte sentinel is a path some domain's scope alphabet may already use —
+// the tracker's whole-domain path is `t` — so each would be a fresh chance to
+// collide with a real object, and one that is known not to is the only safe
+// choice.
+const FrameworkScope = "s"
 
 // BarrierVersion is 1 from the first release AND FOR EVER.
 //
@@ -240,7 +248,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 			Kind:    BarrierKind,
 			Subject: Subject{Kind: BarrierKind},
 			Gen:     run.gen,
-			Scope:   ScopeSet{Paths: []string{BarrierScope}},
+			Scope:   ScopeSet{Paths: []string{FrameworkScope}},
 		}
 		body, err := r.encode(env)
 		if err != nil {

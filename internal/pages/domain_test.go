@@ -188,10 +188,10 @@ func TestTheSentinelCarriesItsContainerSoAPagesDeferralIsFiledInItsSpace(t *test
 func TestABarrierIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	paths := pages.ScopeSet{Subject: true}.Resolve(pages.BarrierSubject()).Paths
-	if len(paths) != 1 || paths[0] != statelog.BarrierScope {
+	if len(paths) != 1 || paths[0] != statelog.FrameworkScope {
 		t.Fatalf("a barrier's scope is %v, and it must be the framework's own "+
 			"%q — anything else serialises every read behind every other",
-			paths, statelog.BarrierScope)
+			paths, statelog.FrameworkScope)
 	}
 }
 

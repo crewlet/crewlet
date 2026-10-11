@@ -480,7 +480,7 @@ func barrierOn(t *testing.T, running *runningLog) uint64 {
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)

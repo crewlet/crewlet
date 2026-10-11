@@ -356,7 +356,7 @@ func TestABarriersVersionIsPinnedAtOne(t *testing.T) {
 			"record version is deferred, and a deferred barrier is a permanent "+
 			"read outage on that node", statelog.BarrierVersion)
 	}
-	if statelog.BarrierScope == "" {
+	if statelog.FrameworkScope == "" {
 		t.Fatal("a barrier declares no scope — an empty scope is refused everywhere " +
 			"else and a barrier must not be the exception")
 	}

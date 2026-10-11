@@ -344,7 +344,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
-		Scope: statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope: statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
