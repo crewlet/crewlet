@@ -462,8 +462,8 @@ func provisionSeat(
 	case held && len(keys) > 0:
 		// CONVERGED, as far as anything can establish. Datadog shows a
 		// key's value once, so nothing can prove the stored string is one
-		// of these — exactly the limit [atlassian.CountTokens] names. What
-		// it CAN prove is the negative below.
+		// of these — exactly the limit [atlassian.Client.ListTokens]
+		// names. What it CAN prove is the negative below.
 		return out
 	case held:
 		// THE ACCOUNT HOLDS NO KEY AT ALL, so whatever is sealed for this

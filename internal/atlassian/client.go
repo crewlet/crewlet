@@ -73,6 +73,16 @@ const serviceAccountsPath = "/admin/account-management/v1/orgs/%s/service-accoun
 //nolint:gosec // a URL template, not a credential
 const apiTokensPath = "/users/%s/manage/api-tokens"
 
+// apiTokenPath is one API token on one account, and what revokes it.
+//
+// THE DOCUMENTED HALF of the token routes, unlike the mint beside it:
+// user-management's reference lists a DELETE here that answers 204 once the
+// token is gone, taking the account id and the token's own id — which the
+// listing on [apiTokensPath] carries beside each token's label.
+//
+//nolint:gosec // a URL template, not a credential
+const apiTokenPath = apiTokensPath + "/%s"
+
 // invitePath grants a service account product access.
 //
 // It is the only route that works, and it is undocumented: the contract comes
@@ -121,8 +131,10 @@ const listPageLimit = 50
 const TokenLifetime = 300 * 24 * time.Hour
 
 // ErrTokenNotReturned is a mint that reported success and carried no
-// credential. It cannot be retried into working — the account now holds a
-// token nobody has — so it is named rather than papered over.
+// credential. The account may now hold a token nobody has, so it is named
+// rather than papered over: the pass that meets it revokes what that mint
+// made, by the label it stamped, exactly as it does a token it minted and
+// could not record.
 var ErrTokenNotReturned = errors.New("atlassian: the mint returned no token")
 
 // APIError is what Atlassian said, with the status it said it under.
@@ -239,9 +251,19 @@ type ServiceAccount struct {
 
 // MintedToken is a credential Atlassian issued once and will not repeat.
 type MintedToken struct {
+	// Label is what the mint stamped on the token — see [TokenLabel] for
+	// why that, and not anything the answer carries, is how the token is
+	// found again.
+	Label string
+	// Token is the value, shown this once.
+	Token string
+}
+
+// APIToken is one API token an account holds, as Atlassian lists it: never
+// its value, which is shown once, at the mint.
+type APIToken struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
-	Token string `json:"token"`
 }
 
 // Site is the Atlassian site an organization's agents work in.
@@ -323,31 +345,71 @@ var AgentScopes = []string{
 	"read:confluence-user",
 }
 
-// MintToken issues an API token on one service account.
+// TokenLabel is the label a mint stamps on one seat's API token.
 //
-// The label is STAMPED with the mint time. Labels are unique within an
-// account and an account outlives any one token, so a second mint would
-// otherwise collide with the first.
+// STAMPED WITH THE MINT TIME. Labels are unique within an account and an
+// account outlives any one token, so a second mint would otherwise collide
+// with the first.
+//
+// AND IT IS THE TOKEN'S ONE IDENTITY THIS ENGINE WRITES, which is why a
+// revocation finds the token by it rather than by an id off the mint's answer.
+// The mint is the admin console's undocumented route, and nothing establishes
+// that its answer names the token it made; the listing is documented to carry
+// each token's id beside its label. It is the same choice [AccountName] makes
+// for an account, and for the same reason: the field this engine wrote is the
+// one it can count on reading back.
+func TokenLabel(handle string, now time.Time) string {
+	return fmt.Sprintf("%s-%d", handle, now.Unix())
+}
+
+// MintedFor reports a label [TokenLabel] stamped for this seat.
+//
+// THE WHOLE SHAPE, not a prefix: the handle, a hyphen, and the mint's seconds
+// and nothing else. It is what decides which of an account's tokens this
+// engine may revoke on its own say-so, so a token a person made on the same
+// account under a name of their own is never one of them.
+func MintedFor(label, handle string) bool {
+	stamp, found := strings.CutPrefix(label, handle+"-")
+	if !found || stamp == "" {
+		return false
+	}
+	for _, r := range stamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// MintToken issues an API token on one service account, under a label from
+// [TokenLabel].
+//
+// THE CALLER STAMPS THE LABEL, so it holds the token's identity whatever the
+// mint answers — including [ErrTokenNotReturned], a token that may exist and
+// whose value nobody has, which is exactly the one that has to be found again
+// and revoked.
 func (c *Client) MintToken(
 	ctx context.Context, key, accountID, label string, now time.Time,
 ) (*MintedToken, error) {
 	body := map[string]any{
-		"label":  fmt.Sprintf("%s-%d", label, now.Unix()),
+		"label":  label,
 		"scopes": AgentScopes,
 		"expiry": now.Add(TokenLifetime).Format(time.RFC3339),
 	}
-	token := new(MintedToken)
+	var answer struct {
+		Token string `json:"token"`
+	}
 	if err := c.call(ctx, key, http.MethodPost,
-		fmt.Sprintf(apiTokensPath, accountID), body, token); err != nil {
+		fmt.Sprintf(apiTokensPath, accountID), body, &answer); err != nil {
 		return nil, err
 	}
-	if token.Token == "" {
+	if answer.Token == "" {
 		return nil, ErrTokenNotReturned
 	}
-	return token, nil
+	return &MintedToken{Label: label, Token: answer.Token}, nil
 }
 
-// CountTokens is how many API tokens an account currently holds.
+// ListTokens reads the API tokens one account currently holds.
 //
 // It answers the one question a held credential cannot answer about itself:
 // whether there is still a live token behind it. A disconnect that removes
@@ -358,22 +420,41 @@ func (c *Client) MintToken(
 // the SAME account holding none, which reads identically here and is the
 // commoner of the two. Either way every call with the sealed value is refused
 // with a 401 that names nothing, so the pass mints a replacement; see
-// [orphaned], which is careful to claim only what this count establishes.
+// [orphaned], which is careful to claim only what this listing establishes.
 //
-// A COUNT rather than a comparison, because Atlassian shows a token's value
-// once: nothing can check that the stored string is one of these. What it can
-// check is that the account has none at all, which no account this engine has
-// provisioned ever legitimately has, and which is exactly the state a
-// recreated account is in.
-func (c *Client) CountTokens(ctx context.Context, key, accountID string) (int, error) {
-	var out []struct {
-		ID string `json:"id"`
-	}
+// NEVER A COMPARISON with what is sealed, because Atlassian shows a token's
+// value once: nothing can check that the stored string is one of these. What
+// it can check is that the account has none at all, which no account this
+// engine has provisioned ever legitimately has, and which is exactly the
+// state a recreated account is in — and, through [MintedFor], which of them
+// this engine minted, for the pass that finds one nothing holds.
+func (c *Client) ListTokens(ctx context.Context, key, accountID string) ([]APIToken, error) {
+	var out []APIToken
 	if err := c.call(ctx, key, http.MethodGet,
 		fmt.Sprintf(apiTokensPath, accountID), nil, &out); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return len(out), nil
+	return out, nil
+}
+
+// RevokeToken deletes one API token from one account.
+//
+// THE OTHER HALF OF MINTING. Atlassian shows a token's value once, so a token
+// this engine minted and then could not keep is a credential that exists, is
+// held by nobody, and which nothing will ever remember to remove — the state
+// [provision.TokenSink]'s own contract legislates against.
+//
+// A 404 is success, as [datadog.Client.DeleteAppKey] reads it: Atlassian
+// answers one for a token or an account that is not there, a token already
+// gone is the state this call is asking for, and the revocation it belongs to
+// must be safe to repeat.
+func (c *Client) RevokeToken(ctx context.Context, key, accountID, tokenID string) error {
+	err := c.call(ctx, key, http.MethodDelete,
+		fmt.Sprintf(apiTokenPath, accountID, tokenID), nil, nil)
+	if Status(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 // DeleteServiceAccount removes an agent's identity.
