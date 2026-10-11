@@ -4737,8 +4737,9 @@ directory is a failed backup and is recorded as one: see
 
 The request has no deadline of its own on the engine's side, and a client
 should give it a long one: `crewlet backup` and the dashboard both wait up to
-**30 minutes** for the answer, because the copy is bounded by the size of the
-store and the stream estate and a client that gave up early would report a
+**12 hours** for the answer, because the copy is bounded by the size of the
+store, the stream estate and — on `s3` — the company's files, whose first copy
+is hours over a modest link, and a client that gave up early would report a
 failure while the engine finishes a good backup. Taking one from the dashboard
 is **Settings › Backups & retention › Take a backup**.
 

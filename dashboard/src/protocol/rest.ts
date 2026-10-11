@@ -217,11 +217,14 @@ export interface RestResponse {
   etag: string | null;
 }
 
-/** A deadline as a person would say it: seconds under two minutes, else
- *  minutes. */
+/** A deadline as a person would say it: seconds under two minutes, minutes
+ *  under two hours, else hours — a backup's twelve-hour wait read as "720
+ *  minutes" is a number nobody reads at a glance. */
 function waitWords(ms: number): string {
   const seconds = Math.round(ms / 1000);
-  return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+  if (seconds < 120) return `${seconds} seconds`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 120 ? `${minutes} minutes` : `${Math.round(minutes / 60)} hours`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */

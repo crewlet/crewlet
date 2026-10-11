@@ -27,14 +27,14 @@ import { sentence } from "./format.ts";
 /**
  * How long the dashboard waits for a copy, in milliseconds.
  *
- * THIRTY MINUTES, the `crewlet backup` CLI's own wait and for its reason: the
- * route is synchronous and a copy is bounded by the size of the store and the
- * stream estate — milliseconds on a new company, minutes on a large one — and
- * the cost of too short a wait is the confusing one, a screen calling a backup
- * failed while the engine finishes writing a perfectly good one. A ceiling, not
- * an expectation.
+ * TWELVE HOURS, the `crewlet backup` CLI's own wait and for its reason: the
+ * route is synchronous and a copy is bounded by the size of the store, the
+ * stream estate and — on `s3` — the company's files, and a FIRST copy of a
+ * large company's files is hours over a modest link. The cost of too short a
+ * wait is the confusing one, a screen calling a backup failed while the engine
+ * finishes writing a perfectly good one. A ceiling, not an expectation.
  */
-export const BACKUP_WAIT_MS = 30 * 60_000;
+export const BACKUP_WAIT_MS = 12 * 60 * 60_000;
 
 /** Who wrote a point, as the owner column says it. */
 export const OWNER_KIND_WORDS: Record<BackupOwnerKind, string> = {

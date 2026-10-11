@@ -5979,8 +5979,11 @@ nothing is downloaded — and offers a fresh directory beside that node's last
 copy when it has one (stamped to the second, never one a backup already went
 to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
-occupied, or one its host cannot create or write — is said on the field. The request
-waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
+occupied, or one its host cannot create or write — is said on the field; a backup
+already running on that node (`409 backup_running`) is said as that rather than as a
+failed copy, and an object store that did not answer (`503 objects_unreachable`) in
+the engine's own hint. The request
+waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Three tiles (the
 newest backup the trim counts, the `backup_floor` policy, and how many were
 requested and failed — over the span the event log reads, named from the
