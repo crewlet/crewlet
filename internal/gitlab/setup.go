@@ -99,9 +99,14 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// several pages the form meant.
 			Help: "Find your [top-level group](https://gitlab.com/dashboard/groups). " +
 				"Each Crewlet agent becomes a service account inside it.",
-			// BLOCKS NOTHING, for the instance address's reason: a group
-			// the pass cannot find stops it with a fault before anything
-			// is observed, so no finding names this field.
+			// BLOCKS NOTHING, because Blocks names what an ABSENT value
+			// produces and nothing reports this one absent. A group the
+			// instance answers 404 for is reported — as an ingress block
+			// on the GROUP, owed at GitLab ([Result.GroupNotFound]) —
+			// and that is not this field's to clear: GitLab's 404 cannot
+			// say whether the path is wrong or the credential's account
+			// cannot see the group, so offering the field as the fix
+			// would be guessing at the half the finding cannot promise.
 		},
 		{
 			Field:      "token",

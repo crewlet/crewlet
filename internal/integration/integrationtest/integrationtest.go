@@ -312,6 +312,37 @@ func AssertConfigFault(t TB, f integration.Finding) {
 	}
 }
 
+// AssertVendorFault fails unless f is owed AT THE THIRD-PARTY APP: a fault the
+// vendor's admin has to act on, so the loop waits on their cadence — the
+// doubling backoff from fifteen seconds that [integration.Schedule.Next] gives
+// [integration.CadenceVendorAdmin] — rather than on the flat hour a
+// configuration edit waits on.
+//
+// [AssertConfigFault]'s other half, for the findings that sit on the line
+// between the two: a name in the company document the vendor answers 404 for,
+// or a credential the vendor was shown and refused. Both read as this
+// deployment's to fix and both are the vendor's — the 404 because it cannot
+// say whether the name or the access is wrong, the refusal because the
+// account at the vendor is what somebody has to look at — and filed as a
+// config fault either one waits out an hour after the person at the vendor
+// has already acted.
+//
+// ASKED OF THE CADENCE, the one property every such finding shares: several
+// kinds are the vendor admin's, so no kind is asserted, and the cadence is
+// what refuses a vendor-owned ADVISORY too — it leaves the integration ready,
+// settled rather than watched, a note rather than a fault. That the cadence
+// is then the vendor admin's backoff is the schedule's own promise, which its
+// tests pin.
+func AssertVendorFault(t TB, f integration.Finding) {
+	t.Helper()
+	report := integration.Classify([]integration.Finding{f})
+	if got := integration.CadenceOf(report); got != integration.CadenceVendorAdmin {
+		t.Errorf("%s on %q is %s and owed by %q, so it waits on the %q cadence; "+
+			"want a fault owed by the third-party app's admin", f.Kind,
+			f.Subject, report.Phase, report.Actor, got)
+	}
+}
+
 // A finding whose actor is a person is the whole reason this subsystem
 // exists: it is the sentence that saves somebody reading logs. One with no
 // detail renders as a bare phase name and sends them there anyway.

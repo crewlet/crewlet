@@ -91,6 +91,20 @@ type Result struct {
 	// anywhere but [Reconcile] must not invent an ingress problem.
 	NoIngress string
 
+	// GroupNotFound is the `provisioning.group` this instance answered 404
+	// for, and is the zero value when the group resolved. A run that sets
+	// it did nothing else: every seat is made a member of the group whichever
+	// [Mode] owns its account, and the group hook lives on it, so there was
+	// nothing to provision and nowhere to hook.
+	//
+	// A STATE, not an error, for the reason [Result.NoKeyring] is one. It
+	// was raised, and the loop reads a raised pass as the engine failing to
+	// look — "the last pass could not read this integration", retried on the
+	// engine's own backoff for ever — over the one thing no retry changes:
+	// somebody has to correct the path, create the group, or let the
+	// credential's account see it.
+	GroupNotFound MissingGroup
+
 	// CredentialExpires is when the credential this run authenticated with
 	// stops working, set ONLY when that is inside
 	// [integration.ExpiryWarning] of the run's clock; zero otherwise, and
@@ -322,10 +336,19 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			integration.Reject(err, Status(err)))
 	}
 	if !found {
-		return nil, fmt.Errorf(
-			"gitlab: no group %q on this instance — every seat is made a "+
-				"member of it, so it has to exist before seats can be "+
-				"provisioned", p.Group)
+		// REPORTED, NOT RAISED — see [Result.GroupNotFound] — and before
+		// anything is created, which is why it is checked here and not
+		// discovered at the first membership write.
+		return &Result{
+			Notes: append(notesOf(opts.Plan), fmt.Sprintf(
+				"GitLab answered 404 for the group %q, so nothing was "+
+					"provisioned and no webhook registered — check "+
+					"provisioning.group, and that the admin token's account "+
+					"is an Owner of the group: GitLab answers 404 for a group "+
+					"this credential cannot see as well as for one that does "+
+					"not exist", p.Group)),
+			GroupNotFound: MissingGroup{Path: p.Group, GroupsURL: groupsURL(opts)},
+		}, nil
 	}
 
 	res := &Result{
@@ -885,6 +908,27 @@ func accountsURL(opts Options) string {
 	}
 	return ""
 }
+
+// MissingGroup is a `provisioning.group` the instance answered 404 for.
+type MissingGroup struct {
+	// Path is the group as the company document names it.
+	Path string
+	// GroupsURL is the instance's list of the groups its viewer belongs to.
+	//
+	// THAT LIST, NOT THE GROUP'S OWN PAGE, which answers the same 404 to a
+	// person who cannot see it either. `/dashboard/groups` has been every
+	// GitLab's "your groups" page for many years and carries the button
+	// that creates one, so whichever half of the 404 is true it is where
+	// the person who fixes it starts.
+	GroupsURL string
+}
+
+// groupsURL is [MissingGroup.GroupsURL] for this run's instance.
+//
+// ON THE ADDRESS THE PASS DIALLED, never the document's `url`: that may be
+// a ${VAR}, or carry the /api/v4 suffix [NewClient] strips, and either one
+// builds a link to nowhere.
+func groupsURL(opts Options) string { return opts.Client.URL() + "/dashboard/groups" }
 
 // BlockedAccount is one seat whose GitLab account cannot sign in.
 type BlockedAccount struct {

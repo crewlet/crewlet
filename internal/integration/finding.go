@@ -90,7 +90,12 @@ const (
 	// FindingIngressBlocked is a delivery path the THIRD-PARTY APP will not
 	// let this engine establish, and that will not fix itself: a webhook the
 	// credential may not register, a plan that does not offer group hooks, a
-	// project or repository the credential may not see.
+	// group, project or repository the credential may not see. Jira, GitHub
+	// and GitLab each answer that with the same 404 as one that does not
+	// exist, so the company document's name for it may be what is wrong —
+	// and the finding is still the vendor's: a corrected name applies a
+	// revision and is reconciled at once whatever the cadence, while access
+	// granted at the vendor is seen only by asking again soon.
 	//
 	// AT THE VENDOR, which is what separates it from [FindingConfigFault].
 	// A delivery path missing because this deployment has no address to give

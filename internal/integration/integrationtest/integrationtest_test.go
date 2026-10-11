@@ -376,6 +376,33 @@ func TestAssertConfigFaultRefusesWhatIsNotOne(t *testing.T) {
 	}
 }
 
+// AND THE VENDOR'S HALF, whose failure is the opposite filing: a finding a
+// person at the third-party app is acting on, waited on for an hour, or one
+// the engine claims to be working on while nobody is.
+//
+// Driven over every kind the closed set holds rather than a chosen few, with
+// the vendor's faults NAMED rather than derived from the verdict table the
+// helper reads, so a kind whose verdict moves is caught in whichever direction
+// it moved. The two vendor-owned ADVISORIES are refused: a note on a ready
+// integration is settled, not watched, and is not a fault to fix.
+func TestAssertVendorFaultRefusesWhatIsNotOne(t *testing.T) {
+	t.Parallel()
+	vendors := map[integration.FindingKind]bool{
+		integration.FindingApprovalRequired: true,
+		integration.FindingIngressBlocked:   true,
+		integration.FindingIdentityFailed:   true,
+		integration.FindingGrantShort:       true,
+	}
+	for _, kind := range integration.FindingKinds {
+		got := &recorder{}
+		integrationtest.AssertVendorFault(got, integration.Finding{Kind: kind, Subject: "x"})
+		if got.failed == vendors[kind] {
+			t.Errorf("%s: AssertVendorFault failed=%v, want %v: %v",
+				kind, got.failed, !vendors[kind], got.log)
+		}
+	}
+}
+
 // EVERY CASE MUST PASS A COMPLIANT RECONCILER. Without this a case that
 // failed unconditionally would satisfy the violation tests above while
 // certifying nothing, which is the way a suite quietly stops meaning

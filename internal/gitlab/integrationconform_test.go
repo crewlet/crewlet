@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -365,6 +366,110 @@ func TestTheOutstandingWorldIsBlockedOnAPerson(t *testing.T) {
 	if len(w.instance.hooks)+len(w.instance.projectHooks) != 0 {
 		t.Errorf("a hook was registered with no public base URL: %+v %+v",
 			w.instance.hooks, w.instance.projectHooks)
+	}
+}
+
+// missingGroupGitLab is a GitLab that answers 404 for `provisioning.group`:
+// renamed, mistyped, never created, or private to accounts the token's owner
+// is not one of — GitLab never says which.
+//
+// A SECOND OUTSTANDING WORLD, and the one a person meets first: the pass
+// stops at its first request, so it is what a mistyped connect form produces.
+// It used to RAISE, which the suite refuses on its own terms — an outstanding
+// world whose pass errors is the engine failing to look, and the loop reported
+// it as exactly that, "the last pass could not read this integration",
+// retried on the engine's backoff for ever over something no retry changes.
+func missingGroupGitLab(t *testing.T, tb integrationtest.TB) *gitlabWorld {
+	t.Helper()
+	return newWorld(t, tb, func(f *adminInstance) { f.noGroup = true }, nil)
+}
+
+// THE CONTRACT HOLDS OVER A GROUP THE INSTANCE LACKS, which is the case whose
+// pass ends before any of the other clauses' work begins.
+func TestTheGitLabReconcilerMeetsTheContractWhenTheGroupIsMissing(t *testing.T) {
+	t.Parallel()
+	var converged *gitlabWorld
+	integrationtest.Run(t, integrationtest.Reconciler{
+		Converged: func(tb integrationtest.TB) integration.Reconciler {
+			converged = convergedGitLab(t, tb, nil)
+			return converged
+		},
+		Outstanding: func(tb integrationtest.TB) integration.Reconciler {
+			return missingGroupGitLab(t, tb)
+		},
+		Mutations: func() int { return converged.writes() },
+	})
+}
+
+// A GROUP THE INSTANCE ANSWERS 404 FOR IS OWED AT GITLAB, and is named as the
+// group rather than as the field that holds it.
+//
+// GitLab's one 404 cannot say whether the path is wrong or the token's account
+// cannot see the group, and two of the three causes behind it are fixed at
+// GitLab. So it is the vendor admin's, watched on that admin's backoff: filed
+// as a config fault it would wait out an hour after somebody created the group
+// or shared it, while a corrected path reconciles at once whatever the
+// cadence. The SUBJECT carries the same decision — a subject naming
+// `integrations.gitlab.provisioning.group` would claim the company's admin
+// can fix it alone, which the suite's configuration clause would then hold
+// the finding to.
+func TestAGroupTheInstanceLacksIsReportedAtGitLab(t *testing.T) {
+	t.Parallel()
+	w := missingGroupGitLab(t, t)
+	findings, err := w.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("a group GitLab answered 404 for was raised as a fault, which "+
+			"the loop reports as the engine failing to look: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly the missing group: the pass "+
+			"observed nothing past it", findings)
+	}
+	got := findings[0]
+	if got.Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %s, want %s", got.Kind, integration.FindingIngressBlocked)
+	}
+	if got.Subject != "nimbus" {
+		t.Errorf("subject = %q, want the group GitLab answered 404 for", got.Subject)
+	}
+	integrationtest.AssertVendorFault(t, got)
+	// BOTH HALVES OF THE 404, or a person reads "not found" about a group
+	// they are looking at in GitLab and goes hunting for a typo.
+	if !strings.Contains(got.Detail, "cannot see") {
+		t.Errorf("the detail does not say a 404 is also a group the credential "+
+			"cannot see: %q", got.Detail)
+	}
+	for _, field := range []string{
+		"integrations.gitlab.provisioning.group",
+		"integrations.gitlab.provisioning.admin_token",
+	} {
+		if !strings.Contains(got.Remedy, field) {
+			t.Errorf("the remedy does not name %s: %q", field, got.Remedy)
+		}
+	}
+	// ON THE ADDRESS THE PASS DIALLED — the harness's document says
+	// gitlab.example.com and the client is pointed at the test server, so a
+	// link built from the document would name a host nobody can open.
+	if want := w.opts.Client.URL() + "/dashboard/groups"; got.ActionURL != want {
+		t.Errorf("action_url = %q, want %q", got.ActionURL, want)
+	}
+	// AND NOTHING WAS CREATED on the way to finding out, which is why the
+	// group is read before any account is.
+	if n := w.writes(); n != 0 {
+		t.Errorf("a pass that could not find the group made %d write(s)", n)
+	}
+
+	// THE COMMAND LINE IS TOLD TOO: `crewlet gitlab provision` prints the
+	// notes, and an exit with nothing printed reads as a run that worked.
+	res, err := gitlab.Reconcile(t.Context(), w.opts)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !slices.ContainsFunc(res.Notes, func(n string) bool {
+		return strings.Contains(n, `"nimbus"`)
+	}) {
+		t.Errorf("no note names the group, so the command line says nothing: %q",
+			res.Notes)
 	}
 }
 
