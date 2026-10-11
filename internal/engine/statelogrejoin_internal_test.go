@@ -138,6 +138,16 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
+	// AND ITS APPLIERS CAME BACK OVER THE ARTEFACT: a write this node makes
+	// is applied. Only a relaunched loop that got past its start check can
+	// apply it, and that check is the one a wrong artefact fails — so this is
+	// what holds the adoption to its promise. Its committed position says
+	// nothing of the kind: Rejoined moves it before anything is relaunched.
+	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != at.Generation {
+		t.Fatalf("a write after the adoption: %+v, %v (tracker applier stopped: %v) — "+
+			"want it applied in generation %d", res, err, running.runner.Stopped(), at.Generation)
+	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	if ok, domain := e.SeatsServiceable(); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
@@ -273,9 +283,10 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 // pushBelowTheFloor leaves a running node below its tracker log's floor, which
 // is exactly what the fleet's trim does to a node that has been away: its
 // appliers stop, two barriers land on the log that it never applies, and the
-// log is purged past them. It returns the tracker's running domain, the
-// position the node had applied, and the last sequence purged — which is the
-// position a peer that applied those barriers would hold.
+// log is purged up to the second of them. It returns the tracker's running
+// domain, the position the node had applied, and the last sequence appended —
+// the position a peer that applied those barriers would hold, and, since a
+// purge at N leaves N itself, the log's first record.
 func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, last uint64) {
 
@@ -375,24 +386,54 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, ?, ?, 0)
-			ON CONFLICT (stream) DO UPDATE SET
-				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
-			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("advance the copy's checkpoint: %v", err)
-	}
+	moveCheckpoint(t, running.log, copyDB, statelog.Position{
+		Stream: tracker.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
+	}, running.runner.StreamCreatedAt())
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}
 	if err := store.QuiesceCopy(t.Context(), path); err != nil {
 		t.Fatalf("quiesce the copy: %v", err)
+	}
+}
+
+// moveCheckpoint moves db's checkpoint on at's stream to at, keyed to created,
+// NAMING THE RECORD log holds at that sequence by its broker instant, as every
+// checkpoint an applier commits does (statelog's setCursor): a checkpoint is a
+// record, not only a sequence. Moved by its sequence alone, a checkpoint goes
+// on naming the record it stood on before; the applier that loads it finds
+// another record there and stops, rightly, as diverged, and the staged rows
+// are ones no peer could hold. A case passed on them only while its waits beat
+// that stop. A checkpoint at sequence zero, or at one the log does not hold —
+// below a rebuilt log's first record, where a reanchor puts it — names no
+// record, as a reanchor's own checkpoint does.
+func moveCheckpoint(t *testing.T, log *jetstream.DomainLog, db *store.DB,
+	at statelog.Position, created time.Time) {
+
+	t.Helper()
+	var stored int64
+	if at.Seq > 0 {
+		_, _, storedAt, held, err := log.At(t.Context(), at.Seq)
+		if err != nil {
+			t.Fatalf("read the log's record at the checkpoint %s: %v", at, err)
+		}
+		if held {
+			stored = store.EncodeTime(storedAt)
+		}
+	}
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, stored_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, ?, 0)
+			ON CONFLICT (stream) DO UPDATE SET
+				generation = excluded.generation, seq = excluded.seq,
+				stream_created_at = excluded.stream_created_at, stored_at = excluded.stored_at`,
+			at.Stream, int64(at.Generation), int64(at.Seq), store.EncodeTime(created), stored,
+			store.EncodeTime(time.Now().UTC()))
+		return err
+	}); err != nil {
+		t.Fatalf("move the copy's checkpoint to %s: %v", at, err)
 	}
 }
 

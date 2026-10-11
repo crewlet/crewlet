@@ -1320,10 +1320,24 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 // shape, and so is the public server unless the bridge has one.
 type httpSurface struct {
 	app       *api.App
-	server    *http.Server
-	public    *http.Server
+	server    *apiListener
+	public    *apiListener
 	projector *observe.Projector
 	runs      *observe.SandboxReconciler
+}
+
+// apiListener is one socket a node binds and the server serving it.
+//
+// THE SOCKET IS KEPT BESIDE THE SERVER because the server does not hold it
+// until Serve has registered it, and Serve runs in the background
+// ([listenAPI]). Shutdown closes only the listeners Serve has registered, so a
+// stop that came first — every stop a failed public bind makes, a moment after
+// api.port was bound — returned with api.port still accepting connections,
+// until the scheduler next ran that goroutine. [shutdownListener] closes the
+// socket itself.
+type apiListener struct {
+	server *http.Server
+	socket net.Listener
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1361,19 +1375,26 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 
 // shutdownListener closes one listener, waiting at most [apiShutdownGrace] for
 // the requests it is serving.
-func shutdownListener(ctx context.Context, server *http.Server, listener string, log *slog.Logger) {
+func shutdownListener(ctx context.Context, l *apiListener, listener string, log *slog.Logger) {
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
-	if err := server.Shutdown(grace); err != nil {
+	if err := l.server.Shutdown(grace); err != nil {
 		// The grace is over and a request is still running. It is CUT,
 		// which cancels its context, rather than left to run on into
 		// the teardown that is about to close the store and the broker
 		// it is reading.
 		log.WarnContext(ctx, "api_shutdown_failed", "listener", listener, "error", err,
 			"detail", "requests still running after the shutdown grace were cut")
-		if closeErr := server.Close(); closeErr != nil {
+		if closeErr := l.server.Close(); closeErr != nil {
 			log.WarnContext(ctx, "api_close_failed", "listener", listener, "error", closeErr)
 		}
+	}
+	// AND THE SOCKET, whether or not Serve had registered it: see
+	// [apiListener]. Already closed is the ordinary case, where Serve had,
+	// and a Serve that starts after this finds the server shutting down and
+	// returns without accepting.
+	if err := l.socket.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		log.WarnContext(ctx, "api_close_failed", "listener", listener, "error", err)
 	}
 }
 
@@ -2085,7 +2106,7 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // client or on how a bind failure is reported.
 func listenAPI(ctx context.Context, addr string, handler http.Handler,
 	log *slog.Logger,
-) (*http.Server, string, error) {
+) (*apiListener, string, error) {
 	// Through a ListenConfig so a shutdown signal arriving while the bind
 	// is in flight aborts it, rather than leaving a listener nobody will
 	// serve from: the bind can block on a DNS lookup for the host.
@@ -2108,7 +2129,7 @@ func listenAPI(ctx context.Context, addr string, handler http.Handler,
 			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
-	return server, listener.Addr().String(), nil
+	return &apiListener{server: server, socket: listener}, listener.Addr().String(), nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request

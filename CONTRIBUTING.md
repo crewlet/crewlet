@@ -556,7 +556,7 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Eight things are
+request, and — as below — CI is what decides whether it lands. Nine things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -628,7 +628,19 @@ worth knowing:
   (`@release/v1`) or `@main` yields no update pull requests at all, so pin
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
-  requests instead of moving under the workflow unannounced.
+  requests instead of moving under the workflow unannounced. The release and
+  main-image workflows pin every action by **full commit SHA**, with the
+  release in a trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites
+  with the pin: they hold the registry and the signing identity (and the
+  release workflow the Releases), and a version tag is a ref its owner can move
+  under them.
+- **goreleaser itself floats within its major.** Every goreleaser step in
+  `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
+  on each run, because Dependabot bumps the action's ref but never a `with:`
+  input, so an exact version would age with nothing watching it. The major
+  is held because `.goreleaser.yaml` is a `version: 2` config: moving to a
+  v3 is a migration of that file, made by hand in the same change, and
+  rehearsed with `make snapshot`.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
@@ -837,12 +849,23 @@ touches
 ## Releasing
 
 Releases are cut by pushing a `v*` tag; GitHub Actions builds every target
-with [goreleaser](https://goreleaser.com), signs the checksums with keyless
-Sigstore, publishes the container image to GHCR and creates the GitHub
-Release. **The tag is the version** — nothing in the tree records one, so
-there is nothing for a tag to disagree with. The whole pipeline rehearses
-locally with `make snapshot`, without a tag and without touching GitHub; the
-full process is in [RELEASING.md](RELEASING.md).
+with [goreleaser](https://goreleaser.com), signs the checksums and the
+container image with keyless Sigstore, publishes the image to GHCR and creates
+the GitHub Release. **The tag is the version** — nothing in the tree records
+one, so there is nothing for a tag to disagree with. The whole pipeline
+rehearses locally with `make snapshot`, without a tag and without touching
+GitHub; the full process is in [RELEASING.md](RELEASING.md).
+
+`main` has a signed image too, `ghcr.io/crewlet/crewlet:main`, rebuilt on
+every push to `main` and moved to that build — one tag, and the only one it
+ever pushes ([RELEASING.md](RELEASING.md#images-from-main)). Its binary
+reports `main-<the first 12 hex digits of the commit>`. A newer push cancels
+the run before it, so when pushes land close together only the newest commit
+is built, and a commit that starts no push run is never built: Dependabot's
+bumps, merged with `GITHUB_TOKEN`, start none, so `main` stays on the last
+pushed commit's image until the next push. That image is **not a release**: it
+creates no Release, carries no notes, and is owed nothing below — a deployment
+that runs `main` has opted out of the compatibility a tag promises.
 
 ### Nothing is released until a tag ships it
 
@@ -905,8 +928,16 @@ regenerated, never hand-edited.
 ## Documentation
 
 The pages under `docs/` are the source of truth and are published to
-[docs.crewlet.ai](https://docs.crewlet.ai). Keep them plain CommonMark: relative
-`.md` links between pages, figures in `docs/assets/`, one `# Heading` per page.
+[docs.crewlet.ai](https://docs.crewlet.ai/engine/latest/), under the engine's
+own path and a version: `/engine/latest/` is the newest release (until this
+engine's first release, a redirect to `main`'s pages), `/engine/next/` is
+`main`, and `/engine/vX.Y/` an older release line, with `schema/` and
+`skills/` published file for file beside each version's pages. Link
+`/engine/latest/`: a page or file the newest release lacks answers there with
+a redirect to its `/engine/next/` copy. Nothing forwards a path the site no
+longer builds. Keep the pages plain
+CommonMark: relative `.md` links between pages, figures in `docs/assets/`, one
+`# Heading` per page.
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
@@ -917,8 +948,13 @@ it goes red), and on a page under `docs/` that `docs/index.md` does not list.
 The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
 string the engine composes — are held by `dashboard/src/app/links.test.ts`
 against the dashboard's route resolver, along with every pointer at a
-`dashboard-design.md` heading. A link to a page that moved is fixed by pointing
-it at where the subject lives now, never by deleting the gate's view of it.
+`dashboard-design.md` heading. And `internal/docslinks` reads every text file
+in the tree for an absolute `https://docs.crewlet.ai` link, failing on one the
+site does not build — a root-shaped path, or a page, schema or skill under
+`/engine/latest/` or `/engine/next/` that this tree does not have — and on a
+page spelled without its trailing slash, which the site answers with a
+redirect. A link to a page that moved is fixed by pointing it at where the
+subject lives now, never by deleting the gate's view of it.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
