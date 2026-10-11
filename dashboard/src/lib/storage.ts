@@ -22,18 +22,23 @@
  *
  * # What storage is for in this product
  *
- * Per-browser conveniences and nothing else: a token, a theme, the stars and
- * recents a reader keeps, the width they dragged a panel to, an org draft not
- * yet saved. Nothing the COMPANY agrees on lives here — that is the engine's —
- * and every reader wraps each access in a try/catch, because a private window
- * throws on the accessor and a cleared profile answers nothing.
+ * Per-browser conveniences and nothing else: a token, a mode and a theme,
+ * the stars and recents a reader keeps, the width they dragged a panel to, an
+ * org draft not yet saved. Nothing the COMPANY agrees on lives here (that is
+ * the engine's), and every reader wraps each access in a try/catch, because a
+ * private window throws on the accessor and a cleared profile answers nothing.
  */
 
 export const STORAGE_KEYS = {
   /** The API token this browser presents (`protocol/authToken.ts`). */
   apiToken: "crewlet_api_token",
-  /** Light, dark or the system's (`lib/prefs.ts`). */
+  /** The mode: light, dark or the system's (`lib/prefs.ts`). */
   theme: "crewlet_theme",
+  /**
+   * The theme, one of `themeRegistry`'s ids (`lib/prefs.ts`); anything else
+   * reads as no choice, which is the default theme.
+   */
+  palette: "crewlet_palette",
   /** Compact, normal or comfortable (`lib/prefs.ts`). */
   density: "crewlet_density",
   /** Objects this reader opened, for the palette (`lib/recents.ts`). */
