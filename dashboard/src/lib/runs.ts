@@ -2,7 +2,7 @@
  * How often the durable coding-run record is asked again.
  *
  * ONE VALUE for every reader of `sandbox_runs` — the runs board, a run's own
- * page and rail, and the attention queue Home and the Inbox draw. It was two:
+ * page and rail, and the attention queue the Overview and the Inbox draw. It was two:
  * the board polled every 20 s and the queue every 30 s, so a run that parked
  * on a question appeared on the board and then, up to ten seconds later, as
  * the decision the Inbox asks a person to make — two screens disagreeing about

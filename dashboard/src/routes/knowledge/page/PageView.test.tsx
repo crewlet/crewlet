@@ -220,7 +220,7 @@ test("each reader says how it read the page and in which turn", async () => {
   const readers = screen.getByRole("region", { name: /^Read by agents/ });
   expect(
     within(readers).getByRole("link", { name: "turn 2 on ENG-412" }).getAttribute("href"),
-  ).toBe("#/live/turns/run-2");
+  ).toBe("#/admin/live/turns/run-2");
   expect(within(readers).getByText(/search: “DHCP lease”/)).toBeTruthy();
   // TWO LINES, NEVER THREE: the count rides the name's line, and the age is
   // held apart from the way-read text so an ellipsis cuts the query rather

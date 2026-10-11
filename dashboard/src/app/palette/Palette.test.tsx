@@ -380,7 +380,7 @@ describe("running now", () => {
     const p = mount({ agents });
     const running = screen.getByText("Running now").closest('[role="group"]') as HTMLElement;
     fireEvent.click(within(running).getAllByRole("option")[0]!);
-    expect(location.hash).toBe("#/live/turns/t-early?tab=transcript");
+    expect(location.hash).toBe("#/admin/live/turns/t-early?tab=transcript");
     expect(p.closed).toHaveBeenCalled();
   });
 
@@ -417,7 +417,7 @@ describe("an id pasted out of a log", () => {
     const p = mount();
     await p.type(id);
     fireEvent.click(p.row("as a trace — every event that carries it"));
-    expect(location.hash).toBe(`#/live/traces/${id}`);
+    expect(location.hash).toBe(`#/admin/live/traces/${id}`);
   });
 });
 

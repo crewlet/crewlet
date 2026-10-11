@@ -62,7 +62,7 @@ function sources(): { file: string; text: string }[] {
     modules()
       .filter(({ path }) => SCANNED.some((dir) => path.startsWith(`${dir}/`)))
       // The org builder arrived from another branch with its own sheet and its
-      // own gate (`routes/org/builder/builderStyles.test.ts`); it is not this
+      // own gate (`routes/admin/org/builder/builderStyles.test.ts`); it is not this
       // scan's subject.
       .filter(({ path }) => !path.split("/").slice(0, -1).includes("builder"))
       .map(({ path, text }) => ({ file: path, text }))

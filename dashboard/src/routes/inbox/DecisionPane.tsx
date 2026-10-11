@@ -42,7 +42,7 @@ import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PERIOD_ADJECTIVE, PERIOD_WORDS, turnsOverWords } from "~/lib/budget.ts";
-import { plainText, renderMarkdown, safeHref } from "~/lib/markdown.ts";
+import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
 import { fmtDateTime, fmtExact, humanize, relTime } from "~/lib/format.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
@@ -484,14 +484,14 @@ function EvidenceChip({ evidence }: { evidence: WorkDecisionEvidence }) {
       );
     case "turn":
       return (
-        <a className="inbox-chip" href={href(["live", "turns", evidence.ref])}>
+        <a className="inbox-chip" href={href(["admin", "live", "turns", evidence.ref])}>
           <ActivityGlyph size="xs" />
           {evidence.label || "Turn trace"}
         </a>
       );
     case "run":
       return (
-        <a className="inbox-chip" href={href(["live", "runs", evidence.ref])}>
+        <a className="inbox-chip" href={href(["admin", "live", "runs", evidence.ref])}>
           <SquareTerminalGlyph size="xs" />
           {evidence.label || "Coding run"}
         </a>
@@ -558,7 +558,7 @@ function RunBody({ run, who, now }: { run: DecisionRun; who: Who | null; now: nu
         <blockquote className="answer-run-question">
           {run.question || "The run paused on a clarification and cannot continue."}
         </blockquote>
-        <a className="t-link" href={href(["live", "runs", run.turn_id])}>
+        <a className="t-link" href={href(["admin", "live", "runs", run.turn_id])}>
           Open the run →
         </a>
       </div>

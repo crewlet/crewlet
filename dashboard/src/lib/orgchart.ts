@@ -7,7 +7,7 @@
  * Its inputs are the org index built over the projection this node has
  * APPLIED (`lib/seats.ts` `indexOrg`), the `agents` push and the tracker's
  * `work_projects` rows — never the builder's draft. The builder
- * (`routes/org/builder/chartModel.ts`) draws a document somebody is editing,
+ * (`routes/admin/org/builder/chartModel.ts`) draws a document somebody is editing,
  * and a chart that shared its model would draw a seat nobody has saved as if
  * it were running; `orgchart.test.ts` holds that as a boundary this module
  * never imports across.

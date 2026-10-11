@@ -2,14 +2,14 @@
  * One person's day — the claims on their attention, as the sections of My
  * work.
  *
- * # Seven claims, and each is a different one
+ * # Eight claims, and each is a different one
  *
- * A person who saw only their assignments would miss six other things asking
- * for their time: what a lead put at the top of their list, the questions
- * waiting on an answer from them, the questions THEY are waiting on, the
- * sub-items they claimed on somebody else's task, the work they were brought
- * onto without owning, what moved on what they follow, and what became
- * workable while they were not looking.
+ * A person who saw only their assignments would miss seven other things
+ * asking for their time: what a lead put at the top of their list, the
+ * questions waiting on an answer from them, the questions THEY are waiting on,
+ * the work they handed to somebody else, what became workable while they were
+ * not looking, the work they were brought onto without owning, what moved on
+ * what they follow, and the sub-items they claimed on somebody else's task.
  *
  * # Why they are sections, and what keeps the old promise
  *
@@ -51,12 +51,13 @@
  * What REACHED somebody is a different question from what is ON them, and it
  * has a workspace of its own (`#/inbox`).
  *
- * # Two sections are the work list, narrowed to one person
+ * # Three sections are the work list, narrowed to one person
  *
- * The Queue and Asked by me are `routes/work/ItemsView.tsx` — the same
- * component `#/work` and a project's Items lens are — held here by an
+ * The Queue, Asked by me and Handed off are `routes/work/ItemsView.tsx` — the
+ * same component `#/work` and a project's Items lens are — held here by an
  * [ItemsHost] that fixes the one thing the section IS (who holds the work; who
- * is waiting on an answer about it) and what it opens on, and leaves the shape,
+ * is waiting on an answer about it; who filed it for somebody else) and what
+ * it opens on, and leaves the shape,
  * the grouping, the order, the columns and every other filter to the reader,
  * in the URL, exactly as on the other two screens. Written as a second
  * renderer the Queue had no Filter menu, no Display menu, no scope switch, no
@@ -104,7 +105,7 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
-import { askedByParams, pageCount, type Scope } from "~/lib/work.ts";
+import { askedByParams, handedOffParams, pageCount, type Scope } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkClaimTotal,
@@ -115,7 +116,7 @@ import type {
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PriorityQueue } from "./Priorities.tsx";
-import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
+import { listTotal, useQueueCountRead } from "~/lib/useQueueCount.ts";
 
 /**
  * What the Queue OPENS on, as the list's own parameters.
@@ -148,8 +149,20 @@ const ASSIGNED_OPENS: Record<string, string> = { group_by: "due:bucket", sort: "
 const ASKED_OPENS: Record<string, string> = { show_closed: "true", sort: "-updated" };
 
 /**
- * A COUNT READ ASKS FOR ONE ROW. The two tabs the tracker counts (the Queue and
- * Asked by me) read `total_hint`, which the engine counts over the whole
+ * What Handed off OPENS on: the open work, banded by where each piece stands,
+ * most recently changed first inside a band.
+ *
+ * WHERE IT STANDS is the question a person opens their hand-offs to ask — has
+ * anybody started it, is it waiting for a review — and the status group is the
+ * tracker's own answer to it. OPEN WORK, the list's own default: a hand-off
+ * that finished comes back to the person who filed it as a notice, and the
+ * scope switch is there for the finished ones.
+ */
+const HANDED_OPENS: Record<string, string> = { group_by: "status_group", sort: "-updated" };
+
+/**
+ * A COUNT READ ASKS FOR ONE ROW. The three tabs the tracker counts (the Queue,
+ * Asked by me and Handed off) read `total_hint`, which the engine counts over the whole
  * matching set whatever the page is — so the rows are waste. The Queue's count
  * asked for a full default page (fifty rows, with every card fact) every thirty
  * seconds to read one number off it. The Queue's own question is
@@ -216,7 +229,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // offered no picker. The FIRST read still goes out, because until the viewer
   // answers this reader is indistinguishable from one who gets a picker. 60s
   // is the interval both other readers of this question already take
-  // (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a load is read,
+  // (`routes/inbox/Inbox.tsx`, `routes/team/People.tsx`): a load is read,
   // not watched.
   const workload = useQuery("work_workload", undefined, {
     enabled: !viewer.anonymous && !viewer.unbound,
@@ -231,7 +244,7 @@ export function MyWork({ section }: { section: MeSection }) {
   });
   const mine = state.data;
 
-  // THE TWO SECTIONS THAT ARE THE WORK LIST, counted as the tracker's own
+  // THE THREE SECTIONS THAT ARE THE WORK LIST, counted as the tracker's own
   // question, asked whichever section is open: a count that appeared only once
   // its section was opened would be a strip that changes as you walk it.
   //
@@ -244,11 +257,9 @@ export function MyWork({ section }: { section: MeSection }) {
   // holds brings its whole subtree along unfiltered, so the count took in
   // sub-tasks held by somebody else, and finished ones, the list never drew.
   //
-  // THE QUEUE'S IS THE FRAME'S ON THE READER'S OWN DAY — the one reading the
-  // sidebar's My work figure draws, so the two can never name two numbers —
-  // and this screen's own read of the same question on anybody else's.
-  const ownQueue = useOwnQueueCount();
-  const theirQueue = useQueueCountRead(whose, !ownDay);
+  // THE QUEUE'S IS THE ONE QUESTION `lib/useQueueCount.ts` asks, for the day
+  // on screen — the reader's own or anybody else's.
+  const queue = useQueueCountRead(whose);
   const askedBy = useQuery(
     "work_items",
     whose
@@ -256,6 +267,18 @@ export function MyWork({ section }: { section: MeSection }) {
           container: "workspace",
           ...askedByParams(whose),
           show_closed: ASKED_OPENS.show_closed,
+          subtasks: "separate",
+          limit: COUNT_ONLY,
+        }
+      : undefined,
+    { enabled: whose !== "", pollMs: 30_000 },
+  );
+  const handedOff = useQuery(
+    "work_items",
+    whose
+      ? {
+          container: "workspace",
+          ...handedOffParams(whose),
           subtasks: "separate",
           limit: COUNT_ONLY,
         }
@@ -279,7 +302,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // sections it fills, and the lists theirs inside themselves.
   usePageCoverage(person.data);
 
-  // WHAT THE TWO LIST SECTIONS ARE, handed to the list that draws them — see
+  // WHAT THE THREE LIST SECTIONS ARE, handed to the list that draws them — see
   // [ItemsHost]. Memoised on the values they read, because the list asks the
   // engine again whenever the lock moves and a fresh object every render would
   // be a fresh question every render.
@@ -299,6 +322,14 @@ export function MyWork({ section }: { section: MeSection }) {
     }),
     [whose, they],
   );
+  const handedHost = useMemo<ItemsHost>(
+    () => ({
+      lock: { handed_off_by: whose },
+      opens: HANDED_OPENS,
+      empty: (scope: Scope) => handedEmpty(scope, they),
+    }),
+    [whose, they],
+  );
 
   // EVERY COUNT, ALWAYS, on the section tabs the page header draws — which is
   // what replaces the stacking: a section nobody has opened still says how
@@ -306,16 +337,21 @@ export function MyWork({ section }: { section: MeSection }) {
   // its ceiling is a floor — `pageCount` writes it with a `+`, which a bare
   // number would report as a fact about somebody's day — and it is absent,
   // never "0", while its read is in flight.
-  const listed = { assigned: ownDay ? ownQueue : theirQueue, askedBy: listTotal(askedBy.data) };
+  const listed = {
+    assigned: queue,
+    askedBy: listTotal(askedBy.data),
+    handedOff: listTotal(handedOff.data),
+  };
   useSectionCounts(
     mine
       ? figures({
           queue: countFor("assigned", mine, listed),
           "asked-of-me": countFor("asked-of-me", mine, listed),
           "asked-by-me": countFor("asked-by-me", mine, listed),
-          unblocked: countFor("unblocked", mine, listed),
-          collaborating: countFor("collaborating", mine, listed),
-          watching: countFor("watching", mine, listed),
+          "handed-off": countFor("handed-off", mine, listed),
+          ready: countFor("ready", mine, listed),
+          helping: countFor("helping", mine, listed),
+          following: countFor("following", mine, listed),
           checklist: countFor("checklist", mine, listed),
         })
       : {},
@@ -493,7 +529,8 @@ export function MyWork({ section }: { section: MeSection }) {
                 />
               )}
               {tab === "asked-by-me" && <ItemsView host={askedHost} />}
-              {tab === "unblocked" && (
+              {tab === "handed-off" && <ItemsView host={handedHost} />}
+              {tab === "ready" && (
                 <Block
                   rows={mine.unblocked_recent}
                   total={mine.totals.unblocked_recent}
@@ -503,7 +540,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   empty={`Nothing that was waiting on something else has become workable for ${they}.`}
                 />
               )}
-              {tab === "collaborating" && (
+              {tab === "helping" && (
                 <Block
                   rows={mine.collaborating}
                   total={mine.totals.collaborating}
@@ -513,7 +550,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   empty={`Nobody has brought ${they} onto a task they do not own.`}
                 />
               )}
-              {tab === "watching" && (
+              {tab === "following" && (
                 <Block
                   rows={mine.watching_recent}
                   total={mine.totals.watching_recent}
@@ -746,8 +783,8 @@ function figures(all: Record<string, string>): Record<string, string> {
  * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
  * busy; the engine counts every block in full beside its page (`totals`), by
  * the predicate that drew it, and that is the number a tab carries. The Queue
- * and Asked by me ask the tracker, whose `total_hint` is the count over the
- * list the section opens onto and whose `total_capped` is the same ceiling.
+ * Asked by me and Handed off ask the tracker, whose `total_hint` is the count
+ * over the list the section opens onto and whose `total_capped` is the same ceiling.
  * `pageCount` writes a `+` only where the engine's own count stopped; while a
  * read is in flight there is no number and the tab carries none rather than a
  * zero, which would read as an empty day.
@@ -755,16 +792,17 @@ function figures(all: Record<string, string>): Record<string, string> {
 function countFor(
   tab: Exclude<Tab, "priorities">,
   mine: WorkMyWork,
-  listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
+  listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal; handedOff?: WorkClaimTotal },
 ): string {
   const totals = mine.totals;
   const claim: WorkClaimTotal | undefined = {
     assigned: listed.assigned,
     "asked-by-me": listed.askedBy,
+    "handed-off": listed.handedOff,
     "asked-of-me": totals.asked_of_me,
-    unblocked: totals.unblocked_recent,
-    collaborating: totals.collaborating,
-    watching: totals.watching_recent,
+    ready: totals.unblocked_recent,
+    helping: totals.collaborating,
+    following: totals.watching_recent,
     checklist: totals.checklist_items,
   }[tab];
   if (claim === undefined) return "";
@@ -856,11 +894,34 @@ function askedEmpty(scope: Scope, they: string): { title: string; description: s
 }
 
 /**
+ * What Handed off says when it holds nothing and nothing is narrowing it — in
+ * this person's voice, per scope, for the reason [assignedEmpty] gives. The way
+ * to fill it is named, because handing work off is the verb this section is a
+ * record of.
+ */
+function handedEmpty(scope: Scope, they: string): { title: string; description: string } {
+  const subject = they === "you" ? "you" : "they";
+  if (scope === "closed") {
+    return {
+      title: `Nothing ${subject} handed off has been finished`,
+      description:
+        "Open is what is still with somebody, and All shows both. The scope switch in the bar is what moves between them.",
+    };
+  }
+  return {
+    title: `Nothing ${subject} handed off is open`,
+    description: `Work ${subject} file for somebody else — or for a team, until its lead picks somebody — waits here, banded by where it stands.${
+      they === "you" ? " Hand off puts the first piece here." : ""
+    }`,
+  };
+}
+
+/**
  * The questions waiting on this person — each a decision they answer in
  * place, on their own day.
  *
  * THE ONE SECTION WHERE SOMEBODY ELSE IS BLOCKED ON THIS PERSON rather than the
- * other way round, which is why it is the shared [DecisionRow] Home draws: the
+ * other way round, which is why it is the shared [DecisionRow] Today draws: the
  * question, who asked and in what role, what they recommend, and the answer —
  * an option, or a reply — sent from the row. On somebody else's day the row is
  * written about them and its controls are held (see the file head).

@@ -7,7 +7,7 @@ The knowledge system (`internal/knowledge`) is the read path agents use to find 
 
 **A diary is read where it is kept current.** An agent's diary is written to
 the store of the node running the agent and follows the agent when placement
-moves it, so the dashboard's **Knowledge › Agent diaries** reads every diary
+moves it, so the dashboard's **Agent setup › Memory** reads every diary
 from the node HOLDING its agent — the list (`memory_overview`) counts every
 agent in the chart at its holder in one round, and one agent's page
 (`agent_memory`) is its holder's answer, naming that node. An agent no node

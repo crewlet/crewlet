@@ -25,7 +25,7 @@ import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
 // at once - the same call `app/frame/cells.tsx` makes for the same reason.
 import { PhaseTag } from "~/ui/primitives.tsx";
-import { href } from "~/app/router.tsx";
+import { href, useShell } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -72,6 +72,8 @@ export function SeatChip({
   kind?: SeatKind;
   size?: "sm" | "md";
 }) {
+  // THE SEAT'S PAGE IN THE SHELL THE LINK IS DRAWN IN — see `seatPath`.
+  const shell = useShell();
   const body = (
     <>
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
@@ -100,7 +102,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={style}
-      href={href(seatPath({ handle }))}
+      href={href(seatPath({ handle }, shell))}
     >
       {body}
     </a>
@@ -131,6 +133,7 @@ export function SeatCard({
   nameOf: NameOf;
 }) {
   const now = useNow();
+  const shell = useShell();
   // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
   // seat draws no edge, for the reason `ringOf` gives.
   const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
@@ -141,7 +144,7 @@ export function SeatCard({
   return (
     // `seatPath`, not a path spelled out again: a seat's address is one rule,
     // kept in one place.
-    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
+    <a className="seat-card" data-tone={tone} href={href(seatPath(seat, shell))}>
       <div className="row">
         {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
             and it is what the seat is doing. */}
@@ -247,7 +250,7 @@ export function EventRow({
     >
       {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
           in the title; which DAY a row belongs to is a heading between days
-          (`routes/live/Activity.tsx`), because a date is a property of
+          (`routes/admin/live/Activity.tsx`), because a date is a property of
           the rows under it rather than of the first of them — and rendered
           here it put `fmtDateTime` in a 62px column and wrapped one row per
           day to three lines. */}
@@ -293,7 +296,7 @@ export function EventRow({
   return (
     <a
       className={cx("feed-row", compact && "compact", event.failed && "failed")}
-      href={href(["live", "events", event.id])}
+      href={href(["admin", "live", "events", event.id])}
       onClick={onOpen}
     >
       {body}
@@ -461,7 +464,7 @@ export function QueryState({
    * on a node whose store could not be read are the same headline and
    * completely different problems, and only the second sentence separates
    * them. It was optional while one caller in the tree had no second sentence
-   * (`routes/spend/Spend.tsx`); that one now says what to do about it, so the
+   * (`routes/admin/spend/Spend.tsx`); that one now says what to do about it, so the
    * type says what the component always meant.
    */
   empty?: { title: ReactNode; hint: ReactNode };

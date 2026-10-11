@@ -119,9 +119,9 @@ describe("what it surfaces", () => {
   test("a run paused on a question carries the question", () => {
     const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    // THE RUN'S OWN ADDRESS. It was `#/live/runs?run=`, a query key the
+    // THE RUN'S OWN ADDRESS. It was `#/admin/live/runs?run=`, a query key the
     // runs screen stopped reading when a run became an object.
-    expect(items[0]?.path).toEqual(["live", "runs", "t1"]);
+    expect(items[0]?.path).toEqual(["admin", "live", "runs", "t1"]);
   });
 
   // WHEN IT PARKED, never when it started: this row is about how long
@@ -337,7 +337,7 @@ describe("what it surfaces", () => {
     const [linked] = attentionQueue(
       input({ agents: [{ id: "dev-a", role: "Dev A", handle: "dev-a", budget: refusing }] }),
     );
-    expect(linked?.path).toEqual(["agents", "seats", "dev-a"]);
+    expect(linked?.path).toEqual(["admin", "agents", "seats", "dev-a"]);
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -359,7 +359,7 @@ describe("what it surfaces", () => {
   // WHAT THE QUIET BAND DRAWS IS TWO-SIDED, and only one side is a type error.
   //
   // TypeScript refuses a condition that names no subject. Nothing but this
-  // refuses a SUBJECT no condition can raise — a phrase on the Inbox and Home
+  // refuses a SUBJECT no condition can raise — a phrase on the Inbox and the Overview
   // claiming something is checked when nothing checks it, which is the exact
   // shape of the sentence it replaced: "No seat is stopped, no run is parked on
   // a question, and no budget is refusing", three of the twelve conditions
@@ -702,7 +702,7 @@ describe("ordering", () => {
 
 // WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser by the seat
 // handle their token is bound to, and the row read "paused by jane-founder" on
-// Home and in the Inbox — an address where a person is meant.
+// the Overview and in the Inbox — an address where a person is meant.
 describe("a stopped seat's row", () => {
   test("names the person who paused it, off the chart", () => {
     const items = attentionQueue(

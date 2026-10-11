@@ -1,18 +1,18 @@
 /**
- * How much open work is on the viewer — ONE reading, for every surface that
+ * How much open work is on a person — ONE question, for every surface that
  * says it.
  *
- * The sidebar's My work figure and the Queue tab on the viewer's own day are
- * one number about one person, and they were two numbers about two different
- * things: the sidebar counted the questions put to the reader, the tab counted
- * the work assigned to them, and the page under the tab could be a third list
- * again. A person reading "My work 1", "Queue 2" and five rows had no way to
- * tell which figure was wrong, because none of them was. So the figure a
- * person meets first — the sidebar's — is the Queue's, and it is ASKED ONCE,
- * by the frame ([QueueCountProvider], which `app/Shell.tsx` mounts): the two
- * surfaces read one answer, the way the Inbox badge and the line the Inbox
- * draws beside its scope do (`useInboxCounts.ts`), rather than polling on two
- * clocks and naming two numbers for most of a minute after a change.
+ * The Queue tab's figure and the list under it were once two numbers about
+ * two different things — a count of the questions put to the reader beside a
+ * list of the work assigned to them — and a person reading "1" over five rows
+ * had no way to tell which was wrong, because neither was. So there is one
+ * question ([queueCountParams]), asked by the screen that draws the figure:
+ * My work, on anybody's day.
+ *
+ * NOT A FRAME READING ANY MORE. The person sidebar's My work row carries no
+ * figure — a count beside a row on every screen is a mark a reader learns to
+ * skip, and what is on a person is their Queue's tab — so a reading the frame
+ * held for every screen would poll for a number nothing outside My work draws.
  *
  * # What is counted
  *
@@ -32,9 +32,8 @@
  * count used to ride a fifty-row page, with every card's facts, every poll.
  */
 
-import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import { useQuery } from "./useQuery.ts";
-import { useViewer } from "./viewer.ts";
 import { SCOPE_GROUPS } from "./work.ts";
 import type { WorkClaimTotal, WorkItemsAnswer } from "~/protocol/index.ts";
 
@@ -46,8 +45,8 @@ import type { WorkClaimTotal, WorkItemsAnswer } from "~/protocol/index.ts";
  * has pressed now: the figure says how much is on this person, and a reader
  * who presses Closed to check something finished has not emptied their day.
  * It was a second literal of the same two groups, with nothing tying the two
- * together, which is how the sidebar and the Queue's own line would come to
- * count different things the day either changed.
+ * together, which is how the tab and the Queue's own line would come to count
+ * different things the day either changed.
  */
 export const QUEUE_SCOPE = SCOPE_GROUPS.open;
 
@@ -55,9 +54,8 @@ export const QUEUE_SCOPE = SCOPE_GROUPS.open;
 const COUNT_ONLY = 1;
 
 /**
- * The Queue's count, as `work_items` asks it — ONE PLACE for the question the
- * frame asks for the viewer and My work asks for somebody else's day, so the
- * two cannot count different things.
+ * The Queue's count, as `work_items` asks it — ONE PLACE for the question, so
+ * the tab on one person's day and on another's cannot count different things.
  */
 export function queueCountParams(handle: string): Record<string, unknown> {
   return {
@@ -87,42 +85,4 @@ export function useQueueCountRead(handle: string, enabled = true): WorkClaimTota
     pollMs: 30_000,
   });
   return useMemo(() => listTotal(read.data), [read.data]);
-}
-
-/**
- * What the frame read, boxed so that a claim nothing has answered yet
- * (`undefined`) is a different value from no frame at all (`null`).
- */
-interface QueueCount {
-  claim: WorkClaimTotal | undefined;
-}
-
-const Reading = createContext<QueueCount | null>(null);
-
-/**
- * Ask once, for everything under it. Inside [ViewerProvider], whose viewer it
- * asks for, for the reason [InboxCountsProvider] is.
- */
-export function QueueCountProvider({ children }: { children: ReactNode }) {
-  const claim = useQueueCountRead(useViewer().handle);
-  const value = useMemo(() => ({ claim }), [claim]);
-  return createElement(Reading.Provider, { value }, children);
-}
-
-/**
- * The viewer's own Queue count, as the frame read it.
- *
- * THROWS OUTSIDE ONE rather than asking for itself, for the reason
- * `useInboxCounts` does: a fallback read here is the second, separately polled
- * read this module exists to remove, and it would work, so nothing would say
- * so.
- */
-export function useOwnQueueCount(): WorkClaimTotal | undefined {
-  const reading = useContext(Reading);
-  if (reading === null) {
-    throw new Error(
-      "useOwnQueueCount() outside a QueueCountProvider: the frame mounts one (FrameReadings, app/Shell.tsx), and a suite that mounts a screen without the frame mounts one around it",
-    );
-  }
-  return reading.claim;
 }

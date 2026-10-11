@@ -242,7 +242,7 @@ change a person made through the engine; see
 
 ### From the dashboard
 
-**Settings › Backups & retention** takes one too: **Take a backup** asks the
+**Engine › Backups & retention** takes one too: **Take a backup** asks the
 node serving the page (`POST /backup`) for a directory on **that node's host**
 — nothing is downloaded — offering a fresh directory beside that node's last
 copy when it has one. The copy can take minutes on a large store; closing the

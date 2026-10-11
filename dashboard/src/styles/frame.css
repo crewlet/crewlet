@@ -13,8 +13,9 @@
    52px bar, the drawer below `breakpoint.shell` — all of that is
    `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
    What is here is what the kit has no opinion about: the two rows the page
-   header draws, the peek as a column of the sheet, the Settings column, and
-   the sidebar's own few rows (the health card, the user block).
+   header draws, the peek as a column of the sheet, the Knowledge tree's
+   column, and the sidebars' own few rows (the health card, the user block,
+   the console's ink).
 
    WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
    current section are raised or underlined, and the one accent in the chrome
@@ -44,7 +45,7 @@
    scroll instead — each exactly `main`'s height, so they are the page's
    scrollers there and `100cqb` is their view too. A box INSIDE the page may
    still scroll its own content (a running phase's transcript, a seat's thread
-   list, the Settings column, a board lane, a long record), and each of those
+   list, the Knowledge tree's column, a board lane, a long record), and each of those
    is held to the rules under "The document does not scroll" in
    docs/reference/dashboard-design.md: bounded to the scroller's view, and
    handing the wheel back, at either end, to whichever of those scrolls it. */
@@ -142,7 +143,7 @@
   max-width: none;
   /* AND IT IS THE SCREEN'S MEASURING STICK, under the same name the bar's is
      (`.page-head`): every `@container page` rule a screen writes — the item
-     page's rail, the event feed's phone row, Home's figures — is about how
+     page's rail, the event feed's phone row, the Overview's figures — is about how
      wide the SCREEN'S column is, and a query binds to the nearest ancestor
      of that name. Only the header declared one, which is not an ancestor of
      any screen, so each of those rules matched nothing at any width. */
@@ -384,7 +385,7 @@
    every screen that never opens one — and ONLY WHERE THE FRAME HAS ROOM, which
    the shell decides and writes as `data-peek="column"` (the other value,
    `drawer`, is the block further down). Not a media query: the width that
-   leaves the list its floor is 236px wider beside Settings' section column
+   leaves the list its floor is 256px wider beside Knowledge's tree column
    than beside any other screen, and it moves with the density, and a media
    query can see neither. `app/layout.ts` has the arithmetic.
 
@@ -439,14 +440,15 @@
   outline-offset: 2px;
 }
 
-/* ---- The sidebar's own rows ----------------------------------------------
-   The navigation is the kit's `SidebarNav`; what is here is the three things
-   the kit has no row for — the ⌘K field's place, the engine's state, and who
-   this browser is. */
+/* ---- The sidebars' own rows ---------------------------------------------
+   The navigation is the kit's `SidebarNav`; what is here is what the kit has
+   no row for — the ⌘K field's place, the engine's state, the connection's
+   trouble and who this browser is. */
 
 /* THE FOOT'S OWN NAVIGATION SITS ON THE FOOT'S INSET. The kit's `SidebarNav`
    brings the rail's gutter with it, and the foot already stands on that
-   gutter, so Settings drew one gutter to the right of every row above it. */
+   gutter, so the admin door drew one gutter to the right of every row above
+   it. */
 .crewlet-app-shell__rail-foot > .crewlet-sidebar-nav {
   padding: 0;
 }
@@ -507,25 +509,131 @@
   white-space: pre-wrap;
 }
 
-/* A LOCKED ROW keeps its words and adds the key after them. */
-.side-locked,
-.section-column-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
+/* HAND OFF, the one create the person sidebar carries, on the nav's own
+   gutter and as wide as a row, with its key at its end. */
+.side-handoff {
+  padding: var(--spacing-1) var(--size-nav-gutter) var(--spacing-3);
+}
+.side-handoff-button {
+  width: 100%;
+}
+.side-handoff-label {
+  flex: 1 1 auto;
+  text-align: left;
 }
 
-/* A STATE WAITING ON THE READER — the tools the engine says need a person —
-   is the kit's badge in the WARNING tone, as the approved Settings artboard
-   draws Integrations' figure ("pill need"). The kit fills its badge with the
-   accent because its one badge is an unread count; this figure is a state,
-   and colour is state, so in the accent it read as a second inbox. The soft
-   fill and its ink are the feedback pair every warning tag wears, on the
-   rail and on the raised current row alike. */
-.section-row-attention .crewlet-nav-item__badge {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
+/* THE CONNECTION, drawn only in trouble (`sidebar/ConnectionLine.tsx`): one
+   line on the foot's row inset, and the button that signs back in when the
+   key is what was refused. */
+.side-connection {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-1) var(--size-nav-row-pad);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+button.side-connection {
+  color: var(--color-feedback-danger-ink);
+  cursor: pointer;
+}
+button.side-connection:hover {
+  background: var(--color-surface-hover);
+}
+button.side-connection:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* A PROJECT UNDER WORK: its name, and its key in the mono face at the row's
+   end — no glyph, because the tree reads by its indent. */
+.side-project {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+  width: 100%;
+}
+.side-project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.side-project-key {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---- The console's sidebar ------------------------------------------------
+   The way back first, then the console's title, its sections with their
+   chords, what is running, and the engine's own state at the foot. */
+.console-back {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  width: 100%;
+  padding: var(--spacing-1) var(--size-nav-row-pad);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+.console-back:hover {
+  background: var(--color-surface-hover);
+}
+.console-back:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+.console-back-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* THE READER'S OWN NEEDS-YOU COUNT, in the accent: the one fill in the chrome
+   that is what waits on the reader, as the Inbox's badge is in the person
+   sidebar. */
+.console-back-badge {
+  flex: none;
+  min-width: var(--spacing-5);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+  color: var(--color-text-on-accent);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+.console-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0 calc(var(--size-nav-gutter) + var(--size-nav-row-pad)) var(--spacing-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+/* A SECTION'S CHORD AT THE ROW'S END, after the words, which take what is
+   left and give way first. */
+.console-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  width: 100%;
+}
+.console-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* THE ENGINE'S STATE, the design's status block: its words over one detail
@@ -1175,13 +1283,12 @@ a.user-block-who:focus-visible {
   outline-offset: var(--size-focus-ring-inset-offset);
 }
 
-/* ---- The Settings column and the Knowledge tree ---------------------------
-   Settings draws its sections as a column beside the screen, and Knowledge
-   its search and its spaces' tree the same way, flush with the
-   sheet: the column is the full height of the scroller's view, drawn with a
-   hairline, and its list stays put while the section beside it scrolls. The
-   kit's content padding is taken back for this one frame and given to the
-   section body instead. */
+/* ---- The Knowledge tree ---------------------------------------------------
+   Knowledge draws its search and its spaces' tree as a column beside the
+   screen, flush with the sheet: the column is the full height of the
+   scroller's view, drawn with a hairline, and its list stays put while the
+   page beside it scrolls. The kit's content padding is taken back for this
+   one frame and given to the section body instead. */
 .app .crewlet-app-shell__content:has(> .section-frame) {
   min-height: 100%;
   padding: 0;
@@ -1198,13 +1305,13 @@ a.user-block-who:focus-visible {
 }
 
 /* AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves only inside its
-   containing block, which here is its grid area — the row the section beside
-   it makes as tall as its content. `min-height: 100%` resolved against that
-   area and made the column exactly as tall as the section, so it had nowhere
-   to stick to and a wheel over Nodes carried Company and Connect off the top.
-   At the view's height it sticks for the whole scroll, its hairline runs the
-   height of the window at every scroll position, and a list longer than a
-   short window scrolls inside itself rather than below the fold.
+   containing block, which here is its grid area — the row the page beside it
+   makes as tall as its content. `min-height: 100%` resolved against that area
+   and made the column exactly as tall as the page, so it had nowhere to stick
+   to and a wheel over a long page carried the tree off the top. At the view's
+   height it sticks for the whole scroll, its hairline runs the height of the
+   window at every scroll position, and a tree longer than a short window
+   scrolls inside itself rather than below the fold.
 
    THE ONE IN-PAGE SCROLLER THAT KEEPS THE WHEEL AT ITS ENDS
    (`overscroll-behavior: contain`), and it is the exception the rule against
@@ -1213,8 +1320,8 @@ a.user-block-who:focus-visible {
    it swallows the wheel while half of it is out of sight. This box cannot be
    in that state — it sticks, and it is exactly the view, so all of it is on
    screen at every scroll position. What chaining would do here is the
-   opposite surprise: a wheel over the section list, at its end, would move
-   the SECTION beside it, which is not what the pointer is over. */
+   opposite surprise: a wheel over the tree, at its end, would move the PAGE
+   beside it, which is not what the pointer is over. */
 .section-column {
   position: sticky;
   top: 0;
@@ -1232,14 +1339,6 @@ a.user-block-who:focus-visible {
   gap: var(--spacing-5);
   min-width: 0;
   padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
-}
-
-/* THE PHONE'S PICKER (`SectionColumn`): one row naming the section the reader
-   is on, which unfolds the column's list. Beside the section there is room
-   for the whole list, so at every width above the phone breakpoint the toggle
-   is not drawn and the list always is. */
-.section-picker-toggle {
-  display: none;
 }
 
 /* ---- The state bar ------------------------------------------------------ */
@@ -2241,75 +2340,26 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     padding-inline: var(--spacing-3);
   }
 
-  /* ONE PANE: the Settings column stacks above the section rather than
-     taking a third of the phone beside it.
+  /* ONE PANE: Knowledge's tree stacks above the page rather than taking a
+     third of the phone beside it.
 
-     AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
-     height, and two `auto` rows split a short section's spare height between
-     them — so the folded picker's row grew by half of it and opened a band
-     of nothing (230px on Nodes at 390 × 2400) between the picker and the
-     section it names. The picker's row is its own height; the rest is the
-     section's. */
+     AND THE PAGE TAKES WHAT IS LEFT. The frame is at least the view's
+     height, and two `auto` rows split a short page's spare height between
+     them, opening a band of nothing between the tree and the page it names.
+     The tree's row is its own height; the rest is the page's. */
   .section-frame {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 1fr;
   }
 
-  /* IN THE FLOW, as tall as it is: a phone scrolls the page past the picker,
-     and the list it unfolds is part of that page rather than a pane of its
-     own. */
+  /* IN THE FLOW, as tall as it is: a phone scrolls the page past the tree,
+     and the tree is part of that page rather than a pane of its own. */
   .section-column {
     position: static;
     height: auto;
     overflow-y: visible;
     border-right: none;
     border-bottom: 1px solid var(--color-border-default);
-  }
-
-  /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
-     Settings column pushed every section's own content about 520px down —
-     below the fold on Nodes and Secrets. */
-  .section-picker {
-    padding: var(--spacing-2) var(--spacing-3);
-  }
-  .section-picker-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-2);
-    width: 100%;
-    min-height: var(--size-target-min);
-    padding: 0 var(--spacing-2);
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-weight: var(--font-weight-medium);
-    text-align: left;
-    cursor: pointer;
-  }
-  .section-picker-toggle:hover {
-    background: var(--color-surface-hover);
-  }
-  .section-picker-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .section-picker-chevron {
-    flex: none;
-    color: var(--color-text-tertiary);
-  }
-  .section-picker[data-open] .section-picker-chevron {
-    transform: rotate(180deg);
-  }
-  .section-picker:not([data-open]) .section-picker-list {
-    display: none;
-  }
-  .section-picker[data-open] .section-picker-list {
-    padding-top: var(--spacing-2);
   }
 
   .section-body {

@@ -160,8 +160,10 @@ units:
         goal: "Implement features, write tests, ship quality code"
 ```
 
-The dashboard and webhook API come up with the engine, and the dashboard
-opens on **Home**: how the company is, and the decisions waiting on you. The full
+The dashboard and webhook API come up with the engine. It is two shells: a
+person's working day — **Today**, the Inbox and My work, the company's work,
+team and knowledge — and, for whoever runs the engine, the **admin console**:
+how the company is running, what it spends and how the machine is set up. The full
 [Quickstart](docs/getting-started/quickstart.md) walks through watching an agent's
 first turn with no integrations at all, then wiring in the real ones.
 

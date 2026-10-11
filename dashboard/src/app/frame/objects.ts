@@ -19,6 +19,9 @@
  * — and each kind's own `pathOf` is what turns it back into a route.
  */
 
+import type { Shell } from "../nav.ts";
+import { seatPath } from "~/lib/seats.ts";
+
 export type ObjectKind =
   | "item"
   | "project"
@@ -69,8 +72,12 @@ export function parseRef(token: string | null | undefined): ObjectRef | null {
 export interface KindSpec {
   /** What this kind is called in a header eyebrow and a palette row. */
   label: string;
-  /** The object's own page. */
-  pathOf: (id: string) => string[];
+  /**
+   * The object's own page, in the shell the link is drawn in. Only a SEAT's
+   * differs — its profile in the person shell, its setup in the console —
+   * because every other kind has one page, in whichever shell owns it.
+   */
+  pathOf: (id: string, shell: Shell) => string[];
   /** Ids that carry their own separators, split for the route. */
   mono?: boolean;
 }
@@ -86,8 +93,8 @@ export interface KindSpec {
 export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
-  seat: { label: "Seat", pathOf: (id) => ["agents", "seats", id], mono: true },
-  unit: { label: "Unit", pathOf: (id) => ["agents", "teams", id] },
+  seat: { label: "Seat", pathOf: (id, shell) => seatPath({ handle: id }, shell), mono: true },
+  unit: { label: "Unit", pathOf: (id) => ["team", "units", id] },
   page: {
     // ONE ADDRESS, THE PAGE'S ID. It was `CONTAINER/Title`, and a title
     // changes on rename: every copied link died the day somebody fixed a
@@ -97,23 +104,27 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
     pathOf: (id) => ["knowledge", "pages", id],
   },
   container: { label: "Container", pathOf: (id) => ["knowledge", id], mono: true },
-  turn: { label: "Turn", pathOf: (id) => ["live", "turns", id], mono: true },
-  run: { label: "Coding run", pathOf: (id) => ["live", "runs", id], mono: true },
-  event: { label: "Event", pathOf: (id) => ["live", "events", id], mono: true },
-  node: { label: "Node", pathOf: (id) => ["settings", "nodes", id], mono: true },
+  turn: { label: "Turn", pathOf: (id) => ["admin", "live", "turns", id], mono: true },
+  run: { label: "Coding run", pathOf: (id) => ["admin", "live", "runs", id], mono: true },
+  event: { label: "Event", pathOf: (id) => ["admin", "live", "events", id], mono: true },
+  node: { label: "Node", pathOf: (id) => ["admin", "engine", "nodes", id], mono: true },
   schedule: {
     // `role/ceo/standup` — three segments, and the name may contain none of
     // them because the engine slugs it.
     label: "Schedule",
-    pathOf: (id) => ["agents", "schedules", ...id.split("/")],
+    pathOf: (id) => ["admin", "agents", "schedules", ...id.split("/")],
   },
-  channel: { label: "Channel", pathOf: (id) => ["live", "a2a", id], mono: true },
-  tool: { label: "Tool", pathOf: (id) => ["settings", "tools", id], mono: true },
-  integration: { label: "Integration", pathOf: (id) => ["settings", "integrations", id] },
-  credential: { label: "Credential", pathOf: (id) => ["settings", "secrets", id], mono: true },
+  channel: { label: "Channel", pathOf: (id) => ["admin", "live", "a2a", id], mono: true },
+  tool: { label: "Tool", pathOf: (id) => ["admin", "connect", "tools", id], mono: true },
+  integration: { label: "Integration", pathOf: (id) => ["admin", "connect", "integrations", id] },
+  credential: {
+    label: "Credential",
+    pathOf: (id) => ["admin", "connect", "secrets", id],
+    mono: true,
+  },
   revision: {
     label: "Revision",
-    pathOf: (id) => ["settings", "config", "revisions", id],
+    pathOf: (id) => ["admin", "engine", "config", "revisions", id],
     mono: true,
   },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
@@ -124,7 +135,7 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   notice: { label: "Notice", pathOf: () => ["inbox"] },
 };
 
-/** The route for an object. */
-export function pathOf(ref: ObjectRef): string[] {
-  return KINDS[ref.kind].pathOf(ref.id);
+/** The route for an object, from a link drawn in `shell`. */
+export function pathOf(ref: ObjectRef, shell: Shell): string[] {
+  return KINDS[ref.kind].pathOf(ref.id, shell);
 }

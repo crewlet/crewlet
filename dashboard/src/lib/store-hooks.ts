@@ -124,7 +124,7 @@ export function useTokens() {
  * it is pushed to every reader, token or not.
  *
  * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
- * `schedules` QUESTION, so `routes/agents/Schedules.tsx` polls that
+ * `schedules` QUESTION, so `routes/admin/agents/Schedules.tsx` polls that
  * deliberately and must not be moved onto this hook: it would silently lose
  * the fires. This is for a reader that wants the schedules and nothing else.
  */

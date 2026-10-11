@@ -93,7 +93,7 @@ describe("who the block says this is", () => {
       </Router>,
     );
     expect(screen.getByRole("link", { name: /Ada Lovelace/ }).getAttribute("href")).toBe(
-      "#/agents/seats/ada",
+      "#/team/seats/ada",
     );
     cleanup();
     render(

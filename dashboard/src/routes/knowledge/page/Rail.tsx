@@ -230,7 +230,7 @@ export function ReadBy({
                         with an ellipsis (whole in its title) so the age at its
                         end is never pushed onto a third line. */}
                     <span className="kpage-reader-head">
-                      <a className="kpage-reader-name" href={href(["agents", "seats", r.handle])}>
+                      <a className="kpage-reader-name" href={href(["team", "seats", r.handle])}>
                         {seat.name}
                       </a>
                       {count && <span className="kpage-reader-count">{count}</span>}
@@ -239,7 +239,7 @@ export function ReadBy({
                       {r.last_turn_id ? (
                         <a
                           className="kpage-reader-how kpage-reader-via-link"
-                          href={href(["live", "turns", r.last_turn_id])}
+                          href={href(["admin", "live", "turns", r.last_turn_id])}
                           title={via}
                         >
                           {via}
@@ -515,7 +515,7 @@ export function Watchers({ watchers, who }: { watchers: string[]; who: Who }) {
           const seat = who(h);
           return (
             <li key={h}>
-              <a className="kpage-link" href={href(["agents", "seats", h])}>
+              <a className="kpage-link" href={href(["team", "seats", h])}>
                 <SeatAvatar name={seat.name} kind={seat.kind ?? "agent"} size="xs" decorative />
                 <span className="kpage-link-title">{seat.name}</span>
               </a>

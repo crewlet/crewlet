@@ -44,7 +44,7 @@ export function TurnCard({
   defaultOpen?: boolean;
   /** Phase keys to open as the card mounts beside the one a running turn is
    *  on — the phases a reader watched live, for a card remounted as its turn
-   *  ends (`routes/agents/seat/Turns.tsx`), whose own latch went with it. */
+   *  ends (`routes/admin/agents/seat/Turns.tsx`), whose own latch went with it. */
   openPhases?: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
@@ -239,7 +239,7 @@ export function TurnCard({
               size="small"
               variant="secondary"
               leadingIcon={<LayersGlyph />}
-              onClick={() => nav.to(["live", "turns", group.turnId])}
+              onClick={() => nav.to(["admin", "live", "turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >
               Open the whole turn

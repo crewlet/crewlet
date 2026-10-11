@@ -17,6 +17,14 @@
  * and everything else asks this function. It imports nothing but `nav.ts`,
  * which is what lets `lib/` and a Node test call it.
  *
+ * # Two shells, one table
+ *
+ * The person shell's heads are its workspaces (`today`, `inbox`, `me`,
+ * `work`, `team`, `knowledge`), and the console's one head is `admin`, under
+ * which its own workspaces are the second segment. Which shell a path is in
+ * is `nav.ts`'s [shellOf] — the first segment — and nothing here decides it
+ * again.
+ *
  * # What decides a segment
  *
  * Its POSITION and its SHAPE, never a lookup: a route resolves before any
@@ -47,8 +55,8 @@ export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * created in and the key `EnsureContainer` makes), so it never holds a
  * lowercase letter. Looser than [KEY_SHAPE] on purpose — a unit's `space:` may
  * carry a dash or start with a digit — and exactly as strict where it matters:
- * every reserved segment is lowercase, so `#/knowledge/skills` can never be
- * read as a container called `skills`.
+ * every reserved segment is lowercase, so a lowercase word under Knowledge can
+ * never be read as a container.
  */
 export const CONTAINER_SHAPE = /^[^a-z]+$/;
 
@@ -57,38 +65,46 @@ export type MeSection =
   | "queue"
   | "asked-of-me"
   | "asked-by-me"
-  | "unblocked"
-  | "collaborating"
-  | "watching"
+  | "handed-off"
+  | "ready"
+  | "helping"
+  | "following"
   | "checklist";
 
 const ME_SECTIONS: readonly MeSection[] = [
   "asked-of-me",
   "asked-by-me",
-  "unblocked",
-  "collaborating",
-  "watching",
+  "handed-off",
+  "ready",
+  "helping",
+  "following",
   "checklist",
 ];
 
 /** Every screen the dashboard draws, with what its path names. */
 export type Screen =
-  | { screen: "home" }
+  // The landing: `#/`, which the viewer's own answer turns into an address.
+  | { screen: "landing" }
+  // The person shell.
+  | { screen: "today" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
   | { screen: "work" }
   | { screen: "work-projects" }
   | { screen: "work-views"; id?: string }
-  | { screen: "work-history" }
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
   | { screen: "org-chart" }
-  | { screen: "roster" }
-  | { screen: "teams"; unit?: string }
-  | { screen: "schedules"; scope: string[] }
-  | { screen: "org-edit" }
+  | { screen: "people" }
+  | { screen: "units"; unit?: string }
+  | { screen: "about" }
   | { screen: "seat"; handle: string }
+  | { screen: "knowledge" }
+  | { screen: "container"; key: string }
+  | { screen: "page"; id: string }
+  // The admin console.
+  | { screen: "overview" }
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
@@ -97,25 +113,27 @@ export type Screen =
   | { screen: "trace"; id: string }
   | { screen: "events" }
   | { screen: "event"; id: string }
-  | { screen: "knowledge" }
-  | { screen: "container"; key: string }
-  | { screen: "page"; id: string }
+  | { screen: "seats" }
+  | { screen: "seat-setup"; handle: string }
+  | { screen: "schedules"; scope: string[] }
   | { screen: "skills" }
-  | { screen: "diaries" }
+  | { screen: "memory" }
   | { screen: "diary"; handle: string }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "budgets" }
-  | { screen: "general" }
-  | { screen: "people" }
+  | { screen: "charter" }
+  | { screen: "access" }
+  | { screen: "org-edit" }
+  | { screen: "audit" }
+  | { screen: "changes" }
   | { screen: "integrations"; kind?: string }
   | { screen: "tools"; server?: string; tool?: string }
   | { screen: "models"; id?: string }
   | { screen: "secrets"; name?: string }
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
-  | { screen: "backups"; domain?: string }
-  | { screen: "audit" };
+  | { screen: "backups"; domain?: string };
 
 export type ScreenName = Screen["screen"];
 
@@ -123,10 +141,13 @@ export type ScreenName = Screen["screen"];
  * A path that addresses a page. The discriminant is `resolved`, deliberately
  * not `kind`: a screen's own parameters are spread beside it, and one of them
  * IS a `kind` (an integration's), which a `kind` discriminant would silently
- * overwrite — `#/settings/integrations/github` would resolve to an
+ * overwrite — `#/admin/connect/integrations/github` would resolve to an
  * integration called "screen".
+ *
+ * `workspace` is "" on the landing alone: `#/` is no workspace's until the
+ * viewer has said whose it is.
  */
-export type Resolved = Screen & { resolved: true; workspace: Workspace };
+export type Resolved = Screen & { resolved: true; workspace: Workspace | "" };
 
 /** A path the product has no page for, and a sentence saying which. */
 export interface Unresolved {
@@ -155,19 +176,18 @@ export function resolves(path: string[]): boolean {
 /** What a path addresses. */
 export function resolve(path: string[]): Route {
   const [head, ...rest] = path;
-  // THE EMPTY FRAGMENT IS HOME, which is the landing screen: what a person
-  // opening this wants to know first is whether anything needs them, and Home
-  // answers that for the company as well as for them.
-  if (head === undefined) return { resolved: true, workspace: "home", screen: "home" };
+  // THE EMPTY FRAGMENT IS THE LANDING, and which page that is depends on who
+  // is reading — `nav.ts`'s `landingFor`, which the dispatch asks once the
+  // viewer has answered. A resolver that picked one here would pick it before
+  // any answer arrived, for everybody.
+  if (head === undefined) return { resolved: true, workspace: "", screen: "landing" };
+  const workspace = workspaceOf(path);
+  const screen = (s: Screen): Resolved => ({ ...s, resolved: true, workspace });
+  if (head === "admin") return admin(rest, screen);
   const under = (label: string) => `“${rest.join("/")}” under ${label}`;
-  const screen = (s: Screen): Resolved => ({
-    ...s,
-    resolved: true,
-    workspace: workspaceOf(path) as Workspace,
-  });
   switch (head) {
-    case "home":
-      return rest.length ? missing("home", under("Home")) : screen({ screen: "home" });
+    case "today":
+      return rest.length ? missing("today", under("Today")) : screen({ screen: "today" });
     case "inbox":
       return rest.length ? missing("inbox", under("Inbox")) : screen({ screen: "inbox" });
     case "me": {
@@ -180,22 +200,10 @@ export function resolve(path: string[]): Route {
     }
     case "work":
       return work(rest, screen, under);
-    case "agents":
-      return agents(rest, screen, under);
-    case "live":
-      return live(rest, screen, under);
+    case "team":
+      return team(rest, screen, under);
     case "knowledge":
       return knowledge(rest, screen, under);
-    case "spend":
-      if (rest.length === 0) return screen({ screen: "spend" });
-      // A CLOSED SET, so an unknown tail is Not Found rather than the spend
-      // screen: `#/spend/budget` — the obvious typo — drawing the spend tables
-      // under a trail reading "Spend / budget" names three different things.
-      if (rest.length === 1 && rest[0] === "budgets") return screen({ screen: "budgets" });
-      if (rest.length === 1 && rest[0] === "tasks") return screen({ screen: "spend-tasks" });
-      return missing("spend", under("Spend"));
-    case "settings":
-      return settings(rest, screen, under);
     default:
       return missing("", `the screen “${head}”`);
   }
@@ -213,17 +221,10 @@ function work(rest: string[], screen: Make, under: Under): Route {
   }
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
-  // its own route, and a change is a record on the item it changed.
-  if (first === "projects" || first === "history" || first === "search") {
+  // its own route.
+  if (first === "projects" || first === "search") {
     if (rest.length > 1) return missing("work", under("Work"));
-    return screen({
-      screen:
-        first === "projects"
-          ? "work-projects"
-          : first === "history"
-            ? "work-history"
-            : "work-search",
-    });
+    return screen({ screen: first === "projects" ? "work-projects" : "work-search" });
   }
   if (rest.length > 1) return missing("work", under("Work"));
   // A PROJECT OR AN ITEM, decided by the SHAPE of the key rather than by a
@@ -240,35 +241,85 @@ function work(rest: string[], screen: Make, under: Under): Route {
   return missing("work", under("Work"));
 }
 
-function agents(rest: string[], screen: Make, under: Under): Route {
+function team(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "org-chart" });
   switch (first) {
-    case "roster":
-      return tail.length ? missing("agents", under("Agents")) : screen({ screen: "roster" });
-    case "edit":
-      return tail.length ? missing("agents", under("Agents")) : screen({ screen: "org-edit" });
-    case "teams":
-      if (tail.length > 1) return missing("agents", under("Agents"));
-      return screen(tail[0] ? { screen: "teams", unit: tail[0] } : { screen: "teams" });
-    case "schedules":
-      // NONE OR ALL THREE: `{scope_type}/{scope_id}/{name}` names one
-      // schedule, and a partial tail names nothing.
-      if (tail.length !== 0 && tail.length !== 3) return missing("agents", under("Agents"));
-      return screen({ screen: "schedules", scope: tail });
+    case "people":
+      return tail.length ? missing("team", under("Team")) : screen({ screen: "people" });
+    case "about":
+      return tail.length ? missing("team", under("Team")) : screen({ screen: "about" });
+    case "units":
+      if (tail.length > 1) return missing("team", under("Team"));
+      return screen(tail[0] ? { screen: "units", unit: tail[0] } : { screen: "units" });
     case "seats":
       // HANDLES LIVE ONLY HERE, which is what lets a handle equal a reserved
-      // word: `#/agents/seats/roster` is a seat called roster.
+      // word: `#/team/seats/people` is a seat called people. A handle under
+      // `team/` itself would make every seat called People, Units or About
+      // unreachable by address.
       if (tail.length !== 1 || !tail[0]) {
-        return missing(
-          "agents",
-          under("Agents"),
-          "a seat is opened from the roster or the org chart",
-        );
+        return missing("team", under("Team"), "a seat is opened from the org chart or the people");
       }
       return screen({ screen: "seat", handle: tail[0] });
     default:
-      return missing("agents", under("Agents"));
+      return missing("team", under("Team"));
+  }
+}
+
+function knowledge(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "knowledge" });
+  // ONE ADDRESS PER PAGE, BY ITS ID. A page was addressed by its container
+  // and title, and a title changes on rename — so every link anybody had
+  // copied broke the day somebody fixed a heading.
+  if (first === "pages") {
+    const [id] = tail;
+    if (tail.length !== 1 || id === undefined || !ID_SHAPE.test(id)) {
+      return missing(
+        "knowledge",
+        under("Knowledge"),
+        "a page is opened from a search or its container",
+      );
+    }
+    return screen({ screen: "page", id });
+  }
+  // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
+  // reserved word or nothing, and never a container the engine could have
+  // minted — so a knowledge section that has not landed yet answers Not Found
+  // rather than a container screen asking the engine for a key it cannot hold.
+  if (reserved(first) || tail.length > 0 || !CONTAINER_SHAPE.test(first)) {
+    return missing("knowledge", under("Knowledge"));
+  }
+  return screen({ screen: "container", key: first });
+}
+
+/** The console: `#/admin`, and its workspaces as the second segment. */
+function admin(rest: string[], screen: Make): Route {
+  const [workspace, ...tail] = rest;
+  if (workspace === undefined) return screen({ screen: "overview" });
+  const under = (label: string) => `“${tail.join("/")}” under ${label}`;
+  switch (workspace) {
+    case "live":
+      return live(tail, screen, under);
+    case "agents":
+      return agents(tail, screen, under);
+    case "spend":
+      if (tail.length === 0) return screen({ screen: "spend" });
+      // A CLOSED SET, so an unknown tail is Not Found rather than the spend
+      // screen: `#/admin/spend/budget` — the obvious typo — drawing the spend
+      // tables under a trail reading "Spend / budget" names three different
+      // things.
+      if (tail.length === 1 && tail[0] === "budgets") return screen({ screen: "budgets" });
+      if (tail.length === 1 && tail[0] === "tasks") return screen({ screen: "spend-tasks" });
+      return missing("spend", under("Spend"));
+    case "company":
+      return company(tail, screen, under);
+    case "connect":
+      return connect(tail, screen, under);
+    case "engine":
+      return engine(tail, screen, under);
+    default:
+      return missing("", `the console screen “${rest.join("/")}”`);
   }
 }
 
@@ -304,55 +355,70 @@ function live(rest: string[], screen: Make, under: Under): Route {
   }
 }
 
-function knowledge(rest: string[], screen: Make, under: Under): Route {
+function agents(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "knowledge" });
-  // ONE ADDRESS PER PAGE, BY ITS ID. A page was addressed by its container
-  // and title, and a title changes on rename — so every link anybody had
-  // copied broke the day somebody fixed a heading.
-  if (first === "pages") {
-    const [id] = tail;
-    if (tail.length !== 1 || id === undefined || !ID_SHAPE.test(id)) {
-      return missing(
-        "knowledge",
-        under("Knowledge"),
-        "a page is opened from a search or its container",
-      );
-    }
-    return screen({ screen: "page", id });
+  if (first === undefined) return screen({ screen: "seats" });
+  switch (first) {
+    case "schedules":
+      // NONE OR ALL THREE: `{scope_type}/{scope_id}/{name}` names one
+      // schedule, and a partial tail names nothing.
+      if (tail.length !== 0 && tail.length !== 3) return missing("setup", under("Agent setup"));
+      return screen({ screen: "schedules", scope: tail });
+    case "skills":
+      return tail.length ? missing("setup", under("Agent setup")) : screen({ screen: "skills" });
+    case "memory":
+      // EVERY AGENT'S MEMORY, and one agent's, by its handle — which lives
+      // here as it does under `seats/`, so a handle may equal a reserved word.
+      if (tail.length === 0) return screen({ screen: "memory" });
+      if (tail.length === 1 && tail[0]) return screen({ screen: "diary", handle: tail[0] });
+      return missing("setup", under("Agent setup"), "an agent's memory is opened from the list");
+    case "seats":
+      if (tail.length !== 1 || !tail[0]) {
+        return missing("setup", under("Agent setup"), "a seat is opened from the seats list");
+      }
+      return screen({ screen: "seat-setup", handle: tail[0] });
+    default:
+      return missing("setup", under("Agent setup"));
   }
-  // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
-  if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
-  // EVERY AGENT'S DIARY, and one agent's, by its handle — which lives here as
-  // it does under `seats/`, so a handle may equal a reserved word.
-  if (first === "diaries") {
-    if (tail.length === 0) return screen({ screen: "diaries" });
-    if (tail.length === 1 && tail[0]) return screen({ screen: "diary", handle: tail[0] });
-    return missing("knowledge", under("Knowledge"), "a diary is opened from the diaries list");
-  }
-  // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
-  // reserved word or nothing, and never a container the engine could have
-  // minted — so a knowledge section that has not landed yet answers Not Found
-  // rather than a container screen asking the engine for a key it cannot hold.
-  if (reserved(first) || tail.length > 0 || !CONTAINER_SHAPE.test(first)) {
-    return missing("knowledge", under("Knowledge"));
-  }
-  return screen({ screen: "container", key: first });
 }
 
-function settings(rest: string[], screen: Make, under: Under): Route {
+function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "general" });
-  const none = () => missing("settings", under("Settings"));
+  if (first === undefined) return screen({ screen: "charter" });
+  // EVERY COMPANY SECTION TAKES NO TAIL: a person's page is their seat, a
+  // change is a record on what it changed, and the builder's selection is its
+  // own query.
+  if (tail.length > 0) return missing("company", under("Company"));
   switch (first) {
     case "people":
-      // NO TAIL: a person's page is their seat, under Agents.
-      return tail.length ? none() : screen({ screen: "people" });
+      return screen({ screen: "access" });
+    case "org":
+      return screen({ screen: "org-edit" });
+    case "audit":
+      return screen({ screen: "audit" });
+    case "changes":
+      return screen({ screen: "changes" });
+    default:
+      return missing("company", under("Company"));
+  }
+}
+
+function connect(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "integrations" });
+  const none = () => missing("connect", under("Connect"));
+  switch (first) {
     case "integrations":
-      if (tail.length > 1) return none();
-      return screen(
-        tail[0] ? { screen: "integrations", kind: tail[0] } : { screen: "integrations" },
-      );
+      // ONE INTEGRATION'S PAGE. The list is Connect's own landing, so a bare
+      // `integrations` is not a second address for it.
+      if (tail.length !== 1 || !tail[0]) {
+        return missing(
+          "connect",
+          under("Connect"),
+          "an integration is opened from Connect's list of them",
+        );
+      }
+      return screen({ screen: "integrations", kind: tail[0] });
     case "tools": {
       // TWO SHAPES UNDER ONE SEGMENT, discriminated on LENGTH: `servers/{name}`
       // is a filter on the catalogue's origin and a bare `{name}` is one tool.
@@ -374,9 +440,22 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     case "secrets":
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "secrets", name: tail[0] } : { screen: "secrets" });
+    default:
+      return none();
+  }
+}
+
+function engine(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "nodes" });
+  const none = () => missing("engine", under("Engine"));
+  switch (first) {
     case "nodes":
-      if (tail.length > 1) return none();
-      return screen(tail[0] ? { screen: "nodes", node: tail[0] } : { screen: "nodes" });
+      // ONE NODE'S PAGE; the list is Engine's own landing.
+      if (tail.length !== 1 || !tail[0]) {
+        return missing("engine", under("Engine"), "a node is opened from Engine's list of them");
+      }
+      return screen({ screen: "nodes", node: tail[0] });
     case "config":
       if (tail.length === 0) return screen({ screen: "config", revisions: false });
       if (tail[0] === "revisions" && tail.length <= 2) {
@@ -394,9 +473,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
       // `domains` a legal one.
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "backups", domain: tail[0] } : { screen: "backups" });
-    case "audit":
-      // NO TAIL: every row has a page of its own somewhere else.
-      return tail.length ? none() : screen({ screen: "audit" });
     default:
       return none();
   }

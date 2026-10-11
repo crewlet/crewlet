@@ -49,6 +49,7 @@ import { useOrg } from "./store-hooks.ts";
 import { knownRefusal, useViewer } from "./viewer.ts";
 import { apiToken } from "~/protocol/index.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
+import type { Shell } from "~/app/nav.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type {
   AgentRow,
@@ -198,7 +199,14 @@ export interface OrgIndex {
 }
 
 /**
- * The route segments that open a seat's page: `#/agents/seats/{handle}`.
+ * The route segments that open a seat's page in a shell: its profile,
+ * `#/team/seats/{handle}`, or its setup in the console,
+ * `#/admin/agents/seats/{handle}`.
+ *
+ * THE SHELL IS REQUIRED, never defaulted: a seat is the one object both
+ * shells have a page for, and a default would send every link drawn in the
+ * other shell across the door unasked. A component that does not know where
+ * it is drawn asks the route (`useShell`).
  *
  * ONE HELPER, so a seat's address is one rule kept in one place — and the
  * handle alone, because the page resolves nothing else (`byHandle`). A caller
@@ -206,8 +214,10 @@ export interface OrgIndex {
  * declaring none before the engine has said what it derives, has no link to
  * offer, and offers none rather than one spelled another way.
  */
-export function seatPath(seat: Pick<Seat, "handle">): string[] {
-  return ["agents", "seats", seat.handle];
+export function seatPath(seat: Pick<Seat, "handle">, shell: Shell): string[] {
+  return shell === "admin"
+    ? ["admin", "agents", "seats", seat.handle]
+    : ["team", "seats", seat.handle];
 }
 
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -1033,7 +1043,7 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
 
 /**
  * The seats the engine says are WORKING, the turn that has been going longest
- * first — the order every list of running turns draws (Home's Live now, Live ›
+ * first — the order every list of running turns draws (the Overview's Live now, Live ›
  * Now running), because the longest-running turn is the one a reader is most
  * likely looking for, and two lists of one set in two orders read as two sets.
  *
@@ -1062,16 +1072,16 @@ export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
 
 /**
  * How many running turns a SHORT list of them names before it hands the rest
- * to Live › Now running, which lists every one: Home's Live now card, and the
- * sidebar's Running group.
+ * to Live › Now running, which lists every one: the Overview's Live now card, and the
+ * console sidebar's Running group.
  *
  * ONE NUMBER FOR BOTH, because they are one list in one order
  * ([workingLongestFirst]) and two caps would name two different sets of seats
  * on the same screen — and one SELECTION for both, `lib/turns.ts`'
  * `runningShortList`, since one cap applied after two different filters
- * named two sets just the same. Four is what Home's card holds level with the figures
- * beside it, and four sidebar rows are about the height of the Pinned group a
- * reader keeps there — a fifth working seat is the point where a shortcut
+ * named two sets just the same. Four is what the Overview's card holds level with the figures
+ * beside it, and four rows are what the console's sidebar has room for under
+ * its seven sections on a laptop's height — a fifth working seat is the point where a shortcut
  * becomes a second copy of Now running, so it is a "more" row instead.
  */
 export const RUNNING_ROWS = 4;

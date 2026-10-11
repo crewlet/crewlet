@@ -43,13 +43,7 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
-import {
-  PriorityMark,
-  StatusBadge,
-  StatusMark,
-  TypeIcon,
-  type RowChrome,
-} from "~/components/work.tsx";
+import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -917,7 +911,7 @@ function PageLinks({ links }: { links: WorkLink[] }) {
 function PageLink({ id }: { id: string }) {
   const page = useQuery("page", { id }, { pollMs: 300_000 });
   return (
-    <a className="task-rail-link" href={href(pathOf({ kind: "page", id }))}>
+    <a className="task-rail-link" href={href(pathOf({ kind: "page", id }, "person"))}>
       <FileTextGlyph size="xs" />
       <span className="truncate">
         {page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}

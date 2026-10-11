@@ -7,7 +7,7 @@
  * tabs mixing shapes with saved views, a bar of eleven controls, the rows, and
  * a change feed under them — five questions on one scroll, of which a reader
  * wanted one. The overview is a page of its own now (`#/work/projects`), the
- * feed is a page of its own (`#/work/history`), and what is left here is the
+ * feed is a page of its own (`#/admin/company/changes`), and what is left here is the
  * work: the saved views, the bar, and the rows.
  *
  * NO INTRODUCTION ABOVE IT. A paragraph saying what the screen is cost every

@@ -86,7 +86,7 @@ pages and chart, answer what is asked of them and act as themselves — and
 reach nothing an agent processed, nor the configuration, the secrets or the
 fleet. Give `role: admin` only to whoever runs the engine.
 
-**The queue is `#/inbox`**, one click from the landing screen (Home). Opening it
+**The queue is `#/inbox`**, one click from Today, the screen a person lands on. Opening it
 with an API key resolves that key's id against every seat's
 `crewlet_operator_id` and shows the person it names: first what is waiting on
 their decision — the questions agents put to them, the coding runs parked on a

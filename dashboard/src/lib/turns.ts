@@ -3,8 +3,8 @@
  * how the work item a turn was on is named on a row, and where a link that
  * WATCHES a running turn lands.
  *
- * TWO LISTS READ THEM — the company's turns (`routes/live/Turns.tsx`) and one
- * seat's (`routes/agents/seat/Turns.tsx`) — and each used to spell both for
+ * TWO LISTS READ THEM — the company's turns (`routes/admin/live/Turns.tsx`) and one
+ * seat's (`routes/admin/agents/seat/Turns.tsx`) — and each used to spell both for
  * itself, so the seat's list asked for the read's default week while calling
  * itself "the newest 50 this seat took", and both drew a keyless item as a
  * full `native:<uuid>` that no row had room for.
@@ -81,7 +81,7 @@ export function runningNow(
  * The turn a seat's live overlay says it is on — its turn record first, then
  * its call in flight, the order [seatOnTurn] reads them in — or "" while it
  * names none: a seat the engine calls working can be a frame or two ahead of
- * the turn id, and a link to `#/live/turns/` with no id is a link to nothing.
+ * the turn id, and a link to `#/admin/live/turns/` with no id is a link to nothing.
  */
 export function turnIdOf(row: AgentRow | null | undefined): string {
   return row?.turn?.turn_id || row?.live_call?.turn_id || "";
@@ -89,7 +89,7 @@ export function turnIdOf(row: AgentRow | null | undefined): string {
 
 /**
  * The tab a watch link opens a running turn on: the TRANSCRIPT, where the
- * phase it is on is drawn open with its rounds arriving (`routes/live/Turn.tsx`
+ * phase it is on is drawn open with its rounds arriving (`routes/admin/live/Turn.tsx`
  * opens a live phase's card as it mounts). Every other link to a turn lands on
  * the Timeline, the page's default, because a reader following a turn from a
  * list or a record is asking what it did and how long each part took. A
@@ -105,7 +105,7 @@ export function turnIdOf(row: AgentRow | null | undefined): string {
  * while a reader is already watching this tab is the same page with nothing
  * live on it, and no link is followed to fix that.
  *
- * `routes/live/TurnScreen.test.tsx` holds this to a tab the page has.
+ * `routes/admin/live/TurnScreen.test.tsx` holds this to a tab the page has.
  */
 export const WATCH_TAB = "transcript";
 
@@ -115,15 +115,15 @@ export const WATCH_TAB = "transcript";
  * caller that navigates (`nav.to(path, query)`) or draws a row the kit links
  * itself; [watchHref] is the same address as an `href`.
  *
- * NOT THE ROWS OF A MONITOR. Home's Live now and Live › Now running list
+ * NOT THE ROWS OF A MONITOR. The Overview's Live now and Live › Now running list
  * running turns as rows whose link is the turn's TRACE — the default tab —
  * because a monitor's row is a way into the record of the turn, the same
  * address a settled turn's row has. A watch link is a control that says what
- * it is for: "Watch live", the sidebar's Running group, `g r`, ⌘K's
+ * it is for: "Watch live", the console sidebar's Running group, `g r`, ⌘K's
  * Running now.
  */
 export function watchLink(turnId: string): { path: string[]; query: Record<string, string> } {
-  return { path: pathOf({ kind: "turn", id: turnId }), query: { tab: WATCH_TAB } };
+  return { path: pathOf({ kind: "turn", id: turnId }, "admin"), query: { tab: WATCH_TAB } };
 }
 
 /** [watchLink] as an `href`. */
@@ -133,18 +133,18 @@ export function watchHref(turnId: string): string {
 }
 
 /**
- * The SHORT list of running turns — Home's Live now card and the sidebar's
- * Running group — and how many working seats it leaves to Live › Now running.
+ * The SHORT list of running turns — the Overview's Live now card and the console
+ * sidebar's Running group — and how many working seats it leaves to Live › Now running.
  *
  * ONE DERIVATION FOR BOTH, because each spelled its own and they named
  * different seats: the sidebar dropped a working seat whose turn has no id
  * before it took [RUNNING_ROWS], Home took the first four as they came, and a
- * seat working only through a coding run no turn record names yet led Home's
+ * seat working only through a coding run no turn record names yet led the Overview's
  * card while the sidebar beside it listed the four after it.
  *
  * THE FILTER COMES BEFORE THE CAP. Every row in either list is a way into its
  * turn, and a seat whose turn has published no id yet has nowhere to go — a
- * link to `#/live/turns/` with no id is a link to nothing — so it is not a
+ * link to `#/admin/live/turns/` with no id is a link to nothing — so it is not a
  * row, and it does not take one of the four places either. It is still
  * COUNTED: `working` is every working seat, for a list's figure, and `more`
  * is what the short list leaves out, id-less seats included, which Live ›
@@ -173,7 +173,7 @@ export function runningTarget(agents: readonly AgentRow[]): {
 } {
   const working = workingLongestFirst(agents);
   const only = working.length === 1 ? turnIdOf(working[0]) : "";
-  return only ? watchLink(only) : { path: ["live"], query: {} };
+  return only ? watchLink(only) : { path: ["admin", "live"], query: {} };
 }
 
 /**

@@ -1193,7 +1193,7 @@ the base is not the permission to register; having a sink is.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
-a minute later cannot disagree, and Settings › Integrations updates with no
+a minute later cannot disagree, and Connect › Integrations updates with no
 extra plumbing. A pass that **failed** is recorded too, as the loop records
 one: phase `activating`, actor `engine`, findings dropped, because a pass that
 failed did not observe anything.
@@ -2518,11 +2518,11 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Admin** |
-| `access` | `{}` | `GET /access`: the key labels and their roles, the people and the posture (`auth.anonymous` and `auth.company_writers` included) the Settings › People & access screen draws. **Admin**. See [below](#get-access) |
-| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Admin**. See [below](#get-credential-pool) |
-| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Admin**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Admin**. See [below](#get-mcp-servers) |
-| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Admin**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
+| `access` | `{}` | `GET /access`: the key labels and their roles, the people and the posture (`auth.anonymous` and `auth.company_writers` included) the Company › People & access screen draws. **Admin**. See [below](#get-access) |
+| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Connect › Models & keys screen. **Admin**. See [below](#get-credential-pool) |
+| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Engine › Backups & retention screen. **Admin**. See [below](#get-backups) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Connect › Tools & MCP screen's Servers section. **Admin**. See [below](#get-mcp-servers) |
+| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Engine › Nodes polls this rather than waiting for one. **Admin**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
 | `sandbox_tail` | `{turn_id, launch_id, epoch?, after?, digest?}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…[&epoch=…&after=…&digest=…]`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output`; `launching` for a job whose box is still being made (not stopped — ask again); `not_running` with the record's `status` (`awaiting_clarification`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left); `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now); or `box_paused` for a running record whose box is paused where its backend cannot read it without waking it (a peek never wakes a box). The asker says what it holds — `epoch`, `after` (the byte offset it holds through: a whole number of zero or more, `bad_params` otherwise — a fraction is refused rather than rounded) and `digest`, all three absent for one holding nothing yet — and `output` is `{text, source: transcript\|stderr\|none, cut, as_of, finished, epoch, start, end, digest, reset, front, held}`, redacted — `epoch`, `start`, `end` and `digest` on every answer, `0` included (a run that has settled nothing yet is answered at `end: 0` and followed from `start: 0`): `text` is what follows `after` (`start` = `after`), or on `reset: true` the last 256 KiB in whole lines, which replaces what the asker held (`start` says where it begins; `cut` that earlier output exists). Send `end` and `digest` back as the next `after` and `digest`. `front` says the owner's reading began after the job's own start; `held` counts bytes written but not shown until their redaction is settled. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s for each running job it is showing — an open span on a turn's timeline, a parked turn's coding-run card, and the run's own page — and nothing outside the dashboard asks |
 | `budgets` | `{}` | `GET /budgets` |
@@ -2559,7 +2559,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `config` | `{}` | `GET /config` *(admin)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(admin)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(admin)* |
-| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Settings › Configuration, whose write half is `PUT /config/{kind}/{id}` *(admin)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Engine › Configuration, whose write half is `PUT /config/{kind}/{id}` *(admin)* |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -3960,7 +3960,7 @@ same kind of honesty for the node block's `evicted`: an unread log contributes
 no tombstone, so every node reads as **not** evicted there and stays counted
 (the conservative side, which is the trim's own), and "not evicted" is then not
 an answer. Read it before concluding a node was readmitted; both `crewlet
-retention status` and **Settings › Backups & retention** say so above the node
+retention status` and **Engine › Backups & retention** say so above the node
 block, and that screen keeps an eviction it just made on the row until a report
 whose evictions were read.
 
@@ -4293,7 +4293,7 @@ saying how large the answer was, rather than cut.
 
 ### `memory_overview`
 
-Every agent seat's memory at a glance — the list **Knowledge › Agent diaries**
+Every agent seat's memory at a glance — the list **Agent setup › Memory**
 draws. A socket query with no parameters (there is no REST route: it is a
 screen's list, and `GET /agents/{id}/memory` is the one seat's record).
 
@@ -4372,7 +4372,7 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ### `GET /access`
 
-Backs **Settings › People & access**: who can reach the company through this
+Backs **Company › People & access**: who can reach the company through this
 engine's own surface, and as whom. **Admin, reads included** — which labels
 the guard accepts, what each one reaches and whom each one is, is a map of
 which credential to take.
@@ -4454,7 +4454,7 @@ disagree the [`auth_diverged`](alarms.md) alarm fires.
 
 ### `GET /credential-pool`
 
-Backs **Settings › Models & keys**: every model the company configures, in
+Backs **Connect › Models & keys**: every model the company configures, in
 config order (the order a seat that names no model falls back through), the
 keys each rotates through and which of them is benched. **Admin, reads
 included** — which variable holds each model's key and when each is refused is
@@ -4515,7 +4515,7 @@ To change a model's keys, `PUT /config/llm-providers/{id}` — see
 
 ### `GET /mcp-servers`
 
-Backs the **Servers** section of **Settings › Tools & MCP**: every MCP server,
+Backs the **Servers** section of **Connect › Tools & MCP**: every MCP server,
 what the configuration declares for it and what each live node did with it.
 **Admin, reads included**, for the reason `/fleet` is — it names the nodes,
 the launch commands and the first line of each failure.
@@ -4570,7 +4570,7 @@ see [Per-entity read and write](#per-entity-read-and-write).
 
 ### `GET /fleet`
 
-Backs the dashboard's **Settings › Nodes** screen — the questions `/health` cannot
+Backs the dashboard's **Engine › Nodes** screen — the questions `/health` cannot
 answer, because it answers about the node that served it and a load
 balancer sends the next refresh somewhere else.
 
@@ -5116,11 +5116,11 @@ should give it a long one: `crewlet backup` and the dashboard both wait up to
 **30 minutes** for the answer, because the copy is bounded by the size of the
 store and the stream estate and a client that gave up early would report a
 failure while the engine finishes a good backup. Taking one from the dashboard
-is **Settings › Backups & retention › Take a backup**.
+is **Engine › Backups & retention › Take a backup**.
 
 ### `GET /backups`
 
-Backs **Settings › Backups & retention**: what the fleet has backed up.
+Backs **Engine › Backups & retention**: what the fleet has backed up.
 **Admin, reads included** — every row names a directory on a named host that
 holds the company's sealed credentials.
 

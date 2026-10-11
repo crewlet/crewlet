@@ -110,7 +110,7 @@ test("a seat two rounds in reads as its third round", () => {
 // its name, which the page answers with "No seat called".
 test("a seat card links its page by handle", () => {
   const { container } = render(<SeatCard seat={seat()} agent={undefined} nameOf={(k) => k} />);
-  expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe("#/agents/seats/ada");
+  expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe("#/team/seats/ada");
 });
 
 // AND A CHIP WITH NO HANDLE IS THE NAME ALONE: spelled with the name instead,
@@ -123,7 +123,7 @@ test("a seat chip links by handle, and with none links nowhere", () => {
   cleanup();
   const linked = render(<SeatChip name="Ada Lovelace" handle="ada" />);
   expect(linked.container.querySelector("a.seat-chip")!.getAttribute("href")).toBe(
-    "#/agents/seats/ada",
+    "#/team/seats/ada",
   );
 });
 

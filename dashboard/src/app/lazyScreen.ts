@@ -13,14 +13,28 @@
  * workspace a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor
+ * # One chunk per workspace, plus the org editor and the console's frame
  *
- * Each `routes/<workspace>/index.ts` is the whole of what this file imports
- * from that workspace, and it is imported ONLY here, by `import()` — a static
- * import of a workspace's module from the frame would pull it back into the
- * entry without a sound. `routes/org` is the one chunk that is not a
- * workspace: the builder is a section of Agents, and it is bigger than any
- * whole workspace, so it is its own (see `routes/org/OrgEdit.tsx`).
+ * Each workspace's `index.ts` — `routes/<workspace>/` in the person shell,
+ * `routes/admin/<workspace>/` in the console — is the whole of what this file
+ * imports from that workspace, and it is imported ONLY here, by `import()`: a
+ * static import of a workspace's module from the frame would pull it back
+ * into the entry without a sound. Two chunks are not workspaces:
+ * `routes/admin/org`, because the builder is a section of Company and bigger
+ * than any whole workspace (see `routes/admin/org/OrgEdit.tsx`), and
+ * `app/console`, the console's own sidebar and the door into it, because the
+ * frame draws them and a member must not download them.
+ *
+ * # A member's browser never fetches the console
+ *
+ * The chunks are listed PER SHELL ([chunksOf]), and the idle prefetch walks
+ * the person shell's for everybody and the console's only for a reader the
+ * engine has said is an admin — so a member's browser downloads no console
+ * code, by hover, by idle time or by a mistyped address (which draws the
+ * frame's refusal rather than a console screen). Code is not the boundary —
+ * the engine refuses what a member's key does not reach whatever a browser
+ * holds (ADR-0031) — but a member's tab parsing a megabyte of screens it may
+ * never open is a cost they pay for nothing.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -40,7 +54,7 @@
  */
 
 import { createElement, use, type ComponentType } from "react";
-import { WORKSPACES, type Workspace } from "./nav.ts";
+import { WORKSPACES, workspaceRow, type Shell, type Workspace } from "./nav.ts";
 import { resolve, type Resolved } from "./routes.ts";
 
 /**
@@ -48,36 +62,66 @@ import { resolve, type Resolved } from "./routes.ts";
  * splits on, so each is spelled out rather than built from the key.
  */
 const LOADERS = {
-  home: () => import("~/routes/home/index.ts"),
+  today: () => import("~/routes/today/index.ts"),
   inbox: () => import("~/routes/inbox/index.ts"),
   me: () => import("~/routes/me/index.ts"),
   work: () => import("~/routes/work/index.ts"),
-  agents: () => import("~/routes/agents/index.ts"),
-  org: () => import("~/routes/org/index.ts"),
-  live: () => import("~/routes/live/index.ts"),
+  team: () => import("~/routes/team/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
-  spend: () => import("~/routes/spend/index.ts"),
-  settings: () => import("~/routes/settings/index.ts"),
-} satisfies Record<Workspace | "org", () => Promise<unknown>>;
+  overview: () => import("~/routes/admin/overview/index.ts"),
+  live: () => import("~/routes/admin/live/index.ts"),
+  setup: () => import("~/routes/admin/agents/index.ts"),
+  spend: () => import("~/routes/admin/spend/index.ts"),
+  company: () => import("~/routes/admin/company/index.ts"),
+  org: () => import("~/routes/admin/org/index.ts"),
+  connect: () => import("~/routes/admin/connect/index.ts"),
+  engine: () => import("~/routes/admin/engine/index.ts"),
+  console: () => import("~/app/console/index.ts"),
+} satisfies Record<Workspace | "org" | "console", () => Promise<unknown>>;
 
-/** A chunk: a workspace, or the org editor. */
+/** A chunk: a workspace, the org editor, or the console's frame. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
 export type ChunkModule<C extends Chunk> = Awaited<ReturnType<(typeof LOADERS)[C]>>;
 
-/** Every chunk, in the order the idle prefetch fetches them: the sidebar's. */
-export const CHUNKS: readonly Chunk[] = [...WORKSPACES.map((ws) => ws.key), "org"];
+/**
+ * Every chunk, in the order the idle prefetch fetches them: the sidebars',
+ * with the console's own frame first among its chunks, since an admin's first
+ * crossing draws it before any console screen.
+ */
+export const CHUNKS: readonly Chunk[] = [
+  ...WORKSPACES.filter((ws) => ws.shell === "person").map((ws) => ws.key),
+  "console",
+  ...WORKSPACES.filter((ws) => ws.shell === "admin").map((ws) => ws.key),
+  "org",
+];
+
+/** The shell a chunk's code is drawn in: the org editor and the frame chunk are the console's. */
+export function shellOfChunk(chunk: Chunk): Shell {
+  if (chunk === "org" || chunk === "console") return "admin";
+  return workspaceRow(chunk)?.shell ?? "person";
+}
+
+/** One shell's chunks, in the sidebar's order — [CHUNKS] narrowed. */
+export function chunksOf(shell: Shell): Chunk[] {
+  return CHUNKS.filter((chunk) => shellOfChunk(chunk) === shell);
+}
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
   if (chunk === "org") return "Edit org";
+  if (chunk === "console") return "admin console";
   return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
 }
 
-/** Which chunk draws a resolved screen. */
-export function chunkOf(route: Resolved): Chunk {
-  return route.screen === "org-edit" ? "org" : route.workspace;
+/**
+ * Which chunk draws a resolved screen — or null for the landing, which the
+ * frame turns into an address before anything is drawn.
+ */
+export function chunkOf(route: Resolved): Exclude<Chunk, "console"> | null {
+  if (route.screen === "org-edit") return "org";
+  return route.workspace === "" ? null : route.workspace;
 }
 
 /**
@@ -164,7 +208,8 @@ export function lazyScreen<C extends Chunk, P extends object>(
 export function preload(path: string[]): void {
   const where = resolve(path);
   if (!where.resolved) return;
-  loadChunk(chunkOf(where)).catch(() => {});
+  const chunk = chunkOf(where);
+  if (chunk) loadChunk(chunk).catch(() => {});
 }
 
 /** The browser's idle scheduler, or a timer where it has none (Safari, jsdom). */
@@ -193,21 +238,24 @@ const IDLE_TIMEOUT_MS = 5_000;
 const IDLE_FALLBACK_MS = 1_000;
 
 /**
- * Fetch every chunk, one at a time, each in its own idle moment.
+ * Fetch every chunk of the shells this reader may open, one at a time, each in
+ * its own idle moment.
  *
  * ONE AT A TIME so the prefetch never competes with itself for the socket's
  * connection or the main thread's parse, and each only when the browser says
  * it is idle, so it never delays what the reader is looking at. It stands
- * down for a reader who asked the browser to save data. Returns the cancel,
- * for the effect that started it.
+ * down for a reader who asked the browser to save data. `shells` is the
+ * person shell for everybody and the console too for an admin — see the
+ * file's doc. Returns the cancel, for the effect that started it.
  */
-export function prefetchOnIdle(): () => void {
+export function prefetchOnIdle(shells: readonly Shell[]): () => void {
+  const chunks = shells.flatMap((shell) => chunksOf(shell));
   const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
   if (connection?.saveData) return () => {};
   let cancel = () => {};
   let stopped = false;
   const next = (at: number) => {
-    const chunk = CHUNKS[at];
+    const chunk = chunks[at];
     if (stopped || chunk === undefined) return;
     cancel = whenIdle(() => {
       loadChunk(chunk).then(

@@ -642,7 +642,7 @@ test("a linked page points at the page by its id and reads its title", async () 
   );
   await settle();
   const link = screen.getByText("Provisioner runbook").closest("a")!;
-  expect(link.getAttribute("href")).toBe(href(pathOf({ kind: "page", id: "p-1" })));
+  expect(link.getAttribute("href")).toBe(href(pathOf({ kind: "page", id: "p-1" }, "person")));
   expect(link.getAttribute("href")).toBe("#/knowledge/pages/p-1");
   expect(asked.find((a) => a.kind === "page")?.params).toEqual({ id: "p-1" });
 });
@@ -974,7 +974,7 @@ test("only an admin's story card links to the trace", async () => {
   draw(JANE);
   await settle();
   expect(screen.getByRole("link", { name: "Trace" }).getAttribute("href")).toBe(
-    href(["live", "turns", "run-1"]),
+    href(["admin", "live", "turns", "run-1"]),
   );
   cleanup();
   draw({ ...JANE, role: "member", reach: "member" });
@@ -1077,10 +1077,12 @@ test("the live row appears only for a turn on this item", async () => {
   expect(live.textContent).toContain("executing · round 7 of 25");
   // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
   // where a settled turn's "Trace" is the record, on the Timeline.
-  expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"], { tab: "transcript" }));
+  expect(live.getAttribute("href")).toBe(
+    href(["admin", "live", "turns", "run-9"], { tab: "transcript" }),
+  );
   // AND THE PAGE BAR'S WAY TO WATCH IT.
   expect(screen.getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
-    href(["live", "turns", "run-9"], { tab: "transcript" }),
+    href(["admin", "live", "turns", "run-9"], { tab: "transcript" }),
   );
 
   cleanup();

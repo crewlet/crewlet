@@ -110,13 +110,13 @@ test("the Go string scanner reads strings and nothing else", () => {
     'const A = "#/work" // and "#/nowhere" again',
     '/* a block with "#/nowhere"',
     "   across lines */",
-    "var b = `#/live",
+    "var b = `#/admin/live",
     "turns`",
     'var c = "an \\"escaped\\" #/inbox"',
     "var r = '\"'",
   ].join("\n");
   const found = goStrings(src).map((s) => `${s.line}:${s.text}`);
-  expect(found).toEqual(["2:#/work", "5:#/live\nturns", '7:an "escaped" #/inbox', '8:"']);
+  expect(found).toEqual(["2:#/work", "5:#/admin/live\nturns", '7:an "escaped" #/inbox', '8:"']);
 });
 
 /** Every printed address in the tree outside the dashboard's own source. */

@@ -226,7 +226,7 @@ export function WorkSearch() {
             // second copy of the route: the rail's `Open ↗` is built from the
             // same reference, so the link a row carries and the way out of the
             // panel it opens can never name different pages.
-            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) })}
+            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) }, "person")}
             // A PLAIN CLICK PEEKS, because a ranked list is read by working
             // DOWN it: a reader checking whether the third hit is the one they
             // meant should not lose the other nine to find out.

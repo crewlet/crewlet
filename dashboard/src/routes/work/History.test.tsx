@@ -228,7 +228,7 @@ test("a picker's counts say what they are a count of, once", async () => {
 // holds: the answer is a page, so a client-side narrowing would be a filter
 // over whatever happened to be loaded.
 test("choosing a kind narrows the question rather than the page", async () => {
-  location.hash = "#/work/history?kind=comment";
+  location.hash = "#/admin/company/changes?kind=comment";
   const query = serving({ work_activity: { records: [], complete: true } });
   mount();
   await waitFor(() => expect(asked(query).kinds).toBe("comment"));
@@ -259,7 +259,7 @@ test("the project rail narrows the log to one project", async () => {
 // changes as the company's — so the picker shows it even when no loaded row
 // carries it, and choosing "Every project" takes it off.
 test("a project narrowing arriving in the address is visible and removable", async () => {
-  location.hash = "#/work/history?project=ENG";
+  location.hash = "#/admin/company/changes?project=ENG";
   const query = serving({ work_activity: { records: [], complete: true } });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));

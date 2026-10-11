@@ -149,7 +149,7 @@ The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
 while the trim waits on an acknowledgement, and the alarm fires on the missing
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-**Settings › Backups & retention** marks that point **counted · newest**.
+**Engine › Backups & retention** marks that point **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -683,7 +683,7 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-**Settings › Backups & retention** offers **Readmit…** on a node row its logs
+**Engine › Backups & retention** offers **Readmit…** on a node row its logs
 hold evicted and **Evict…** on every other, and the dialog behind them is the
 same gesture as the command, answered the same way: one row per log with its
 outcome and position — no position for `unknown` — or the reason it was not
@@ -1008,7 +1008,7 @@ are missing, any unresolved write attempt, and any admission still blocking
 activation.
 
 **You do not have to go looking for it.** While an operation is open, both
-`crewlet retention status` and Settings › Backups & retention lead with it — the stream, the
+`crewlet retention status` and Engine › Backups & retention lead with it — the stream, the
 phase, the attempt, how long it has been open, who ran the verb, and who is
 still outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you

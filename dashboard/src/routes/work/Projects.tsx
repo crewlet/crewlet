@@ -584,7 +584,7 @@ export function Projects() {
             // AND THE HREF IS THE FRAME'S OWN ANSWER to where a project lives
             // rather than a second copy of the route, so a row and the panel it
             // opens can never name different pages.
-            rowHref={(row) => peekHref({ kind: "project", id: row.key })}
+            rowHref={(row) => peekHref({ kind: "project", id: row.key }, "person")}
             onRowActivate={peekRow<WorkProjectRow>((row) =>
               openPeek({ kind: "project", id: row.key }),
             )}

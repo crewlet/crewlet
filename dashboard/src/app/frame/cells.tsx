@@ -47,7 +47,7 @@
  */
 
 import type { ReactNode } from "react";
-import { href } from "../router.tsx";
+import { href, useShell } from "../router.tsx";
 import { cx, EmptyValue, Tag } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 // A `TextCell`'s mark is named by whichever screen draws the column, so the
@@ -57,7 +57,7 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
-import { handleLabel, type SeatKind } from "~/lib/seats.ts";
+import { handleLabel, seatPath, type SeatKind } from "~/lib/seats.ts";
 import { workItemLabel } from "~/lib/turns.ts";
 import type { WorkItemRef } from "~/protocol/index.ts";
 
@@ -224,11 +224,14 @@ export function SeatCell({
    */
   kind?: SeatKind;
 }) {
+  // THE SEAT'S PAGE IN THE SHELL THE CELL IS DRAWN IN: its profile in the
+  // person shell, its setup in the console.
+  const shell = useShell();
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
     <a
       className="cell-seat"
-      href={href(["agents", "seats", handle])}
+      href={href(seatPath({ handle }, shell))}
       title={title ?? handleLabel(handle)}
     >
       <SeatAvatar

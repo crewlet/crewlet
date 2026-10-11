@@ -9,7 +9,7 @@ import { useNavigator, useRoute } from "~/app/router.tsx";
  * old path becomes a live route sends every reader of that route somewhere
  * else, permanently, with the address bar agreeing with them. So an old
  * address — a `#/company/…` from before the one-sidebar rebuild, a bare
- * `#/live/traces` — says what it asked for and, where the product knows, why
+ * `#/admin/live/traces` — says what it asked for and, where the product knows, why
  * there is nothing there.
  */
 export function NotFound({ what, hint }: { what: string; hint?: string }) {
@@ -34,7 +34,7 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
         </>
       }
       action={
-        <Button variant="primary" onClick={() => nav.to(["home"])}>
+        <Button variant="primary" onClick={() => nav.to(["today"])}>
           Go home
         </Button>
       }

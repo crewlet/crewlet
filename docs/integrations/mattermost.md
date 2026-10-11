@@ -25,7 +25,7 @@ own infrastructure.
 
 ## Setting it up from the dashboard
 
-Connect Mattermost in Settings › Integrations with the instance address, the
+Connect Mattermost in Connect › Integrations with the instance address, the
 team and a system administrator token. The reconcile loop creates each agent's
 bot account on its next tick, running the same pass
 `crewlet mattermost provision` runs. The administrator token is sealed in the
@@ -678,7 +678,7 @@ nodes that is a small number of idle connections; it is the one cost of a
 seat never going deaf while placement moves it.
 
 **Each delivery is counted once.** The node that wins a post's claim publishes
-an `inbound_delivery` record beside the wake, so Settings › Integrations
+an `inbound_delivery` record beside the wake, so Connect › Integrations
 counts Mattermost's deliveries like any other surface's — one post presented
 to one seat, whichever node read it — and its row lists them as
 `socket:posted`, with the post id as the provider's id. The record is

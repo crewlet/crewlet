@@ -53,18 +53,21 @@ describe("what the reader opened", () => {
     // because the screen publishes its name a render later. Overwriting on
     // that write turned the row's title into a hex string at the instant it
     // was clicked, until the query came back.
-    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
-    remember({ path: ["live", "turns", "abc"], label: "Cut the release", workspace: "live" }, true);
-    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
+    remember({ path: ["admin", "live", "turns", "abc"], label: "abc", workspace: "live" }, false);
+    remember(
+      { path: ["admin", "live", "turns", "abc"], label: "Cut the release", workspace: "live" },
+      true,
+    );
+    remember({ path: ["admin", "live", "turns", "abc"], label: "abc", workspace: "live" }, false);
     expect(stored().map((r) => r.label)).toEqual(["Cut the release"]);
   });
 
   it("stores an identifier for a place nothing has ever named", () => {
     // An object NOTHING names — a turn with no plan summary — has its id and
     // nothing else, and a rail that dropped it would lose a place the reader
-    // was. `routes/live/crumbs.test.tsx` pins the same rule from the
+    // was. `routes/admin/live/crumbs.test.tsx` pins the same rule from the
     // screen's end.
-    remember({ path: ["live", "turns", "abc"], label: "abc", workspace: "live" }, false);
+    remember({ path: ["admin", "live", "turns", "abc"], label: "abc", workspace: "live" }, false);
     expect(stored().map((r) => r.label)).toEqual(["abc"]);
   });
 
@@ -183,7 +186,7 @@ describe("two tabs on one origin", () => {
  */
 describe("the cap", () => {
   it("is one bound over every workspace", () => {
-    remember({ path: ["live", "turns", "t1"], label: "A turn", workspace: "live" }, true);
+    remember({ path: ["admin", "live", "turns", "t1"], label: "A turn", workspace: "live" }, true);
     for (let i = 0; i < MaxRecents + 3; i++) {
       remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
     }

@@ -101,7 +101,7 @@ var alarmMeaning = map[Kind]string{
 		"is an alarm and not a refusal: a rolling key rotation passes through " +
 		"this state by construction, and a node that refused to serve beside a " +
 		"peer with another table would make every rotation an outage. A node " +
-		"with no keyring cannot be compared, which Settings › Nodes says rather " +
+		"with no keyring cannot be compared, which Engine › Nodes says rather " +
 		"than this alarm.",
 }
 

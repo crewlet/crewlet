@@ -158,7 +158,7 @@ comes from the node's `stream` block — never from its roles:
 | `client` | `stream.type: nats` | A plain client of an external cluster somebody else runs |
 
 Every node advertises its kind on its presence lease, beside its roles and
-labels, and **Settings › Nodes** and `crewlet fleet broker list` show it. A node
+labels, and **Engine › Nodes** and `crewlet fleet broker list` show it. A node
 advertising a kind this build does not know — a newer build's — shows as
 `unknown`, and is counted as a member wherever that is the safe reading.
 
@@ -242,7 +242,7 @@ counts the dead one. The whole removal is bounded by one wait (two minutes and
 five seconds): nobody answering as leader for all of it is a group without a
 quorum, which cannot change its own membership, so bring enough members back
 first; a carrying member that goes silent ends it as an outcome nobody knows —
-read `list` before asking again. The **Broker members** panel on **Settings › Nodes**
+read `list` before asking again. The **Broker members** panel on **Engine › Nodes**
 offers the same removal, by node id or by peer id.
 
 ## Node roles
@@ -620,11 +620,11 @@ The consequences worth stating plainly:
   different `api.auth` tables, so a key may reach more through one of them.
   Give every such node the same keys, roles and values and restart the odd
   ones; mid-way through a rolling key rotation it is expected and clears when
-  the last node restarts. Settings › Nodes marks which node holds which table
+  the last node restarts. Engine › Nodes marks which node holds which table
   against the one you are on. See
   [Every node that serves the API holds the same keys](../concepts/configuration.md#every-node-that-serves-the-api-holds-the-same-keys).
 - **`/health`** carries this node's seats, its in-flight count and its
-  config posture; the dashboard's **Settings › Nodes** screen puts every node's
+  config posture; the dashboard's **Engine › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
 - **Each node's heartbeat** also carries how each of its MCP servers
   started — one row per server, counting the

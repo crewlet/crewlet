@@ -10,7 +10,7 @@ import type { AuthAgreement, TableDigest } from "./access.ts";
  * build that cannot import a Go identifier — held to the engine's in both
  * directions by `internal/api`'s `broker_client_test.go` and
  * `objects_test.go`. What is done with them is behaviour, and lives in
- * `protocol/broker.ts` and the Settings screens.
+ * `protocol/broker.ts` and the console's Engine screens.
  */
 
 /**

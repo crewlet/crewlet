@@ -128,7 +128,7 @@ is its *broker kind*, derived from the `stream` block and from nothing else:
 | `client` | `type: nats` | a plain client of an external cluster somebody else runs |
 
 Every node advertises its kind on its presence lease (`crewlet fleet broker
-list` and the dashboard's **Settings › Nodes** screen show it), and a node advertising a
+list` and the dashboard's **Engine › Nodes** screen show it), and a node advertising a
 kind this build does not know — a newer build's — shows as `unknown`. The rules that are about the broker
 are asked of the kind, whatever the roles: a member of a fleet — one naming a
 cluster, peers or a leaf listener — must set `stream.store_dir`, because it
@@ -831,8 +831,8 @@ it decides which pages a browser lets read an answer, and no caller reaches more
 through a node because of it.
 
 While two live nodes disagree, the [`auth_diverged`](../reference/alarms.md)
-alarm fires, naming which nodes hold which table, and Settings › Nodes and
-Settings › People & access show each node's table against the one you are on
+alarm fires, naming which nodes hold which table, and Engine › Nodes and
+Company › People & access show each node's table against the one you are on
 (`GET /fleet`, `GET /access`). A node counts while its presence lease is live
 and stops counting when it lapses, so a node that has gone stops holding the
 alarm up within one lease TTL. It is an **alarm and not a refusal**: a rolling
@@ -880,7 +880,7 @@ before the list is consulted, and listing one is refused at boot.
 be replaced now, by whoever holds the new one, and the managing system cannot
 know it is needed. Writing the new value and re-publishing the unchanged
 document — `PUT /secrets/{name}` then `POST /config/reload`, or one rotation
-through Settings › Integrations — changes nothing the managing system renders,
+through Connect › Integrations — changes nothing the managing system renders,
 so it is the break-glass a person keeps. If the managing system also syncs the
 secret store, it will overwrite a rotated name it owns at its next sync; fix
 the value at its source as well.
@@ -890,7 +890,7 @@ records what it discovered at a vendor writes as the node, not as a
 credential; a managing system that re-renders the document should carry those
 values (they are in the active revision it reads back) or set them itself.
 That includes a provisioning pass any operator starts on demand from `/setup`
-or Settings › Integrations: where `integrations.jira` or
+or Connect › Integrations: where `integrations.jira` or
 `integrations.confluence` has no `cloud_id`, the Atlassian pass records the
 `cloud_id` and `site_url` of the site it found, and the revision is credited to
 the node (`reconcile loop`), not to the operator who pressed the button.

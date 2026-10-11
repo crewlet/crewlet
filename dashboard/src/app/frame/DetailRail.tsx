@@ -31,7 +31,7 @@
  * peek and a list still wide enough to read beside it, and a drawer over the
  * screen below that. The shell decides which (`data-peek`), from
  * `peekColumnMin` in `app/layout.ts`, which is where the arithmetic — the
- * 444 px list floor, every width in front of it, Settings' section column and
+ * 444 px list floor, every width in front of it, Knowledge's tree column and
  * the density — is written down, and where these widths come from. The
  * dragged width is the reader's PREFERENCE: as a column it is capped at what
  * leaves the list its floor, so a width dragged on a wide window never takes
@@ -39,7 +39,8 @@
  */
 
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigator, useRoute } from "../router.tsx";
+import { useNavigator, useRoute, useShell } from "../router.tsx";
+import type { Shell } from "../nav.ts";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { href } from "../router.tsx";
 import { ButtonLink, IconButton } from "@crewlethq/ui";
@@ -103,9 +104,12 @@ export function usePeekControls(): {
   };
 }
 
-/** The href a row carries, so a modifier-click opens the object's page. */
-export function peekHref(ref: ObjectRef): string {
-  return href(pathOf(ref));
+/**
+ * The href a row carries, so a modifier-click opens the object's page — the
+ * page in `shell`, which only a seat's depends on (`objects.ts`).
+ */
+export function peekHref(ref: ObjectRef, shell: Shell): string {
+  return href(pathOf(ref, shell));
 }
 
 /**
@@ -181,6 +185,7 @@ export function DetailRail({
   query?: Record<string, string>;
 }) {
   const { close } = usePeekControls();
+  const shell = useShell();
   // THE READER'S WIDTH, where they dragged one, over the width the screen
   // under the rail rests it at.
   const resting = useContext(PeekRestingWidth);
@@ -297,7 +302,7 @@ export function DetailRail({
           <ButtonLink
             size="small"
             variant="secondary"
-            href={query ? href(pathOf(object), query) : peekHref(object)}
+            href={query ? href(pathOf(object, shell), query) : peekHref(object, shell)}
             trailingIcon={<ArrowUpRightGlyph size="sm" />}
           >
             Open

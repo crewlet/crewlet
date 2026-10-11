@@ -51,27 +51,27 @@ const ACCENT: Site[] = [
     why: "THE TRANSLATION, not a call site: our `accent` said in uilet's spelling. The one place the two vocabularies meet.",
   },
   {
-    file: "routes/settings/Fleet.tsx",
+    file: "routes/admin/engine/Fleet.tsx",
     line: `{data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}`,
     why: "Which node is answering this reader. Literally where the reader is.",
   },
   {
-    file: "routes/settings/Fleet.tsx",
+    file: "routes/admin/engine/Fleet.tsx",
     line: `{n.id === data?.this_node && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, as a row of the fleet table.",
   },
   {
-    file: "routes/settings/Fleet.tsx",
+    file: "routes/admin/engine/Fleet.tsx",
     line: `{here && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact again, in the node's own rail.",
   },
   {
-    file: "routes/settings/Retention.tsx",
+    file: "routes/admin/engine/Retention.tsx",
     line: `{n.node_id === thisNode && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, in the retention table's node column.",
   },
   {
-    file: "routes/settings/Access.tsx",
+    file: "routes/admin/company/Access.tsx",
     line: `{t.yours && <Tag variant="brand">yours</Tag>}`,
     why: 'The token THIS BROWSER presents, among every token the guard accepts: the same fact as Nodes\' "you are on", in the tokens table.',
   },

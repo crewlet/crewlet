@@ -14,9 +14,11 @@
  * - each LAYER the frame raises (`Shell.tsx` — the command palette and the New
  *   task sheet, [LayerBoundary]), whose fallback is a dialog of its own that
  *   closes the way the layer does;
- * - each LIVE SECTION OF THE SIDEBAR ([RailBoundary], `sidebar/Sidebar.tsx`),
- *   so a malformed project row costs the Projects list and never the
- *   navigation above it.
+ * - each LIVE SECTION OF A SIDEBAR ([RailBoundary], `sidebar/PersonSidebar.tsx`
+ *   and `console/ConsoleSidebar.tsx`), so a malformed project row costs the
+ *   Work row's projects and never the navigation around it;
+ * - the CONSOLE'S SIDEBAR as a whole ([ColumnBoundary], `Shell.tsx`), which
+ *   arrives in the console's own chunk and can fail to arrive like a screen.
  *
  * NOT THE SHELL. The frame around a screen is how a reader gets somewhere
  * else, and a boundary wrapping it would take the way out down with the
@@ -125,8 +127,8 @@ export function ScreenBoundary({ resetKey, children }: { resetKey: string; child
 }
 
 /**
- * A column a workspace draws beside its screens from its own chunk — the
- * Knowledge tree. Reset by the WORKSPACE rather than the path: the column
+ * A column drawn from a chunk of its own — the Knowledge tree beside its
+ * screens, and the console's sidebar. Reset by the WORKSPACE rather than the path: the column
  * outlives every navigation inside it (that is what keeps its expanded
  * folders), so a navigation is not a reason to redraw one that threw, and
  * leaving the workspace unmounts it anyway.

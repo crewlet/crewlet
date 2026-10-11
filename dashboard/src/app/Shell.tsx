@@ -1,6 +1,15 @@
 /**
- * The application frame: the one sidebar, the page header, the screen and
- * the peek — composed on the kit's `AppShell`.
+ * The application frame: the sidebar of the shell the address is in, the page
+ * header, the screen and the peek — composed on the kit's `AppShell`.
+ *
+ * # Two shells, one frame
+ *
+ * The address picks the shell (`nav.ts`'s `shellOf`): the person shell's
+ * sidebar (`sidebar/PersonSidebar.tsx`) everywhere but `#/admin/…`, and the
+ * console's (`console/ConsoleSidebar.tsx`, out of the console's own chunk)
+ * there. Everything else in the frame — the header, the peek, the palette,
+ * the keys — is one frame for both, because a second frame is a second place
+ * each of them would be wired.
  *
  * THE KIT OWNS THE FRAME'S GEOMETRY AND ITS NARROW SHAPE. The sidebar stands
  * on the frame and the screen floats beside it on a sheet, inset by
@@ -12,10 +21,10 @@
  *
  * The shell composes; it does not decide. Where a route goes is
  * `routes.ts`, what the trail says is `crumbs.ts`, which workspaces and
- * sections exist is `nav.ts`, and what the sidebar shows is `sidebar/`. This
- * file wires them together and owns exactly the things nothing else can: the
- * palette, the token dialog, the page context a screen describes itself
- * through, and the peek column.
+ * sections exist is `nav.ts`, and what each sidebar shows is `sidebar/` and
+ * `console/`. This file wires them together and owns exactly the things
+ * nothing else can: the palette, the token dialog, the page context a screen
+ * describes itself through (`page.tsx`), and the peek column.
  *
  * # The peek is a column of the sheet
  *
@@ -26,8 +35,8 @@
  * only the screens that remembered to mount one have.
  *
  * THIS FILE DECIDES WHICH, because the width depends on two things only the
- * frame knows: whether the screen draws Settings' section column beside its
- * list, and the reader's density. `app/layout.ts` does the arithmetic and
+ * frame knows: whether the screen draws Knowledge's tree beside its list, and
+ * the reader's density. `app/layout.ts` does the arithmetic and
  * says why a media query in the stylesheet cannot; the result is one
  * attribute, `data-peek="column" | "drawer"`, so the two shapes cannot both
  * hold at one width, or neither.
@@ -42,7 +51,15 @@ import {
   type ReactNode,
 } from "react";
 import { AppShell } from "@crewlethq/ui";
-import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
+import {
+  DESTINATIONS,
+  WORKSPACES,
+  adminPathOf,
+  personPathOf,
+  shellOf,
+  workspaceOf,
+  workspaceRow,
+} from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
@@ -52,10 +69,9 @@ import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
-import { Sidebar } from "./sidebar/Sidebar.tsx";
-import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
-import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
-import { PageContextValue, type PageContext, type PublishedFleet } from "./page.tsx";
+import { PersonSidebar } from "./sidebar/PersonSidebar.tsx";
+import { PageHeader, type PageMenuEntry } from "./header/PageHeader.tsx";
+import { PageContextValue, type PageContext } from "./page.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
@@ -63,11 +79,11 @@ import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
-import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
+import { routeProject } from "./palette/hits.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeymap } from "./keymap.ts";
 import { runningTarget } from "~/lib/turns.ts";
@@ -77,16 +93,14 @@ import { FillRequest } from "./fill.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
- * What the frame reads ONCE for every surface in it: who this browser is,
- * how much is waiting on them, and how much open work is on them.
+ * What the frame reads ONCE for every surface in it: who this browser is, and
+ * how much is waiting on them.
  *
- * All three are standing reads, and the first two used to be made per caller
- * — the viewer by the frame, the sidebar and the Inbox count, the count by the
- * sidebar, Home and the Inbox — so one tab held up to six slots of the
- * socket's four on two facts, and the badge and the screen beside it polled on
- * separate minutes and could name two numbers. The third is the same case: the
- * sidebar's My work figure and the Queue tab on the reader's own day are one
- * number (`lib/useQueueCount.ts`). Mounted here, every caller reads one
+ * Both are standing reads, and both used to be made per caller — the viewer
+ * by the frame, the sidebar and the Inbox count, the count by the sidebar,
+ * the Overview and the Inbox — so one tab held up to six slots of the socket's four
+ * on two facts, and the badge and the screen beside it polled on separate
+ * minutes and could name two numbers. Mounted here, every caller reads one
  * answer. A suite that mounts a screen without the frame mounts this around
  * it, because a hook that fell back to its own read would bring the
  * per-caller reads back without a sound.
@@ -94,9 +108,7 @@ import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 export function FrameReadings({ children }: { children: ReactNode }) {
   return (
     <ViewerProvider>
-      <InboxCountsProvider>
-        <QueueCountProvider>{children}</QueueCountProvider>
-      </InboxCountsProvider>
+      <InboxCountsProvider>{children}</InboxCountsProvider>
     </ViewerProvider>
   );
 }
@@ -135,10 +147,10 @@ function Frame({ children }: { children: ReactNode }) {
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
   const [tokenOpen, setTokenOpen] = useState(false);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
-  // holds it for the reason it holds the palette: four doors — the sidebar's
-  // head, the Projects group, a screen's page bar, a board lane — open ONE
-  // sheet, and a route change does not close it (the reader may have followed
-  // a link to check a name while filing).
+  // holds it for the reason it holds the palette: every door — the sidebar's
+  // Hand off, its key, a screen's page bar, a board lane — opens ONE sheet,
+  // and a route change does not close it (the reader may have followed a link
+  // to check a name while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
@@ -147,7 +159,6 @@ function Frame({ children }: { children: ReactNode }) {
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
-  const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -159,8 +170,12 @@ function Frame({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
-  // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
+  // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is. An
+  // admin's keys are bound for an admin only (`KeyRow.admin`): a member
+  // pressing a console chord would be taken to an address their key does not
+  // reach.
   const [legendOpen, setLegendOpen] = useState(false);
+  const shell = shellOf(route.path);
   useKeymap({
     // IT OPENS, and closing is the palette's own: while it is up it is a
     // modal layer, every page key stands aside, and it answers this row
@@ -174,15 +189,35 @@ function Frame({ children }: { children: ReactNode }) {
       if (!focusSearchTarget()) setPaletteOpen(true);
     },
     keys: () => setLegendOpen(true),
-    ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+    ...Object.fromEntries(
+      WORKSPACES.map((ws) => [
+        `go.${ws.key}`,
+        { run: () => nav.to(ws.path), when: ws.shell === "person" || viewer.admin },
+      ]),
+    ),
+    // THE OTHER SHELL'S TWIN OF WHERE THE READER IS, both ways — the doors'
+    // own rule (`adminPathOf`, `personPathOf`), so the key and the doors
+    // cannot disagree about where a place's twin is.
+    "shell.swap": {
+      run: () => {
+        const crossing =
+          shell === "admin" ? personPathOf(route.path, route.query) : adminPathOf(route.path);
+        nav.to(crossing.path, crossing.query);
+      },
+      when: viewer.admin,
+    },
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the
     // agents push lands twice per tool-loop round, and a subscription here
     // would re-render the whole frame on every one of them for a key pressed
     // once in a while.
-    running: () => {
-      const target = runningTarget(store.state.agents);
-      nav.to(target.path, target.query);
+    running: {
+      run: () => {
+        const target = runningTarget(store.state.agents);
+        nav.to(target.path, target.query);
+      },
+      when: viewer.admin,
     },
+    handoff: () => openNewTask({ project: routeProject(route.path) || undefined }),
   });
 
   // THE PALETTE CLOSES whenever the route moves: picking a row closes it on
@@ -206,7 +241,7 @@ function Frame({ children }: { children: ReactNode }) {
   const column = columnWidth(row?.renderer);
   const frame = { column, scale: densityScale(prefs.density) };
   const roomy = useMediaQuery(`(width >= ${peekColumnMin(frame)}px)`);
-  const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
+  const peekShape = peekable(peek, shell) ? (roomy ? "column" : "drawer") : undefined;
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
@@ -234,7 +269,7 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu }),
     [],
   );
 
@@ -244,17 +279,7 @@ function Frame({ children }: { children: ReactNode }) {
     connected,
     configured: engine?.configured,
     onSetToken: openToken,
-    onConfig: () => nav.to(["settings", "config"]),
-  });
-
-  // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
-  // and three admin answers asked only while the column is on screen. See
-  // `sidebar/settingsFigures.tsx`.
-  const figures = useSettingsSidebar({
-    here: row?.renderer === "column",
-    admin: viewer.admin,
-    health: engine,
-    published: publishedFleet,
+    onConfig: () => nav.to(["admin", "engine", "config"]),
   });
 
   const screen = (
@@ -272,6 +297,9 @@ function Frame({ children }: { children: ReactNode }) {
       <PeekNeighbours>
         <AppShell
           className="app"
+          // WHICH SHELL THE FRAME IS DRAWING, for the stylesheet: the console
+          // and the person shell are one frame, told apart by their ground.
+          data-shell={shell}
           // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN — an
           // empty column would take its width from every screen that never
           // opens one — and only where the frame has room for it; see
@@ -287,7 +315,15 @@ function Frame({ children }: { children: ReactNode }) {
           fill={filling}
           navigationKey={route.hash}
           toggleLabel="Navigation"
-          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
+          sidebar={
+            shell === "admin" ? (
+              <ColumnBoundary what="The admin console's navigation" resetKey="console">
+                <ConsoleSidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />
+              </ColumnBoundary>
+            ) : (
+              <PersonSidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />
+            )
+          }
           topbar={
             <PageHeader
               crumbs={crumbs}
@@ -315,13 +351,9 @@ function Frame({ children }: { children: ReactNode }) {
               className="section-frame"
               style={{ "--section-column": `${column}px` } as CSSProperties}
             >
-              {row.renderer === "tree" ? (
-                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
-                  <KnowledgeTree />
-                </ColumnBoundary>
-              ) : (
-                <SectionColumn row={row} path={route.path} admin={viewer.admin} figures={figures} />
-              )}
+              <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
+                <KnowledgeTree />
+              </ColumnBoundary>
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -348,7 +380,7 @@ function Frame({ children }: { children: ReactNode }) {
             <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
           </LayerBoundary>
         )}
-        {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
+        {legendOpen && <KeyLegend admin={viewer.admin} onClose={() => setLegendOpen(false)} />}
         {tokenOpen && (
           <TokenDialog
             onClose={() => setTokenOpen(false)}
@@ -372,3 +404,9 @@ const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);
+
+/**
+ * The console's sidebar, out of the console's own frame chunk: a member's
+ * browser never downloads it (`lazyScreen.ts`).
+ */
+const ConsoleSidebar = lazyScreen("console", (module) => module.ConsoleSidebar);

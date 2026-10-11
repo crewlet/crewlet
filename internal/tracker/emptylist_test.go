@@ -14,7 +14,7 @@ import (
 //
 // `ProjectListing.Projects` carries no `omitempty`, so a nil slice reaches a
 // client as `"projects": null` — which is neither "some" nor "none" but a
-// third state, and the dashboard's landing screen read it as neither: it asks
+// third state, and the dashboard's work screen read it as neither: it asks
 // `projects?.length === 0` to decide whether to draw the panel that says where
 // a project comes from, and `undefined === 0` is false. So a company on its
 // very first day — the one state that panel exists for — got the ordinary work

@@ -1,5 +1,5 @@
 /**
- * Settings › Models & keys, in words and in values: what each state the engine
+ * Connect › Models & keys, in words and in values: what each state the engine
  * sends means, which seats run on a model, and the edit form's rules.
  *
  * NOTHING HERE DECIDES A STATE. Whether a key is cooling and whether a model can

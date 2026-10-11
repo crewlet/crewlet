@@ -1,7 +1,7 @@
 /**
  * Where a running turn is, as the steps a stepper draws, and what it is
  * calling — read off the agents push, the same way on every screen that draws
- * a running turn (Home's Live now, a seat's Current turn card).
+ * a running turn (the Overview's Live now, a seat's Current turn card).
  *
  * ONE DERIVATION, because two stepper rows that disagree about which step a
  * turn is on — one saying Execute, one saying Review — for the same seat at

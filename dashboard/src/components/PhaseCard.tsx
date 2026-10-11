@@ -548,7 +548,7 @@ export function PhaseCard({
   // alike. The guard spelled the address itself and kept the old one when the
   // event log moved under Live — so it never matched, and the card drew
   // "event →" to the page it was already on.
-  const eventPath = pathOf({ kind: "event", id: record.eventId });
+  const eventPath = pathOf({ kind: "event", id: record.eventId }, "admin");
   const onOwnEventPage = useIsCurrent(eventPath);
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.

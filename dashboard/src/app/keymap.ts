@@ -97,6 +97,13 @@ export interface KeyRow {
    * with K. A bare letter never does — it is a letter in the field.
    */
   whileTyping?: boolean;
+  /**
+   * An ADMIN's key: bound, and listed in the legend, only for a reader the
+   * engine says is an admin — a console chord, the swap between the shells,
+   * the running turn. A member pressing one would be taken to an address
+   * their key does not reach, which is a refusal wearing a shortcut.
+   */
+  admin?: boolean;
 }
 
 /**
@@ -125,22 +132,48 @@ const FRAME: KeyRow[] = [
   // `g` then a letter jumps to a workspace, DERIVED from `nav.ts` so a
   // workspace added there is a row here with no second edit. A sequence
   // rather than a modifier, because every single-modifier combination worth
-  // having is already the browser's.
+  // having is already the browser's. ONE NAMESPACE FOR BOTH SHELLS — the
+  // letters are unique across the table (`router.test.ts`) — and a console
+  // chord is an admin's (see [KeyRow.admin]).
   ...WORKSPACES.map((ws): KeyRow => ({
     id: `go.${ws.key}`,
     scope: "frame",
     presses: [{ after: "g", key: ws.chord }],
-    does: `Go to ${ws.label}`,
+    does: ws.shell === "admin" ? `Go to ${ws.label} in the admin console` : `Go to ${ws.label}`,
     by: "dashboard",
+    ...(ws.shell === "admin" ? { admin: true } : {}),
   })),
+  // THE DOOR AS A KEY: the other shell's twin of where the reader is
+  // (`adminPathOf` / `personPathOf`), so an admin moves between being a
+  // person and running the machine without losing their place.
+  {
+    id: "shell.swap",
+    scope: "frame",
+    presses: [{ after: "g", key: "." }],
+    does: "Switch between your workspace and the admin console, keeping your place",
+    by: "dashboard",
+    admin: true,
+  },
   // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
   // and reaching it was a workspace, a card, a profile and a tab away. Not a
-  // `go.` row, which is the family derived from `nav.ts`.
+  // `go.` row, which is the family derived from `nav.ts` — and the console's,
+  // because what it opens is a turn's trace.
   {
     id: "running",
     scope: "frame",
     presses: [{ after: "g", key: "r" }],
     does: "Watch the running turn — with several running, see them all",
+    by: "dashboard",
+    admin: true,
+  },
+  // HANDING WORK OFF IS WHAT A PERSON DOES FROM ANYWHERE, so it is one bare
+  // key, which the sidebar's Hand off button wears beside its label. It
+  // opens the one New task sheet, which says itself who may file and why not.
+  {
+    id: "handoff",
+    scope: "frame",
+    presses: [{ key: "c" }],
+    does: "Hand off work — open a new task",
     by: "dashboard",
   },
   {

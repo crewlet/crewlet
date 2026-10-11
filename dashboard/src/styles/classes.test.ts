@@ -564,7 +564,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-combobox__panel",
-    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room; and it lays the Assign task dialog's matches out in the dialog's flow (`.assign-seat-find`), because the kit's anchored panel, inside a dialog body that scrolls, was clipped to two and a half of eight rows. Another rule about OUR composition of the package's component.",
+    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the seats' page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room; and it lays the Assign task dialog's matches out in the dialog's flow (`.assign-seat-find`), because the kit's anchored panel, inside a dialog body that scrolls, was clipped to two and a half of eight rows. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -619,7 +619,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-app-shell__rail-foot",
-    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the Settings navigation inside it, which the foot already stands on. Another rule about OUR composition of the package's component.",
+    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the admin door's navigation inside it, which the foot already stands on. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -628,13 +628,8 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-nav-item__badge",
-    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-card__header",
-    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. And on a narrow screen every head holding both a subtitle and actions wraps, so the subtitle takes a line of its own (Configuration's Active revision drew 'Active' over 'revision' beside a cut subtitle). Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on a card's head. styles/screens.css lets the Overview's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. And on a narrow screen every head holding both a subtitle and actions wraps, so the subtitle takes a line of its own (Configuration's Active revision drew 'Active' over 'revision' beside a cut subtitle). Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -644,22 +639,22 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__header-main",
-    why: "uilet's Card writes it on the head's title group. See crewlet-card__header: on a phone Home's feed head gives this group the whole first line.",
+    why: "uilet's Card writes it on the head's title group. See crewlet-card__header: on a phone the Overview's feed head gives this group the whole first line.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-stacked-columns__slot",
-    why: "uilet's StackedColumns writes it on each column's slot, oldest first. styles/screens.css paints the LAST slot's segment in the accent on Home's Tasks completed chart (`.home-chart`), because that column is today and the chart is ONE series: drawn as two series so the kit could colour today, the split leaked into the tooltip as a second 'Completed today' row on every column. Another rule about OUR composition of the package's component.",
+    why: "uilet's StackedColumns writes it on each column's slot, oldest first. styles/screens.css paints the LAST slot's segment in the accent on the Overview's Tasks completed chart (`.home-chart`), because that column is today and the chart is ONE series: drawn as two series so the kit could colour today, the split leaked into the tooltip as a second 'Completed today' row on every column. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-stacked-columns__segment",
-    why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint Home's chart overrides on today's column.",
+    why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint the Overview's chart overrides on today's column.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "is-positive",
-    why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
+    why: "routes/team/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
   },
   {
     name: "is-caution",
@@ -750,7 +745,7 @@ interface Handle {
 const HANDLES: Handle[] = [
   {
     name: "btable-name",
-    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
+    why: "routes/admin/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/admin/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
   },
   {
     name: "btable-label",

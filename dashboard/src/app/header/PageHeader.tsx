@@ -6,7 +6,7 @@
  *
  * The first row is the kit's top bar — the drawer toggle below the shell
  * breakpoint, the breadcrumb, an object page's lenses beside it (`PageLenses`),
- * and what this page can do: who is working right now (Home's bar only), the
+ * and what this page can do: who is working right now (the Overview's bar only), the
  * star and the link, and LAST the screen's own controls (portalled in through
  * `PageActions`) — because a screen's primary action ("New task") belongs at
  * the bar's end, where the approved designs put it and where the eye finishes
@@ -15,10 +15,6 @@
  * as tabs, on a section's own page only: on an object page the crumbs are the
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
- *
- * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * its own row in WORKSPACES holds more sections, in three groups, than a tab
- * strip can — a row nobody reads to the end of.
  *
  * # A section is a path
  *
@@ -38,7 +34,6 @@
 
 import {
   useCallback,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -46,30 +41,18 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { AppShell, AvatarStack, Button, Menu, cx, useToast, type MenuEntry } from "@crewlethq/ui";
 import {
-  AppShell,
-  AvatarStack,
-  Button,
-  Menu,
-  SidebarNav,
-  cx,
-  useToast,
-  type MenuEntry,
-} from "@crewlethq/ui";
-import {
-  ArrowUpRightGlyph,
   ChevronDownGlyph,
   ChevronRightGlyph,
   CopyGlyph,
   EllipsisGlyph,
-  KeyGlyph,
   StarGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
-import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
-import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
+import type { WorkspaceRow } from "../nav.ts";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
@@ -112,7 +95,7 @@ export function PageHeader({
   /** The page's own name, for the star. */
   title: string;
   workspace: string;
-  /** Whether this page draws who is working — Home's only (`useWorkingNow`). */
+  /** Whether this page draws who is working — the Overview's only (`useWorkingNow`). */
   working?: boolean;
   /** The screen's secondary actions, folded into "More" on a phone. */
   menu?: readonly PageMenuEntry[];
@@ -161,8 +144,8 @@ export function PageHeader({
 
 /**
  * Who is working right now: their faces, and how many — the company's pulse,
- * one click from what they are running. Drawn on Home only (`useWorkingNow`):
- * everywhere else the sidebar's Live row carries the same count, and its
+ * one click from what they are running. Drawn on the Overview only (`useWorkingNow`):
+ * everywhere else in the console the sidebar's Live row carries the same count, and its
  * Running group names each turn.
  *
  * THE ENGINE'S WORD, off the agents push. Nothing is drawn while nobody is
@@ -174,7 +157,7 @@ export function WorkingNow() {
   const working = agents.filter((a) => a.activity === "working");
   if (working.length === 0) return null;
   return (
-    <a className="working-now" href={href(["live"])}>
+    <a className="working-now" href={href(["admin", "live"])}>
       <AvatarStack
         size="xs"
         max={WORKING_FACES}
@@ -233,7 +216,7 @@ export function SectionTabs({
   counts: Record<string, string>;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && !s.elsewhere);
+  const tabs = row.sections.filter((s) => s.tab !== false);
   const current = tabs.find((s) => samePath(s.path, path));
   const strip = useRef<HTMLElement>(null);
   const fit = useTabFit(
@@ -408,129 +391,6 @@ function useTabFit(
 }
 
 /**
- * Settings' sections, as a column of groups beside the screen.
- *
- * A GUARDED SECTION DRAWS ITS LOCK AND STAYS, for the reason the sidebar's
- * Settings row does: a section that vanished for a reader who is not an admin
- * is one they cannot know exists. A CROSS-LINK (Budgets, which
- * lives once, under Spend) draws an arrow, because pressing it leaves
- * Settings. A figure beside a section is handed in whole, in the column's own
- * two shapes (`settingsFigures.tsx` decides them and asks for what they need),
- * so the column itself asks nothing.
- */
-export function SectionColumn({
-  row,
-  path,
-  admin,
-  figures,
-}: {
-  row: WorkspaceRow;
-  path: string[];
-  /** Whether the reader reaches the admin sections (`viewer.admin`). */
-  admin: boolean;
-  figures: Record<string, SectionFigure>;
-}) {
-  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. The landing's path is
-  // the workspace root, which prefixes every Settings address, so without this
-  // a mistyped `#/settings/general` drew "Not found" under a column (and a
-  // phone picker) saying the reader was on General.
-  const current = resolves(path) ? sectionOf(path) : undefined;
-  const groups: { name: string; sections: Section[] }[] = [];
-  for (const s of row.sections) {
-    const name = s.group ?? "";
-    const last = groups[groups.length - 1];
-    if (last && last.name === name) last.sections.push(s);
-    else groups.push({ name, sections: [s] });
-  }
-  // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION. Stacked whole above
-  // the section it took about 520px, so on Nodes and Secrets the section's own
-  // content began below the fold on every visit. Below the phone breakpoint
-  // the list is folded behind one row saying where the reader is, and it folds
-  // again once they pick a section (the path moves); at every other width the
-  // toggle is not drawn and the list always is (frame.css).
-  const [open, setOpen] = useState(false);
-  const [openedAt, setOpenedAt] = useState(path.join("/"));
-  if (openedAt !== path.join("/")) {
-    setOpenedAt(path.join("/"));
-    setOpen(false);
-  }
-  const listID = useId();
-  const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
-  // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
-  // groups of rows, one of which is where the reader is — raised with a
-  // hairline and no hue, the same mark the sidebar beside it uses, so "where
-  // am I" reads one way in both columns.
-  return (
-    <div className="section-column section-picker" data-open={open || undefined}>
-      <button
-        type="button"
-        className="section-picker-toggle"
-        aria-expanded={open}
-        aria-controls={listID}
-        onClick={() => setOpen((was) => !was)}
-      >
-        {CurrentGlyph && <CurrentGlyph size="sm" aria-hidden="true" />}
-        <span className="section-picker-name">
-          {current ? (
-            <>
-              <span className="sr-only">{row.label} section: </span>
-              {current.label}
-            </>
-          ) : (
-            `${row.label} sections`
-          )}
-        </span>
-        <ChevronDownGlyph size="xs" aria-hidden="true" className="section-picker-chevron" />
-      </button>
-      <div id={listID} className="section-picker-list">
-        <SidebarNav label={`${row.label} sections`}>
-          {groups.map((g) => (
-            <SidebarNav.Group key={g.name} label={g.name}>
-              {g.sections.map((s) => {
-                const Glyph = glyphFor(s.icon);
-                const locked = s.guarded && !admin;
-                const figure = figures[s.key];
-                return (
-                  <SidebarNav.Item
-                    key={s.key}
-                    href={href(s.path)}
-                    current={!s.elsewhere && current?.key === s.key}
-                    icon={<Glyph size="sm" />}
-                    label={
-                      <span className="section-column-label">
-                        {s.label}
-                        {locked && (
-                          <>
-                            <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, for admins</span>
-                          </>
-                        )}
-                        {s.elsewhere && (
-                          <>
-                            <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, under {s.path[0]}</span>
-                          </>
-                        )}
-                      </span>
-                    }
-                    badge={figure?.badge ?? figure?.attention}
-                    count={figure?.count}
-                    // A STATE WAITING ON THE READER is the kit's pill — its
-                    // size, its place and its spoken figure — repainted in
-                    // the warning tone (see `SectionFigure.attention`).
-                    className={figure?.attention ? "section-row-attention" : undefined}
-                  />
-                );
-              })}
-            </SidebarNav.Group>
-          ))}
-        </SidebarNav>
-      </div>
-    </div>
-  );
-}
-
-/**
  * The trail, and it is a SCROLLPORT — so while it overflows it is a tab stop.
  *
  * `.crumbs` scrolls sideways past its floor rather than clipping the ancestry
@@ -561,7 +421,7 @@ export function SectionColumn({
  * ancestors at their width and the last crumb at its stub. The bar breaks a
  * line when the trail's floor cannot sit beside the controls, and a floor of
  * 20ch alone let a seat's trail share a phone's line with its one button at
- * two hundred pixels — "Agents › Engineering · Co" cut mid-letter under
+ * two hundred pixels — the unit crumb ("Engineering · Co") cut mid-letter under
  * Message, the seat's own crumb scrolled out of sight. Measured, the floor is
  * what the trail must show, so a trail that cannot show it beside the
  * controls takes a line of its own, and it scrolls only when its ancestry
@@ -746,8 +606,8 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
  *
  * THE ONLY PRODUCER OF A STAR. `lib/starred.ts` was written whole — the cap,
  * the refusal at it, the storage guards, its own suite — and nothing in the
- * product could create one or read one back, so every workspace sidebar's
- * Starred section had an empty list by construction.
+ * product could create one or read one back, so the sidebar's
+ * Favourites had an empty list by construction.
  *
  * ONE BUTTON, one gesture: a filled star means "not this one", which is why
  * `toggleStar` is the only verb. It reports, including the refusal at the cap
@@ -777,7 +637,7 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
         leadingIcon={<StarGlyph size="sm" />}
         disabledReason="Already in the sidebar"
         title="Already in the sidebar"
-        aria-label="Keep in Starred"
+        aria-label="Keep in Favourites"
       />
     );
   }
@@ -797,7 +657,7 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
       size="small"
       variant="ghost"
       onClick={onClick}
-      title={said || (kept ? "Remove from Starred" : "Keep in Starred")}
+      title={said || (kept ? "Remove from Favourites" : "Keep in Favourites")}
       pressed={kept}
       leadingIcon={<StarGlyph filled={kept} size="sm" />}
     >
@@ -872,14 +732,14 @@ export function PageMore({
       path.length < 2
         ? {
             key: "star",
-            label: "Keep in Starred",
+            label: "Keep in Favourites",
             disabled: true,
             description: "Already in the sidebar",
             onSelect: () => {},
           }
         : {
             key: "star",
-            label: kept ? "Remove from Starred" : "Keep in Starred",
+            label: kept ? "Remove from Favourites" : "Keep in Favourites",
             icon: <StarGlyph filled={kept} size="sm" />,
             onSelect: () => {
               if (toggle({ path, label, workspace }) === "full") {

@@ -23,8 +23,8 @@ import {
   walk,
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
-import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
-import { WORKSPACES } from "./nav.ts";
+import { AGENT_TABS, PERSON_TABS } from "~/routes/team/seat/profile.ts";
+import { ADMIN_HEAD, WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
 /** Every source file of the given extensions, excluding the suites. */
@@ -226,17 +226,27 @@ const LINK_LITERAL =
 
 test("the link pattern reads every spelling a route literal is written in", () => {
   const heads = (line: string) => [...line.matchAll(LINK_LITERAL)].map((m) => m[1]);
-  expect(heads('<a href={href(["live", "turns"])}>')).toEqual(["live"]);
-  expect(heads('nav.to(["agents", "roster"])')).toEqual(["agents"]);
-  expect(heads('  path: ["settings", "config"],')).toEqual(["settings"]);
+  expect(heads('<a href={href(["admin", "live", "turns"])}>')).toEqual(["admin"]);
+  expect(heads('nav.to(["team", "people"])')).toEqual(["team"]);
+  expect(heads('  path: ["admin", "engine", "config"],')).toEqual(["admin"]);
   expect(heads('const here = useIsCurrent(["events", record.eventId]);')).toEqual(["events"]);
   expect(heads('samePath(route.path, ["events", id])')).toEqual(["events"]);
   expect(heads('samePath(["events", id], route.path)')).toEqual(["events"]);
 });
 
-/** Every link in one module's text that reaches no screen, as `line — #/path`. */
+/**
+ * Every link in one module's text that reaches no screen, as `line — #/path`.
+ *
+ * THE CONSOLE'S HEAD IS ITS FIRST SEGMENT AND ITS WORKSPACE THE SECOND, so a
+ * console link is read one segment deeper: `["admin", "settings"]` has a head
+ * the table owns and a workspace nothing does, and checked at the head alone
+ * it would pass whatever followed `admin`.
+ */
 function deadLinks(text: string): string[] {
   const owned = new Set(WORKSPACES.map((w) => w.path[0]));
+  const consoleWorkspaces = new Set(
+    WORKSPACES.filter((w) => w.shell === "admin" && w.path.length > 1).map((w) => w.path[1]),
+  );
   const literal = new RegExp(LINK_LITERAL.source, LINK_LITERAL.flags);
   const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
   const dead: string[] = [];
@@ -253,8 +263,13 @@ function deadLinks(text: string): string[] {
         dead.push(`${i + 1} — #/${head}`);
         continue;
       }
+      const next = /^\s*,\s*"([^"]*)"/.exec(tail)?.[1];
+      if (head === ADMIN_HEAD && next !== undefined && !consoleWorkspaces.has(next)) {
+        dead.push(`${i + 1} — #/${head}/${next}`);
+        continue;
+      }
       // A PATH WRITTEN WHOLLY IN LITERALS is checked against the resolver
-      // itself, because a known head is not a known route: `["live",
+      // itself, because a known head is not a known route: `["admin", "live",
       // "traces"]` has one and drew the turns list under a traces title.
       if (whole.test(tail)) {
         const segs = [head, ...[...tail.matchAll(/"([^"]*)"/g)].map((x) => x[1]!)];
@@ -276,27 +291,33 @@ test("every link names a segment a workspace owns, and a whole literal path reso
 /**
  * A LINK TO A HEAD NO ROUTE OWNS IS DEAD, AND THE RULE SAYS SO.
  *
- * Every workspace lives under one head: the event log under `#/live/events`,
- * spend under `#/spend`, the fleet, the runs, the configuration and the seats
- * under Settings, Live and Agents, and pages under `#/knowledge/pages`. A link
- * written against a plausible head beside one of those — `#/activity`,
- * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
- * as its reading of that — so each such head is fed through it here, beside the
- * live address, which has to come back clean. A rule that stopped reporting
- * the dead head, or started reporting the live one, fails here rather than
- * letting a whole family of dead links through.
+ * Every workspace lives under one head: the event log under
+ * `#/admin/live/events`, spend under `#/admin/spend`, the fleet and the
+ * configuration under the console's Engine, a teammate under `#/team`, and
+ * pages under `#/knowledge/pages`. A link written against a plausible head
+ * beside one of those — `#/activity`, `#/cost`, `#/pages`, or a head a
+ * release of this tree retired, like `#/settings` — resolves to nothing, and
+ * so does a console link whose second segment no console workspace owns. The
+ * rule above is only as good as its reading of that, so each such head is fed
+ * through it here, beside the live address, which has to come back clean. A
+ * rule that stopped reporting the dead head, or started reporting the live
+ * one, fails here rather than letting a whole family of dead links through.
  */
 test("a link to a head no route owns is reported, and the live address is not", () => {
   const moves: [dead: string, current: string][] = [
-    ['href(["activity"])', 'href(["live", "events"])'],
-    ['href(["cost"])', 'href(["spend"])'],
-    ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
-    ['nav.to(["runs"])', 'nav.to(["live", "runs"])'],
-    ['  path: ["config"],', '  path: ["settings", "config"],'],
-    ['href(["seats", handle])', 'href(["agents", "seats", handle])'],
+    ['href(["activity"])', 'href(["admin", "live", "events"])'],
+    ['href(["cost"])', 'href(["admin", "spend"])'],
+    ['nav.to(["fleet"])', 'nav.to(["admin", "engine"])'],
+    ['nav.to(["runs"])', 'nav.to(["admin", "live", "runs"])'],
+    ['  path: ["config"],', '  path: ["admin", "engine", "config"],'],
+    ['href(["seats", handle])', 'href(["team", "seats", handle])'],
     ['href(["pages", id])', 'href(["knowledge", "pages", id])'],
-    ['href(["company"])', 'href(["home"])'],
-    ['href(["admin"])', 'href(["settings"])'],
+    ['href(["company"])', 'href(["admin", "company"])'],
+    ['href(["home"])', 'href(["today"])'],
+    ['href(["settings"])', 'href(["admin"])'],
+    ['nav.to(["live", "turns"])', 'nav.to(["admin", "live", "turns"])'],
+    ['href(["admin", "settings"])', 'href(["admin", "company"])'],
+    ['href(["admin", "seats", handle])', 'href(["admin", "agents", "seats", handle])'],
   ];
   for (const [dead, current] of moves) {
     expect(deadLinks(dead), dead).toHaveLength(1);
@@ -309,10 +330,10 @@ test("a link to a head no route owns is reported, and the live address is not", 
  *
  * A link that names a live route and carries a query the screen there never
  * reads resolves, renders, and silently drops what it was for. Four did after
- * the event log moved from `#/activity` to `#/live/events`: "Its events" on a
+ * the event log moved from `#/activity` to `#/admin/live/events`: "Its events" on a
  * seat, "In the log" on a trace, "Read this channel's events" on an
  * agent-to-agent channel and Live's own "Event log" button were rewritten to
- * the workspace's head, `#/live` — which is Live's landing screen, not the log
+ * the workspace's head, `#/admin/live` — which is Live's landing screen, not the log
  * — so each opened the running seats with its `actor=`, `q=` and `category=`
  * thrown away.
  *
@@ -321,8 +342,8 @@ test("a link to a head no route owns is reported, and the live address is not", 
  * names the module, and the parameters are its own `useParam("…")` literals.
  */
 const READS_ITS_PARAMS: { path: string[]; module: string }[] = [
-  { path: ["live"], module: "routes/live/LiveNow.tsx" },
-  { path: ["live", "events"], module: "routes/live/Activity.tsx" },
+  { path: ["admin", "live"], module: "routes/admin/live/LiveNow.tsx" },
+  { path: ["admin", "live", "events"], module: "routes/admin/live/Activity.tsx" },
 ];
 
 /** Every link written as a literal path with a literal query, in one module. */
@@ -389,10 +410,12 @@ test("a link's query names only what the screen it opens reads", () => {
 
 test("the query reading sees both link spellings", () => {
   const read = (text: string) => linksWithQuery(text, "tsx").map((l) => [l.path, l.keys]);
-  expect(read('const a = href(["live"], { actor: who });')).toEqual([[["live"], ["actor"]]]);
-  expect(read('nav.to(["live", "events"], { q: id, "category": "a2a" });')).toEqual([
+  expect(read('const a = href(["admin", "live"], { actor: who });')).toEqual([
+    [["admin", "live"], ["actor"]],
+  ]);
+  expect(read('nav.to(["admin", "live", "events"], { q: id, "category": "a2a" });')).toEqual([
     [
-      ["live", "events"],
+      ["admin", "live", "events"],
       ["q", "category"],
     ],
   ]);
@@ -407,14 +430,14 @@ test("the query reading sees both link spellings", () => {
  * the check above silently cover less than it claims.
  */
 test("the document-pointer exemption fires, and spares no real link", () => {
-  // The shapes routes/org/builder/model writes.
+  // The shapes routes/admin/org/builder/model writes.
   expect(documentPointer('  { path: ["llm"], credential: false },')).toBe(true);
   expect(documentPointer('    set: [{ path: ["goal"], value: "Ship" }],')).toBe(true);
   // The shapes a nav destination is written in, across all four tables.
-  expect(documentPointer('      path: ["settings", "config"],')).toBe(false);
+  expect(documentPointer('      path: ["admin", "engine", "config"],')).toBe(false);
   expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
-  expect(documentPointer('    path: ["live", "turns"],')).toBe(false);
-  expect(documentPointer('      href(["agents", "seats", handle])')).toBe(false);
+  expect(documentPointer('    path: ["admin", "live", "turns"],')).toBe(false);
+  expect(documentPointer('      href(["team", "seats", handle])')).toBe(false);
 });
 
 test("something in the tree is actually exempted, so the rule is not dead weight", () => {
@@ -660,7 +683,7 @@ const FORWARDS: readonly { path: string; callee: string; argument: string; why: 
     why: "useAct's own body sends the tool its caller named, and every useAct( is held to a literal here",
   },
   {
-    path: "routes/org/builder/testkit.tsx",
+    path: "routes/admin/org/builder/testkit.tsx",
     callee: "query",
     argument: "what",
     why: "the builder test kit's stub socket answers whatever kind a screen asks it, through the fixture the suite supplies; every screen asking is held to a literal here",
@@ -933,24 +956,32 @@ describe("every read names its question", () => {
  * and every one of those links quietly opened the wrong tab.
  *
  * Both spellings a seat link is written in are read: `href`/`nav.to` over a
- * literal `["agents", "seats", …]` path with a literal query, and a row's
- * `{ path: ["agents", "seats", …], query: { tab } }`.
+ * literal `["team", "seats", …]` or `["admin", "agents", "seats", …]` path
+ * with a literal query, and a row's `{ path: […], query: { tab } }`. A seat
+ * has a page in EACH shell and the two have different tabs — a teammate's
+ * profile in the person shell, an agent's setup in the console — so each
+ * link is held to the tabs of the page its own path opens.
  */
-function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
-  const out: { tab: string; at: number }[] = [];
-  const toSeats = (node: Node | undefined): boolean => {
-    if (node?.type !== "ArrayExpression") return false;
-    const [a, b] = node.elements as Node[];
-    return stringValue(a) === "agents" && stringValue(b) === "seats";
+function seatTabLinks(
+  text: string,
+  lang: Lang,
+): { tab: string; at: number; shell: "person" | "admin" }[] {
+  const out: { tab: string; at: number; shell: "person" | "admin" }[] = [];
+  const toSeats = (node: Node | undefined): "person" | "admin" | null => {
+    if (node?.type !== "ArrayExpression") return null;
+    const [a, b, c] = (node.elements as Node[]).map((e) => stringValue(e));
+    if (a === "team" && b === "seats") return "person";
+    if (a === ADMIN_HEAD && b === "agents" && c === "seats") return "admin";
+    return null;
   };
-  const tabOf = (node: Node | undefined): void => {
-    if (node?.type !== "ObjectExpression") return;
+  const tabOf = (node: Node | undefined, shell: "person" | "admin" | null): void => {
+    if (node?.type !== "ObjectExpression" || shell === null) return;
     for (const prop of node.properties as Node[]) {
       if (prop.type !== "Property") continue;
       const key = prop.key as Node;
       const name = key.type === "Identifier" ? String(key.name) : stringValue(key);
       const value = stringValue(prop.value as Node);
-      if (name === "tab" && value !== null) out.push({ tab: value, at: prop.start });
+      if (name === "tab" && value !== null) out.push({ tab: value, at: prop.start, shell });
     }
   };
   walk(parse(text, lang), (n) => {
@@ -959,7 +990,7 @@ function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
       const named =
         (callee.type === "Identifier" && callee.name === "href") || memberName(callee) === "to";
       const [first, second] = n.arguments as Node[];
-      if (named && toSeats(first)) tabOf(second);
+      if (named) tabOf(second, toSeats(first));
     }
     if (n.type === "ObjectExpression") {
       const props = (n.properties as Node[]).filter((p) => p.type === "Property");
@@ -968,14 +999,17 @@ function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
           const key = p.key as Node;
           return (key.type === "Identifier" ? String(key.name) : stringValue(key)) === name;
         })?.value as Node | undefined;
-      if (toSeats(field("path"))) tabOf(field("query"));
+      tabOf(field("query"), toSeats(field("path")));
     }
   });
   return out;
 }
 
 test("every link to a seat names a tab its profile has", () => {
-  const tabs = new Set<string>(AGENT_TABS);
+  const tabs = {
+    person: new Set<string>(PERSON_TABS),
+    admin: new Set<string>(AGENT_TABS),
+  };
   const stale: string[] = [];
   let links = 0;
   for (const mod of modules()) {
@@ -983,7 +1017,9 @@ test("every link to a seat names a tab its profile has", () => {
     const line = lineOf(mod.text);
     for (const link of seatTabLinks(mod.text, mod.lang)) {
       links++;
-      if (!tabs.has(link.tab)) stale.push(`${mod.path}:${line(link.at)} — tab=${link.tab}`);
+      if (!tabs[link.shell].has(link.tab)) {
+        stale.push(`${mod.path}:${line(link.at)} — tab=${link.tab} (${link.shell})`);
+      }
     }
   }
   expect(stale, "these links open a tab no seat has, which lands on Overview").toEqual([]);
@@ -993,11 +1029,19 @@ test("every link to a seat names a tab its profile has", () => {
 
 test("the seat-tab reading sees both link spellings", () => {
   const read = (text: string) => seatTabLinks(text, "tsx").map((l) => l.tab);
-  expect(read('href(["agents", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
-  expect(read('nav.to(["agents", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
-  expect(read('const row = { path: ["agents", "seats", h], query: { tab: "cost" } };')).toEqual([
+  expect(read('href(["team", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
+  expect(read('nav.to(["admin", "agents", "seats", r.role], { tab: "model" });')).toEqual([
+    "model",
+  ]);
+  expect(read('const row = { path: ["team", "seats", h], query: { tab: "cost" } };')).toEqual([
     "cost",
   ]);
+  // EACH IS HELD TO ITS OWN SHELL'S PAGE.
+  expect(
+    seatTabLinks('href(["admin", "agents", "seats", h], { tab: "turns" });', "tsx").map(
+      (l) => l.shell,
+    ),
+  ).toEqual(["admin"]);
   // Another object's tab is not a seat's.
   expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
 });

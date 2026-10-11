@@ -1,4 +1,4 @@
-// The three questions the landing screen asks and nothing else answered:
+// The three questions the console's Overview asks and nothing else answered:
 // the company's work as a series (`work_flow`), one merged feed of what the
 // company did (`company_feed`), and what is waiting on the person reading
 // (`decisions`).
@@ -24,7 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// DefaultFlowPoints is a fortnight of days: the landing screen's
+// DefaultFlowPoints is a fortnight of days: the Overview's
 // "completed per day" chart, and enough weeks behind a week-on-week delta.
 const DefaultFlowPoints = 14
 
@@ -119,7 +119,7 @@ type FeedPageChange struct {
 // it deliberately did NOT run (`skipped_catchup`, `skipped_paused`), so that
 // "why did the standup not run" has an answer — but a tick not run is not
 // something the company did, and it is answered where the ledger is read
-// (`schedule_runs`, Agents › Schedules), not here.
+// (`schedule_runs`, Agent setup › Schedules), not here.
 //
 // CONSECUTIVE RUNS OF ONE SCHEDULE ARE ONE ROW. A sweep every ten minutes is
 // 144 rows a day, and a feed that printed each would bury every completion

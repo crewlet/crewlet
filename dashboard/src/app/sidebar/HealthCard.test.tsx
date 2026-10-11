@@ -104,7 +104,7 @@ describe("what the card is", () => {
   test("a link to the nodes, for every state that is a fact about the fleet", () => {
     render(<HealthCard reading={read()} onSetToken={() => {}} />);
     const card = screen.getByRole("link", { name: /Engine healthy/ });
-    expect(card.getAttribute("href")).toBe("#/settings/nodes");
+    expect(card.getAttribute("href")).toBe("#/admin/engine");
   });
 
   test("the alarm line is drawn with its own tone and a glyph, not by colour alone", () => {

@@ -29,17 +29,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { NewPageDialog } from "./NewPage.tsx";
-import {
-  Button,
-  Card,
-  cx,
-  EmptyState,
-  FilterChip,
-  Input,
-  Select,
-  Skeleton,
-  Tag,
-} from "@crewlethq/ui";
+import { Button, Card, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -61,12 +51,11 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageDetail, PageRevision, PageSummary } from "~/protocol/index.ts";
-import { usePageLabels } from "~/app/page.tsx";
 import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -80,7 +69,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "n
  * The five facts a page is read by, in one order, on its page and in the rail.
  *
  * ONE FUNCTION rather than two lists that happen to agree today — the same
- * argument `nodeFacts` makes on Settings › Nodes. A reader scans a page's
+ * argument `nodeFacts` makes on Engine › Nodes. A reader scans a page's
  * place, its version, who wrote it, when, and who is watching, and a header
  * written twice is two orders as soon as somebody adds a sixth fact.
  *
@@ -212,7 +201,11 @@ export function PageLink({ page }: { page: PageSummary }) {
   const { open } = usePeekControls();
   const ref = { kind: "page" as const, id: page.id };
   return (
-    <a className="t-link truncate" href={peekHref(ref)} onClick={rowPeekHandler(() => open(ref))}>
+    <a
+      className="t-link truncate"
+      href={peekHref(ref, "person")}
+      onClick={rowPeekHandler(() => open(ref))}
+    >
       {page.title}
     </a>
   );
@@ -414,7 +407,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
             // copy of the route: the rail's `Open ↗` is built from the same
             // reference, so a row and the panel it opens can never name
             // different pages.
-            rowHref={(r) => peekHref({ kind: "page", id: r.id })}
+            rowHref={(r) => peekHref({ kind: "page", id: r.id }, "person")}
             onRowActivate={peekRow<PageSummary>((r) => openPeek({ kind: "page", id: r.id }))}
             columns={[
               {

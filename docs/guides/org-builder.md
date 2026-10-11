@@ -1,8 +1,10 @@
 # The Org Builder
 
-The dashboard's Agents workspace has an **Edit org** section
-(`#/agents/edit`, the button on the org chart) for editing the organization of a running company, and
-for creating the company on an engine that has none. It edits the same
+The admin console's Company workspace has an **Edit org** section
+(`#/admin/company/org`, also the **Edit org** button on Agent setup's seats,
+and where `g .` takes an admin from the person shell's org chart) for editing
+the organization of a running company, and for creating the company on an
+engine that has none. It edits the same
 company document `GET /config` serves and `PATCH /config` writes, so every
 change it makes is an ordinary configuration revision: stored, activated,
 audited, and applied by every node on its own tick.
@@ -116,8 +118,8 @@ company is never applied to one that exists, and never replayed onto it.
 beside it.
 
 After a successful create, two steps remain that the dashboard cannot take for
-you: connecting chat and trackers in Settings › Integrations, and adding a
-model provider, which no dashboard screen adds (Settings › Models & keys edits
+you: connecting chat and trackers in Connect › Integrations, and adding a
+model provider, which no dashboard screen adds (Connect › Models & keys edits
 a provider the company already has). The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
@@ -313,7 +315,7 @@ turn until a provider exists: work sent to a seat waits on its inbox and runs
 once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
 The builder does not write providers, and the dashboard does not add one:
-Settings › Models & keys edits a model the configuration already declares.
+Connect › Models & keys edits a model the configuration already declares.
 Add one with `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
@@ -357,7 +359,7 @@ it names, never shown as a field's error.
 
 A problem about something the builder does not write says where it is fixed:
 a link to **Integrations** for an integration block, and for a schedule or
-the company's `scheduling` block, which no screen writes (Agents › Schedules
+the company's `scheduling` block, which no screen writes (Agent setup › Schedules
 shows when each schedule fires and changes none), the two ways it is changed:
 `crewlet config import` or `PUT /config`.
 
@@ -369,11 +371,11 @@ shows when each schedule fires and changes none), the two ways it is changed:
 | Mission, vision, policies | Policies are an ordered list. |
 
 Everything else in the company document is outside the builder. Some of it has
-a screen of its own: Settings › Integrations connects and configures the
-integrations, Settings › Models & keys edits a model provider the company
-already has, and Settings › Tools & MCP adds an MCP server. No screen writes
+a screen of its own: Connect › Integrations connects and configures the
+integrations, Connect › Models & keys edits a model provider the company
+already has, and Connect › Tools & MCP adds an MCP server. No screen writes
 the rest (adding a model provider, workers, sandbox and scheduling settings),
-and Settings › Configuration only reads it: it is changed with
+and Engine › Configuration only reads it: it is changed with
 `crewlet config import` or `PUT /config`
 ([Configure via the API](configure-via-api.md)).
 
@@ -397,7 +399,7 @@ not a field somebody sets.
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
 unit's tool credentials as server and variable names. No screen writes either,
 and the editor says so with the two ways they are changed:
-`crewlet config import` or `PUT /config`. Agents › Schedules, which the
+`crewlet config import` or `PUT /config`. Agent setup › Schedules, which the
 schedules panel links to, shows when each schedule fires; it changes none.
 
 **Renaming a unit that holds literal credentials.** The engine never sends a
@@ -430,10 +432,10 @@ workers, placement, learning, tool credentials (names only) and whether the
 seat is the Datadog fallback. Sandbox, workers and tool credentials each name
 a company-level block the builder does not edit (`providers.sandbox`,
 `workers`, `mcp_servers`), and placement says which of the fleet's nodes may
-run the seat. The Datadog fallback is chosen in Settings › Integrations, which
+run the seat. The Datadog fallback is chosen in Connect › Integrations, which
 its fact links to. No screen writes any of the others, so each says so with
 the two ways it is changed, `crewlet config import` or `PUT /config`, rather
-than linking to Settings › Configuration, which only reads.
+than linking to Engine › Configuration, which only reads.
 
 A seat's kind is changed with **Change to human seat** or **Change to agent
 seat**, in its menu or in the editor, which is its own step because it
@@ -643,7 +645,7 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the org chart, Teams and Settings › General still draw the
+applied it, the org chart, Units and Company › Charter still draw the
 previous organization, and say so.
 
 The strip under the toolbar follows the revision:
@@ -718,7 +720,7 @@ draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 Every check is conditional on the revision the draft was started from, so a
 revision saved by somebody else (another operator, `crewlet config import`, a
-setup flow in Settings › Integrations) is found at the next check, not at the
+setup flow in Connect › Integrations) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
 draft was started from) and **Update my draft**. A builder with no changes on

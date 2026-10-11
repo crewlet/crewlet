@@ -465,7 +465,10 @@ function ChangeRow({
           {record.turn_id && (
             <>
               {" "}
-              <a className="prose-link task-when" href={href(["live", "turns", record.turn_id])}>
+              <a
+                className="prose-link task-when"
+                href={href(["admin", "live", "turns", record.turn_id])}
+              >
                 turn →
               </a>
             </>
@@ -683,7 +686,10 @@ export function StoryCard({
                   (ADR-0031): offered to anybody else it is a link to a
                   refusal. */}
               {viewer.admin && (
-                <a className="t-link task-trace" href={href(["live", "turns", story.turn_id])}>
+                <a
+                  className="t-link task-trace"
+                  href={href(["admin", "live", "turns", story.turn_id])}
+                >
                   Trace
                 </a>
               )}
@@ -728,7 +734,7 @@ function LiveRow({
       </span>
       <a
         className="task-live"
-        href={turn ? watchHref(turn) : href(["live"])}
+        href={turn ? watchHref(turn) : href(["admin", "live"])}
         aria-label={`${name} is on turn ${ordinal} of ${item.key} — watch live`}
       >
         <span className="task-live-dot" aria-hidden="true" />

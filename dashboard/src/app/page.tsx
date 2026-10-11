@@ -20,7 +20,6 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef } from "r
 import type { Labels } from "./crumbs.ts";
 import type { PageMenuEntry } from "./header/PageHeader.tsx";
 import type { CoverageFacts } from "~/components/work.tsx";
-import type { FleetAnswer } from "~/protocol/index.ts";
 
 /**
  * What a screen tells the frame about itself.
@@ -42,18 +41,6 @@ export interface PageContext {
   setCounts: (counts: Record<string, string>) => void;
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
-  setFleet: (fleet: PublishedFleet | null) => void;
-}
-
-/**
- * The `fleet` answer a screen is already holding, handed to the frame — or
- * null when no screen on the page reads it. `answer` is null while that
- * screen's first answer is in flight: the screen OWNS the reading from the
- * moment it mounts, so the column does not start a query of its own for the
- * second or so before it lands.
- */
-export interface PublishedFleet {
-  answer: FleetAnswer | null;
 }
 
 const noop: PageContext = {
@@ -62,7 +49,6 @@ const noop: PageContext = {
   setCounts: () => {},
   setShowWorking: () => {},
   setMenu: () => {},
-  setFleet: () => {},
 };
 
 /** What the frame provides, and every hook below reads. */
@@ -109,7 +95,7 @@ export function usePageLabels(labels: Labels): void {
  * inside it does — so without one the inbox's freshness badge and its "this
  * answer is incomplete" banner stayed in the state bar over every screen the
  * reader visited afterwards, as claims about data those screens never read.
- * On Settings › Secrets, which somebody opens precisely to judge whether what
+ * On Connect › Secrets, which somebody opens precisely to judge whether what
  * they are seeing is trustworthy, that is the worst possible stale value.
  *
  * A reset in the Shell keyed on the route would not do: React flushes a
@@ -152,30 +138,11 @@ export function useSectionCounts(counts: Record<string, string>): void {
 }
 
 /**
- * Hand the frame the `fleet` answer this screen polls, for the Settings
- * column's Nodes figure.
- *
- * ONE READING, NOT TWO: the column says "n behind on config" as a mirror of
- * the Nodes screen's own "Behind on config" tile, and with a poll of its own
- * on a different clock the two disagreed for up to a poll interval while every
- * tick sent the operator's engine the same question twice. While a screen has
- * published here the column asks nothing and draws this answer. Cleared when
- * the screen goes, for the reason [usePageLabels] gives: the frame outlives it.
- */
-export function usePublishFleet(answer: FleetAnswer | null): void {
-  const { setFleet } = usePageContext();
-  useEffect(() => {
-    setFleet({ answer });
-  }, [answer, setFleet]);
-  useEffect(() => () => setFleet(null), [setFleet]);
-}
-
-/**
- * Draw "who is working" in the page bar — Home's, and nobody else's.
+ * Draw "who is working" in the page bar — the Overview's, and nobody else's.
  *
  * ONE PAGE ASKS FOR IT, the way the approved Main artboard draws it: the
  * company's pulse belongs at the head of the page a reader opens to see how
- * the company is. Everywhere else the sidebar's Live row already carries the
+ * the company is. Everywhere else in the console the sidebar's Live row already carries the
  * count, and the chip drawn in every bar was a second copy of it — on a
  * task page or a profile it sat between the trail and the page's own actions,
  * and at a phone's width it pushed them past the edge. Cleared when the screen

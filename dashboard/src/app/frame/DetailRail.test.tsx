@@ -24,7 +24,7 @@ import { CANVAS_PEEK_WIDTH } from "~/app/layout.ts";
 
 beforeEach(() => {
   localStorage.clear();
-  location.hash = "#/agents/roster?peek=seat:ceo";
+  location.hash = "#/team/people?peek=seat:ceo";
 });
 
 afterEach(() => {

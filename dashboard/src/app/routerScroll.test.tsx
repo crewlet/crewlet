@@ -62,7 +62,7 @@ async function frames(n = 20) {
 }
 
 beforeEach(() => {
-  history.replaceState(null, "", "#/live/turns/t1");
+  history.replaceState(null, "", "#/admin/live/turns/t1");
 });
 afterEach(() => {
   cleanup();
@@ -83,7 +83,7 @@ test("a move to a new entry still starts at the top", async () => {
   const { el } = mount();
   await frames(2);
   el.scrollTop = 400;
-  act(() => nav!.to(["live", "turns", "t2"]));
+  act(() => nav!.to(["admin", "live", "turns", "t2"]));
   await frames();
   expect(el.scrollTop).toBe(0);
 });

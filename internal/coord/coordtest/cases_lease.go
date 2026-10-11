@@ -453,7 +453,7 @@ var leaseCases = []testCase{
 	{"acquired_at_is_the_tenures_utc_start_on_the_stores_clock", func(h *harness) {
 		// What an operator reads as "node-2 · since 08:02". Every lease a
 		// backend returns carries one, so a backend that forgot it would
-		// pass every ownership case and hand Settings › Nodes a zero
+		// pass every ownership case and hand Engine › Nodes a zero
 		// instant for every seat's tenure.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if lease.AcquiredAt.IsZero() {

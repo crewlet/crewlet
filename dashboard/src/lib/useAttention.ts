@@ -3,7 +3,7 @@
  * draw it read it.
  *
  * `lib/attention.ts` is the pure derivation; this is the one place its inputs
- * are gathered, because Home and the Inbox both draw the queue and two copies
+ * are gathered, because the Overview and the Inbox both draw the queue and two copies
  * of "which reads feed it" is how the landing screen and the place you act
  * come to disagree about what needs a decision.
  */
