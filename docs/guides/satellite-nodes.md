@@ -97,7 +97,10 @@ Three steps: say what the node is, say where the role belongs, start it.
 
 Only the Tier A file lives on the satellite. The company itself (roles,
 prompts, providers, integrations) comes from the fleet, so there is no
-company YAML to copy or keep in sync.
+company YAML to copy or keep in sync. A `company.yaml` that happens to sit in
+its working directory (the `-company` default) changes nothing: a bootstrap
+seed is never imported over the company the fleet runs, and the satellite
+boots on the fleet's company rather than on that file.
 
 A **stateless** satellite on an embedded fleet:
 

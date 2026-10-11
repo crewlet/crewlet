@@ -255,7 +255,7 @@ command, against a node that already has one.
 
 `crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere. **A missing `./company.yaml` is not an error** — the store is authoritative, so a node with no Tier B file boots on whatever the store holds, or unconfigured when it holds nothing.
 
-`-company` only ever **bootstraps an empty store**. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the active revision, so a restart cannot revert a change made live — and the node boots on the store's company rather than the file's, so what it builds once per process (the native tracker and knowledge base, the code sandbox's runtime, the store's embedding width) is built from the company it serves. Two flags cover the other intents:
+`-company` only ever **bootstraps an empty store**, and only while the fleet runs no company either: a node whose own store is empty — one without `data`, at every boot, or a data node joining a running fleet — leaves the fleet's company alone and converges on it. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the active revision, so a restart cannot revert a change made live — and the node boots on the store's company rather than the file's, so what it builds once per process (the native tracker and knowledge base, the code sandbox's runtime, the store's embedding width) is built from the company it serves. Two flags cover the other intents:
 
 | I want to… | Use |
 |---|---|
