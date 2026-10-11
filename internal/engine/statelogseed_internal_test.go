@@ -62,6 +62,17 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	// waits for an in-flight tick, so after it returns nothing else writes.
 	e.stopRetention()
 
+	// AND THE APPLIERS ARE HALTED, because they are the other writer of the
+	// checkpoint this case deletes. The node goes on writing its own logs
+	// once it admits seats — a barrier record for a linearizable read lands
+	// on the tracker log at boot — and a batch its applier commits after the
+	// DELETE below writes the row straight back (`setCursor` upserts it), so
+	// the node reads as one whose rows the re-anchor passed, not as one with
+	// no checkpoint at all: one run in six to twelve, measured.
+	// `haltAppliers` waits for every loop, so after it returns nothing else
+	// writes the row.
+	s.haltAppliers()
+
 	name := tracker.Domain{}.Name()
 	stream := tracker.Domain{}.Stream().Name
 
