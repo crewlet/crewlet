@@ -7,7 +7,9 @@
 // seed operator-supplied credential paths in, both copy a refreshed login back
 // out, and both hand a child process an environment. A second implementation
 // of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole.
+// drift means a hole. It is also where a freshly written executable is waited
+// for ([Settle]), because the code host's hook script and every test stand-in
+// hit the same window.
 //
 // Nothing here imports the rest of Crewlet: it sits below both consumers.
 package hostbox

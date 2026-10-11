@@ -45,6 +45,7 @@ A distribution, exported with the engine's own bucket boundaries: twenty-one pow
 | `crewlet.backup.duration` | `ms` | — | How long a backup took, which is the window the trim hold covers and the I/O the copy spends competing with the applier's own commits. It is what turns the retention guide's worked example into a number for THIS hardware. |
 | `crewlet.store.pool.wait` | `ms` | `file` | How long a reader waited for a connection. It is what says the reader pool is too small on this node, which nothing could say before. |
 | `crewlet.tracker.search.scan.duration` | `ms` | `path`, `rung` | One search's scan, split by whether it ran for a turn's prefetch or for somebody's deliberate search, and by the ranking it actually served (`rung`: hybrid, keyword, semantic, or none). Only the prefetch had a published percentile, and the interactive path is the one with a target; a keyword scan is a fraction of a fused one's cost, so reading them as one series hides a slow meaning half. |
+| `crewlet.code.git.wait` | `ms` | `class` | How long a git process waited for a slot on this node, by `class` (`read`, `transfer`, `maintenance`). A p95 approaching ten seconds is a node about to answer clones and pushes with 503 — every slot of one lane busy for a whole read attempt. `transfer` waiting is a node serving as many clones and pushes as its transfer lane admits (more git nodes, or more memory and a wider lane); `read` waiting is a node out of cores. |
 
 ## Gauges
 
@@ -70,6 +71,8 @@ A value that goes both ways, sampled at each export.
 | `crewlet.store.bytes` | `By` | `file` | The store's size on disk, which the snapshot's free-space precondition and the provisioning rule are both derived from. |
 | `crewlet.tracker.search.concurrency` | `1` | — | Searches in flight, which is the row of the supported-corpus table this node is actually on: inside the one-second budget, about 345 000 sources with one running and about 136 000 with eight through the full scan, and about 545 000 and 183 000 through an index probing half its lists. |
 | `crewlet.tracker.vector.coverage` | `1` | — | The fraction of sources carrying a current vector. It is how a stalled embedding backlog is reported, since it never drops a seat. |
+| `crewlet.code.git.processes` | `1` | `class` | Git processes running on this node, by `class`. `transfer` pinned at the transfer lane's size while `crewlet.code.git.wait` climbs is a node serving as many clones and pushes as its memory was sized for; `maintenance` is background index rebuilding, at most half the node's cores. |
+| `crewlet.code.git.lent_cores` | `1` | — | Cores of this node's read lane lent right now to pushes as extra index-pack threads — up to three a push, never the last free core. A loan is made when a push starts and repaid once its pack is indexed, so it covers the client's whole upload: lent cores held high while `crewlet.code.git.processes` for `read` sits low is slow uploads holding loans, and the reason a later push on this node indexes on one core. |
 | `crewlet.alarm.active` | `1` | `kind` | Whether each named alarm is firing right now, 0 or 1. It is the same table the operator record renders and the CLI exits non-zero on, so a collector and a person see one answer. |
 
 ## Counters

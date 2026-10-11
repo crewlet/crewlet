@@ -7,11 +7,16 @@ need to get a development environment running and land a change.
 
 Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
-`make check` runs and CI's own job downloads for itself. **A current Node**
-(npm ships with it) for the dashboard — its build output is committed, so
-building and running the ENGINE needs neither, but changing the dashboard or
-running `internal/e2e`'s client replay does. Nothing in the tree pins a node
-version; CI installs the latest — see *Which node* under
+`make check` runs and CI's own job downloads for itself. **git 2.40 or newer**
+on `PATH` — on macOS, Homebrew's: Apple's bundled git is 2.39. The code host
+runs real git as a subprocess, and its suites drive real git both as the
+engine and as a client; a machine without it, or with an older one, FAILS
+them (`internal/code/gitproc/gittest.Require`) rather than skipping, because
+git is a prerequisite of the suite, not something a machine may lack. **A
+current Node** (npm ships with it) for the dashboard — its build output is
+committed, so building and running the ENGINE needs neither, but changing the
+dashboard or running `internal/e2e`'s client replay does. Nothing in the tree
+pins a node version; CI installs the latest — see *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
 

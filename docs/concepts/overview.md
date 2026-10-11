@@ -206,6 +206,11 @@ internal/
 ├── usage/                # Each node's day, replicated — statelog's fourth
 │                         #   domain: spend, turns and reads that outlive the
 │                         #   node that recorded them
+├── code/                 # The code host. gitproc/ is the one git subprocess
+│                         #   wrapper — a built environment, an allowlisted
+│                         #   configuration, slot lanes, process groups and
+│                         #   deadlines — and gitproc/gittest/ the client git
+│                         #   every test drives
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index

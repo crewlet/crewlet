@@ -574,6 +574,37 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
+		// ---- git ------------------------------------------------------
+		{
+			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"class"},
+			Shows: "How long a git process waited for a slot on this node, by " +
+				"`class` (`read`, `transfer`, `maintenance`). A p95 " +
+				"approaching ten seconds is a node about to answer clones and pushes " +
+				"with 503 — every slot of one lane busy for a whole read attempt. " +
+				"`transfer` waiting is a node serving as many clones and pushes as " +
+				"its transfer lane admits (more git nodes, or more memory and a " +
+				"wider lane); `read` waiting is a node out of cores.",
+		},
+		{
+			Name: CodeGitProcesses, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"class"},
+			Shows: "Git processes running on this node, by `class`. `transfer` " +
+				"pinned at the transfer lane's size while `crewlet.code.git.wait` " +
+				"climbs is a node serving as many clones and pushes as its memory " +
+				"was sized for; `maintenance` is background index rebuilding, " +
+				"at most half the node's cores.",
+		},
+		{
+			Name: CodeGitLentCores, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Cores of this node's read lane lent right now to pushes as " +
+				"extra index-pack threads — up to three a push, never the last " +
+				"free core. A loan is made when a push starts and repaid once " +
+				"its pack is indexed, so it covers the client's whole upload: " +
+				"lent cores held high while `crewlet.code.git.processes` for " +
+				"`read` sits low is slow uploads holding loans, and the reason " +
+				"a later push on this node indexes on one core.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
