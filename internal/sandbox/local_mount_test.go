@@ -374,9 +374,10 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 // --user — a result indistinguishable from the detection being wrong, which
 // is what makes it worth a test of its own.
 //
-// The forkers are the point: this reproduces at ~8% without them being
-// goroutines of THIS process, and not at all with load applied from outside
-// it, because the inherited descriptor is what does the refusing.
+// The forkers are the point: with eight of them forking as goroutines of THIS
+// process, a just-written script's exec fails ETXTBSY about 8% of the time
+// (17 of 200 execs), and not at all under load applied from outside the
+// process, because the inherited descriptor is what does the refusing.
 func TestARuntimeStubIsExecutableWhenItIsHandedOver(t *testing.T) {
 	t.Parallel()
 	stop := make(chan struct{})
@@ -395,15 +396,27 @@ func TestARuntimeStubIsExecutableWhenItIsHandedOver(t *testing.T) {
 	}
 	t.Cleanup(func() { close(stop); forkers.Wait() })
 
+	// Each probe is a SUBTEST, started from a goroutine of its own. The
+	// probes run at once because their own forks hold the window open
+	// beside the forkers' — with the wait removed, and counting whole runs
+	// of this 64-probe test under -race, probing one at a time let 4 runs
+	// in 20 pass, and probing at once 2 in 40 — and each is a subtest
+	// because fakeRuntime fails through FailNow, which only a test's own
+	// goroutine may call: from a goroutine of this test's, it ended that
+	// goroutine and marked this test finished while it ran on. t.Run,
+	// unlike FailNow, may be called from many goroutines at once, so long
+	// as every call returns before this test does.
 	var probes sync.WaitGroup
 	failures := make(chan string, 64)
-	for range 64 {
+	for probe := range 64 {
 		probes.Go(func() {
-			runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
-				`[name=rootless name=seccomp,profile=builtin]`, 0)
-			if !runtimeIsRootless(t.Context(), runtime) {
-				failures <- runtime
-			}
+			t.Run(fmt.Sprintf("probe-%d", probe), func(t *testing.T) {
+				runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
+					`[name=rootless name=seccomp,profile=builtin]`, 0)
+				if !runtimeIsRootless(t.Context(), runtime) {
+					failures <- runtime
+				}
+			})
 		})
 	}
 	probes.Wait()
