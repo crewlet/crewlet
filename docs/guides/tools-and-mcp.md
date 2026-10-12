@@ -558,12 +558,13 @@ mcp_servers:
     command: uvx
     args: ["mcp-atlassian"]
     env: { JIRA_URL: "https://mycompany.atlassian.net" }
-  # stdio, per-role Slack
+  # stdio, per-role Slack; its write tools exist only when switched on
   - name: slack
     shared: false
     command: npm
-    args: ["exec", "--yes", "--", "slack-mcp-server@latest", "--transport", "stdio"]
+    args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
     tool_prefix: "slack_"
+    env: { SLACK_MCP_ADD_MESSAGE_TOOL: "true", SLACK_MCP_REACTION_TOOL: "true" }
   # http, per-role remote GitHub MCP (token supplied per agent)
   - name: github
     transport: http
@@ -579,6 +580,8 @@ roles:
       slack:     { SLACK_MCP_XOXB_TOKEN: "${ALICE_SLACK_BOT}" }
       github:    { Authorization: "Bearer ${ALICE_GH_TOKEN}" }
 ```
+
+The Slack entry's two `env` switches are not tuning: `slack-mcp-server` registers no tool that posts until `SLACK_MCP_ADD_MESSAGE_TOOL` is set, so without it a Slack seat reads every message and answers none. They belong in the entry's `env` rather than in an `--enabled-tools` argument: a list given only on the command line registers the tool, but the call reads the environment and refuses every post ([Slack](../integrations/slack.md#configure-in-yaml) has the detail).
 
 Environment variables and HTTP header values support `${VAR}` references — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files. A reference resolves from the [secret store](../concepts/secret-store.md) first and the engine's process environment behind it, when the engine builds the server — so the value is baked into the running child's environment or its connection's headers, and a rotation reaches it only when that server is rebuilt (see [Secret Store § Propagation](../concepts/secret-store.md#propagation) for which gesture rebuilds which child).
 

@@ -209,8 +209,10 @@ mcp_servers:
       confluence_create_page: { read_only: false, open_world: true }
   - name: slack
     shared: false
-    command: npx
-    args: ["slack-mcp-server@latest"]
+    command: npm
+    args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
+    # without these the server registers no tool that posts or reacts
+    env: { SLACK_MCP_ADD_MESSAGE_TOOL: "true", SLACK_MCP_REACTION_TOOL: "true" }
     tool_annotations:
       conversations_add_message: { read_only: false, open_world: true }
   - name: github
