@@ -798,3 +798,46 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 			"saying unknown would tell a person it may have", body["outcome"])
 	}
 }
+
+// A PIN IS ITS OWN CALLER'S, and a context re-keyed to another credential
+// does not inherit it.
+//
+// The dispatch pins the seat it admitted a call as on the call's context, and
+// every actor reads that pin before the chart. A context is inherited by
+// everything derived from it, so one re-keyed to another operator with
+// [auth.WithOperator] still carried the pin — and every resolution made under
+// it answered the FIRST caller's seat for the second credential: a write made
+// as one person and attributed, in the audit trail, to another. So a pin made
+// for one operator is no pin at all to another: the work actor resolves the
+// second credential to its own seat, as a caller nobody pinned.
+func TestASeatPinnedForOneCallerIsNotAnothersSeat(t *testing.T) {
+	t.Parallel()
+	chart := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+		{Name: "Founder", Kind: org.KindHuman,
+			Contact: &org.HumanContact{CrewletOperatorID: "founder-token"}},
+		{Name: "Ops", Kind: org.KindHuman,
+			Contact: &org.HumanContact{CrewletOperatorID: "ops-token"}},
+	}}
+	chart.Normalize()
+	company := func() *org.Organization { return chart }
+	pinned := operator.WithSeat(auth.WithOperator(t.Context(), "founder-token"),
+		"founder-token", "founder")
+	rekeyed := auth.WithOperator(pinned, "ops-token")
+
+	wrote, err := operator.WorkActor(company, nil)(rekeyed, nil)
+	if err != nil || wrote.Seat != "ops" || wrote.OperatorID != "ops-token" {
+		t.Errorf("a context pinned for the founder and re-keyed to ops wrote as "+
+			"%+v (%v), want ops's own seat", wrote, err)
+	}
+
+	// AND THE PIN STILL HOLDS FOR THE CALLER IT WAS MADE FOR, the chart's
+	// later binding notwithstanding — which is the whole of what it is for.
+	elsewhere := operator.WithSeat(auth.WithOperator(t.Context(), "founder-token"),
+		"founder-token", "ops")
+	if wrote, err := operator.WorkActor(company, nil)(elsewhere, nil); err != nil ||
+		wrote.Seat != "ops" {
+
+		t.Errorf("a call admitted as ops wrote as %+v (%v) — its own pin was "+
+			"not read", wrote, err)
+	}
+}

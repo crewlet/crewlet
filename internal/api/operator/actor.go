@@ -46,6 +46,9 @@ func operationFrom(ctx context.Context) string {
 // seatKey is the context key [withSeat] stores under.
 type seatKey struct{}
 
+// seatPin is one call's pinned seat and the operator it was pinned FOR.
+type seatPin struct{ operator, seat string }
+
 // withSeat pins the seat ONE call's caller is bound to — "" for a token
 // nobody binds — so every frame of that call reads the one answer.
 //
@@ -64,14 +67,31 @@ type seatKey struct{}
 // pins it first, and the dispatch reuses that answer rather than asking
 // again. Read back by [pinnedSeat], which tells a pinned "" (an unbound
 // caller) from no pin at all.
-func withSeat(ctx context.Context, seat string) context.Context {
-	return context.WithValue(ctx, seatKey{}, seat)
+//
+// # The pin names the operator it was made for
+//
+// A context is inherited by everything derived from it, and an operator is
+// put on one with [auth.WithOperator] — so a context re-keyed to ANOTHER
+// credential would still carry this caller's pin, and every resolution that
+// reads the pin first would answer this caller's seat for somebody else. So
+// the pin is stored with operatorID, and [pinnedSeat] answers it only to a
+// context whose operator is still that one.
+func withSeat(ctx context.Context, operatorID, seat string) context.Context {
+	return context.WithValue(ctx, seatKey{}, seatPin{operator: operatorID, seat: seat})
 }
 
-// pinnedSeat reads the seat [withSeat] pinned, and whether one was.
+// pinnedSeat reads the seat [withSeat] pinned, and whether one was — for the
+// operator on ctx. A pin made for any other operator is no pin at all: the
+// caller is resolved from the chart, as one nobody admitted.
 func pinnedSeat(ctx context.Context) (string, bool) {
-	seat, ok := ctx.Value(seatKey{}).(string)
-	return seat, ok
+	pin, ok := ctx.Value(seatKey{}).(seatPin)
+	if !ok {
+		return "", false
+	}
+	if operatorID, _ := auth.OperatorFrom(ctx); operatorID != pin.operator {
+		return "", false
+	}
+	return pin.seat, true
 }
 
 // WorkActor and PageActor read the operator off the request's context.

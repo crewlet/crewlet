@@ -301,7 +301,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	// chart while it runs: the seat admitted here is pinned on the context,
 	// so the actor the tool writes as and the audit record name this one
 	// answer rather than asking the chart again. See [withSeat].
-	ctx = withSeat(ctx, seat)
+	ctx = withSeat(ctx, operatorID, seat)
 
 	logged := []any{"tool", name, "operator_id", operatorID, "seat", seat,
 		"request_id", requestID}

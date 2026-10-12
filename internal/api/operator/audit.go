@@ -83,7 +83,7 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 	seat, pinned := pinnedSeat(ctx)
 	if !pinned {
 		seat = seatFor(s.chart, s.env, operatorID)
-		ctx = withSeat(ctx, seat)
+		ctx = withSeat(ctx, operatorID, seat)
 	}
 	result, served, err := s.catalogue.call(ctx, name, args)
 	if !served || readOnly(name) {
