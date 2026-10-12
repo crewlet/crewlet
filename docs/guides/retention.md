@@ -1640,17 +1640,31 @@ counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they
 count toward the day they happened in rather than toward today.
 
-Two excursions are designed for and do not alarm:
+Two excursions are designed for. The second never alarms; the first alarms
+only on a small volume:
 
-1. **A full re-embedding.** A width change republishes every vector, which at
-   year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
-   once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
-   10 %, clear of each. The corpus is the company's whole history — about
-   17 MB per agent seat per year — so a larger or older company sets
-   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
-   per year of history.
+1. **A full re-embedding.** A width change republishes every vector, so for
+   the week after it the vector log holds the company's whole corpus — about
+   17 MB per agent seat per year of history, 8.46 GB (7.88 GiB) for the
+   reference company in its fifth year. What that leaves free depends on the
+   ceiling a first boot created the vector log with, every field unset: about
+   88 % of the 64 GiB clamp, which a volume of about 500 GiB free or more
+   gets; about 37 % of the 12.5 GiB a 100 GiB volume gets; and about 0.1 % of
+   the 7.9 GiB a 64 GiB volume gets, where the five logs' asks are scaled down
+   to the three eighths of the volume they share. The alarm fires within a
+   tenth of the ceiling, so **on a volume of less than about 71 GiB free, a
+   year-five re-embedding raises `log_headroom`**. The line was about 55 GiB
+   before the code log asked for its share of the same budget
+   ([what the code log's reservation costs](replication.md#what-the-code-logs-reservation-costs)).
+   Below it, set `stream.tracker_vectors_max_bytes` at about twice the corpus
+   — 34 MB per agent seat per year of history — which the log is created with
+   whole; or, for a company that hosts no code, set `stream.code_log_max_bytes`
+   to its 1 GiB floor, which moves the line to about 58 GiB and leaves a
+   64 GiB volume's year-five re-embedding about 19 % free. Either takes effect
+   at the first boot; once the streams exist, the same trade is
+   [`crewlet retention set-capacity`](#changing-a-logs-ceiling). A larger or
+   older company sets `stream.tracker_vectors_max_bytes` the same way,
+   whatever its volume.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 
