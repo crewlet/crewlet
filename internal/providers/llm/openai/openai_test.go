@@ -604,8 +604,10 @@ func TestConversationTranslation(t *testing.T) {
 		{
 			Role:    llm.RoleAssistant,
 			Content: "working",
-			// Reasoning must NOT go back: this endpoint has no field for
-			// it, and the vendors that emit it reject it on input.
+			// Reasoning does NOT go back from the neutral view: it is the
+			// engine's reading of a host's own field, and a turn carries
+			// it back only as that host sent it, to that host (see
+			// replay_test.go). This turn carries no such record.
 			ReasoningContent: "secret thoughts",
 			ThinkingBlocks:   []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm"}},
 			ToolCalls: []llm.ToolCall{
@@ -637,7 +639,7 @@ func TestConversationTranslation(t *testing.T) {
 	}
 	for _, banned := range []string{"reasoning_content", "reasoning", "thinking_blocks"} {
 		if _, present := assistant[banned]; present {
-			t.Fatalf("assistant turn carried %q back to an endpoint with no such field", banned)
+			t.Fatalf("assistant turn carried %q, which no host sent it", banned)
 		}
 	}
 	call := assistant["tool_calls"].([]any)[0].(map[string]any)
