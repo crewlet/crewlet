@@ -288,7 +288,9 @@ test("a node that could not read the fleet's ledger says its cooldowns are its o
     answer: { ...pool(), fleet: false, fleet_error: "the coordination store did not answer" },
   });
   await settle();
-  expect(screen.getByText(/own cooldowns only/)).toBeDefined();
+  expect(screen.getByText(/cooldowns only/).textContent).toBe(
+    "Showing node-a’s cooldowns only. Other nodes’ may differ.",
+  );
   expect(screen.getByText("the coordination store did not answer")).toBeDefined();
 });
 
@@ -319,7 +321,7 @@ test("a refused reader sees the refusal alone — no tiles, no empty list", asyn
   await settle();
   expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
-  expect(screen.queryByText(/configures no model/)).toBeNull();
+  expect(screen.queryByText(/No model configured/)).toBeNull();
 });
 
 // --- editing one ------------------------------------------------------------ //
@@ -386,9 +388,7 @@ test("an edit sends back the entity it read, with only what was edited replaced"
   });
   const dialog = await openEdit();
   // THE INLINE KEY IS LOCKED, and the mask is never drawn.
-  expect(
-    within(dialog).getByText(/Key 2 is written inline — its value is never sent here/),
-  ).toBeDefined();
+  expect(within(dialog).getByText("Key 2 is inline.")).toBeDefined();
   expect(dialog.innerHTML).not.toContain("__redacted__");
 
   fireEvent.change(within(dialog).getByLabelText(/^Model/), { target: { value: "claude-opus-5" } });
