@@ -90,9 +90,10 @@ afterEach(() => {
 describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
-    // The chrome is present and honest: not connected, and saying so — in the
-    // sidebar's health card and in the landing screen's own sentence.
-    expect(screen.getAllByText("Reconnecting").length).toBeGreaterThan(0);
+    // The chrome is present and honest: not connected yet, and saying so, in
+    // the sidebar's engine row and in the landing screen's own sentence. A tab
+    // still dialling has lost nothing, so the row says it is connecting.
+    expect(screen.getAllByText("Connecting").length).toBeGreaterThan(0);
     // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
     // takes over rather than sitting beside a claim that all is well.
     expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();

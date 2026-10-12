@@ -666,7 +666,7 @@ nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
 these rows say which. At the foot, Settings, the
-**health card** and the **user block**. The head carries the company's lockup,
+**engine panel** and the **user block**. The head carries the company's lockup,
 alone on its line.
 
 **Every "New task" is one sheet.** A work screen's
@@ -770,26 +770,45 @@ numbers. A surface mounted outside the frame is refused rather than handed a
 read of its own, because that fallback would bring the per-surface reads back
 without a sound.
 
-**The health card** says the one state that decides what a reader should do,
-in precedence order: the token was refused (the card is then the button that
-asks for another), reconnecting, draining, no configuration, a posture that
-diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
-("Waiting for the engine" — nothing reported is not healthy), and serving —
-"3 nodes · config epoch 42", or "node count unavailable" where the presence
-read failed. The dot is the POSTURE and nothing else: a serving node has a
-success dot whatever its alarms say — and the dot sits on the TITLE's line,
-sharing its grid row, rather than centred on a card whose height the alarm line
-grows. The title is "Engine healthy" only when the alarm table was evaluated
-and nothing in it fires, and "Engine serving" otherwise, because "healthy"
-directly above "5 alarms" is a claim the line under it refutes.
-The alarm line beneath is a second fact with its own tone and glyph — the
-health push's `alarms`, a count and the alarm that has stood longest ("5
-alarms · oldest: backup age") in warning ink beside a warning triangle, never
-the rows, because the push is public; a push with no alarm table says "Alarms
-not evaluated yet" in plain text, because an unevaluated table is neither an
-empty one nor a fault. Recolouring the dot for an alarm drew a green title
-beside an amber dot, and a title such as "serving, with alarms" only repeats
-the alarm line. Everything comes off the one health push; nothing polls.
+**The engine panel** is one row at the foot of the rail, drawn in the rail's
+own grammar (the kit's `AppShell.RailRow`, the row Settings is above it): a
+dot, the state in words, and, while alarms stand, how many, beside a warning
+triangle ("Engine serving ⚠ 5"). Its words are a few in every state, so it
+keeps one 30px height and the foot never moves when the engine's state does.
+It says the one state that decides what a reader should do, in precedence
+order: the token was refused (the row is then the button that asks for
+another, and opens nothing), the engine is unreachable, the tab is still
+connecting (a neutral dot: nothing has reported yet, which is neither healthy
+nor a fault), draining, starting (a neutral dot, while the node applies its
+first configuration and its posture says `wait`), no configuration, a posture
+that diverged from the fleet (`shed`, `stuck`, `isolated`), and serving. The
+dot is the POSTURE and nothing else: a serving node has a success dot whatever
+its alarms say. "Engine healthy" is said only when the alarm table was
+evaluated and nothing in it fires, and "Engine serving" otherwise, because
+"healthy" beside a count of alarms is a claim the count refutes.
+
+Pressing the row opens the panel above it (the kit's `Popover`, named
+"Engine"): the state again with this node's name, then the live node count
+("2 live", or "Count unavailable" where the presence read failed, never a
+zero), the configuration epoch this node applied ("Applying" while it starts),
+how long it has been up, and the alarms, then **Open node**
+(`#/settings/nodes/{node}`) and, while alarms stand, **Open alarms**
+(`#/settings/backups?at=alarms`, which brings the alarm list into view without
+moving it). While the engine is unreachable the panel says how long ago it
+last answered and offers **Reconnect now**, which dials at once rather than at
+the end of the backoff. The alarms are listed by name, the longest-standing
+first. Their COUNT is the health push's, the evaluation the engine's gauge and
+log lines come from; their NAMES are the operator's retention report, the
+document Backups & retention lists them from, asked for when the panel opens
+and again when the count moves, because the push is public and names only the
+one that has stood longest. A reader without an operator credential is told
+that one and how many more stand. A name is the alarm's kind read as words,
+its initialisms kept whole, with the domain an alarm was raised on after a
+colon ("Backup age", "Trim blocked: tracker"); `lib/alarms.ts` holds the rule.
+A table the engine has not evaluated is "Not evaluated", never "None". The
+push counts the nodes holding a presence lease and does not know how many a
+fleet should have, so a node that is down is a smaller count and nothing
+more. On a phone the row and its panel are in the drawer, and nowhere else.
 
 **The user block** is who this browser is: a person (bound: their name and
 the seat's role, linking to it; a person is never captioned "human seat", and
@@ -1573,7 +1592,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 
 | Piece | What it is |
 |---|---|
-| `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
+| `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -2597,7 +2616,7 @@ twice and none nowhere:
 | Home | Subjects | Why there |
 |---|---|---|
 | `seat`: the Inbox's "Needs you", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
-| `engine` — the sidebar's health card and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
+| `engine`: the sidebar's engine panel and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
 | `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
 On Home the queue is COUNTED, not drawn: the `seat` conditions that are not

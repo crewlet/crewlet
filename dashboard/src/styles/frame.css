@@ -14,7 +14,7 @@
    `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
    What is here is what the kit has no opinion about: the two rows the page
    header draws, the peek as a column of the sheet, the Settings column, and
-   the sidebar's own few rows (the health card, the user block).
+   the sidebar's own few rows (the engine panel's insides, the user block).
 
    WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
    current section are raised or underlined, and the one accent in the chrome
@@ -440,9 +440,9 @@
 }
 
 /* ---- The sidebar's own rows ----------------------------------------------
-   The navigation is the kit's `SidebarNav`; what is here is the three things
-   the kit has no row for — the ⌘K field's place, the engine's state, and who
-   this browser is. */
+   The navigation is the kit's `SidebarNav` and the engine's row is the kit's
+   `AppShell.RailRow`; what is here is what the kit leaves to the application:
+   the ⌘K field's place, the engine panel's inset, and who this browser is. */
 
 /* THE FOOT'S OWN NAVIGATION SITS ON THE FOOT'S INSET. The kit's `SidebarNav`
    brings the rail's gutter with it, and the foot already stands on that
@@ -526,95 +526,12 @@
   color: var(--color-feedback-warning-ink);
 }
 
-/* THE ENGINE'S STATE, the design's status block: its words over one detail
-   line, on the card rung inside the hairline — the one row in the foot that
-   reports rather than goes somewhere. A link to the nodes, or the button that
-   asks for a token when the token is what is wrong. */
-.health-card {
-  /* A GRID, so the dot shares the TITLE's row and is centred on that line's
-     own box — whatever the title's size at this density, however many lines
-     follow it. It was a flex row with the dot's box sized to a computed line
-     height, which is a second statement of the title's metrics that drifts
-     the moment either changes; in a row it centred on the whole card. */
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: var(--spacing-2);
-  width: 100%;
-  min-width: 0;
-  padding: calc(var(--spacing-2) + 1px) var(--size-nav-row-pad);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.health-card:hover {
-  border-color: var(--color-border-hover);
-}
-
-.health-card:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* The dot sits in the title's row; the text's lines take the column beside
-   it, each on a row of its own; the chevron spans them all. */
-.health-card-dot {
-  display: flex;
-  grid-row: 1;
-  grid-column: 1;
-}
-
-.health-card-text {
-  display: contents;
-  line-height: var(--font-line-height-snug);
-}
-
-.health-card-text > * {
-  grid-column: 2;
-  line-height: var(--font-line-height-snug);
-}
-
-.health-card-title {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-}
-
-.health-card-detail,
-.health-card-alarm {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  overflow-wrap: anywhere;
-}
-
-/* THE ALARM LINE CARRIES ITS OWN TONE, because the dot beside the title is
-   the posture's: a standing alarm is warning ink with its glyph, a table not
-   yet evaluated is plain secondary text. */
-.health-card-alarm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  color: var(--color-text-secondary);
-}
-
-.health-card-alarm[data-tone="warning"] {
-  color: var(--color-feedback-warning-ink);
-}
-
-.health-card-alarm > svg {
-  flex: none;
-}
-
-.health-card-go {
-  grid-column: 3;
-  grid-row: 1 / span 3;
-  flex: none;
-  color: var(--color-text-tertiary);
+/* THE ENGINE PANEL'S INSET. The row that opens it and every part inside it
+   are the kit's (`AppShell.RailRow`, `Popover`, `DescriptionList`, `Button`,
+   `StatusDot`); the kit's popover draws no inset of its own, and this is the
+   one the panel's parts stand on, as every popover here gives its own. */
+.engine-panel {
+  padding: var(--spacing-3);
 }
 
 /* WHO THIS BROWSER IS, and the reader's own preferences beside the name. */

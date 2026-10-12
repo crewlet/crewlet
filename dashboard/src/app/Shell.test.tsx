@@ -1047,9 +1047,6 @@ describe("what the frame holds open", () => {
   });
 });
 
-// THE ENGINE'S STATE IS THE HEALTH CARD'S NAME, and the card is the way to the
-// nodes. Every word is the health push's: `HealthCard.test.tsx` holds the
-// precedence, this holds the wiring.
 // THE COMPANY IS THE LOCKUP'S TITLE, beside the product's mark — the approved
 // design's "Nimbus" — and the lockup is the way home.
 test("the lockup is the company's name beside the product's mark, and goes home", async () => {
@@ -1067,17 +1064,22 @@ test("the lockup is the company's name beside the product's mark, and goes home"
   );
 });
 
-test("the health card reads the push and links to the nodes", async () => {
+// THE ENGINE'S STATE IS THE ENGINE ROW'S NAME, at the rail's foot, and the row
+// opens the engine panel. Every word is the health push's: `EnginePanel.test.tsx`
+// holds the precedence and the panel, this holds the wiring.
+test("the engine row reads the push and opens the engine panel", async () => {
   const { store, socket } = answering({});
   mountShell(store, socket);
   act(() => {
     store.setConnected(true);
     store.applyHealth(healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } }));
   });
-  const card = document.querySelector<HTMLAnchorElement>("a.health-card");
-  expect(card?.getAttribute("href")).toBe("#/settings/nodes");
-  expect(card?.textContent).toContain("Engine healthy");
-  expect(card?.textContent).toContain("3 nodes · config epoch 42");
+  const row = screen.getByRole("button", { name: "Engine healthy" });
+  expect(row.closest("aside")).not.toBeNull();
+  fireEvent.click(row);
+  const panel = screen.getByRole("dialog", { name: "Engine" });
+  expect(within(panel).getByText("3 live")).toBeDefined();
+  expect(within(panel).getByText("Epoch 42")).toBeDefined();
 });
 
 // A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·

@@ -1103,8 +1103,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	}
 
 	// THE FLEET AND ITS ALARMS, the server's half of what the replay holds
-	// the health card to: a live node counted, and a standing alarm with its
-	// worst severity — the company has never taken a backup.
+	// the engine panel to: a live node counted, and a standing alarm with the
+	// one that has stood longest named, since the company has never taken a
+	// backup.
 	health := frames.lastHealth(t)
 	if nodes, _ := health["nodes"].(float64); nodes < 1 {
 		t.Errorf("the last health push counts %v live nodes, want at least this one",
