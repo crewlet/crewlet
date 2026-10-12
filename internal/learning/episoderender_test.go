@@ -176,8 +176,14 @@ func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
 		episodes[i] = Episode{Kind: KindRaw, TaskSummary: "Message from Ana: Slack message",
 			Ask: strconv.Itoa(i) + " ask " + long, PlanSummary: strconv.Itoa(i) + " did " + long}
 	}
+	// The deadline is read from the clock INSIDE the call, so it is bounded by
+	// the clock on either side of it rather than by one reading plus a slack:
+	// a fixed slack is a claim about how fast this goroutine is scheduled, and
+	// under the race detector on a loaded runner the call's own reading came
+	// 3.6ms after a 1ms allowance.
 	start := time.Now()
 	PastTurns(context.Background(), episodes, fit, EpisodeAccountBytes)
+	end := time.Now()
 
 	model.mu.Lock()
 	defer model.mu.Unlock()
@@ -192,8 +198,9 @@ func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
 				i, deadline.Sub(start), first.Sub(start))
 		}
 	}
-	if first.IsZero() || first.Sub(start) > EpisodeRewriteTimeout+time.Millisecond {
-		t.Fatalf("the render's deadline is %v after its start, want at most %v",
-			first.Sub(start), EpisodeRewriteTimeout)
+	if first.IsZero() || first.Before(start.Add(EpisodeRewriteTimeout)) || first.After(end.Add(EpisodeRewriteTimeout)) {
+		t.Fatalf("the render's deadline is %v after the call began and %v after it returned, "+
+			"want %v from an instant inside the call", first.Sub(start), first.Sub(end),
+			EpisodeRewriteTimeout)
 	}
 }
