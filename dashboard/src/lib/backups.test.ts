@@ -83,11 +83,12 @@ describe("why a backup was not taken", () => {
     expect(refusal).toEqual({ field: true, message: "backup: unusable destination: not empty" });
   });
 
-  test("an engine failure sends the reader to its log, and says the directory is not a backup", () => {
+  test("an engine failure sends the reader to its log", () => {
     const refusal = backupRefusal(new RestError(500, { error: "backup_failed" }));
     expect(refusal.field).toBe(false);
-    expect(refusal.message).toMatch(/api_backup_failed/);
-    expect(refusal.message).toMatch(/not a backup/);
+    expect(refusal.message).toBe(
+      "The copy failed. The engine log has the reason (api_backup_failed).",
+    );
   });
 
   test("a wait that ran out is not called a failure", () => {

@@ -50,7 +50,7 @@ export const OUTCOME_WORDS: Record<BackupOutcome, string> = {
 /** Whose word the trim takes, in one sentence. */
 export const POLICY_WORDS: Record<BackupPolicy, string> = {
   engine: "The trim counts the newest verified copy any node wrote.",
-  operator: "The trim counts only an operator's acknowledgement that a copy has left the host.",
+  operator: "Counts only copies an operator confirmed off the host.",
 };
 
 /** One stream's reach, as a line: `CREWLET_TRACKER_LOG @900 (generation 2)`. */
@@ -160,13 +160,11 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
   if (err.status === 0) {
     return {
       field: false,
-      message:
-        "The engine did not answer in time. The copy may still finish — the history on this page records it when it does.",
+      message: "No answer in time. The copy may still finish; check the history.",
     };
   }
   return {
     field: false,
-    message:
-      "The copy failed on the engine's host, and its log says why under api_backup_failed. Whatever was written there has no manifest, so it is not a backup.",
+    message: "The copy failed. The engine log has the reason (api_backup_failed).",
   };
 }

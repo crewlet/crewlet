@@ -6129,9 +6129,9 @@ cooling key comes back. **Runs** is the seats whose resolved chain (the org
 projection's `llm`, the engine's own resolution) starts with the model, and
 how many fall back to it. A row opens the **model's page** (`models/{id}`):
 its facts, the state's sentence when it is not ready, every key with its
-state, when it comes back, why (*Nothing sets ACME_KEY on this node*, *The
-same key as key 1*, and its Back cell says *As key 1*, since the pool
-holds it once), this node's leases of it and the non-reversible **hint**
+state, when it comes back, why (*ACME_KEY isn’t set on this node*, *Same as
+key 1*, and its Back cell says *As key 1*, since the pool holds it once),
+this node's leases of it and the non-reversible **hint**
 the engine's `credential_cooled` log lines carry, then **Seats on it** — each
 seat and which phases run on it or fall back to it. A seat's model chain on
 its Settings tab links here. **Edit** (the page's action, and a row's pencil)

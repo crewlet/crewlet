@@ -450,7 +450,9 @@ test("an inline key keeps its place: no gesture moves it, and it is replaced whe
     el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled");
   const add = () => within(dialog).getByRole("button", { name: "Add key" });
   expect(unavailable(add())).toBe(true);
-  expect(add().getAttribute("title")).toMatch(/Key 2 is written inline/);
+  expect(add().getAttribute("title")).toMatch(
+    /Key 2 is inline\. Replace it with a secret before adding or removing keys\./,
+  );
   // Removing key 1 would move the inline key to index 0: unavailable.
   expect(unavailable(within(dialog).getByRole("button", { name: "Remove key 1" }))).toBe(true);
   // Removing the inline key itself leaves no mask to restore: available.
@@ -517,7 +519,7 @@ test("a subscription cli-agent entry offers no key, and says how it signs in", a
   );
   const dialog = await openCLIEdit();
   expect(within(dialog).queryByText("Tokens")).toBeNull();
-  expect(within(dialog).getByText(/signs in through its CLI's login/)).toBeDefined();
+  expect(within(dialog).getByText(/None\. Signs in through its CLI\./)).toBeDefined();
   expect(within(dialog).queryByRole("button", { name: "Add key" })).toBeNull();
 });
 
@@ -531,7 +533,7 @@ test("an api-key cli-agent entry holds exactly one key", async () => {
   expect(within(dialog).getByText("API key")).toBeDefined();
   const add = within(dialog).getByRole("button", { name: "Add key" });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
-  expect(add.getAttribute("title")).toMatch(/holds one key and rotates nothing/);
+  expect(add.getAttribute("title")).toMatch(/Holds one key\. Add more as separate entries\./);
 });
 
 test("a key on a cli-agent entry that reads none is a fault to remove before saving", async () => {
@@ -546,7 +548,7 @@ test("a key on a cli-agent entry that reads none is a fault to remove before sav
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   });
   await settle();
-  expect(within(dialog).getByText(/read only under cli.auth.mode api-key/)).toBeDefined();
+  expect(within(dialog).getByText(/Keys only work in api-key mode\. Remove it\./)).toBeDefined();
   expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
 
   await act(async () => {
