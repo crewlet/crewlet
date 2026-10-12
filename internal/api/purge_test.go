@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -20,6 +22,7 @@ type fakePurger struct {
 	operator, opID, id, project, reason string
 	calls                               int
 	outcome                             statelog.Outcome
+	err                                 error
 }
 
 func (f *fakePurger) PurgeAs(_ context.Context, operator, opID, id, project,
@@ -27,6 +30,9 @@ func (f *fakePurger) PurgeAs(_ context.Context, operator, opID, id, project,
 
 	f.calls++
 	f.operator, f.opID, f.id, f.project, f.reason = operator, opID, id, project, reason
+	if f.err != nil {
+		return tracker.WriteResult{}, f.err
+	}
 	outcome := f.outcome
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
@@ -267,6 +273,77 @@ func TestAnUnknownPurgeCarriesNoPosition(t *testing.T) {
 		if body["op_id"] == "" || body["op_id"] == nil {
 			t.Errorf("an %s purge answered no op_id — it is what a retry names", outcome)
 		}
+	}
+}
+
+// A PURGE NOBODY ANSWERED IS UNKNOWN, AND EVERY ANSWER NAMES ITS OPERATION.
+//
+// The router reports a purge it sent to data nodes that never answered as
+// [estate.ErrOutcomeUnknown] — any of them may have run it — and a request
+// whose own deadline ended the wait is the same fact. Both used to be a 500
+// with no operation id, so a purge whose record may have landed read as a
+// failure and the only way on was a second purge under a fresh id. They are
+// answered as the write path's own unknown now: 200, the operation, no
+// position. A refusal is still a refusal, and carries the operation too.
+func TestAPurgeNobodyAnsweredIsUnknownAndNamesItsOperation(t *testing.T) {
+	for name, err := range map[string]error{
+		"no data node answered": fmt.Errorf("%w (tracker.purge_task, asked of "+
+			"data-a: data-a: no answer)", estate.ErrOutcomeUnknown),
+		"the request's deadline ended the wait": fmt.Errorf("%w (tracker.purge_task, "+
+			"asked of data-a): %w", estate.ErrOutcomeUnknown, context.DeadlineExceeded),
+		"the wait ran out": fmt.Errorf("estate: tracker.purge_task: %w",
+			context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := &fakePurger{err: err}
+			code, body := postPurge(t, purgeApp(t, p),
+				"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why")
+			if code != http.StatusOK || body["outcome"] != string(statelog.OutcomeUnknown) {
+				t.Fatalf("a purge nobody answered answered %d %v, want 200 unknown", code, body)
+			}
+			if body["op_id"] != p.opID || p.opID == "" {
+				t.Errorf("a purge nobody answered named op_id %v, want the %q it ran under",
+					body["op_id"], p.opID)
+			}
+			if _, has := body["position"]; has {
+				t.Errorf("an unknown purge carried a position: %v", body)
+			}
+		})
+	}
+
+	p := &fakePurger{err: fmt.Errorf("tracker: %w", tracker.ErrNoTask)}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why")
+	if code != http.StatusInternalServerError || body["op_id"] != p.opID {
+		t.Errorf("a refused purge answered %d %v, want 500 naming the op_id %q",
+			code, body, p.opID)
+	}
+}
+
+// A PURGE WHOSE OPERATION ALREADY NAMES ANOTHER TASK IS NOT OFFERED A RETRY.
+//
+// The id a caller brings back is refused by the log when it already names a
+// record on another subject — a purge's id carried to another task. Every
+// other failure carries the id because a retry under it is safe; this one is
+// refused the same way every time under that id, so it is `409 op_reused`
+// naming none, and says to send the purge again without one.
+func TestAPurgeWhoseOperationNamesAnotherTaskIsNotOfferedARetry(t *testing.T) {
+	t.Parallel()
+	p := &fakePurger{err: fmt.Errorf("estate: tracker.purge_task: %w",
+		&statelog.Unavailable{Reason: statelog.ReasonOpReused,
+			Detail: "the operation already names a record on task t-9"})}
+	brought := statelog.NewOpID(time.Now(), "purge-t-9")
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id="+brought)
+	if code != http.StatusConflict || body["error"] != string(statelog.ReasonOpReused) {
+		t.Fatalf("a purge under another task's operation answered %d %v, want 409 "+
+			"op_reused", code, body)
+	}
+	if _, named := body["op_id"]; named {
+		t.Errorf("the refusal offered the operation no retry can finish under: %v", body)
+	}
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, "no op_id") {
+		t.Errorf("the refusal does not say to start afresh: %q", detail)
 	}
 }
 

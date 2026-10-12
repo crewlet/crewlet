@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -294,29 +296,81 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	echo := map[string]any{"task": id, "key": key, "project": project}
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
-	if err != nil {
+	switch {
+	case destructionUnknown(err):
+		log.Warn("purge_outcome_unknown", "task", id, "operator", operator,
+			"op_id", opID, "error", err,
+			"hint", "retry under the same op_id; a fresh one is a second purge")
+		answerDestroyed(w, echo, statelog.OutcomeUnknown, opID, statelog.Position{})
+		return
+	case operationReused(err):
+		// THE ONE REFUSAL NO RETRY UNDER THIS ID CAN FINISH: the id the
+		// caller brought already names a record on another task. Answered
+		// as a failure carrying it, the command line told the operator to
+		// run the purge again with that same id, which is refused the same
+		// way every time.
+		answerReused(w, "purge", err)
+		return
+	case err != nil:
+		// THE OPERATION BESIDE THE REFUSAL, as every destruction's answer
+		// carries it: a retry under the same id is safe whatever happened,
+		// and the caller is never left holding only the id it sent.
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
-			"error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "purge_failed", "detail": err.Error()})
+			"op_id", opID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "purge_failed", "detail": err.Error(), "op_id": opID,
+		})
 		return
 	}
 	// LOGGED AT INFO WITH THE REASON, because this is the one gesture
 	// whose subject no longer exists to be inspected afterwards.
 	log.Info("task_purged", "task", id, "key", key, "project", project,
 		"operator", operator, "reason", reason, "outcome", result.Outcome)
-	answer := map[string]any{
-		"task": id, "key": key, "project": project,
-		"outcome": result.Outcome,
-		"op_id":   result.OpID,
+	answerDestroyed(w, echo, result.Outcome, result.OpID, result.Position)
+}
+
+// destructionUnknown reports whether a destruction's write path failed in a
+// way that leaves it unknown rather than refused: the write was sent to a
+// data node that never answered ([estate.ErrOutcomeUnknown]), or the request's
+// own deadline ended the wait for one.
+//
+// ONE PREDICATE FOR EVERY DESTRUCTIVE ROUTE, because what it decides is what a
+// caller does next: an unknown is answered as the write path's own `unknown`
+// ([answerDestroyed]) and finished by retrying under the same operation, while
+// a refusal is something to change. The purge answered both as a 500 with no
+// operation id, so a purge whose record may have landed was reported failed,
+// and the only way on was a second purge under a fresh id.
+func destructionUnknown(err error) bool {
+	return errors.Is(err, estate.ErrOutcomeUnknown) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// answerDestroyed is how every destructive operator route answers a gesture
+// whose write path gave an outcome — the purge here: 200 whatever the outcome,
+// the gesture's own echo, the three-valued `outcome`, the `op_id` a retry is
+// sent under, and the `position` the record landed at.
+//
+// 200 FOR ALL THREE, because each is an answer rather than a failure: `pending`
+// is durable and `unknown` is the one to retry, and a status per outcome would
+// make every client read the body anyway to learn which — so one convention,
+// written once, rather than a shape per domain.
+//
+// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the gate
+// routes' rule, for the gate routes' reason: a zero position reads as a record
+// at the log's origin, and the gesture this answers may never have reached the
+// log at all.
+func answerDestroyed(w http.ResponseWriter, echo map[string]any,
+	outcome statelog.Outcome, opID string, position statelog.Position) {
+
+	answer := make(map[string]any, len(echo)+3)
+	for key, value := range echo {
+		answer[key] = value
 	}
-	// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the
-	// gate routes' rule, for the gate routes' reason: a zero position reads
-	// as a record at the log's origin, and the purge this answers may never
-	// have reached the log at all.
-	if result.Outcome != statelog.OutcomeUnknown {
-		answer["position"] = result.Position
+	answer["outcome"], answer["op_id"] = outcome, opID
+	if outcome != statelog.OutcomeUnknown {
+		answer["position"] = position
 	}
 	writeJSON(w, http.StatusOK, answer)
 }
@@ -348,6 +402,33 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 		return "", false
 	}
 	return opID, true
+}
+
+// operationReused reports a write the state log refused because its operation
+// id already names a record on ANOTHER subject ([statelog.ReasonOpReused]):
+// the caller brought back an id minted for another gesture.
+//
+// IT IS NOT A RETRY TO OFFER. Every other refusal a destruction meets is
+// finished by sending the same id again, which is why every answer names it;
+// this one is refused the same way every time under that id, because the id
+// is the problem. So its answer ([answerReused]) names no operation and says
+// to start afresh.
+func operationReused(err error) bool {
+	var refusal *statelog.Unavailable
+	return errors.As(err, &refusal) && refusal.Reason == statelog.ReasonOpReused
+}
+
+// answerReused answers a destruction [operationReused] refused: `409
+// op_reused`, the log's own sentence, and no `op_id` — the one refusal a retry
+// under the same id can never finish.
+func answerReused(w http.ResponseWriter, what string, err error) {
+	writeJSON(w, http.StatusConflict, map[string]string{
+		"error": string(statelog.ReasonOpReused),
+		"detail": fmt.Sprintf("nothing was written: the op_id sent with this %s "+
+			"already names a record on something else, and an operation id is "+
+			"one gesture — send it again with no op_id, so it runs under an "+
+			"operation of its own (%v)", what, err),
+	})
 }
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
