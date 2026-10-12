@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -80,6 +81,16 @@ var sentinels = []sentinel{
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
+	{"chat.ErrArchived", chat.ErrArchived},
+	{"chat.ErrConflict", chat.ErrConflict},
+	{"chat.ErrForbidden", chat.ErrForbidden},
+	{"chat.ErrInvalid", chat.ErrInvalid},
+	{"chat.ErrNameTaken", chat.ErrNameTaken},
+	{"chat.ErrNoActivation", chat.ErrNoActivation},
+	{"chat.ErrNotFound", chat.ErrNotFound},
+	{"chat.ErrRoomExists", chat.ErrRoomExists},
+	{"chat.ErrUnknownKind", chat.ErrUnknownKind},
+
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
@@ -112,6 +123,12 @@ type typedKind struct {
 // Each is carried field by field: a plain field as JSON, and a field of type
 // error — the cause a refusal was concluded from — as a nested wire error, so
 // the cause still answers errors.Is on the far side.
+//
+// THE REFUSALS A PERSON IS SHOWN ARE HERE TOO ([tracker.Refusal],
+// [pages.InvalidError], [chat.InvalidError]), and not for a caller's
+// errors.As: each package's Sentence finds the writer's own words by unwrapping
+// its refusal type, so a refusal that crossed as its message alone was shown
+// to a person with the Go prefix in front of it.
 var typedKinds = []typedKind{
 	{"tracker.AlreadyAnsweredError", reflect.TypeFor[*tracker.AlreadyAnsweredError]()},
 	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
@@ -126,6 +143,10 @@ var typedKinds = []typedKind{
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+
+	{"chat.ErrFutureVersion", reflect.TypeFor[*chat.ErrFutureVersion]()},
+	{"chat.InvalidError", reflect.TypeFor[*chat.InvalidError]()},
+	{"chat.ErrUnknownVersion", reflect.TypeFor[chat.ErrUnknownVersion]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},

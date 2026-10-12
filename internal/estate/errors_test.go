@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -151,9 +152,9 @@ func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 // Go prefix — and it finds them by unwrapping the package's refusal TYPE. A
 // refusal decided on the data node that answered and printed on the node whose
 // caller asked has crossed the wire, so the type has to cross with its fields
-// or Sentence finds nothing and prints "tracker: …" or "pages: invalid: …" to
-// the person. The class must survive beside it, since a surface picks the
-// refusal's class by it.
+// or Sentence finds nothing and prints "tracker: …", "pages: invalid: …" or
+// "chat: invalid: …" to the person. The class must survive beside it, since a
+// surface picks the refusal's class by it.
 func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -170,6 +171,8 @@ func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 			tracker.ErrForbidden, tracker.Sentence},
 		{"pages", &pages.InvalidError{Field: "title",
 			Why: "is empty — give the page one"}, pages.ErrInvalid, pages.Sentence},
+		{"chat", &chat.InvalidError{Field: "name",
+			Why: "is longer than 80 bytes — shorten it"}, chat.ErrInvalid, chat.Sentence},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -223,7 +226,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	var found int
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
-	for _, pkg := range []string{"tracker", "pages", "statelog", "estate"} {
+	for _, pkg := range []string{"tracker", "pages", "chat", "statelog", "estate"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", pkg))
 		for _, name := range vars {
 			found++
@@ -244,10 +247,10 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 				// rebuilds a type from its exported fields, so one of
 				// these arrives as its message alone. That is how a
 				// refusal's sentence was lost on every routed write —
-				// the tracker's and the pages log's refusal types were
-				// both unexported, so each package's Sentence on the
-				// asking node found no refusal and handed a person the
-				// Go error's prefix.
+				// the tracker's, the pages log's and chat's refusal
+				// types were all unexported, so each package's Sentence
+				// on the asking node found no refusal and handed a
+				// person the Go error's prefix.
 				t.Errorf("%s.%s is an unexported error type, which the wire "+
 					"rebuilds as its message alone: export it with its fields "+
 					"and register it in estate's typedKinds", pkg, name)

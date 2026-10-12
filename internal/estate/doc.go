@@ -9,16 +9,16 @@
 //
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
-// copy of the tracker's or the knowledge base's rows. Its seats still read and
-// write both, constantly — every board, every task, every page a tool touches
-// — so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
-// and SERVES it over the broker ([Serve]), and every node's tools are handed
-// facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker and knowledge-base routes and the operator's own MCP —
-// for the reason a data node's own seats are: read straight off the node's
-// copy, a node whose copy was out of service answered its operator from the
-// very copy it had stopped serving its seats from.
+// copy of the tracker's, the knowledge base's or chat's rows. Its seats still
+// read and write all three, constantly — every board, every task, every page
+// and every room a tool touches — so something has to answer them. EVERY DATA
+// NODE HOLDS THE WHOLE ESTATE and SERVES it over the broker ([Serve]), and every
+// node's tools are handed facades of one [Router], which answers in-process
+// where this node's copy serves and asks another data node otherwise. So are
+// the operator's surfaces — the API's tracker, knowledge-base and chat routes
+// and the operator's own MCP — for the reason a data node's own seats are: read
+// straight off the node's copy, a node whose copy was out of service answered
+// its operator from the very copy it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //
@@ -47,7 +47,9 @@
 // refusal of its own first copy (a create whose title is now taken): an
 // unanswered unkeyed page write is therefore NEVER repeated, and is reported as
 // [ErrOutcomeUnknown] — which is the honest answer, and the one a tool turns
-// into "read the page before writing again".
+// into "read the page before writing again". A CHAT write is the page write's
+// case exactly ([statelog.CallKey]); the erase and the prune take their caller's
+// whole operation id, and are repeated under it as a purge is.
 //
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, or it could not reach the
@@ -138,7 +140,8 @@
 // rebuilds a type from its exported fields and so cannot rebuild one of those
 // at all: it arrives as its message alone. That is not only a lost errors.As.
 // Each package's Sentence — the words a PERSON is shown for a refusal — finds
-// them by unwrapping the package's refusal type, and the tracker's and the
-// pages log's were both unexported, so every refusal decided on another data
-// node reached a person with "tracker:" or "pages: invalid:" in front of it.
+// them by unwrapping the package's refusal type, and the tracker's, the pages
+// log's and chat's were all unexported, so every refusal decided on another
+// data node reached a person with "tracker:", "pages: invalid:" or "chat:
+// invalid:" in front of it.
 package estate

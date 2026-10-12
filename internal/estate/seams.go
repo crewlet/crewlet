@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -477,6 +478,231 @@ func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, comme
 	})
 	p.r.Observe(out.Written.Outcome.Position)
 	return out.Comment, out.Written, err
+}
+
+// Chat is the engine's own chat, read and written: every read answered for one
+// viewer, every write as the actor it names.
+//
+// THE KNOWLEDGE BASE'S SHAPE rather than the tracker's, because it is the
+// store's own: one node's chat serves every seat and every operator through
+// one store, so the party a write acts as travels per call rather than being
+// derived into a writer ([WorkWriter]).
+type Chat struct{ r *Router }
+
+// Chat answers the engine's own chat.
+func (r *Router) Chat() Chat { return Chat{r: r} }
+
+// Channels answers the rooms a viewer is in.
+func (c Chat) Channels(ctx context.Context, viewer string, q chat.ChannelsQuery,
+	fresh statelog.Freshness) (chat.ChannelListing, error) {
+	return call(ctx, c.r, opChatChannels, nil, chatChannelsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Channel answers one room, for a viewer who may read it.
+func (c Chat) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chat.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelHere is [Chat.Channel] asked of THIS node's own copy first, even
+// while that copy lags its log — see [callHere].
+//
+// FOR THE LIVE CHANNEL'S DECISION ABOUT A RECORD THIS NODE'S APPLIER HAS JUST
+// COMMITTED: whether one viewer may be shown it. That copy holds the record by
+// construction, while the ordinary walk would ask a peer first whenever the
+// copy lags — during the very burst that makes it lag — turning every
+// decision into a round trip to a node that may not have applied the record
+// yet. A copy out of service is passed over as ever, and the caller's floor
+// ([statelog.Freshness.MinPosition]) holds whichever copy answers to the
+// record being announced.
+func (c Chat) ChannelHere(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chat.ChannelDetail, error) {
+	return callHere(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelNamed answers the room a name addresses, for a viewer who may read it.
+func (c Chat) ChannelNamed(ctx context.Context, viewer, name string,
+	fresh statelog.Freshness) (chat.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannelNamed, nil,
+		chatChannelNamedArgs{Viewer: viewer, Name: name, Fresh: fresh})
+}
+
+// Messages answers a page of one room's transcript.
+func (c Chat) Messages(ctx context.Context, viewer string, q chat.TranscriptQuery,
+	fresh statelog.Freshness) (chat.Transcript, error) {
+	return call(ctx, c.r, opChatMessages, nil, chatMessagesArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Thread answers one thread, its root and its replies.
+func (c Chat) Thread(ctx context.Context, viewer string, q chat.ThreadQuery,
+	fresh statelog.Freshness) (chat.Thread, error) {
+	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Mentions answers a page of the messages that named a viewer.
+func (c Chat) Mentions(ctx context.Context, viewer string, q chat.MentionQuery,
+	fresh statelog.Freshness) (chat.MentionFeed, error) {
+	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// settled raises the session floor to what a chat write reported, so the next
+// read — on whichever node answers it, this one included — includes it.
+func (c Chat) settled(w chat.Written) { c.r.Observe(w.Outcome.Position) }
+
+// CreateChannel opens a room. Never repeated when unanswered — see
+// [ErrOutcomeUnknown] — unless it carries the caller's key, under which a
+// repeat is the same operation ([op.repeatableWhen]). So for every chat write
+// below but the erase and the prune, which take the caller's operation id.
+func (c Chat) CreateChannel(ctx context.Context, actor chat.Actor, in chat.NewChannel) (
+	chat.Written, error) {
+	out, err := call(ctx, c.r, opChatCreateChannel, nil, chatCreateChannelArgs{Actor: actor, Channel: in})
+	c.settled(out)
+	return out, err
+}
+
+// OpenDirect opens the direct conversation between the actor and the
+// participants, reporting whether this call created it.
+func (c Chat) OpenDirect(ctx context.Context, actor chat.Actor, participants []string,
+	key statelog.CallKey) (chat.Written, bool, error) {
+	out, err := call(ctx, c.r, opChatOpenDirect, nil,
+		chatOpenDirectArgs{Actor: actor, Participants: participants, Key: key})
+	c.settled(out.Written)
+	return out.Written, out.Created, err
+}
+
+// PatchChannel changes a room's topic, purpose, archive or retention.
+func (c Chat) PatchChannel(ctx context.Context, actor chat.Actor, channelID string,
+	patch chat.ChannelPatch, key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatPatchChannel, nil,
+		chatPatchChannelArgs{Actor: actor, ChannelID: channelID, Patch: patch, Key: key})
+	c.settled(out)
+	return out, err
+}
+
+// SetMembers replaces a room's members.
+func (c Chat) SetMembers(ctx context.Context, actor chat.Actor, channelID string,
+	members []chat.Member, key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatSetMembers, nil,
+		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members, Key: key})
+	c.settled(out)
+	return out, err
+}
+
+// Join puts the actor in a room.
+func (c Chat) Join(ctx context.Context, actor chat.Actor, channelID string,
+	key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatJoin, nil,
+		chatMembershipArgs{Actor: actor, ChannelID: channelID, Key: key})
+	c.settled(out)
+	return out, err
+}
+
+// Leave takes the actor out of a room.
+func (c Chat) Leave(ctx context.Context, actor chat.Actor, channelID string,
+	key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatLeave, nil,
+		chatMembershipArgs{Actor: actor, ChannelID: channelID, Key: key})
+	c.settled(out)
+	return out, err
+}
+
+// Post says something in a room.
+func (c Chat) Post(ctx context.Context, actor chat.Actor, channelID string,
+	in chat.NewMessage) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatPost, nil,
+		chatPostArgs{Actor: actor, ChannelID: channelID, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Reply says something in a message's thread.
+func (c Chat) Reply(ctx context.Context, actor chat.Actor, channelID, replyTo string,
+	in chat.NewMessage) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatReply, nil,
+		chatReplyArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Edit rewrites a message its actor wrote.
+func (c Chat) Edit(ctx context.Context, actor chat.Actor, channelID, messageID string,
+	in chat.EditMessage) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatEdit, nil,
+		chatEditArgs{Actor: actor, ChannelID: channelID, MessageID: messageID, Edit: in})
+	c.settled(out)
+	return out, err
+}
+
+// Delete takes a message down, leaving its tombstone.
+func (c Chat) Delete(ctx context.Context, actor chat.Actor, channelID, messageID string,
+	key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatDelete, nil,
+		chatDeleteArgs{Actor: actor, ChannelID: channelID, MessageID: messageID, Key: key})
+	c.settled(out)
+	return out, err
+}
+
+// React adds the actor's reaction to a message.
+func (c Chat) React(ctx context.Context, actor chat.Actor, channelID, messageID, emoji string,
+	key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji, Key: key,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Unreact takes the actor's reaction back.
+func (c Chat) Unreact(ctx context.Context, actor chat.Actor, channelID, messageID, emoji string,
+	key statelog.CallKey) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji,
+		Remove: true, Key: key,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Erase removes messages for good, under the operation id the caller minted —
+// repeated under it when unanswered, as a purge is.
+func (c Chat) Erase(ctx context.Context, actor chat.Actor, opID, channelID string,
+	messageIDs []string, reason string) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatErase, nil, chatEraseArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, MessageIDs: messageIDs, Reason: reason,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Prune drops a room's messages older than cutoff, under the operation id the
+// caller minted.
+func (c Chat) Prune(ctx context.Context, actor chat.Actor, opID, channelID string,
+	cutoff time.Time) (chat.Written, error) {
+	out, err := call(ctx, c.r, opChatPrune, nil, chatPruneArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, Cutoff: cutoff,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// ChatSearch is the chat keyword search, answered for one viewer by a data
+// node that holds both the rooms the viewer may read and the index.
+type ChatSearch struct{ r *Router }
+
+// ChatSearch answers the chat keyword search.
+func (r *Router) ChatSearch() ChatSearch { return ChatSearch{r: r} }
+
+// Search ranks the company's chat for one viewer, over the rooms that viewer
+// may read.
+//
+// AN ERROR, NEVER AN EMPTY ANSWER, where no data node could run it — unlike the
+// knowledge search, which is best effort by its seam's own contract. Nothing
+// here is best effort: a seat told "nobody said that" acts on it, and a person
+// searching a screen is shown the refusal rather than an empty list.
+func (s ChatSearch) Search(ctx context.Context, q ChatQuery) (ChatSearchAnswer, error) {
+	return call(ctx, s.r, opChatSearch, nil, q)
 }
 
 // Knowledge is the native knowledge search, answered by a data node's index.
