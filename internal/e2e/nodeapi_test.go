@@ -129,10 +129,13 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	operators, err := api.NewEngineOperators(e)
+	operators, err := api.NewEngineOperators(ctx, e)
 	if err != nil {
 		return fail("operator surface", err)
 	}
+	// Closed last of all, as cmd/crewlet closes it after its listeners: it
+	// holds a subscription on the engine's queue for its peers' rebuilds.
+	stops = append(stops, func() { operators.Close(context.WithoutCancel(ctx)) })
 	copier, err := backup.New(backup.Options{
 		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		Conn: backends.Conn(), API: backends.API(),
@@ -258,7 +261,12 @@ func wireAPI(
 	}
 
 	srv := httptest.NewServer(app)
-	stops = append(stops, srv.Close)
+	// THE LISTENING STREAMS END AS THE LISTENER COMES DOWN, as cmd/crewlet
+	// registers it on its own listener's shutdown.
+	stops = append(stops, func() {
+		operators.EndListens()
+		srv.Close()
+	})
 	return app, srv, stops, nil
 }
 

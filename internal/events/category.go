@@ -200,6 +200,12 @@ var excluded = map[string]string{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet",
+	"operator_tools_changed": "a NUDGE between nodes that one node built its " +
+		"operator catalogue again, so every node tells the MCP clients " +
+		"listening on it to list their tools again. The apply that moved the " +
+		"catalogue is already a row (config_revision_applied), and a durable " +
+		"row per node per rebuild would record one revision once more per " +
+		"member of the fleet",
 	"sandbox_answer_given": "the WAKE an answer by turn puts on the seat's " +
 		"inbox, and never a turn. What the answer became is " +
 		"sandbox_run_answered, and that a person gave it is their " +

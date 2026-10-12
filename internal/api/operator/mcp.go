@@ -26,13 +26,16 @@ import (
 // question of registration order.
 const MCPPath = "/operator/mcp"
 
-// MCPPattern is the route the MCP transport is mounted at: a POST, because a
-// transport that keeps no session has nothing for the other two verbs of
-// streamable HTTP to do (see [guardedMCP]). A GET, which asks for a
-// server-to-client stream, and a DELETE, which ends a session, are answered
+// MCPPattern is the route the MCP transport is mounted at, on [MCPPath]: a
+// POST, because a transport that keeps no session has nothing for the other
+// two verbs of streamable HTTP to do (see [guardedMCP]). A GET, which asks for
+// a server-to-client stream, and a DELETE, which ends a session, are answered
 // the mux's own 405 naming POST — the answer MCP's streamable-HTTP transport
 // gives a client for "this server offers no stream", and one carrying a code
-// like every other refusal this engine writes.
+// like every other refusal this engine writes. A client of the 2026-07-28
+// protocol opens its stream as a POST instead — `subscriptions/listen`, held
+// open until the client or the node ends it — and that is the one way this
+// transport reaches a client between its requests ([Listeners]).
 const MCPPattern = "POST " + MCPPath
 
 // serverName is what an MCP client lists this server as.
@@ -54,8 +57,9 @@ type mcpTransport struct {
 }
 
 // newMCPTransport registers every catalogue tool on an MCP server, and builds
-// the one HTTP handler that serves it.
-func newMCPTransport(s *Server, company string) mcpTransport {
+// the one HTTP handler that serves it. The streams clients listen on are kept
+// in listeners, the node's one registry of them ([Listeners]).
+func newMCPTransport(s *Server, company string, listeners *Listeners) mcpTransport {
 	title := "Crewlet"
 	if name := strings.TrimSpace(company); name != "" {
 		title = name + " (Crewlet)"
@@ -63,8 +67,10 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name: serverName, Title: title, Version: "1",
 	}, nil)
+	srv.AddReceivingMiddleware(listeners.receiving)
+	srv.AddSendingMiddleware(listeners.sending)
 	for _, tool := range s.catalogue.tools {
-		srv.AddTool(&mcp.Tool{
+		definition := &mcp.Tool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			InputSchema: tool.Parameters(),
@@ -79,7 +85,8 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 			// had nothing to ask on.
 			Annotations: crewletmcp.SDKAnnotations(
 				builtin.AnnotationsFor(tool.Name())),
-		}, handlerFor(s, tool.Name()))
+		}
+		srv.AddTool(definition, handlerFor(s, tool.Name()))
 	}
 	return mcpTransport{srv: srv, handler: guardedMCP(srv)}
 }
@@ -170,7 +177,11 @@ const MCPMaxBody = 4 << 20
 // new session — so each of those was a broken connection to an operator's
 // assistant, as was the expiry any idle bound would have added, while with no
 // bound a client that crashed held its session for the life of the process.
-// Stateless, any node and any catalogue answers any request.
+// Stateless, any node and any catalogue answers any request. A 2026-07-28
+// client's `subscriptions/listen` is ONE request held open, and its session
+// lives exactly as long as that request — ended by the client, by its
+// connection dropping, or by the node's listener shutting down
+// ([Listeners.End]); what it is for is [Listeners].
 //
 // What it costs is that per-request session, as the SDK builds one: the body
 // read whole, bounded by [MCPMaxBody]; a JSON-RPC connection over it, which

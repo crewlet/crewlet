@@ -321,6 +321,110 @@ func TestACatalogueSwappedMidConversationKeepsItsClient(t *testing.T) {
 	}
 }
 
+// A LISTENER IS TOLD ITS TOOLS CHANGED, WHICHEVER CATALOGUE ITS STREAM IS ON.
+// The server advertises `tools.listChanged`, and with no session kept the one
+// way to reach a connected client between its requests is the stream a client
+// of the 2026-07-28 protocol holds open — `subscriptions/listen`, on the
+// catalogue that answered it. Every catalogue a node builds keeps its streams
+// in the node's one registry, so an announcement after a swap reaches a stream
+// parked on the catalogue the swap replaced, and the client's next listing is
+// the catalogue serving now. Nothing announced it once, and a client kept
+// offering the replaced catalogue's tools until it was reconnected.
+//
+// And the registry counts the stream while it is open and forgets it once it
+// ends, so a node holds nothing for a client that has gone.
+func TestAListenerIsToldWhicheverCatalogueItIsOn(t *testing.T) {
+	t.Parallel()
+	listeners := operator.NewListeners()
+	work := builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)}
+	reads := newSurface(t, operator.Options{Work: work, Listeners: listeners})
+	steers := newSurface(t, operator.Options{
+		Work:      work,
+		Steer:     builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil)},
+		Listeners: listeners,
+	})
+	var current atomic.Pointer[operator.Server]
+	current.Store(reads)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current.Load().MCPHandler().ServeHTTP(w,
+			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+	}))
+	t.Cleanup(srv.Close)
+	if n := listeners.Listening(); n != 0 {
+		t.Fatalf("the premise: a registry no client has reached holds %d streams", n)
+	}
+	sess, changed := listenOperator(t, srv.URL)
+	if n := listeners.Listening(); n != 1 {
+		t.Errorf("a registry holding one listener's stream counts %d", n)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("before the swap: %v", err)
+	}
+	if hasTool(listed, builtin.SteerTurnTool) {
+		t.Fatalf("the catalogue of reads lists %s", builtin.SteerTurnTool)
+	}
+
+	current.Store(steers)
+	listeners.Announce(t.Context())
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("the listener on the replaced catalogue was never told the tools changed")
+	}
+	if listed, err = sess.ListTools(ctx, nil); err != nil {
+		t.Fatalf("the listing after the announcement: %v", err)
+	}
+	if !hasTool(listed, builtin.SteerTurnTool) {
+		t.Errorf("after the announcement the listener was listed the replaced catalogue, "+
+			"without %s", builtin.SteerTurnTool)
+	}
+
+	_ = sess.Close()
+	for listeners.Listening() != 0 {
+		if ctx.Err() != nil {
+			t.Fatal("the registry still counts the stream of a listener that left")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// listenOperator connects an MCP client to an operator transport served at
+// base as the client this repository ships does when it is handed a tool-list
+// handler — at the 2026-07-28 protocol, opening a `subscriptions/listen` stream
+// at connect — and answers the session and a channel receiving once per
+// notification that the tools changed. It returns once the server has
+// acknowledged the stream and told it the once a stream is told as it opens
+// ([operator.Listeners]), so nothing a case does next races the subscription
+// and the channel starts quiet.
+func listenOperator(t *testing.T, base string) (*mcp.ClientSession, <-chan struct{}) {
+	t.Helper()
+	changed := make(chan struct{}, 16)
+	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"},
+		&mcp.ClientOptions{
+			ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+				changed <- struct{}{}
+			},
+		})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: base + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
+	}, &mcp.ClientSessionOptions{ProtocolVersion: "2026-07-28"})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("the listener's stream was never told the tools changed as it opened")
+	}
+	return sess, changed
+}
+
 // hasTool reports whether a listing names a tool.
 func hasTool(listed *mcp.ListToolsResult, name string) bool {
 	return slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool {

@@ -75,7 +75,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
-`/operator/mcp` serves only `POST` — it keeps no session, so there is no stream to open and no session to end — and every JSON-RPC call it carries, reads included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
+`/operator/mcp` serves only `POST` — it keeps no session, so there is no `GET` stream to open and no session to end — and every JSON-RPC call it carries, reads and a new listening stream included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. A stream an assistant opened BEFORE the drain is kept for the whole drain, and goes on hearing every other node's rebuild of its tools ([`/operator/mcp`](#operatormcp--your-own-assistant)): ending it at the drain's first moment would cut a client that does not open a new stream — the Go SDK's does not — off for the drain's whole length rather than for none of it. It is answered, and so ends, as the listener starts to close, so it never holds the listener's five seconds. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
 A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
 
@@ -87,7 +87,7 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 }
 ```
 
-A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close — except an assistant's listening stream, which is answered the moment the listener starts to close, so `api_shutdown_failed` keeps meaning that a request was stuck.
 
 A node with a [public listener](#which-listener-serves-what) drains both by this one table — its webhooks are refused on `api.public` and its sandbox endpoints served there — and closes `api.public` first, then `api.port`, each with its own five seconds, so `/health` answers until the very end even while an open bridge session holds the public listener for its whole grace.
 
@@ -3159,13 +3159,49 @@ each call. A revision that switches a native half to a vendor or back changes
 nothing here until the node restarts, as
 [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)
 says for every surface. A client connected while the catalogue is built again
-keeps its connection: its next listing is the new catalogue's.
+keeps its connection, and a listing is answered by the catalogue of whichever
+node it reaches — which, in a fleet, may not have applied the revision yet.
+
+**A listening assistant is told when its tools change, by the whole fleet.**
+The server advertises `tools.listChanged`, and a client on the 2026-07-28 MCP
+protocol that listens for it — a `subscriptions/listen` stream, which the Go
+SDK's client opens at connect whenever it is handed a tool-list handler — is
+sent `notifications/tools/list_changed` on that stream, and lists again. It is
+told:
+
+- **once as its stream opens.** A client usually lists its tools before its
+  stream exists, and that listing can predate a change announced in the
+  meantime; told once more, it lists again with the stream in place.
+- **whenever any ingress node builds its catalogue again** — this one, or any
+  other: each node announces its rebuild to the fleet
+  (`operator_tools_changed`), and every node tells every stream it holds.
+  Nodes apply a revision each on their own clock — a company's first apply
+  takes seconds — and a listing reaches whichever node a load balancer picks,
+  so a listing made after the first node's announcement can be answered by a
+  node that has not applied yet. The last notification a listening client
+  receives follows the last node's rebuild, and the listing it makes then is
+  the new catalogue wherever it lands.
+
+That holds while the client's stream is open and the broker carries the
+announcement, which, like every announcement between nodes, is best effort: a
+node that cannot be reached at that moment does not relay it. A stream ends
+when the node holding it shuts down (it is answered, not cut — see below);
+whether the client then opens another is the client's, and the Go SDK's client
+does not, so an assistant that was listening on a node that has since stopped
+is told nothing more until it reconnects. A client on an earlier protocol has
+no stream to be told on (its `GET` is answered `405`), so it sees the new
+tools the next time it lists them, or when it reconnects: after a revision that
+brings or retires a backend, have it list its tools again or restart it.
 
 **It keeps no session.** Every request carries its own token and is answered
 whole by whichever node it reaches, and nothing is held for the client between
 two of them — no `Mcp-Session-Id` is handed out, and a `GET` (a
 server-to-client stream) or a `DELETE` (ending a session) is answered `405`,
-which an MCP client reads as a server that offers no stream. So a fleet's
+which an MCP client reads as a server that offers no stream. A client on the
+2026-07-28 protocol listens with a `POST` instead, one request held open until
+it ends it, its connection drops, or the node's listener shuts down — which
+answers every stream it holds as it begins, so a listening assistant never
+holds a node's shutdown. So a fleet's
 ingress nodes behind a load balancer need no session affinity, a rebuilt
 catalogue ends nobody's connection, and a client that crashed leaves nothing
 behind on the node. A session-keeping transport refused every request that

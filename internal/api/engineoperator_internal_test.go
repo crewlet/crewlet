@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // movingOperators is an operator surface over facts a case moves, counting the
@@ -48,19 +50,40 @@ func (m *movingOperators) surface(t *testing.T) *EngineOperators {
 			}
 			return facts
 		},
-		func(operatorBasis) (*operator.Server, error) {
+		func(basis operatorBasis, listeners *operator.Listeners) (*operator.Server, error) {
 			if m.builds.Add(1) > 1 && m.hold != nil {
 				<-m.hold
 			}
 			if m.fail.Load() {
 				return nil, errors.New("refused")
 			}
-			return &operator.Server{}, nil
+			return steering(basis, listeners)
 		})
 	if err != nil {
 		t.Fatalf("the surface: %v", err)
 	}
 	return o
+}
+
+// steering is a catalogue built afresh at every call — a whole server of its
+// own, keeping its listeners' streams in listeners — of one tool, and of a
+// second, [builtin.AnswerRunTool], where the facts name a knowledge backend:
+// what a listing says tells which facts the catalogue answering it was built
+// from.
+func steering(basis operatorBasis, listeners *operator.Listeners) (*operator.Server, error) {
+	opts := operator.Options{
+		Audit: queuememory.New(),
+		Steer: builtin.SteerDeps{
+			Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil),
+		},
+		Listeners: listeners,
+	}
+	if basis.knowledge {
+		opts.Runs = builtin.RunDeps{
+			Desk: struct{ builtin.RunDesk }{}, Actor: operator.WorkActor(nil, nil),
+		}
+	}
+	return operator.New(opts)
 }
 
 // serving is the catalogue o answers now, failing the case where it answers

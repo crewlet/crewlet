@@ -31,7 +31,12 @@
 // bring or retire a knowledge backend — so the node builds a NEW Server from
 // the new deps and swaps it in whole, both transports with it (the api
 // package's EngineOperators): a request is served by one catalogue, never by
-// half of two, and nothing here is mutated while a transport reads it.
+// half of two, and nothing here is mutated while a transport reads it. The
+// one thing a client can leave on a Server is the stream it listens on, which
+// stays on the catalogue that answered it — so every Server a node builds
+// keeps its streams in the node's one registry ([Listeners]), and the node
+// tells every stream there that its tools changed, whichever catalogue it is
+// parked on.
 //
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
@@ -187,6 +192,13 @@ type Options struct {
 	// operator with two of these connected can tell which is which.
 	Company string
 
+	// Listeners is the registry this server keeps the streams MCP clients
+	// listen on in — ONE per node, handed to every catalogue the node builds,
+	// so an announcement reaches a stream whichever catalogue answered it
+	// (see [Listeners]). Nil keeps them in a registry of this server's own,
+	// which nothing else announces through: a server built alone.
+	Listeners *Listeners
+
 	// Audit is where every call that is not a proven read publishes its
 	// runtime audit record (see [Audit]). REQUIRED whenever the catalogue
 	// serves anything: a surface that writes to the company and records
@@ -282,7 +294,11 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org, env: opts.Env,
 		audit: opts.Audit}
-	s.mcp = newMCPTransport(s, opts.Company)
+	listeners := opts.Listeners
+	if listeners == nil {
+		listeners = NewListeners()
+	}
+	s.mcp = newMCPTransport(s, opts.Company, listeners)
 	return s, nil
 }
 
