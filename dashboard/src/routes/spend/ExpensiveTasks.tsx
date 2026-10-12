@@ -92,7 +92,7 @@ export function ExpensiveTasksCard({
             <Skeleton height="6rem" />
           </div>
         ) : rows.length === 0 ? (
-          <p className="spend-card-body spend-muted">
+          <p className="spend-card-body spend-caption">
             No task last changed in this window has spent tokens yet.
           </p>
         ) : (

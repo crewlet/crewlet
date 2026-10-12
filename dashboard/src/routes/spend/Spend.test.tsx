@@ -855,3 +855,17 @@ test("the hero's tiles row holds only the tiles that have something to say", asy
   await settle();
   expect(document.querySelectorAll(".spend-tiles > .spend-tile")).toHaveLength(1);
 });
+
+// AN EMPTY CARD SAYS SO AT THE CAPTION STEP, as every ranked list's empty
+// sentence does: the task card's was set at the body size, one step larger
+// than its neighbours' on the same row.
+test("the empty task card says so at the caption step", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1),
+    work_items: items([]),
+    viewer: VIEWER,
+  });
+  await settle();
+  const line = screen.getByText("No task last changed in this window has spent tokens yet.");
+  expect(line.classList.contains("spend-caption")).toBe(true);
+});
