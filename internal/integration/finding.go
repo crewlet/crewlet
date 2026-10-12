@@ -235,6 +235,20 @@ func (f FindingKind) severity() int {
 	}
 }
 
+// Known reports whether this build defines the kind: whether a case of its own
+// ranks and judges it, rather than the default for a kind a newer peer wrote.
+//
+// Asked of the RANK, which only the default holds, and never of the verdict:
+// an unknown tier is genuinely degraded and the operator's, which is exactly
+// what the default says too, so a check on the verdict calls it a stranger and
+// has to name it as an exception — and every later kind that shares the
+// default's verdict would need naming the same way.
+func (f FindingKind) Known() bool { return f.severity() != unknownKind.severity() }
+
+// unknownKind is a kind no build defines, for [FindingKind.Known] to read the
+// default's rank from.
+const unknownKind FindingKind = ""
+
 // Verdict is the phase and actor a kind implies. Fixed per kind: a third-party app
 // says what it found, never what it means.
 func (f FindingKind) Verdict() (Phase, Actor) {

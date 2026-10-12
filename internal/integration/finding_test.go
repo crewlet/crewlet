@@ -117,6 +117,16 @@ func TestUnknownKindOutranksOnlyTheAdvisory(t *testing.T) {
 	}
 }
 
+// A kind no build defines reads as unknown, whatever it is spelled as — the
+// empty kind a decoder produces from a row without one included.
+func TestAKindThisBuildDoesNotDefineIsNotKnown(t *testing.T) {
+	for _, kind := range []FindingKind{"", "a kind a newer build found", "Unknown_Tier"} {
+		if kind.Known() {
+			t.Errorf("%q reads as a kind this build defines", kind)
+		}
+	}
+}
+
 // The ranking is a STRICT total order over the known kinds. Two kinds sharing
 // a rank would make Classify's answer depend on slice order, which is how a
 // report starts changing between two passes that found the same things.
@@ -164,6 +174,12 @@ func TestEveryKnownKindIsRankedAndJudged(t *testing.T) {
 		if kind.severity() == unknownRank {
 			t.Errorf("%s falls through to the unknown-kind rank %d, so nothing "+
 				"here decides how severe it is", kind, unknownRank)
+		}
+		// AND THE EXPORTED ANSWER AGREES, which is what the vendor
+		// conformance suite asks: it once compared verdicts instead and
+		// had to name every kind sharing the default's by hand.
+		if !kind.Known() {
+			t.Errorf("%s is defined here and reads as unknown to Known", kind)
 		}
 		phase, actor := kind.Verdict()
 		if !phase.Valid() {
