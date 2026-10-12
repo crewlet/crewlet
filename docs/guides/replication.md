@@ -266,7 +266,12 @@ did, it lies below that record and applies nowhere. Such a refusal is about the
 asking node, like one with no position, and another node takes the write under
 the same operation id; if the asking node's own append did land, the broker
 collapses that node's copy onto it inside the window and the refusal it gets
-names the asking node as the copy's writer, as below.
+names the asking node as the copy's writer, as below. That the append applies
+nowhere is read from the asking node's operation ledger — an append that landed
+before the node's eviction applied, and only its ledger row says so — so where
+that ledger cannot vouch for the operation (it was minted before the point the
+ledger may have lost rows to), the write is answered an unvouched `unknown`
+rather than refused.
 
 When the record in the way is **another node's** — the asking node's append
 was collapsed onto a copy that node wrote — the refusal names that node as the
