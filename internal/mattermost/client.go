@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -34,6 +35,25 @@ import (
 // timeout on a token mint being harmless and it minting a SECOND access
 // token, live on the account, whose value the caller that would have
 // persisted or revoked it never saw.
+//
+// # A redirect is refused, never followed
+//
+// Go's client follows a 301, 302 or 303 by resending the request as a GET,
+// without its body (net/http, redirectBehavior). For an API client that
+// turns every write into a read of the same path: a typing indicator or a
+// bot's disable fails on a route that takes no GET, and a bot's rename — PUT
+// /bots/{id} — arrives as GET /bots/{id}, which Mattermost answers 200 with
+// the unchanged bot, so the provisioner reported a rename that never
+// happened, and a teardown a marker it never wrote. And the address is
+// shared: the agents' Mattermost MCP server dials the same url, and its HTTP
+// client follows no redirect at all, so an engine that followed one would
+// connect and hear every message while its agents could not answer any.
+//
+// A server redirects the API only when the url is not the address it serves
+// it at — Mattermost sends a request outside its Site URL's path into that
+// path ([redirected]), a proxy sends http to https — so the redirect is
+// answered as the misconfiguration it is: an error on every call, naming the
+// address the server sent the request to.
 
 // RetryStatuses are worth a second try at all: 429 is the rate limiter, and
 // 502/503/504 are a proxy or a server mid-restart — which is the ordinary
@@ -129,7 +149,8 @@ type ClientOptions struct {
 	// uses to compare Site URLs.
 	Token string
 
-	// HTTP is the transport; nil takes one with [DefaultTimeout].
+	// HTTP is the transport; nil takes one with [DefaultTimeout]. Its
+	// redirect policy is not used: the client follows no redirect.
 	HTTP *http.Client
 
 	// Now is the clock, injectable so a test need not wait out a backoff.
@@ -145,14 +166,25 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if u, err := url.Parse(base); err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("mattermost: %q is not an instance url", opts.URL)
 	}
-	c := &Client{base: base, token: opts.Token, http: opts.HTTP, now: opts.Now}
-	if c.http == nil {
-		c.http = httpx.Client(DefaultTimeout)
+	transport := opts.HTTP
+	if transport == nil {
+		transport = httpx.Client(DefaultTimeout)
 	}
+	c := &Client{base: base, token: opts.Token, http: refusingRedirects(transport), now: opts.Now}
 	if c.now == nil {
 		c.now = time.Now
 	}
 	return c, nil
+}
+
+// refusingRedirects is hc answering a redirect to its caller rather than
+// following it (see "A redirect is refused" above). A copy, so a client the
+// caller handed in keeps its own policy everywhere else; the transport, and
+// with it the connection pool, is shared.
+func refusingRedirects(hc *http.Client) *http.Client {
+	out := *hc
+	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &out
 }
 
 // URL is the normalised instance address.
@@ -249,8 +281,24 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
 		}
 	}
+	if resp.StatusCode >= 300 {
+		// Drained so the connection returns to the pool.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return resp.Header, &Error{
+			Method: method, Path: path, Status: resp.StatusCode,
+			Message: redirected(c.base, req.URL, resp.Header.Get("Location")),
+		}
+	}
 	if out != nil {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
+			if media := mediaType(resp.Header.Get("Content-Type")); media != "" && !isJSON(media) {
+				return resp.Header, fmt.Errorf("mattermost: %s %s: %s answered with %s rather "+
+					"than the API's JSON, so integrations.mattermost.url does not reach "+
+					"Mattermost's API. Mattermost answers its web app's page at any path it "+
+					"has no route for, which is where an address under another path than "+
+					"its Site URL's lands: give the url the Site URL's path: %w",
+					method, path, c.base, media, err)
+			}
 			return resp.Header, fmt.Errorf("mattermost: decode %s %s: %w", method, path, err)
 		}
 	} else {
@@ -343,6 +391,55 @@ func (e *transportError) Error() string {
 	return fmt.Sprintf("mattermost: %s %s: %v", e.method, e.path, e.err)
 }
 func (e *transportError) Unwrap() error { return e.err }
+
+// redirected says where the server sent a request, and what to set
+// integrations.mattermost.url to instead.
+//
+// THE ADDRESS IS DERIVED ONLY WHERE THE REDIRECT SAYS IT. Two redirects reach
+// an API client: one that moves the scheme or the host and keeps the path —
+// a proxy sending http to https — and Mattermost's own, which puts its Site
+// URL's path in front of the WHOLE path of any request outside it
+// (server/channels/app/server.go, the RootRouter's NotFoundHandler). So a
+// target that ends with the path asked for names the address: what precedes
+// that path is the server's own, and the url's path, when it carries one,
+// was outside it. Anything else is named as it came, rather than guessed at.
+func redirected(base string, requested *url.URL, location string) string {
+	target, err := requested.Parse(location)
+	if location == "" || err != nil {
+		return "the server answered with a redirect it gave no usable address " +
+			"for, so integrations.mattermost.url is not the address it serves " +
+			"its API at. This client follows no redirect, because following " +
+			"one resends every write as a GET"
+	}
+	set := "the address it answers at without one"
+	if prefix, ok := strings.CutSuffix(target.Path, requested.Path); ok {
+		at := url.URL{Scheme: target.Scheme, Host: target.Host, Path: prefix}
+		if prefix == "" {
+			// The path was kept, so the url's own path was right.
+			at.Path = urlPath(base)
+		}
+		set = at.String()
+	}
+	return fmt.Sprintf("the server redirects it to %s, so integrations.mattermost.url "+
+		"is not the address it serves its API at. This client follows no "+
+		"redirect, because following one resends every write as a GET: set the "+
+		"url to %s", target.Redacted(), set)
+}
+
+// mediaType is a Content-Type without its parameters, lower-cased; empty when
+// the header is absent or unreadable.
+func mediaType(contentType string) string {
+	media, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return ""
+	}
+	return media
+}
+
+// isJSON reports a JSON media type, application/json or a +json suffix.
+func isJSON(media string) bool {
+	return media == "application/json" || strings.HasSuffix(media, "+json")
+}
 
 // serverMessage pulls Mattermost's own error text out of a body, and hands
 // anything that is not its envelope to [httpx.Refusal] — a proxy in front of

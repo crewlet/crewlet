@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -890,17 +891,10 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // dialWebsocket is the real connection.
-//
-// The Origin header is set to what a browser at this instance would send,
-// because Mattermost accepts a socket only from an origin matching its own
-// Site URL — and a client sending none is refused outright.
 func dialWebsocket(ctx context.Context, seat Seat, c *Client) (Socket, error) {
 	//nolint:bodyclose // Deliberate: see dialOnce in doctor.go.
 	conn, _, err := websocket.Dial(ctx, c.WebsocketURL(), &websocket.DialOptions{
-		HTTPHeader: map[string][]string{
-			"Authorization": {"Bearer " + c.Token()},
-			"Origin":        {BrowserOrigin(c.URL())},
-		},
+		HTTPHeader: socketHeader(c.Token()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mattermost: dial %s: %w", c.WebsocketURL(), err)
@@ -910,6 +904,28 @@ func dialWebsocket(ctx context.Context, seat Seat, c *Client) (Socket, error) {
 	// past the library's default.
 	conn.SetReadLimit(4 << 20)
 	return &wsSocket{conn: conn}, nil
+}
+
+// socketHeader is the handshake every socket the engine opens sends: the
+// bot's credential, and NO ORIGIN.
+//
+// Origin is how a BROWSER tells a server which page is asking, and
+// Mattermost's websocket origin check is a browser control: both of its
+// branches (App.OriginChecker, server/channels/app/server.go, and
+// utils.CheckOrigin, at v11.11.1) admit an upgrade that carries none, which
+// is what Mattermost's own Go client sends. The engine used to send the
+// Origin of the address it dials, which put its sockets under the BROWSER
+// rule — the Origin's host and scheme must be the Site URL's — so a company
+// dialling anything but the address people browse (an in-cluster Service, a
+// private name) had every seat's upgrade refused with a 403 while its REST
+// calls worked, unless an administrator also listed that address in
+// AllowCorsFrom: every agent deaf, on the ordinary Kubernetes deployment.
+//
+// One function for the fleet and the doctor's per-seat probe, because a
+// probe shaped differently from the engine's own dial answers a question
+// about some other client.
+func socketHeader(token string) http.Header {
+	return http.Header{"Authorization": {"Bearer " + token}}
 }
 
 type wsSocket struct{ conn *websocket.Conn }

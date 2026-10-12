@@ -45,46 +45,52 @@ func WebsocketURL(base string) string {
 	return b + WebsocketPath
 }
 
-// BrowserOrigin is the Origin header a browser at base would send.
+// BrowserOrigin is the Origin header a browser at base sends.
 //
-// SCHEME AND AUTHORITY ONLY, lower-cased. An Origin never carries a path,
-// which matters twice: it is what Mattermost's websocket check compares, and
-// it is the exact string an allowed-origins setting is matched against — so
-// a probe inventing a path-bearing Origin fails a check every real browser
-// passes.
+// SERIALISED THE WAY A BROWSER SERIALISES IT (RFC 6454 §6.2): the scheme and
+// the host, lower-cased, the port only when it is not the scheme's default,
+// and never a path. Each part is load-bearing, because this string is what
+// Mattermost's websocket check compares and what an AllowCorsFrom entry is
+// matched against: a page at https://chat.example.com:443/team sends
+// `https://chat.example.com`, and a probe that kept the port or the path
+// would be judged on an Origin no browser ever sends.
+//
+// Empty for an address no browser can be at — anything but an absolute http
+// or https URL with a host.
 func BrowserOrigin(base string) string {
 	u, err := url.Parse(NormalizeURL(base))
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil || u.Hostname() == "" {
 		return ""
 	}
-	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	scheme := strings.ToLower(u.Scheme)
+	if defaultPort(scheme) == "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		// An IPv6 literal, which Hostname unbracketed.
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && port != defaultPort(scheme) {
+		return scheme + "://" + host + ":" + port
+	}
+	return scheme + "://" + host
 }
 
-// OriginMatches reports whether a browser at configured would pass the
-// server's websocket origin check against the Site URL it reports.
-//
-// THIS MODELS THE SERVER'S OWN RULE rather than approximating it: it
-// compares host and scheme case-insensitively and ignores the path entirely.
-// A whole-URL string compare reports a mismatch for a capitalised host and
-// for every subpath deployment, on installs whose live feed works perfectly
-// — and this check exists to tell an operator their humans are blind, so a
-// false alarm is worse than useless.
-func OriginMatches(configured, reported string) bool {
-	left, right := BrowserOrigin(configured), BrowserOrigin(reported)
-	return left != "" && left == right
+// defaultPort is the port a browser leaves out of an http or https Origin,
+// and empty for any other scheme.
+func defaultPort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
 }
 
-// PathMatches reports whether the two agree on the subpath the server is
-// served under.
-//
-// A SEPARATE QUESTION from the origin, with a separate consequence: a wrong
-// path does not break the websocket, it breaks every absolute link and
-// plugin URL the server builds. Reporting them together would send an
-// operator to fix a socket that works.
-func PathMatches(configured, reported string) bool {
-	return urlPath(configured) == urlPath(reported)
-}
-
+// urlPath is an address's path, without a trailing slash: the empty string
+// for one served at its root.
 func urlPath(raw string) string {
 	u, err := url.Parse(NormalizeURL(raw))
 	if err != nil {
