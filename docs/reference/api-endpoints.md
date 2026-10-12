@@ -3358,10 +3358,11 @@ same facts in this node's event store, whatever became of it: see
 
 ## The native tracker and knowledge base
 
-`GET /work`, `GET /pages` and their neighbours read **this node's own
-projection** of the company's tracker and knowledge base — the same copy a
-seat's tools read, so an operator and an agent looking at one item see one
-item.
+`GET /work`, `GET /pages` and their neighbours read the company's tracker and
+knowledge base **through this node's estate router** — the facade a seat's
+tools read through, so an operator and an agent looking at one item see one
+item — answered from this node's copy while it serves and from a data node's
+otherwise.
 
 Three properties are worth stating because each is a decision rather than an
 implementation detail.
@@ -3370,8 +3371,8 @@ implementation detail.
 `tracker.backend: jira` has no `work_items` question at all, and asking gets
 `unknown_query` / `404`. That is deliberate: an operator who wired Jira and
 then found a blank Crewlet board would reasonably conclude their integration
-was broken. There is no native record for this node to have a copy of, and an
-empty board would claim otherwise.
+was broken. There is no native record for any node to hold, and an empty
+board would claim otherwise.
 
 **A node that has not caught up refuses.** Every one of these answers
 `unavailable` (`503`, with a `Retry-After`) while this node is behind the log,
