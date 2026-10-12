@@ -162,8 +162,8 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// AND THE INBOX'S OWN SWEEP, which is a range
 				// delete rather than a repair and is therefore
 				// PER NODE — `tracker_notifications` is
-				// Divergent, so each node holds its own rows and
-				// a singleton would tidy one and let the rest
+				// Divergent, so each data node holds its own rows
+				// and a singleton would tidy one and let the rest
 				// grow for ever. Contributed here rather than in
 				// tracker.Jobs because that list runs under the
 				// duty and this one must not.

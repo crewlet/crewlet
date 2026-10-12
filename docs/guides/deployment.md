@@ -1090,11 +1090,13 @@ dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_role`,
 `task_id`, `channel_id`, `sender`, `trace_id`) plus a JSON column for
 everything else.
 
-That inline write is also why a fleet's event store is *per node*: each holds
-what it published. A history read is therefore asked of **every live node**
-at query time — the node serving the dashboard reads its own store and
-scatters the same question to its peers, merges what comes back, and names
-any node that did not answer in the answer's `coverage` (see
+That inline write is also why a fleet's event store is *per node*: each data
+node holds what it published, and what it keeps for a node without `data`
+([custody](#custody-the-rows-of-a-node-without-data), below). A history read is
+therefore asked of **every live data node** at query time — the node serving
+the dashboard reads its own store and scatters the same question to its peers,
+merges what comes back, and names any node that did not answer in the answer's
+`coverage` (see
 [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
 A node that has LEFT the fleet takes its turn-level detail with it; the
 aggregates — spend, turn counts, page reads — survive it in the replicated

@@ -39,7 +39,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the embeddings that search them and every node's daily usage — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the embeddings that search them and every data node's daily usage — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -275,24 +275,36 @@ peers hold too.
 
 A node is **two** database files, and they answer differently.
 
-The **replicated estate** is a copy of state every node holds: the tracker's
-projects, tasks, comments and history, derived from an ordered log by an
-applier that runs identically everywhere. Any healthy node's copy of it is the
+The **replicated estate** is a copy of state every data node holds: the work
+tracker, the knowledge base's pages and the embeddings that search them, and
+every data node's daily usage, each derived from its own log by an applier that
+runs identically on every data node. Any healthy data node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
-only *that node* did: its audit event log, its scheduled-run history, its share
-of the config revision history. Those exist nowhere else and no peer's backup
-contains them.
+only *that node* did: its audit event log (and, on a data node, the events it
+keeps in [custody](deployment.md#custody-the-rows-of-a-node-without-data) for
+the nodes without `data`), its scheduled-run history, its share of the config
+revision history. Those exist nowhere else and no peer's backup contains them.
+A node without `data` keeps none of them: its node estate is scratch, deleted
+at every boot, and each of its events is in the data node keeping it.
 
 So:
 
-- **For the company's state — one node is enough.** Everything a restore needs
-  to bring the company back is on the stream estate and the replicated estate,
-  and a single node's backup captures both.
-- **For the complete audit trail — take one per node**, on the same schedule,
-  and keep them together. The event log is per-node history with no second
-  copy, so a fleet-wide audit trail is the union of every node's.
+- **For the company's state — one data node is enough.** Everything a restore
+  needs to bring the company back is on the stream estate and the replicated
+  estate, and a single data node's backup captures both. A node without `data`
+  copies the streams and its own file, never the replicated estate — so a
+  nightly copy scheduled on a stateless agent host brings the company back
+  only while its logs still hold every record, and a backup exists for the
+  day they do not.
+- **For the complete audit trail — take one per data node**, on the same
+  schedule, and keep them together. The event log is per-node history with no
+  second copy, so a fleet-wide audit trail is the union of every data node's.
+  A node without `data` keeps no event log of its own: each of its events is
+  kept in exactly one data node's
+  ([custody](deployment.md#custody-the-rows-of-a-node-without-data)), so that
+  node's backup is where it is.
 
 There is no fleet-wide barrier and deliberately no attempt at one: each node's
 copy is its own moment, and the estate that has to be internally consistent —
@@ -349,9 +361,9 @@ is the freshest backup imaginable.
 
 **The backup interval IS the recovery point for history below the trim
 floor.** Above that floor the log holds every record on R replicas and every
-node holds the applied rows, so losing a node loses nothing. Below it the log
-holds nothing, and each node's own database file is the only copy of that
-history — N of them, independent, none replicated. A schedule of six hours is
+data node holds the applied rows, so losing a node loses nothing. Below it the
+log holds nothing, and each data node's replicated estate is the only copy of
+that history — one per data node, independent, none replicated. A schedule of six hours is
 therefore a six-hour RPO for that half of the company's past, and no replica
 count changes it. See [Retention](retention.md).
 

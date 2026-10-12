@@ -562,7 +562,7 @@ What each of the four holds, in full:
 
 One file, the replicated estate, which every data node holds whole — written by
 a state log's applier:
-records arrive in one order from the log, every node applies the same ones,
+records arrive in one order from the log, every data node applies the same ones,
 and the rows plus this node's position on the log commit in a single
 transaction. There is no leader
 and no node whose copy is the real one.
@@ -764,17 +764,18 @@ on ordinary rollout lag makes the fastest node the cause of a fleet-wide outage,
 and stepping out of rotation when *no* peer has the epoch is not shedding, it is
 stopping.
 
-**History is read from every node, not copied to every node.** Each node's
-event store holds only what it published, so a fleet has no one store of its
-turns. A history read — the event log, a turn, a trace, the list of turns — is
-scattered to every live node at query time over the broker's ephemeral
-request/reply and merged by the node serving it, and every such answer carries
-a `coverage` naming any node that did not answer inside the two-second fleet
-read budget (ADR-0021). Replicating the detail would put every prompt and
-response on every node's disk to answer a question asked a few times a minute;
-the price is stated rather than hidden — a node that leaves takes its detail
-with it, while the aggregates survive it in the replicated `usage` domain. See
-[Reading the fleet's history](event-system.md#reading-the-fleets-history).
+**History is read from every data node, not copied to every node.** Each data
+node's event store holds only what it published and what it keeps in custody for
+a node without `data`, so a fleet has no one store of its turns. A history read
+— the event log, a turn, a trace, the list of turns — is scattered to every live
+data node at query time over the broker's ephemeral request/reply and merged by
+the node serving it, and every such answer carries a `coverage` naming any node
+that did not answer inside the two-second fleet read budget (ADR-0021).
+Replicating the detail would put every prompt and response on every data node's
+disk to answer a question asked a few times a minute; the price is stated rather
+than hidden — a node that leaves takes its detail with it, while the aggregates
+survive it in the replicated `usage` domain. See [Reading the fleet's
+history](event-system.md#reading-the-fleets-history).
 
 **A draining node keeps answering both.** Its listener stays up until the drain
 has completed, because the probes are what an orchestrator reads while the turns
@@ -828,7 +829,7 @@ here.
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |
 | REST, the dashboard, the socket | `internal/api`, `static/dashboard` | [API endpoints](../reference/api-endpoints.md) · [Dashboard design](../reference/dashboard-design.md) |
 | Event rows, live projection, traces | `internal/observe`, `internal/tracing`, `internal/tokens` | [Deployment](../guides/deployment.md) |
-| The fleet's turn-level history, read from every node | `internal/eventfan` | [Event system](event-system.md#reading-the-fleets-history) |
+| The fleet's turn-level history, read from every live data node | `internal/eventfan` | [Event system](event-system.md#reading-the-fleets-history) |
 | Which tracker a company runs, and why one of them keeps no state | — | [The tracker](task-engine.md) |
 | DACI, and the structured ask that is all the engine records of a decision | `internal/tracker` | [Decision framework](decision-framework.md) · [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision) |
 | More than one node | `internal/seat/placement` | [Scaling out](scaling.md) · [Running a fleet](../guides/fleet.md) · [Satellite nodes](../guides/satellite-nodes.md) |

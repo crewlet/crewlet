@@ -10,10 +10,10 @@ import (
 // The subtask closure, and why it is rebuilt with a VISITED SET rather than a
 // depth counter.
 //
-// Two concurrent re-parents on two nodes can form a shape no single write
-// could see: A under B on one node and B under A on the other, both accepted
-// by the broker because they are writes to two different subjects. The log
-// then carries both, every node applies both, and the parent chain is a cycle.
+// Two concurrent re-parents on two nodes can form a shape no single write could
+// see: A under B on one node and B under A on the other, both accepted by the
+// broker because they are writes to two different subjects. The log then
+// carries both, every data node applies both, and the parent chain is a cycle.
 //
 // A depth-limited walk would loop until the limit and then produce a closure
 // that is silently wrong. A visited set TERMINATES and reports what it found —

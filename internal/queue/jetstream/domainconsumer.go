@@ -23,10 +23,10 @@ import (
 //
 // # Why it is DURABLE and per NODE, not per fleet
 //
-// Every node applies every record — that is what makes N identical SQL copies
-// — so this is not a work queue and there is no group to share. Each node
-// keeps its own consumer, named after itself, and its own position within it.
-// A shared consumer would deliver each record to exactly one node, which is
+// Every data node applies every record — that is what makes N identical SQL
+// copies — so this is not a work queue and there is no group to share. Each
+// node keeps its own consumer, named after itself, and its own position within
+// it. A shared consumer would deliver each record to exactly one node, which is
 // the opposite of replication.
 //
 // # And why the CONSUMER's position is not the checkpoint

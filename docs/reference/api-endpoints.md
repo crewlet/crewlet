@@ -144,7 +144,7 @@ node means nothing was done.
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
-| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
+| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
 | `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
@@ -164,7 +164,7 @@ node means nothing was done.
 | `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and its content could not be read right now (see [below](#project-files)) |
 | `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and `?op_id=` how an `unknown` answer is retried. **Always needs an operator token** — the write is attributed to the person (see [below](#project-files)) |
 | `DELETE` | `/work/files/{project}/{path...}` | Remove a file. Same credential, `If-Match` and `?op_id=` as the write |
-| `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}`, and for a SET (`tags`, `watchers`, `muted`, `collaborators`, each link kind, `blocking`, a catalogue's or tag set's declarations, a person's favorites) the members that joined and left, as `{"<field>": {"from": "", "to": "", "added": […], "removed": […]}}`, each sorted and every member whole — for every kind and not only the ones about a task: a project reconcile names the purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary. Nothing is cut: an ordered list (`priorities`, `pinned_views`, `checklists`) is carried whole, free text past 600 bytes (a project's `purpose`, say) is described as `<N> bytes`, and every field a change moved is on the row — only a notification card stops at 32, saying how many it left off (`fields_omitted`). The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list, plus `(<n> promoted)` where an item became a sub-item. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, a value past 150 bytes as `<N> bytes`, and a count of any whose field the project no longer declares. The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
+| `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}`, and for a SET (`tags`, `watchers`, `muted`, `collaborators`, each link kind, `blocking`, a catalogue's or tag set's declarations, a person's favorites) the members that joined and left, as `{"<field>": {"from": "", "to": "", "added": […], "removed": […]}}`, each sorted and every member whole — for every kind and not only the ones about a task: a project reconcile names the purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every data node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary. Nothing is cut: an ordered list (`priorities`, `pinned_views`, `checklists`) is carried whole, free text past 600 bytes (a project's `purpose`, say) is described as `<N> bytes`, and every field a change moved is on the row — only a notification card stops at 32, saying how many it left off (`fields_omitted`). The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list, plus `(<n> promoted)` where an item became a sub-item. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, a value past 150 bytes as `<N> bytes`, and a count of any whose field the project no longer declares. The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
 | `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it, whether it is `open`, and the `decision` it carries when it asks somebody to choose — see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision)), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's handle is operator-only |
 | `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of eighteen it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks — plus the person behind an operator's token (`actor_seat`), the comment and turn the change came from, and the `ask` it is about, read as it stands now. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?snoozed=` — `exclude` (the default: a snooze means *not now*), `include` or `only`, anything else refused naming the three — `?reasons=` (comma-separated, refused naming the eighteen); every one of them narrows the SCAN, so a page is full whenever the scope holds 50 notices and `next_cursor` is never a cursor past an empty page, `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
 | `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. Same scope rule as `/work/my-work`, with the handle always named here because it is the path: your own seat's needs no credential, anybody else's is operator-only. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
@@ -1373,8 +1373,10 @@ bars above it hold exactly what the ring would.
 ### A seat's LLM history
 
 `llm_history` is the seat's **finished** phases, read from the event store of
-**every node that ever held the seat** — placement moves a seat, and each node
-keeps the phases it ran — one row per `agent_phase_completed`, newest first,
+**every live data node** — placement moves a seat, and the phases it ran are
+kept by the data node it ran on, or, where it ran on a node without `data`, by
+the data node keeping that node's events in custody — one row per
+`agent_phase_completed`, newest first,
 capped at 50, with the answer's `coverage` saying which nodes it heard from
 (see [Reading the fleet's history](#reading-the-fleets-history-coverage)). The call
 *in flight* is not in it; that is `live.live_call`, which comes from the
@@ -1834,7 +1836,7 @@ history](#reading-the-fleets-history-coverage)), and it stops at the newest
 point any node's page stopped at, so a node whose reply was cut to fit the
 transport shortens the page without ending it. The `agent` filter adds another
 reason — it also pulls in every event sharing a trace with a direct match,
-from every node, so a caller must dedupe by id.
+from every data node, so a caller must dedupe by id.
 
 The persistent store retains 30 days, and
 [`event_history_seconds`](#the-health-envelope) on the health envelope is
@@ -1851,13 +1853,16 @@ set of eight values, and which event type lands under which is in
 
 ### Reading the fleet's history: `coverage`
 
-Every node's event store holds what that node published and nothing else, so
-the history questions — `events`, `event`, `event_series`, `trace`, `turn`,
-`turns`, `phases`, a seat's `llm_history` on `agent`, the delivery and
-outcome counts on `integrations`, and the live projection's boot seed — are answered by **every live node at query time**: the
-node you asked reads its own store and scatters the same question to its
-peers, merges the answers, and says which nodes it heard from. Each of those
-answers carries one shape:
+Every data node's event store holds what that node published, and the events of
+a node without `data` it keeps in
+[custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data), and
+nothing else, so the history questions — `events`, `event`, `event_series`,
+`trace`, `turn`, `turns`, `phases`, a seat's `llm_history` on `agent`, the
+delivery and outcome counts on `integrations`, and the live projection's boot
+seed — are answered by **every live data node at query time**: the node you
+asked reads its own store and scatters the same question to its peers, merges
+the answers, and says which nodes it heard from. Each of those answers carries
+one shape:
 
 ```json
 "coverage": {
@@ -2347,7 +2352,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture (`auth.company_writers` included) the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
-| `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
+| `backups` | `{}` | `GET /backups`: each data node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Operator-only**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
@@ -2509,11 +2514,12 @@ every event from every node, because a dashboard served by one node must
 show turns that ran on another, and that is why it is not a publish
 listener: a listener sees only what its own node published. The event
 store takes the other route, a publish listener inline on the publishing
-node, so no two nodes can write one row.  Each event
-updates the live-state projection *and* fans out to connected
-dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
-oldest queued envelope so it cannot stall the publish path or other
-tabs.
+node — or, for a node without `data`, the one data node that keeps the event
+in [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+— so no two nodes keep one row. Each event updates the live-state projection
+*and* fans out to connected dashboards. Backpressure is per-WebSocket: a
+stalled tab drops the oldest queued envelope so it cannot stall the publish
+path or other tabs.
 
 The dashboard itself is a React + TypeScript application, built by Vite
 from `crewlet/dashboard/` into `crewlet/static/dashboard/`, which the
@@ -3293,7 +3299,7 @@ last of them. So `min_position` never floors a read below a record the call
 made, and a write with one unconfirmed record is never reported `applied`.
 A later record refused after an earlier one landed answers the later
 record's refusal, and its `detail` says what did land — with that record's
-outcome and position — because the earlier change is on every node and "not
+outcome and position — because the earlier change is on every data node and "not
 made" would send a person to redo it.
 
 A refusal is `{error, tool, detail}`, and the transport's own `unbound` adds
@@ -3431,7 +3437,7 @@ an operator uploaded, the output of a run somebody wants to keep. Each is a row
 in the tracker — a path, a type, a size and SHA-256, a version and who wrote
 it — and its content is one object in the
 [object store](../concepts/object-store.md), the one store the whole fleet
-shares, rather than a copy in every node's database. See
+shares, rather than a copy in every data node's database. See
 [A project's files](../guides/work-tracker.md#a-projects-files) for what a seat
 does with them.
 
@@ -4779,21 +4785,22 @@ does not open it.
 
 Two records, because they answer two questions:
 
-- **`points`** — each node's NEWEST backup, from the fleet's backup register:
-  what each node announced when its manifest was written, plus the operator's
-  newest acknowledgement of each log (`crewlet retention ack`, `kind:
-  "operator"`), one point per log acknowledged, each covering that log alone.
-  `counted` says the trim may count it — the `backup_floor` policy (`policy`)
-  takes this owner's word and the copy was verified — and a point is `newest`
-  where some log's backup term reads it: for at least one log it covers, the
-  newest counted point covering that log. Several can be — under `operator`,
-  one per log acknowledged. `bytes` is the whole
+- **`points`** — the fleet's backup register: each data node's NEWEST backup,
+  as it announced it when its manifest was written (a node without `data`
+  copies no replicated estate and announces nothing), and the operator's newest
+  acknowledgement of each log (`crewlet retention ack`, `kind: "operator"`),
+  one point per log acknowledged, each covering that log alone. `counted`
+  says the trim may count it — the `backup_floor` policy (`policy`) takes this
+  owner's word and the copy was verified — and a point is `newest` where some
+  log's backup term reads it: for at least one log it covers, the newest
+  counted point covering that log. Several can be — under `operator`, one per
+  log acknowledged. `bytes` is the whole
   artefact (every database copy and stream snapshot) and is absent on an
   acknowledgement, which asserts a copy the engine never saw. `covers` is how
   far the copy reaches in each state-log stream.
 - **`history`** — every `POST /backup` a person made, newest first, from the
-  [runtime audit](#the-runtime-audit-sourceoperator) every node keeps for the
-  event log's 30 days: when it finished, the `node` whose disk holds it, who
+  [runtime audit](#the-runtime-audit-sourceoperator) every data node keeps for
+  the event log's 30 days: when it finished, the `node` whose disk holds it, who
   asked (`operator`, and the bound person in `actor_seat`), the `dir`, and
   `outcome` — `applied` (the manifest was written) or `failed` (it was not: the
   directory holds debris, not a backup). At most 100 rows; `more` says the page
@@ -5102,8 +5109,8 @@ parameters:
   named windows only, so its figures are the company's. It is the only answer
   with a per-turn tail (`by_turn`) and a watermark (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated
-  [`usage` domain](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) (ADR-0020): every
-  node's day, applied on every node. So the answer is the same whichever node
+  [`usage` domain](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day) (ADR-0020): every
+  data node's day, applied on every data node. So the answer is the same whichever node
   is asked, reaches back **181 days** (the domain's history, not the event
   log's 30), and still counts a node that has left the fleet. It replaced a
   scan of the answering node's own event log, which reported a third of a
@@ -5239,7 +5246,7 @@ Notes:
   no `turns` or `failed`, since a person takes no turns. `seat=<handle>`
   narrows a window to one person as it does to one seat. A person's spend
   reaches the named windows as its own usage record, published with the rest
-  of the node's day.
+  of the day of the data node whose event log holds its spend.
 - All lists are sorted by `total_tokens` descending, ties on the name.
 - Every bucket also carries `cache_read_tokens` and `cache_write_tokens`:
   the share of `input_tokens` the providers' prompt caches served and

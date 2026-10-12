@@ -127,7 +127,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 			t.Fatalf("the retry answered %q and the subject's last record is %d, "+
 				"want unknown and still %d — the broker no longer remembers the "+
 				"operation, so a retry this node decides again lands as a SECOND "+
-				"record every node applies", res.Outcome, last, first.Position.Seq)
+				"record every data node applies", res.Outcome, last, first.Position.Seq)
 		}
 	})
 
@@ -213,7 +213,7 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 		}
 		if got := h.appends.appends.Load() - appended; got != 0 {
 			t.Errorf("the retry reached the broker %d time(s) past its duplicate "+
-				"window, which lands a second copy every node applies", got)
+				"window, which lands a second copy every data node applies", got)
 		}
 	})
 

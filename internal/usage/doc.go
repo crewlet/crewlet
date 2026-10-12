@@ -1,6 +1,6 @@
 // Package usage is what each node's seats, schedules and people did each
-// company day, replicated to every node — the state-log framework's FOURTH
-// domain, and its second COMPACTED one.
+// company day, replicated to every data node — the state-log framework's
+// FOURTH domain, and its second COMPACTED one.
 //
 // # The question it answers, and who has to agree on it
 //
@@ -12,11 +12,17 @@
 // horizon), and a node that left the fleet took its history with it.
 //
 // Every node has to agree on a node's day, and only its CURRENT value matters —
-// which is ADR-0014's fourth answer, a compacted changelog. Each node derives
-// its own day from its own event log ([store.DB.UsageForDay]), folds it into
-// one record per (node, day, seat), per (node, day, schedule) and per (node,
-// day, person), and publishes the record whole; every node's applier writes it
-// into the replicated estate. ADR-0020 is the decision.
+// which is ADR-0014's fourth answer, a compacted changelog. Each DATA node
+// derives its own day from its own event log ([store.DB.UsageForDay]), folds
+// it into one record per (node, day, seat), per (node, day, schedule) and per
+// (node, day, person), and publishes the record whole; every data node's
+// applier writes it into the replicated estate. ADR-0020 is the decision.
+//
+// A node without `data` publishes no day (ADR-0025): it keeps no event log
+// and runs no state log, and its events are kept in exactly ONE data node's
+// event log by custody, so they are counted in that data node's day — which is
+// why custody's claim exists: a batch two data nodes kept would bill its spend
+// twice.
 //
 // # Why the node is part of the identity
 //
@@ -41,7 +47,7 @@
 //
 // Not turn-level detail. A day's row cannot say which turn spent what, and
 // the questions that need one turn — a trace, a phase, an event — are answered
-// by asking every node's own event log at query time, which is a different
+// by asking every data node's own event log at query time, which is a different
 // mechanism with a different retention.
 //
 // Not swept. The horizon ([History]) is applied by the applier from the

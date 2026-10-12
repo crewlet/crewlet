@@ -27,7 +27,7 @@ knowledge:
 
 | | `native` | `confluence` |
 |---|---|---|
-| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
+| Where pages live | the fleet's own ordered log, applied into every data node's database | a Confluence site |
 | How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval — an index over the codes, then an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
@@ -36,8 +36,8 @@ knowledge:
 ### Native: an index, and what that means
 
 There is a local copy, and being honest about it is the whole design. Every
-page change is one record on an ordered log, every node applies it into its own
-database, and a lexical index is built behind those rows asynchronously —
+page change is one record on an ordered log, every data node applies it into its
+own database, and a lexical index is built behind those rows asynchronously —
 tokenising a large wiki takes minutes, and doing it inline would put the whole
 index build inside the apply transaction that holds the node's only writer.
 
@@ -68,8 +68,9 @@ The driver this engine ships has **no approximate-nearest-neighbour index** —
 `internal/store/caps.go` measures for one once per process and reports what it
 found on every open — and the alternatives to building one were a full exact
 scan of every vector on every query, or embedding a search library with its
-own index format, file and backup story on every node. Instead the search is
-**two stages**, which is the shape every production vector engine uses anyway:
+own index format, file and backup story on every data node. Instead the
+search is **two stages**, which is the shape every production vector engine
+uses anyway:
 
 1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
@@ -127,8 +128,8 @@ flowchart LR
 
 - **It is replicated state, like the vectors.** The embedding duty trains it
   from the corpus's own codes, publishes it as a record on the vector log,
-  and every node applies that record — so every node holds the same centroids
-  and files every document in the same list, and a node that adopts a
+  and every data node applies that record — so every data node holds the same
+  centroids and files every document in the same list, and a node that adopts a
   snapshot adopts the index inside it. The arithmetic is integer Hamming
   distance with a fixed tie break, so two CPUs never disagree about a list.
 - **How many lists a search reads is measured, never configured.** Every
@@ -306,8 +307,8 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every node applies it. The company pays the
-bill once and holds the answer everywhere.
+source once and publishes a record; every data node applies it. The company
+pays the bill once and every data node holds the answer.
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -519,9 +520,9 @@ independence is the point:
   function of the id rather than of anything derived from it.
 
 **A single node reads every bucket**, exactly as it did before the column
-existed. A fleet above 10 000 documents divides them: each live node scans a
-contiguous range, returns its best candidates *with scores*, and the asking node
-merges. There is no routing plan to compute and nothing to configure — the
+existed. A fleet above 10 000 documents divides them: each live data node scans
+a contiguous range, returns its best candidates *with scores*, and the asking
+data node merges. There is no routing plan to compute and nothing to configure — the
 division is a sorted roster and a remainder, and every node computes the same
 one. See [Search](../guides/search.md) for the merge order, why BM25 stays
 comparable across a divided scan, and what a partial answer names.
@@ -728,7 +729,7 @@ Two properties differ from the vendor path and both are visible:
   that is not there, or two pages filed under each other, are pages no walk of
   the container ever reaches. An empty parent is the container's top.
   Two moves that are each sound can still race — A under B on one node, B
-  under A on another — and so can a move and its parent's purge. Every node
+  under A on another — and so can a move and its parent's purge. Every data node
   then files the page where it can, identically: a move whose parent it can no
   longer hold leaves the page where it was, a create lands at the top, and a
   `pages_parent_salvaged` warning names the page. **Purging a page re-files

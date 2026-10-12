@@ -1583,12 +1583,14 @@ type Stream struct {
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
 	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
-	// stream every node publishes its own company days to, so that spend,
-	// turn and read history is answered fleet-wide and outlives the node
-	// that spent it.
+	// stream every data node publishes its own company days to (a node
+	// without `data` publishes none: its events are kept in one data node's
+	// log by custody and counted in that node's day), so that spend, turn
+	// and read history is answered fleet-wide and outlives the node that
+	// spent it.
 	//
 	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
-	// (node, day, seat or schedule) for 181 days, so its size is the
+	// (node, day, seat, schedule or person) for 181 days, so its size is the
 	// number of those objects rather than how busy they were. A three-node
 	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
 	// default is four times that. Unset takes the default rather than a
@@ -1600,7 +1602,7 @@ type Stream struct {
 	// CREATED with, and crossing it refuses the append — the day's figures
 	// stop replicating and the log's headroom alarm names this domain —
 	// rather than dropping the oldest day.
-	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=1073741824;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."`
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=1073741824;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

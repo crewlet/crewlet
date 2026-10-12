@@ -513,8 +513,8 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 
 // startNativeDuties arms the native runtime's two fleet-singleton duties — the
 // log's trim, without which a domain's log only grows to its ceiling, and the
-// vector domain's one writer — and the usage publisher every node runs for its
-// own days ([Engine.startUsage]). ONE CALL FOR BOTH CALLERS — [New] and
+// vector domain's one writer — and the usage publisher every data node runs
+// for its own days ([Engine.startUsage]). ONE CALL FOR BOTH CALLERS — [New] and
 // [Engine.startNativeFor] — so a runtime met at an apply cannot be missing a
 // writer a boot would have armed: a node that booted unconfigured and was
 // handed its first company by an apply would otherwise never publish a day of
@@ -529,8 +529,8 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// semantic search is present and correct over an empty corpus — which
 	// reports as a healthy domain rather than as a missing one.
 	e.startEmbedding(ctx, n.log)
-	// AND THE USAGE DOMAIN'S WRITER, which every node runs for its own
-	// days. Without it the domain replicates an empty stream and every
+	// AND THE USAGE DOMAIN'S WRITER, which every data node runs for its
+	// own days. Without it the domain replicates an empty stream and every
 	// spend answer is as partial as it was before the domain existed.
 	e.startUsage(ctx, n.log)
 }

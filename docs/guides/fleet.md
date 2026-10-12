@@ -21,11 +21,11 @@ so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
 **One thing does divide by itself.** Above 10 000 indexed documents a fleet
-splits the knowledge search's 64 buckets between its live nodes, so each scans
-a share of the corpus rather than all of it. Nothing is configured and nothing
-is rebuilt — adding a node divides the buckets again on the next search, and an
-answer a node did not come back for is labelled partial rather than silently
-short. See [Search](search.md).
+splits the knowledge search's 64 buckets between its live data nodes, so each
+scans a share of the corpus rather than all of it. Nothing is configured and
+nothing is rebuilt — adding a data node divides the buckets again on the next
+search, and an answer a node did not come back for is labelled partial rather
+than silently short. See [Search](search.md).
 
 ## What a fleet needs
 
@@ -588,9 +588,10 @@ The consequences worth stating plainly:
   only ever looks down, so a lower-protocol build is never refused and
   takes over a higher node's expired leases unchecked. Nothing in the table
   can stop it.
-- **A node that leaves takes its turn-level history with it.** Every node's
-  event store holds the events it published, and the dashboard's turns,
-  traces and event log are read from every live node at query time. A node
+- **A node that leaves takes its turn-level history with it.** Every data
+  node's event store holds the events it published and the ones it keeps in
+  custody for a node without `data`, and the dashboard's turns, traces and
+  event log are read from every live data node at query time. A node
   you drain for good, or a node whose volume you discard, is a node whose
   turns, phases and events no screen can show again — the spend, turn
   counts and page reads it recorded survive it, in the replicated `usage`
@@ -631,11 +632,13 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker and the knowledge embeddings are derived on every node from
-an ordered log the fleet shares. A node replays that log from wherever its own
-rows say it stopped — which works only while the log still **holds** those
-records. It does not hold them for ever: once every node has applied past a
-record, a backup covers it and it is at least a week old, it is trimmed.
+The replicated estate — the work tracker, the knowledge base, the embeddings
+that search them and every data node's usage days — is derived on every
+data node from ordered logs the fleet shares, one per domain. A node replays
+each log from wherever its own rows say it stopped — which works only while the
+log still **holds** those records. It does not hold them for ever: once every
+data node has applied past a record, a backup covers it and it is at least a
+week old, it is trimmed.
 
 So a node that was down long enough, or that has never run at all, can wake up
 below what the log still holds. There is nothing left for it to replay, and no
@@ -647,27 +650,28 @@ serves anything.
 
 Three things make that work, and all three are per node:
 
-- **Every node publishes its own position**, every ten seconds and at once
+- **Every data node publishes its own position**, every ten seconds and at once
   when it takes a snapshot. This is what the trim reads to decide what the
   fleet has finished with — a node that publishes nothing is a node the trim
   cannot see, and the log is then trimmed past records that node still needs.
-- **Every node takes snapshots**, into `store.snapshot_dir` (by default
+- **Every data node takes snapshots**, into `store.snapshot_dir` (by default
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
   cannot decode, while the disk is short, or while the fleet counts no other
   data node — and retries shortly rather than waiting out the
   interval.
-- **Every node serves them.** There is no designated donor: a fleet whose
-  only donor was down would have nothing to give.
+- **Every data node serves them.** There is no designated donor: a fleet
+  whose only donor was down would have nothing to give. A node without `data`
+  holds no replicated estate, so it takes no snapshot and has none to serve.
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
 fall below the floor, and this path is never needed.
 
 Watch for **`statelog_no_snapshot_yet`** (a warning), which says a node has
-never successfully taken one and why. A fleet where every node logs it has no
-recovery path: a member that falls behind will find nothing to adopt, months
+never successfully taken one and why. A fleet where every data node logs it has
+no recovery path: a member that falls behind will find nothing to adopt, months
 later, in the one situation where it matters.
 
 It is logged once per change of reason rather than on every retry, so the line

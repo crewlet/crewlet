@@ -1,10 +1,10 @@
 # Replication
 
 Crewlet's own tracker and knowledge base are **replicated state machines**
-(the embeddings and each node's usage history ride the same framework as
-[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day)). One
-ordered stream per domain is the write-ahead log; every node applies it into
-its own SQL database; the checkpoint commits in the same transaction as the
+(the embeddings and each data node's usage history ride the same framework
+as [compacted domains](#two-compacted-domains-the-embeddings-and-each-data-nodes-day)).
+One ordered stream per domain is the write-ahead log; every data node applies it
+into its own SQL database; the checkpoint commits in the same transaction as the
 rows it covers. That last clause is the whole design: a node's position and its
 rows can never disagree, because they are written together or not at all.
 
@@ -26,7 +26,7 @@ are stated first.
 The anchor and the version are equal only while every accepted record produces
 rows, and an apply **gate** is by definition the rule that makes them differ.
 An evicted node's append is accepted by the broker at sequence 102 and dropped
-by every applier: the object's version stays at 100 on every node while the
+by every applier: the object's version stays at 100 on every data node while the
 broker's last message on that subject is 102. A writer that formed its
 expectation from the version would be refused, re-read 100, and burn its whole
 round budget — for at least the trim's age floor, and unbounded above while any
@@ -95,7 +95,7 @@ not says so — the item is named, and its dependencies are finished on it with
 
 ### What a retry is judged by: the instant its operation was minted
 
-Every node keeps an **operation ledger** — which operations its own applier
+Every data node keeps an **operation ledger** — which operations its own applier
 has applied, and where — and it is the ledger, not the broker, that makes a
 retry safe. The broker also collapses a repeated operation id, but only inside
 its two-minute duplicate window, and a turn re-run after a crash or a caller
@@ -316,12 +316,13 @@ above, never its own.
 This is the sentence the backup schedule hangs on.
 
 **Above the trim floor**, the log holds every record on R replicas and every
-node holds the applied rows. Losing a node loses nothing.
+data node holds the applied rows. Losing a node loses nothing.
 
 **Below the trim floor the log may already hold nothing — the trim has licensed
-deleting it — and each node's own database file is the only copy of that
-history** — N of them, independent, none replicated. Losing history below the
-floor takes all N disks, and it is covered **only** by the backup gate.
+deleting it — and each data node's replicated estate is the only copy of that
+history** — one per data node, independent, none replicated. Losing history
+below the floor takes every data node's disk, and it is covered **only** by the
+backup gate.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
@@ -375,8 +376,8 @@ is not answering, either one can fail. What happens then depends on the drift:
   node reported itself up.
 
 A rebuild touches only this node. No peer reads through its consumer, and no
-retention term reads it either: the trim works from the positions each node
-publishes from its own rows. What the rebuild makes safe is **losing the
+retention term reads it either: the trim works from the positions each data
+node publishes from its own rows. What the rebuild makes safe is **losing the
 replicated database while the broker keeps its estate**. A node started on an
 empty `crewlet-replicated.db` replays each log from the broker, or adopts a
 peer's snapshot where the trim has already removed the start of one. It no
@@ -384,7 +385,7 @@ longer waits on records its old reader already acknowledged.
 
 ## Replication lag is two positions
 
-Not one number. Every node publishes both:
+Not one number. Every data node publishes both:
 
 - **`seq`** — the record it has *consumed*: its checkpoint, the contiguous
   prefix it has moved over.
@@ -547,11 +548,11 @@ that adds such a column or changes how one is computed, a node that just
 adopted a snapshot from a peer on a different build, or a checkpoint a reanchor
 created — the node's next boot recomputes them from the rows it holds, in the
 same transaction that records which rules the rows now follow, before it
-applies anything new. It happens once per change, on every node; the
+applies anything new. It happens once per change, on every data node; the
 `statelog_rederived` log line names the domain, the rule versions it moved
 between and how many rows it wrote.
 
-## Two compacted domains: the embeddings and each node's day
+## Two compacted domains: the embeddings and each data node's day
 
 Two domains do not keep a history at all. Their streams keep **one message per
 subject** — a keyed table rather than a log — so a node that joins replays the
@@ -562,16 +563,20 @@ hold identical rows.
 | Domain | Stream | One subject per | Written by | Kept for |
 |---|---|---|---|---|
 | **vectors** | `CREWLET_TRACKER_VECTORS` | embedded source | the fleet's one embedding duty | 90 days per message; the rows until the source is forgotten |
-| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat or schedule) | **every node, for its own days only** | 181 days |
+| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat, schedule or person) | **every data node, for its own days only** | 181 days |
 
-**`usage` is what makes history fleet-wide.** Each node derives its own day —
-the spend by phase, worker, model and provider slot, the turns that ended and
-how (failed, reviewed, first pass, sent back, a duration histogram), the pages
-its seats read, the schedules it fired — from its own event log, every 15
+**`usage` is what makes history fleet-wide.** Each data node derives its own
+day — the spend by phase, worker, model and provider slot, the turns that ended
+and how (failed, reviewed, first pass, sent back, a duration histogram), the
+pages its seats read, the schedules it fired — from its own event log, every 15
 seconds while the day moves, and publishes each object's whole cumulative value.
-Every node applies every node's days, so any node answers for the fleet and a
-node that leaves takes nothing with it: its days stay in every peer's rows, and
-a node that joins later replays them from the stream. Because the node is part
+A node without `data` publishes no day: it keeps no event log, and its events
+are written into exactly one data node's
+([custody](deployment.md#custody-the-rows-of-a-node-without-data)), so its
+seats' spend is counted in that data node's day. Every data node applies every
+data node's days, so any data node answers for the fleet and a node that
+leaves takes nothing with it: its days stay in every peer's rows, and a node
+that joins later replays them from the stream. Because the node is part
 of the subject, no two nodes ever write one object and nothing is arbitrated;
 an apply replaces the object's rows.
 
@@ -579,7 +584,7 @@ A day is cut on the company's clock (`timezone`). A node re-derives today and
 yesterday on every tick, so the turn that ended a second before midnight
 reaches the fleet, and on every start, so a day a node was down across still
 arrives. History older than 181 days leaves in the same transaction that
-applies the day that makes it old, on every node alike — there is no sweep.
+applies the day that makes it old, on every data node alike — there is no sweep.
 The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).
 
 ## The six capacity ceilings
@@ -601,8 +606,8 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
-4. **The store's own size** — every node is a full replica, so the corpus is
-   held N times.
+4. **The store's own size** — every data node is a full replica, so the corpus
+   is held once per data node; a node without `data` holds none of it.
 5. **Applier occupancy** — the 16 seconds above.
 6. **The snapshot repository** — one artefact per node, sized in
    [Retention](retention.md).

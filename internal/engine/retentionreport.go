@@ -562,13 +562,13 @@ func (r *retention) observed(out *statelog.Reading) {
 // # The rate is the LOG'S, read where it is applied
 //
 // A barrier record is what a linearizable read costs the log, so the census
-// input is the barrier records a log received — and every node applies every
-// record, so the count this node's applier took of them is the whole fleet's,
-// not this node's. What this replaced summed the barriers THIS NODE appended,
-// which on a fleet of several serving nodes is only its share of the reads: a
-// three-node fleet exceeding its census threefold read as a company exactly at
-// it, and the alarm could not fire until the company was six times past what
-// its logs were sized for.
+// input is the barrier records a log received — and every data node applies
+// every record, so the count this node's applier took of them is the whole
+// fleet's, not this node's. What this replaced summed the barriers THIS NODE
+// appended, which on a fleet of several serving nodes is only its share of the
+// reads: a three-node fleet exceeding its census threefold read as a company
+// exactly at it, and the alarm could not fire until the company was six times
+// past what its logs were sized for.
 //
 // # The census is per seat, plus the engine's own
 //

@@ -2654,15 +2654,15 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 // AT THE HOUR THEY WERE COMMITTED.
 //
 // The census a log is held against is its linearizable reads, and a barrier
-// record is what each one costs it. Every node applies every record, so the
-// applier's count is the whole fleet's — which is the number `census_drift`
+// record is what each one costs it. Every data node applies every record, so
+// the applier's count is the whole fleet's — which is the number `census_drift`
 // needs and a node's own appends are not. Labelled with the stream, which is
-// what an operator finds the log by on the broker; counted from the
-// batch that committed, so a record redelivered below the checkpoint is not a
-// second read; and filed in the rolling window at the hour the BROKER stored
-// it, so a node replaying days of backlog — back from an outage, or past a
-// snapshot a day old — does not read days of reads as the last one. The
-// cumulative series counts every barrier applied, as an exporter diffs it.
+// what an operator finds the log by on the broker; counted from the batch that
+// committed, so a record redelivered below the checkpoint is not a second read;
+// and filed in the rolling window at the hour the BROKER stored it, so a node
+// replaying days of backlog — back from an outage, or past a snapshot a day old
+// — does not read days of reads as the last one. The cumulative series counts
+// every barrier applied, as an exporter diffs it.
 func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

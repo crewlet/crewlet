@@ -85,11 +85,12 @@ func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 // Subject is the object a record is about: one kind of thing, on one node, on
 // one company day.
 //
-// THE NODE IS PART OF THE IDENTITY, and that is the whole design. Each node
-// derives only what its own event log holds, so two nodes that both ran a seat
-// on one day publish two records rather than racing for one — no arbitration,
-// no merge at write time, and a reader sums across nodes. A seat that moved
-// at noon is two rows for that day, both true.
+// THE NODE IS PART OF THE IDENTITY, and that is the whole design. Each data
+// node derives only what its own event log holds — what it published, and
+// what it keeps in custody for a node without `data` — so two data nodes whose
+// logs both hold a seat's turns on one day publish two records rather than
+// racing for one: no arbitration, no merge at write time, and a reader sums
+// across nodes. A seat that moved at noon is two rows for that day, both true.
 type Subject struct {
 	Kind Kind `json:"kind"`
 

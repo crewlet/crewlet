@@ -493,8 +493,9 @@ adopts a snapshot from a node in the new generation, **on its own**:
   it can donate as soon as its gate allows. Until some node in the new
   generation holds an artefact, the others ask again on the doubling interval.
 
-The vectors are exempt: each node re-anchors its own copy, so a peer ahead there
-is a recovery in progress rather than a history this node has lost.
+The vectors and the usage days are exempt: each data node re-anchors its own copy,
+so a peer ahead there is a recovery in progress rather than a history this node
+has lost.
 
 **If the node that re-anchored is gone for good** — decommissioned, or its disk
 lost, before any peer adopted from it — nothing can donate the new generation:
@@ -516,9 +517,9 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG
    only after step 2.
 2. From then on an evicted node's position row — and any trim floor it
    published — counts toward neither the generation the fleet is on nor the
-   reanchor guards. Every node reads the peer's standing off the log itself,
-   since a stranded node's applier never reaches the eviction record; so the
-   nodes stop asking for a donor at the peer's generation.
+   reanchor guards. Every data node reads the peer's standing off the log
+   itself, since a stranded node's applier never reaches the eviction record; so
+   the nodes stop asking for a donor at the peer's generation.
 3. **Re-anchor the most caught-up remaining node.** `reanchor` names the
    `abandoned` case: the log is the one these rows are keyed to and still holds
    everything they are missing, but it continues in a generation only the
@@ -825,12 +826,13 @@ API are unaffected. See [Read consistency](consistency.md).
 
 The **usage log** refuses the same way, and what it costs is different: no read
 appends to it, so nothing a seat does is refused — what stops is the
-replication of each node's days. Every node keeps re-deriving its day and
-retrying on every tick, nothing is lost from any node's own event log, and the
-`log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
-size is a count of node-days rather than a rate — one message per (node, day,
-seat or schedule) for 181 days — so a log that fills has outgrown its census:
-raise `stream.usage_log_max_bytes` as below.
+replication of each data node's days. Every data node keeps re-deriving its
+day and retrying on every tick, nothing is lost from any data node's own event
+log, and the `log_headroom` alarm names the domain (`log_headroom on usage`)
+long before the ceiling. Its size is a count of node-days rather than a rate —
+one message per (node, day, seat, schedule or person) for 181 days — so a log
+that fills has outgrown its census: raise `stream.usage_log_max_bytes` as
+below.
 
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
@@ -1121,19 +1123,19 @@ it rather than waiting for that batch.
 copy's age sees a log that is its own history, so nothing about its own log
 refuses it — yet every write it makes after the restore is one the restored
 reanchor of a newer node would apply nowhere, acknowledged to a caller who then
-loses it. So every node reads the positions register on its heartbeat, and a
-peer on the same stream, in the same generation and not evicted, whose position
-is past the log's end — confirmed against the log, which must not hold the
-record there — or whose row says `log_diverged`, stops this node's **writes**
-of that domain: each refuses `log_truncated`, naming the peer, and the node
-logs `statelog_log_truncated`. Its **reads** go on, being the log's own history.
-The eviction of that peer is still written, because it is one of the ways out —
-into the [gate reserve](#the-gate-reserve) if the log has filled meanwhile.
-The refusal lifts on its own (`statelog_log_truncated_cleared`) once the peer
-re-anchors, is rebuilt from a peer's snapshot, or is evicted. What this cannot
-see is a newer node that has not published since the restore — after a whole
-broker restore the register is the copy's too — so writes made before it boots
-still land.
+loses it. So every data node reads the positions register on its heartbeat, and
+a peer on the same stream, in the same generation and not evicted, whose
+position is past the log's end — confirmed against the log, which must not hold
+the record there — or whose row says `log_diverged`, stops this node's
+**writes** of that domain: each refuses `log_truncated`, naming the peer, and
+the node logs `statelog_log_truncated`. Its **reads** go on, being the log's own
+history. The eviction of that peer is still written, because it is one of the
+ways out — into the [gate reserve](#the-gate-reserve) if the log has filled
+meanwhile. The refusal lifts on its own (`statelog_log_truncated_cleared`) once
+the peer re-anchors, is rebuilt from a peer's snapshot, or is evicted. What this
+cannot see is a newer node that has not published since the restore — after a
+whole broker restore the register is the copy's too — so writes made before it
+boots still land.
 
 **After restoring a broker, re-anchor the most caught-up node whose checkpoint
 was past the restored log's end, before anything else writes to it** — the verb
@@ -1224,7 +1226,7 @@ rows came from, and the rebuilt stream — same name, same generation — would
 arbitrate it as a sequence about itself: an expectation of zero would land on a
 subject the old history had written, and an ordinary one would be accepted
 wherever the rebuilt stream's own history happened to end at the same number.
-Anything that landed would be applied by every node once the stream is
+Anything that landed would be applied by every data node once the stream is
 followed from its head. A refused write is an `unavailable` answer naming
 `wrong_stream`, both creation instants and the `reanchor` command below.
 
@@ -1327,16 +1329,17 @@ the log still holds is on the log, so nothing it applied is lost by a reanchor
 that follows it, and it is not weighed (whether what it wrote after a restore
 is kept is the `-discard` question, not this one). So a node the log diverged
 from can re-anchor although the copy-age nodes that wrote the log past it
-stand further along the log than its checkpoint. Every node publishes, beside
-its position, the creation instant of the stream its rows are keyed to and the
-broker's instant for its checkpoint's record, so a peer still on the lost
-stream, or past a restored log's end, is compared with this node and one that
-came up on the rebuilt stream with no rows is not: it is further along nothing
-a reanchor discards. A refusal names the peer that is further along. `-force` overrides the
-most-caught-up rule for the case where the fleet cannot be asked, and never the
-first. The
-vectors are exempt from both: their coverage legitimately differs node to node,
-so every node re-anchors its own copy.
+stand further along the log than its checkpoint. Every data node publishes,
+beside its position, the creation instant of the stream its rows are keyed to
+and the broker's instant for its checkpoint's record, so a peer still on the
+lost stream, or past a restored log's end, is compared with this node and one
+that came up on the rebuilt stream with no rows is not: it is further along
+nothing a reanchor discards. A refusal names the peer that is further along.
+`-force` overrides the most-caught-up rule for the case where the fleet cannot
+be asked, and never the first. The vectors and the usage days are exempt from
+both, and every data node re-anchors its own copy of each: the vectors' coverage
+legitimately differs node to node, and each data node's usage days are written
+by that node alone.
 
 **And one generation is only ever opened once.** Two nodes that re-anchor the
 same log at the same moment — each before the other's position row says so, or
@@ -1384,8 +1387,9 @@ runbook nobody read.
 Three different things:
 
 - **Removing** a task hides it. The rows stay; a restore brings it back.
-- **Deleting** writes a marker. Every node drops every record about that task,
-  for ever — which is what stops a redelivery months later resurrecting it.
+- **Deleting** writes a marker. Every data node drops every record about that
+  task, for ever — which is what stops a redelivery months later resurrecting
+  it.
 - **Purging** removes the rows. Its report has **three groups**: what was
   purged, what could not be reached, and what is stale.
 
@@ -1415,20 +1419,20 @@ reason is the entire account of what used to be at that key. A purge is an
 the engine — because nothing else can be asked to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means
-the record is on the log and each node's rows go as it reaches them; do not run
-it again. `unknown` is the one to retry, and the printed operation id goes back
-in `-op-id` so the retry cannot append a second purge of a task the first one
-may already have destroyed — and when it did, the retry answers `applied`, at
-the first purge's position, rather than finding the task gone and refusing.
-Pass it back exactly as printed: the id carries the
-instant it was minted, which is what a node judges the retry by once its
-operation ledger may have lost the first purge's row to the ledger's
-thirty-day sweep, and there it answers `unknown` again rather than purging twice. An id of your
-own making is refused (`op_id_invalid`): it carries no instant, so no node
-could tell whether it already ran. So is a printed one altered on the way back
-— trimmed, spaced, or grown past 128 bytes — because the broker carries the id
-in a header that trims its ends and rewrites a line break, and would
-deduplicate it as another operation.
+the record is on the log and each data node's rows go as it reaches them; do not
+run it again. `unknown` is the one to retry, and the printed operation id goes
+back in `-op-id` so the retry cannot append a second purge of a task the first
+one may already have destroyed — and when it did, the retry answers `applied`,
+at the first purge's position, rather than finding the task gone and refusing.
+Pass it back exactly as printed: the id carries the instant it was minted, which
+is what a node judges the retry by once its operation ledger may have lost the
+first purge's row to the ledger's thirty-day sweep, and there it answers
+`unknown` again rather than purging twice. An id of your own making is refused
+(`op_id_invalid`): it carries no instant, so no node could tell whether it
+already ran. So is a printed one altered on the way back — trimmed, spaced, or
+grown past 128 bytes — because the broker carries the id in a header that trims
+its ends and rewrites a line break, and would deduplicate it as another
+operation.
 
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a
@@ -1447,9 +1451,9 @@ architecture cannot keep.
 There is no tiering here, and the absence is a decision rather than an
 omission.
 
-Every node holds the whole corpus in one SQL database. A task filed three years
-ago is read at the same cost as one filed this morning, is searched by the same
-index, and is replicated exactly as many times. The log in front of it is
+Every data node holds the whole corpus in one SQL database. A task filed three
+years ago is read at the same cost as one filed this morning, is searched by the
+same index, and is replicated exactly as many times. The log in front of it is
 trimmed; the tables are not.
 
 That is what makes the storage forecast a function of how much a company has
@@ -1457,15 +1461,16 @@ ever done rather than of how much it is doing — and it is why the numbers belo
 are worth reading before the fleet is large.
 
 The **usage history** is the one replicated table set with a horizon of its
-own: each node's company days — spend, turns, page reads, schedule fires — are
-kept **181 days**, which is a ninety-day window, the ninety days it is compared
-with, and the day a moved clock can touch. Nothing sweeps them: every record for
-a day deletes the rows older than that day minus 181 in the same transaction
-that writes it, on every node, and the stream's own age bound forgets the same
-days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+own: each data node's company days — spend, turns, page reads, schedule fires
+— are kept **181 days**, which is a ninety-day window, the ninety days it is
+compared with, and the day a moved clock can touch. Nothing sweeps them: every
+record for a day deletes the rows older than that day minus 181 in the same
+transaction that writes it, on every data node, and the stream's own age bound
+forgets the same days. See
+[Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 
 Two tables are the exception, and both are swept **per node** rather than once
-across the fleet — each node applies the log into its own copy, so a fleet
+across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
 which looks exactly like a sweep that works to whoever checks the node it ran
 on.
@@ -1516,7 +1521,7 @@ company with none is counted as one), plus what the engine reads on its own —
 the object store's collector, one in the fleet, pins the tracker's log 25 times
 a day (24 collections and one audit) — and the alarm fires on the log furthest
 past twice its census.
-The rate is the log's, counted where every node applies it, and each barrier is
+The rate is the log's, counted where every data node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they
 count toward the day they happened in rather than toward today.

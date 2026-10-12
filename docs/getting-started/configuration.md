@@ -1066,13 +1066,14 @@ stream:
   # usage_log_max_bytes: 1073741824
                                     #   the usage log's ceiling (default 1 GiB,
                                     #   1..64 GiB): the compacted stream every
-                                    #   node publishes its own company days to —
-                                    #   spend, turns, page reads, schedule fires
-                                    #   — so history is answered fleet-wide and
-                                    #   outlives the node that spent it. SIZED BY
-                                    #   A CENSUS, not a rate: one message per
-                                    #   (node, day, seat or schedule) for 181
-                                    #   days, about 217 MB for three nodes of
+                                    #   data node publishes its own company days
+                                    #   to — spend, turns, page reads, schedule
+                                    #   fires — so history is answered
+                                    #   fleet-wide and outlives the node that
+                                    #   spent it. SIZED BY A CENSUS, not a rate:
+                                    #   one message per (node, day, seat,
+                                    #   schedule or person) for 181 days,
+                                    #   about 217 MB for three nodes of
                                     #   forty seats and twenty schedules.
                                     #   Crossing it refuses the append and the
                                     #   log_headroom alarm names `usage`

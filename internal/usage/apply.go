@@ -14,7 +14,7 @@ import (
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
 // `usage_turns`, `usage_tokens`, `usage_reads`, `usage_schedule_runs` and
-// `usage_person_tokens`, on every node.
+// `usage_person_tokens`, on every data node.
 //
 // # An apply REPLACES
 //
@@ -36,11 +36,11 @@ import (
 // # The horizon is applied here, by the record
 //
 // Every apply also deletes the rows older than its own day minus [History].
-// That is a pure function of the record — the day it carries — so every node
-// that applies it deletes the same rows, and no local sweep ever writes this
-// estate. A company that goes quiet keeps its old rows until the next record
-// arrives, which is harmless: the stream has already forgotten them, and a
-// read asks for a window rather than for everything.
+// That is a pure function of the record — the day it carries — so every data
+// node that applies it deletes the same rows, and no local sweep ever writes
+// this estate. A company that goes quiet keeps its old rows until the next
+// record arrives, which is harmless: the stream has already forgotten them, and
+// a read asks for a window rather than for everything.
 type Applier struct{}
 
 // NewApplier builds the usage applier. It takes nothing, for the vector

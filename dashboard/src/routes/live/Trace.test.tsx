@@ -1,7 +1,7 @@
 /**
  * Where one trace sends a reader next, and what it says it is missing.
  *
- * A trace is every event sharing one id, assembled from every node's own store
+ * A trace is every event sharing one id, assembled from every data node's store
  * at read time — so its page answers two questions beyond the spans it draws:
  * where the same events are in the log, and whether a node's share of the
  * chain is absent.

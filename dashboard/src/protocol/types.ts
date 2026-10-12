@@ -3426,8 +3426,10 @@ export interface AgentAnswer {
   llm_history: EventRecord[];
   /** Pass back as `before` to page further into the record. */
   next: string;
-  /** Which nodes the history came from — a seat's history is on every node
-   *  that ever held it — or null when it could not be read at all. */
+  /** Which data nodes the history came from — a seat's history is kept by
+   *  every data node it ran on, or that kept its events in custody while it
+   *  ran on a node without `data` — or null when it could not be read at
+   *  all. */
   coverage?: Coverage | null;
 }
 
@@ -4514,7 +4516,7 @@ export interface SeatActivityTotals {
 
 /**
  * One seat's turns over a window of company days, from the replicated usage
- * domain — every node's days summed (`seat_activity`).
+ * domain — every data node's days summed (`seat_activity`).
  */
 export interface SeatActivityRow {
   handle: string;

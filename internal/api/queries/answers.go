@@ -411,7 +411,7 @@ func Register(r *Registry, s Sources) {
 		// push names a version of a heavy field newer than the copy it
 		// holds — the push that carried it was dropped. From the projection
 		// alone, so it costs what a push does; `agent` reads the seat's
-		// history from every node as well.
+		// history from every data node as well.
 		r.Register("live_call", s.liveCall)
 		r.Register("tokens", s.tokens)
 	}
@@ -745,9 +745,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// in the store addressable by id.
 		"next": next,
 		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
-		// so its history is on every node that ever held it; null when it
-		// could not be read at all, which is not the same as a seat that
-		// has never run.
+		// so its history is on every data node it ran on or that kept its
+		// events in custody; null when it could not be read at all, which
+		// is not the same as a seat that has never run.
 		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
