@@ -302,8 +302,15 @@ describe("in the frame", () => {
     key("p");
     const dialog = await screen.findByRole("dialog", { name: "Switch project" });
     expect(dialog.classList.contains("crewlet-switcher--centered")).toBe(true);
-    await settle();
-    fireEvent.click(within(dialog).getByRole("option", { name: "Split engine, SPLIT, 4 open" }));
+    // THE LISTING IS WAITED FOR, NOT ASSUMED. Away from Work nothing asks
+    // for it until G then P opens the panel, so the panel and the answer it
+    // asked for are drawn on two schedules, and settle()'s fixed count of
+    // microtasks waits on neither: under load the panel was found first and
+    // the click met a list still busy — as it does every time the listing
+    // is answered 300 ms late.
+    fireEvent.click(
+      await within(dialog).findByRole("option", { name: "Split engine, SPLIT, 4 open" }),
+    );
     await waitFor(() => expect(location.hash).toBe("#/work/SPLIT"));
     expect(screen.queryByRole("dialog", { name: "Switch project" })).toBeNull();
   });
