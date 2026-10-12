@@ -223,7 +223,7 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

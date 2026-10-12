@@ -167,8 +167,8 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 }
 
 // sayDestructionRetry tells an operator which operation id a destruction that
-// failed is retried under, where the failure leaves one to name — `work purge`
-// mints its id before it asks.
+// failed is retried under, where the failure leaves one to name — `work purge`,
+// `chat erase` and `chat prune` alike, since each mints its id before it asks.
 //
 // TWO FAILURES NAME ONE. A request the node never answered may have run to
 // completion after the connection went, so the id this command minted is the

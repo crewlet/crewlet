@@ -274,7 +274,8 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil,
+		nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -696,7 +697,20 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, log)
+	// THE HUB runEngine RUNS, from the same hub constructor, so a surface
+	// served here is the one production serves: its sockets attach to a hub
+	// that reads the rooms through the router and answers the fleet's
+	// presence probes. It is not this engine's applier observer — the engine
+	// was built before it, where runEngine builds both through
+	// [api.NewEngineWithChat] — so no committed record reaches it; what it
+	// carries here is the surface's wiring, which is all these cases assert.
+	// Stopped as runEngine stops it, by its owner rather than by the surface.
+	chatLive := api.NewEngineChatLive(nodeID)
+	chatLive.Start(t.Context())
+	chatLive.Attach(t.Context(), e)
+	t.Cleanup(chatLive.Stop)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), log)
 	return surface, reconciler, err
 }
 
