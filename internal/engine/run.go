@@ -2031,11 +2031,12 @@ func (e *Engine) stopCustody(ctx context.Context) {
 	e.custody.Stop(bounded)
 }
 
-// StallLag is how far behind the worst live watched duty is.
+// StallLag is how far behind the worst live watched duty is: the time since
+// its last beat, once it has missed one ([seat.Watchdog.Lag]).
 //
 // The early-warning half of the watchdog: it fires at the lease TTL, and
-// this is the number climbing towards it. Zero means nothing to report —
-// either the duty is turning normally or nothing is being watched — which is
+// this is the number climbing towards it. Zero means nothing to report:
+// every watched duty is on its beat, or nothing is being watched, which is
 // the same reading a health surface wants for both.
 func (e *Engine) StallLag() time.Duration {
 	if e.watchdog == nil {

@@ -102,10 +102,13 @@ type Health struct {
 	Seats        []string `json:"seats"`
 
 	// StallLagSeconds is how far behind this node's watched duty is,
-	// present only when it is behind at all. It is the number that climbs
-	// towards the seat lease TTL, at which the watchdog ends the process —
-	// so an operator watching a node degrade sees it here before the
-	// restart rather than only afterwards in the exit code.
+	// present only when it is behind at all: when its last beat is older
+	// than the beat interval it keeps (a second at the shipped lease TTL),
+	// which is a missed beat, and then the whole time since that beat. It is
+	// the number that climbs towards the seat lease TTL, at which the
+	// watchdog ends the process, so an operator watching a node degrade
+	// sees it here before the restart rather than only afterwards in the
+	// exit code.
 	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
 
 	// UnprovenSeconds maps each seat stranded by a teardown that could not

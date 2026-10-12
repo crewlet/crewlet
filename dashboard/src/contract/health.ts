@@ -79,10 +79,13 @@ export interface EngineHealth {
   /** The handles THIS node currently holds. */
   seats: string[];
   /**
-   * How far behind this node's watched duty is, in seconds — present only
-   * while it is behind at all. It climbs towards the seat lease TTL, at which
-   * the watchdog ends the process, so a node degrading shows here before the
-   * restart rather than only afterwards in its exit code.
+   * How far behind this node's watched duty is, in seconds, present only
+   * while it is behind at all: once its last beat is older than the beat
+   * interval it keeps (a second at the shipped lease TTL), which is a missed
+   * beat, and then the whole time since that beat. It climbs towards the seat
+   * lease TTL, at which the watchdog ends the process, so a node degrading
+   * shows here before the restart rather than only afterwards in its exit
+   * code. Absent on a node whose duty is on its beat.
    */
   stall_lag_seconds?: number;
   /**
