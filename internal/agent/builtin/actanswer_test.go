@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -59,6 +60,65 @@ var everyWriteCall = map[string]map[string]any{
 	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
 	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
 	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
+	// THE CHAT GESTURES, every one the dashboard makes — the read-state
+	// flush included, which appends nothing ([appendsNoRecord]).
+	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved"},
+	builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": "ok"},
+	builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": "a word"},
+	builtin.ReactToMessageTool: {"channel": chatRoomID, "message": "m1",
+		"emoji": ":+1:"},
+	builtin.JoinChannelTool:  {"channel": chatRoomID},
+	builtin.LeaveChannelTool: {"channel": chatRoomID},
+	chat.EditMessageTool: {"channel": chatRoomID, "message": "m1",
+		"body": "on it, by noon"},
+	chat.DeleteMessageTool: {"channel": chatRoomID, "message": "m1"},
+	chat.CreateChannelTool: {"name": "launch", "kind": "private",
+		"members": []any{"agent-ceo"}},
+	chat.OpenDMTool:        {"to": []any{"agent-ceo"}},
+	chat.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
+	chat.SetChannelMembersTool: {"channel": chatRoomID, "members": []any{"jane",
+		map[string]any{"handle": "agent-ceo", "follow_all": true}}},
+	chat.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
+		"mute": []any{chatRoomID}},
+}
+
+// appendsNoRecord are the operator writes that append nothing to any log, each
+// with why — and every gate below holds them to THAT, explicitly, rather than
+// leaving them out: an answer at the top is still what the act transport lifts,
+// so it must say `applied` at no position, and no record may reach a writer.
+//
+// `mark_chat_read` writes a person's read state to the coordination store, a
+// compare-and-set that has landed when it answers: there is no record whose
+// outcome could be pending, no position a read could wait for, and no
+// operation to derive — a cursor only advances and a list only replaces, so
+// the same flush twice is the same state. Its one `unknown` is a put whose
+// answer was lost, which is the store's to report rather than a record's
+// (TestAFlushWhoseAnswerWasLostIsUnknown).
+var appendsNoRecord = map[string]string{
+	chat.MarkChatReadTool: "a read-state flush is a compare-and-set in the " +
+		"coordination store, on no log",
+}
+
+// answersAppliedAtNoPosition is the receipt a write that appends no record
+// must answer with, and that it appended none.
+func answersAppliedAtNoPosition(t *testing.T, name string, answer map[string]any,
+	w *ledgerFake, callsBefore int) {
+
+	t.Helper()
+	if answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Errorf("%s answered outcome %v, want applied — it landed when it "+
+			"answered: %v", name, answer["outcome"], answer)
+	}
+	if position, stated := answer["position"]; !stated || position != nil {
+		t.Errorf("%s answered position %v, want null at the top — there is no "+
+			"record a read could wait for: %v", name, answer["position"], answer)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.calls != callsBefore {
+		t.Errorf("%s (%s) appended %d records", name, appendsNoRecord[name],
+			w.calls-callsBefore)
+	}
 }
 
 // EVERY WRITE ANSWERS FOR EVERY RECORD IT APPENDED, AT THE TOP. The writers
@@ -72,7 +132,14 @@ func TestEveryOperatorWriteAnswersForEveryRecordItAppended(t *testing.T) {
 	catalogue := writeSurface(w)
 	for name, tool := range catalogue {
 		t.Run(name, func(t *testing.T) {
+			w.mu.Lock()
+			before := w.calls
+			w.mu.Unlock()
 			answer, last := w.call(t, tool, request(1), everyWriteCall[name])
+			if _, none := appendsNoRecord[name]; none {
+				answersAppliedAtNoPosition(t, name, answer, w, before)
+				return
+			}
 			if answer["outcome"] != string(statelog.OutcomePending) {
 				t.Errorf("%s answered outcome %v at the top, want pending — its "+
 					"records were all pending, and the transport lifts this key "+
@@ -100,6 +167,15 @@ func TestARetriedOperatorWriteDerivesTheSameOperations(t *testing.T) {
 			first := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			retry := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			other := w.opsOf(t, tool, request(22), everyWriteCall[name])
+			if why, none := appendsNoRecord[name]; none {
+				// NOTHING TO DERIVE, AND NOTHING DERIVED: a repeat is
+				// the same state rather than the same operation.
+				if len(first)+len(retry)+len(other) != 0 {
+					t.Errorf("%s (%s) derived operations %v, %v, %v", name,
+						why, first, retry, other)
+				}
+				return
+			}
 			if len(first) == 0 {
 				t.Fatalf("%s reached no writer at all, so this case certifies nothing", name)
 			}
@@ -142,6 +218,18 @@ func TestARequestsOperationFinishesOnlyItsOwnCall(t *testing.T) {
 			if err != nil {
 				t.Fatalf("call: %v", err)
 			}
+			if _, none := appendsNoRecord[name]; none {
+				// NOTHING IS WRITTEN UNDER AN OPERATION here, so another
+				// call's names nothing it could take — the flush is the
+				// person's state whichever operation rode beside it, and
+				// what must hold is that no record reached a writer.
+				w.mu.Lock()
+				defer w.mu.Unlock()
+				if w.calls != 0 {
+					t.Errorf("%s appended %d records", name, w.calls)
+				}
+				return
+			}
 			if !got.Failed || got.Refusal != tools.RefusalInvalid ||
 				!strings.Contains(got.Output, "derived for another call") {
 				t.Errorf("%s under another call's operation answered %+v, want "+
@@ -177,6 +265,13 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 
 			w := newLedgerFake(statelog.OutcomeUnknown)
 			tool := writeSurface(w)[name]
+			if _, none := appendsNoRecord[name]; none {
+				// NO LEDGER TO LOSE AN ACKNOWLEDGEMENT: a log whose every
+				// write is unknown leaves this one applied at no position.
+				answer, _ := w.call(t, tool, request(67), args)
+				answersAppliedAtNoPosition(t, name, answer, w, 0)
+				return
+			}
 			got, err := tool.Call(w.asked(t, tool, request(67), args), args)
 			if err != nil {
 				t.Fatalf("call: %v", err)
@@ -365,6 +460,19 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			Reader: kb, Writer: w,
 			Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
 				return pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops"}, nil
+			},
+			Operation: operationOf,
+		},
+		// THE BOUND SEAT AS AUTHOR, KIND OPERATOR AND THE TOKEN BESIDE IT,
+		// which is the attribution the operator surface's chat actor
+		// builds. No reader: every call here names its room by id. And a
+		// read-state store, so the one write that appends no record is
+		// served and held to that ([appendsNoRecord]).
+		Chat: builtin.ChatDeps{
+			Writer: w, Cursors: fakeCursors{},
+			Actor: func(context.Context, *turnctx.Turn) (chat.Actor, error) {
+				return chat.Actor{Handle: "jane", Kind: chat.AuthorOperator,
+					OperatorID: "ops"}, nil
 			},
 			Operation: operationOf,
 		},
@@ -646,6 +754,79 @@ func (f *ledgerFake) Comment(_ context.Context, _ pages.Actor, _ string,
 	in pages.NewComment) (pages.Comment, pages.Written, error) {
 	w, err := f.pageWrite("comment", in.CallKey)
 	return pages.Comment{ID: "m1"}, w, err
+}
+
+// The chat writes. Their operation is derived INSIDE the store from the call
+// key, as a page write's is, so the key is what is recorded — with the verb,
+// so a direct message's open and post under one key are two entries.
+
+func (f *ledgerFake) chatWrite(verb string, key statelog.CallKey) (chat.Written, error) {
+	r, err := f.record(verb + ":" + key.String())
+	return chat.Written{
+		Channel:  chat.Channel{ID: chatRoomID, Name: chatRoomName, Kind: chat.KindPublic},
+		Revision: uint64(r.Position.Packed()), ChangeID: r.OpID, Outcome: r,
+	}, err
+}
+
+func (f *ledgerFake) Post(_ context.Context, _ chat.Actor, _ string,
+	in chat.NewMessage) (chat.Written, error) {
+	return f.chatWrite("post", in.CallKey)
+}
+
+func (f *ledgerFake) Reply(_ context.Context, _ chat.Actor, _, _ string,
+	in chat.NewMessage) (chat.Written, error) {
+	return f.chatWrite("reply", in.CallKey)
+}
+
+func (f *ledgerFake) OpenDirect(_ context.Context, _ chat.Actor, _ []string,
+	key statelog.CallKey) (chat.Written, bool, error) {
+	w, err := f.chatWrite("open", key)
+	return w, err == nil, err
+}
+
+func (f *ledgerFake) React(_ context.Context, _ chat.Actor, _, _, _ string,
+	key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("react", key)
+}
+
+func (f *ledgerFake) Unreact(_ context.Context, _ chat.Actor, _, _, _ string,
+	key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("unreact", key)
+}
+
+func (f *ledgerFake) Join(_ context.Context, _ chat.Actor, _ string,
+	key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("join", key)
+}
+
+func (f *ledgerFake) Leave(_ context.Context, _ chat.Actor, _ string,
+	key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("leave", key)
+}
+
+func (f *ledgerFake) CreateChannel(_ context.Context, _ chat.Actor,
+	in chat.NewChannel) (chat.Written, error) {
+	return f.chatWrite("create", in.CallKey)
+}
+
+func (f *ledgerFake) PatchChannel(_ context.Context, _ chat.Actor, _ string,
+	_ chat.ChannelPatch, key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("patch", key)
+}
+
+func (f *ledgerFake) SetMembers(_ context.Context, _ chat.Actor, _ string,
+	_ []chat.Member, key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("members", key)
+}
+
+func (f *ledgerFake) Edit(_ context.Context, _ chat.Actor, _, _ string,
+	in chat.EditMessage) (chat.Written, error) {
+	return f.chatWrite("edit", in.CallKey)
+}
+
+func (f *ledgerFake) Delete(_ context.Context, _ chat.Actor, _, _ string,
+	key statelog.CallKey) (chat.Written, error) {
+	return f.chatWrite("delete", key)
 }
 
 // TWO DIFFERENT CALLS UNDER ONE REQUEST ARE TWO OPERATIONS. A turn's calls

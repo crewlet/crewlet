@@ -12,8 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE KEY A KEYED WRITE IS DERIVED FROM is [statelog.CallKey], and its doc
-// carries the reasons for each field. What is the wiki's own is below: the namespaces its ids live under, and the parts each write
+// THE KEY A KEYED WRITE IS DERIVED FROM is [statelog.CallKey], shared with
+// chat, and its doc carries the reasons for each field. What is the wiki's
+// own is below: the namespaces its ids live under, and the parts each write
 // derives over — the WIKI LEAVES THE KEY'S TOOL EMPTY, because no two of its
 // tools make one gesture, so its ids are derived over the seed, the parts, the
 // arguments and the count alone.

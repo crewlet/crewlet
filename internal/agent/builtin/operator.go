@@ -13,7 +13,7 @@ import (
 //
 // Every entry here is the same value [Register] files into a seat's registry.
 // The only thing that differs is who a write is attributed to, and that is
-// [WorkDeps.Actor] — a single field — rather than a second copy of ten tools.
+// [WorkDeps.Actor] — a single field — rather than a second copy of the tools.
 // Two copies drift on exactly the parts nobody looks at: which field is
 // trimmed, which default applies, what a refusal says. Only one of the two is
 // ever tested, and it is never the copy that broke.
@@ -29,15 +29,24 @@ import (
 // which is `answer_run`), and `lookup_colleague` — which would be useful, but resolves
 // against the turn's own org and has no other source.
 //
-// What is left is the surface an operator's assistant actually needs: read
-// the board, file and move work, read and write the wiki, search what the
-// company knows.
+// What is left is the surface an operator's assistant actually needs — and
+// the dashboard, which makes every change it makes through this catalogue
+// (ADR-0024): read the board, file and move work, read and write the wiki,
+// search what the company knows, and talk in the company's own chat.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
 	Work      WorkDeps
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
+
+	// Chat is the company's own chat. Its [ChatDeps.Actor] resolves the
+	// credential to the `kind: human` seat it is bound to — a room renders
+	// a speaker by seat, so that is the handle every message carries —
+	// and records the write as an operator's, the token beside the seat,
+	// as every write on this surface is (ADR-0024). A token bound to none
+	// is refused every call, the reads included.
+	Chat ChatDeps
 
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
@@ -161,6 +170,31 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
+		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
+		// them through this catalogue (ADR-0024): read the rooms, find
+		// what was said, say something, react, move one's own membership
+		// — the nine a seat holds — and the furniture only a person
+		// arranges, which no seat is given: a room made or its settings
+		// changed, its whole membership stated, a message rewritten or
+		// taken back, a conversation opened before its first word, and
+		// how far one has read. See chatoperator.go for why each is a
+		// person's.
+		{&listChannels{deps: deps.Chat}, deps.Chat.Reader != nil},
+		{&readChannel{deps: deps.Chat}, deps.Chat.Reader != nil},
+		{&searchMessages{deps: deps.Chat}, deps.Chat.Search != nil},
+		{&postMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&replyInThread{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&sendDM{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&reactToMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&joinChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&leaveChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&editMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&deleteMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&createChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&openDM{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&updateChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&setChannelMembers{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&markChatRead{deps: deps.Chat}, deps.Chat.Cursors != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {

@@ -3869,7 +3869,7 @@ func bindRequest(actor Actor, tool string, args map[string]any) (Actor, string) 
 
 // foreignRequest refuses a call whose transport named an operation derived
 // for another call. One sentence for the work tools and the page tools alike
-// ([WorkDeps.bindOperation], [PageDeps.foreignOperation]): it is one rule.
+// ([WorkDeps.bindOperation], [foreignOperation]): it is one rule.
 func foreignRequest(tool string) string {
 	return fmt.Sprintf("%s refused this request, and nothing was written: the "+
 		"operation it was sent under was derived for another call — another "+

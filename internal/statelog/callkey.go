@@ -11,10 +11,11 @@ import (
 // unit began, which of its calls this is, and what the call was. Or the zero
 // value, for a call nothing will repeat.
 //
-// ONE TYPE FOR EVERY DOMAIN THAT TAKES ONE. A key is the rule for what makes
-// two calls one operation, and two copies of a rule are two answers: the
-// wiki's own copy went without the digest of the call's arguments until a fix
-// of its own.
+// ONE TYPE FOR EVERY DOMAIN THAT TAKES ONE — the wiki's and chat's. Each used
+// to declare its own with the same fields and the same identity, and the two
+// had already drifted once: chat's gained the digest of the call's arguments
+// and the wiki's did not, until a fix of its own. A key is the rule for what
+// makes two calls one operation, and two copies of a rule are two answers.
 //
 // # Why a write takes one
 //
@@ -55,8 +56,8 @@ import (
 // Because the count and the identity have to agree on what makes two calls
 // different, and on their own they do not. [CallKey.Repeat] tells calls apart
 // by their ARGUMENTS, as a model typed them; the parts a domain derives an id
-// over are what those arguments RESOLVED to — an object's id, never the name
-// it was typed as. Two calls typed differently can resolve alike, and
+// over are what those arguments RESOLVED to — a page's or a room's id, never
+// the name it was typed as. Two calls typed differently can resolve alike, and
 // then a count two of them share hands the later one the earlier one's id: the
 // later call is answered with the earlier one's success and writes nothing.
 // With a digest of the arguments in the identity ([CallKey.Args]) two calls
@@ -69,13 +70,14 @@ import (
 // # Why a domain may name the tool
 //
 // Where two of a domain's tools make ONE gesture, the count cannot tell them
-// apart: it counts calls to one tool, so each is its own tool's first.
-// Collapsing the two is the unsafe direction — a second remark answered as
-// the first's retry and dropped with a success; naming the tool
-// ([CallKey.Tool]) can only make a repetition a second write, which is what
-// was asked for. The wiki has no such pair, leaves it empty, and an empty
-// tool adds nothing to the identity — so the wiki's derived ids are what they
-// were before the field existed.
+// apart: it counts calls to one tool, so each is its own tool's first. Chat
+// has such a pair — post_message and send_dm both post into a room — and
+// collapsing the two is the unsafe direction, a second remark answered as the
+// first's retry and dropped with a success; naming the tool ([CallKey.Tool])
+// can only make a repetition a second message, which is what was asked for.
+// The wiki has no such pair, leaves it empty, and an empty tool adds nothing to
+// the identity — so the wiki's derived ids are what they were before the field
+// existed.
 //
 // A STRUCT RATHER THAN A STRING because the writes that take one already take
 // several strings in a row, and a key passed where a body was meant is a write
@@ -83,9 +85,9 @@ import (
 // which a caller could otherwise hand over part of.
 //
 // THE ZERO VALUE IS A REAL ONE: a call that names no seed — an operator's
-// assistant over MCP, an import — writes under a fresh operation every time,
-// because nothing will repeat it and a stable id would collapse every later
-// write into the first.
+// assistant over MCP, an import, the engine narrating a room — writes under a
+// fresh operation every time, because nothing will repeat it and a stable id
+// would collapse every later write into the first.
 //
 // NOT ATTRIBUTION, which is why it is no domain's actor field: nothing about it
 // is written to a history row, and an actor is the record of who wrote.
@@ -104,9 +106,9 @@ type CallKey struct {
 	Since time.Time
 
 	// Repeat is how many earlier calls in the seed's run asked for
-	// something else — to the same tool (turnctx.CallLog.Ordinal). Zero adds
-	// nothing to a derived id, so a run's first call of each kind derives the
-	// id it always did.
+	// something else — to the same tool, or to a tool a domain counts with
+	// it (turnctx.CallLog.OrdinalAmong). Zero adds nothing to a derived id,
+	// so a run's first call of each kind derives the id it always did.
 	Repeat int
 
 	// Tool is the tool the call was made through, for a domain whose
@@ -134,8 +136,9 @@ func (k CallKey) Empty() bool { return k.String() == "" }
 // operation, the call's own arguments where the key carries them, and the
 // repeat count when there is one.
 //
-// ONE SPELLING for every derivation a domain makes — an operation's or a new
-// page's — so they can never disagree about what makes two calls one.
+// ONE SPELLING for every derivation a domain makes — an operation's, a
+// message's, a new page's or room's — so they can never disagree about what
+// makes two calls one.
 func (k CallKey) Identity(namespace string, parts ...string) []string {
 	out := make([]string, 0, len(parts)+5)
 	out = append(out, namespace, k.String())

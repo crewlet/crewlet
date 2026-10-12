@@ -32,10 +32,11 @@ import (
 // though it was the same words said again after a different remark, which
 // the rule says is a remark of its own.
 //
-// Nothing between the call and the rows is mocked: the store derives the id
-// from the key the tool hands it, the tool reads the key's count from the log,
-// and the surface writes the log — so the property lives in three packages and
-// is asserted where all three meet.
+// Nothing between the call and the rows is mocked, for the reason the chat
+// domain's copy of this case gives: the store derives the id from the key the
+// tool hands it, the tool reads the key's count from the log, and the surface
+// writes the log — so the property lives in three packages and is asserted
+// where all three meet.
 func TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

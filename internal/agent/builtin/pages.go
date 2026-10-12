@@ -108,92 +108,17 @@ type PageDeps struct {
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
-// operation is the transport's operation for this call, or "" — see
-// [PageDeps.Operation].
-func (d PageDeps) operation(ctx context.Context) string {
-	if d.Operation == nil {
-		return ""
-	}
-	return d.Operation(ctx)
-}
-
-// callKey is the key every page write this call makes is derived from — the
-// package doc's one rule, "How a write is made once", typed for the store
-// ([statelog.CallKey]):
-//
-//   - IN A TURN, the turn's seed ([turnKey]), the instant it began
-//     ([turnSince]), this call's repeat count in the run
-//     ([turnctx.CallLog.Ordinal]) and a digest of the arguments the count
-//     compared ([turnctx.ArgsDigest]) — what [opIDFor] derives a work write
-//     from, so a remark made again after a different one is a second
-//     comment, the same remark made again after a different one is too
-//     whatever the page was called in each, and a re-run's is the first;
-//   - OUTSIDE ONE, the operation the transport named for this call
-//     ([PageDeps.Operation]), carrying that operation's own instant — it
-//     already names the call, its arguments included, so it takes no
-//     repeat count and no digest;
-//   - or none, which the store mints afresh.
-//
-// THE DIGEST TRAVELS WITH THE COUNT because the count compares the arguments
-// as typed and the store's parts are what they resolved to: a page named by
-// its id once and by "CONTAINER/Title" the next time is two calls to one and
-// one page to the other, and without the digest a count two such calls share
-// hands the later one the earlier one's id — see [statelog.CallKey].
+// callKey is the key every page write this call makes is derived from —
+// [callKeyOf], with the wiki's policy: a repeat is counted among calls to the
+// tool alone, because none of the wiki's tools undoes another, and the key
+// names no tool, because no two of them make one gesture. So a remark made
+// again after a different one is a second comment, the same remark made again
+// after a different one is too whatever the page was called in each, and a
+// re-run's is the first.
 func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) statelog.CallKey {
 
-	if seed := turnKey(turn); seed != "" {
-		return statelog.CallKey{Seed: seed, Since: turnSince(turn),
-			Repeat: turn.CallLog().Ordinal(tool, args),
-			Args:   turnctx.ArgsDigest(args)}
-	}
-	if op := d.operation(ctx); op != "" {
-		at, _ := statelog.OpMintedAt(op)
-		return statelog.CallKey{Seed: op, Since: at}
-	}
-	return statelog.CallKey{}
-}
-
-// foreignOperation refuses a page write whose transport named an operation
-// derived for ANOTHER call — [WorkDeps.bindOperation]'s rule, held on the
-// page tools for its reason: a check that exempted one source of operations
-// would be where a transport that derived one wrong wrote anyway, and here it
-// would write a page, a revision or a comment under ids the other call
-// derives. The page tools take no `op_id`, so a transport's operation is the
-// only one they meet. "" where the call has none, is a turn's (whose key wins
-// — see [PageDeps.callKey]), or names this call.
-func (d PageDeps) foreignOperation(ctx context.Context, turn *turnctx.Turn,
-	tool string, args map[string]any) string {
-
-	if turnKey(turn) != "" {
-		return ""
-	}
-	op := d.operation(ctx)
-	if op == "" || statelog.OpNamed(op, callName(tool, args)) {
-		return ""
-	}
-	return foreignRequest(tool)
-}
-
-// sameCall says how this caller makes a page write again as the same
-// operation — [sameCall]'s rule for the knowledge base's keys — or "" where no
-// repeat is the same operation.
-func (k pageCaller) sameCall(tool string) string {
-	switch {
-	case k.turn:
-		return fmt.Sprintf("call %s again with exactly the same arguments, "+
-			"before calling it with any others", tool)
-	case k.key.String() != "":
-		return "send the same request again, unchanged"
-	}
-	return ""
-}
-
-// pageCaller is who made a page write, as far as repeating it goes: a turn,
-// or a caller whose transport named its operation, or neither.
-type pageCaller struct {
-	turn bool
-	key  statelog.CallKey
+	return callKeyOf(ctx, turn, d.Operation, tool, nil, args, false)
 }
 
 // settle hands a page write's position to [PageDeps.Await], so the next read
@@ -482,7 +407,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
 	}
-	if denied := t.deps.foreignOperation(ctx, turn, WritePageTool, args); denied != "" {
+	if denied := foreignOperation(ctx, turn, t.deps.Operation, WritePageTool, args); denied != "" {
 		return failed(denied), nil
 	}
 	status, refusal := createStatus(args)
@@ -647,7 +572,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(SavePageTool), nil
 	}
-	if denied := t.deps.foreignOperation(ctx, turn, SavePageTool, args); denied != "" {
+	if denied := foreignOperation(ctx, turn, t.deps.Operation, SavePageTool, args); denied != "" {
 		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "page"))
@@ -844,7 +769,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(CommentOnPageTool), nil
 	}
-	if denied := t.deps.foreignOperation(ctx, turn, CommentOnPageTool, args); denied != "" {
+	if denied := foreignOperation(ctx, turn, t.deps.Operation, CommentOnPageTool, args); denied != "" {
 		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "page"))
@@ -910,8 +835,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// operation for a page write, so its repeat is a new comment, and a
 	// second one if the first landed. [unknownNext] is the rule every
 	// tracker write already answers by.
-	again := pageCaller{turn: turnKey(turn) != "", key: in.CallKey}.
-		sameCall(CommentOnPageTool)
+	again := callerOf(turn, in.CallKey).sameCall(CommentOnPageTool)
 	commentNext := func(unvouched bool) string {
 		return unknownNext(unvouched, again,
 			"Read the page's comments with get_page", "that is a second comment")
@@ -976,7 +900,8 @@ func pageWriteFailure(name string, err error, next string) tools.Result {
 		// person's request — asked of every other data node first and
 		// reported only when none answered, whose same call IS the safe
 		// retry. So what to do next is the caller's, and it is what the
-		// tool's own unknown answer says for this call.
+		// tool's own unknown answer says for this call ([chatWriteFailure]'s
+		// rule, for the same reason).
 		return unknownOutcome(fmt.Sprintf("%s: whether this landed is unknown "+
 			"(%v). It may be on the page and it may not — do not report it as "+
 			"done, and do not report it as failed. %s", name, err, next))

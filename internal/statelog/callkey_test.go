@@ -9,9 +9,11 @@ import (
 )
 
 // ONE IDENTITY FOR EVERY DOMAIN THAT TAKES A KEY, and the field only one of
-// them fills adds nothing where it is empty. The hoist is safe only if the
-// wiki's ids are what they were — its keys name no tool — and a key that names
-// a tool still carries it.
+// them fills adds nothing where it is empty.
+//
+// The wiki and chat each spelled this once; the hoist is safe only if the
+// wiki's ids are what they were — its keys name no tool — and chat's still
+// carry the tool that keeps post_message and send_dm apart.
 func TestACallKeysIdentityAddsOnlyWhatItCarries(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {

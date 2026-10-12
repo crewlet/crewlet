@@ -2899,15 +2899,16 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **sixteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-three no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
 [`answer_run`](#answering-a-parked-coding-run),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
-[`steer_turn`](#steering-a-running-turn), and
-[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge). A view is furniture — a name, a shape
+[`steer_turn`](#steering-a-running-turn),
+[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
+[the seven chat gestures only a person makes](#the-chat-gestures-only-a-person-makes). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -2929,6 +2930,39 @@ a colleague, or resume itself, would be overruling the people who run the
 company. And a note to a running turn is a person redirecting the work: a seat
 that could steer a colleague's turn would be directing it past the person who
 asked for the work.
+
+### The chat gestures only a person makes
+
+Where the company runs native chat, the dashboard's chat screen makes every
+change it makes through this catalogue — a person's own assistant reaches the
+same tools — and seven of them are given to no seat:
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `create_channel` | `name`, and optionally `kind` (`public` or `private`; omitted takes `chat.native.default_channel_private`), `topic`, `purpose`, `members`, `retention_days` | Makes a named room, with the caller in it. The name is its address, so two people asking for one contend and one is refused `exists`. A unit's own room is the org chart's: the engine opens one for each unit that declares a `channel`, and a create of kind `unit` is refused `forbidden`. |
+| `open_dm` | `to` — the other handles | Opens the conversation between the caller and them, or reaches the one already open, without saying anything; `created` says which. Its id is its participants, so opening it twice is one room. |
+| `update_channel` | `channel`, and any of `topic`, `purpose`, `archived`, `retention_days` | Changes only what it names: an empty `topic` clears the topic, an absent one leaves it. An archived room is still read and searched and takes no new messages; a shorter retention deletes what is older on every data node. |
+| `set_channel_members` | `channel`, `members` | States the room's WHOLE membership — whoever is left out is taken out, and an empty list empties it. Refused for a unit's room, whose membership is the org chart's, and for a direct conversation, whose id is its participants. |
+| `edit_message` | `channel`, `message`, `body`, and optionally `links` | Rewrites a message. Only its author may. Whoever the new words name for the first time is told; nobody else is woken again. `links` changes only when sent: omitted, the message keeps the links it has, so fixing a typo needs only the new `body`; a list replaces them, and an empty list removes them. |
+| `delete_message` | `channel`, `message` | Takes a message back: its words go and its row stays, so a thread hung off it keeps its root. Its author may, and so may an operator — which a person calling here is, so a person can take back anybody's message in any room, including a private room or a direct conversation they are not in. |
+| `mark_chat_read` | any of `cursors` (room id → the position read through), `mute` and `unmute` (room ids), `dnd_until` (RFC 3339; empty ends it) | Records how far the caller has read, which rooms they mute or unmute and whether they are in do-not-disturb. A cursor only moves forward, and past 256 rooms the one read least recently is forgotten. A mute is a ROOM AT A TIME rather than a list: each named room is muted or unmuted and every other keeps its state, so muting one needs nothing read first and two screens toggling two rooms at once both land. A mute that would take the set past 256 rooms is refused `invalid` rather than cut, and so is one room both muted and unmuted in one call. The answer's `read` is the caller's whole read state as the write left it, named by its `handle` exactly as the [`chat_cursor_moved`](#ws-wsstream) push carries it — so `read.muted` is the whole set the record now holds, and `read.revision` orders this answer against that push, which reaches the calling screen too: whichever arrives first is the state. Not a record on the log — it is written to the coordination store and answers `applied` at no position. A flush whose write went out and whose answer was lost answers `unknown` (on `/operator/act`, the 503 with `outcome: unknown`): it may have landed, and sending the same call again is safe, because a cursor only moves forward and a mute, an unmute or a do-not-disturb sent twice is stated twice. A flush that lands is pushed as [`chat_cursor_moved`](#ws-wsstream) to the caller's own open sockets on every node and nobody else's, so a badge cleared in one window clears in the other. |
+
+`members` is a list of handles, or of `{handle, follow_all}` where the member
+should hear everything said in the room. Each is a person's for its own
+reason: a seat corrects what it said by replying, which the room sees arrive,
+rather than rewriting a remark colleagues already acted on; a room, its
+settings and its membership are the company's furniture and a private room's
+readership; and a read cursor is a person's attention — a seat is woken rather
+than reading, and has none.
+
+Every one of them answers `outcome` and `position` like every other write,
+and is made once however often it is asked: through `/operator/act` the
+retry of a gesture is the same request, and its operation is derived from it.
+The ones that state something — the settings, the members, the words, the
+tombstone, the conversation — answer an `unknown` by offering the same call as
+harmless, because stating it again changes nothing where the first landed;
+`create_channel` says to look first, since a second create of a name that
+landed is refused as taken.
 
 ### Moving a card on a board
 
@@ -3151,12 +3185,13 @@ create, a comment, an update, a page write, a project or catalogue change, a
 saved view and a person's own marks, pins and queue all follow the one rule.
 
 Each tool appears only where its half of the company is native: a company on
-`tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets only the tools about the fleet's own records — `answer_run`,
-`pause_seat`, `resume_seat` and `steer_turn`. `search_knowledge` and
-`answer_knowledge` are the exception and are offered against **any** knowledge
-backend, Confluence included — a ranked search over the company's own wiki, or
-an answer drawn from it, is exactly as useful to an assistant there.
+`tracker.backend: jira` gets the page tools and not the work tools, one off
+native chat gets no chat tool, and one native in none of the three gets only the
+tools about the fleet's own records — `answer_run`, `pause_seat`, `resume_seat`
+and `steer_turn`. `search_knowledge` and `answer_knowledge` are the exception
+and are offered against **any** knowledge backend, Confluence included — a
+ranked search over the company's own wiki, or an answer drawn from it, is
+exactly as useful to an assistant there.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
