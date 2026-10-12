@@ -939,7 +939,7 @@ the log has left prints `left gen N` (or `ahead gen N`) in place of a lag,
 since its sequence compares with nothing the log holds now; a node that
 reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
 gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)),
-`-` on the vector changelog, which keeps none; `HEADROOM` is what is left of
+`-` on the compacted logs — the vector changelog and the usage log — which keep none; `HEADROOM` is what is left of
 the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
 takes an eviction.
 
@@ -1186,7 +1186,8 @@ refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
 applied. On the tracker and pages logs the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on
-the vector changelog it is the whole target. A target under a gibibyte is
+the compacted logs — the vector changelog and the usage log — it is the whole
+target. A target under a gibibyte is
 refused too — Tier A's floor for every log, and the one the reserve is sized
 against. A target under the current ceiling and above the usage is accepted,
 and is how a log gives a reservation back. A raise the broker cannot

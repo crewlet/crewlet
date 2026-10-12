@@ -3686,7 +3686,8 @@ ceiling **ordinary writes** are held to: `max_bytes` less `reserve_bytes`,
 which on the tracker and pages logs is the top sixteenth kept for the records
 that install or lift a gate, so that an eviction still lands on a log full for
 everything else ([the gate reserve](../guides/retention.md#the-gate-reserve)).
-`reserve_bytes` is absent on a log that keeps none — the vector changelog —
+`reserve_bytes` is absent on a log that keeps none — the vector changelog and
+the usage log —
 where the headroom is of the whole ceiling.
 
 `crewlet retention status` renders exactly these bytes.
