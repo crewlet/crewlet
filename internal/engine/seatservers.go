@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -45,8 +44,20 @@ import (
 // spec moved is restarted, one that is not running is started, and one the
 // seat no longer declares is stopped. And a pass that leaves a child failed
 // for any reason but a spec that can never launch tries again on its own,
-// with a doubling delay up to a ceiling, until the child starts or the seat
-// is let go.
+// on the restart schedule every MCP server is retried on ([mcp.RestartWait]),
+// until the child starts or the seat is let go.
+//
+// A child that DIES after it started is not this file's to restart: its
+// bridge noticed, keeps it, and is bringing it back, gated on the same proof
+// of the lease a pass is (mcpsupervise.go). A pass leaves it alone, as it
+// leaves a child running its spec — [mcp.Bridge.Runs] answers yes for it —
+// so the two never race to start one child; an apply's pass only asks it to
+// try now, which is what an apply asks of every server that is down. Unless
+// its spec MOVED: the bridge would bring it back from the spec it died with,
+// which is what the revision or the credential replaced, so the pass restarts
+// it into the new one exactly as it restarts a running child whose spec moved
+// — [mcp.Bridge.Reconcile] ends the supervision of the old spec before it
+// starts the new.
 //
 // # One pass at a time per seat, and the last one is current
 //
@@ -108,39 +119,6 @@ import (
 // installs nothing, and one asked for afterwards does nothing, so no child is
 // ever started for a seat after the release that was meant to end them.
 
-// seatServerRetryBase and seatServerRetryCeiling space the retries of a seat
-// child that would not start: fifteen seconds after the first failed pass,
-// twice as long after each one after it, up to five minutes. Those are the
-// waits [seatServerRetryJitter] then spreads by a fifth either way, so the
-// longest is six minutes, and each is what its waits AVERAGE — the reading
-// [backoff.Jitter] gives the number its caller justified. Clamping the spread
-// waits to the ceiling instead would put half of a fleet's seats back on the
-// same instant at it, which is the lockstep the spread is there to break.
-//
-// THE BASE IS ONE SEAT HEARTBEAT (internal/seat's HeartbeatInterval), the
-// cadence at which this node re-proves it holds the seat at all. A retry
-// sooner than that would mostly re-run a start against the same vendor
-// moments after it refused, forking a process each time; and a credential
-// that is merely late needs no retry at all, since the apply that seals it
-// runs a pass of its own.
-//
-// THE CEILING IS THE SEAT HOST'S UNDEAD ALARM INTERVAL (twenty heartbeats),
-// the interval at which a seat's other persistent failure is said again. Each
-// failed retry logs `mcp_server_failed` with the child's last words, so the
-// ceiling is how often, on average, a child that will not come back repeats
-// itself; and it bounds how long a vendor that has recovered waits to be
-// noticed, at six minutes with the spread. A deployment has no honest reason
-// to want either differently, so neither is a knob.
-const (
-	seatServerRetryBase    = 15 * time.Second
-	seatServerRetryCeiling = 5 * time.Minute
-)
-
-// seatServerRetryJitter spreads each retry by a fifth either way, so the seats
-// of a fleet that booted together, all refused by one vendor, do not retry it
-// in lockstep for the life of the deployment.
-const seatServerRetryJitter = 0.2
-
 // seatChildren is one held seat's own bridge and the state that keeps it
 // converged — see the file comment.
 type seatChildren struct {
@@ -187,6 +165,13 @@ type seatChildren struct {
 	// is the first of a new series rather than the next of the old one.
 	failures int
 
+	// retryNow is set by an apply's request and taken by the next pass,
+	// which asks every child its bridge is bringing back for an attempt now
+	// rather than at its schedule's next ([mcp.Bridge.RetryNow]) — what an
+	// apply asks of a shared server that is down, for the same reason: it is
+	// the gesture an operator makes once a vendor is back.
+	retryNow bool
+
 	// retry is the armed retry, nil when none is due.
 	retry *time.Timer
 }
@@ -201,11 +186,14 @@ func (e *Engine) newSeatChildren(ctx context.Context, handle string) *seatChildr
 	lease, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &seatChildren{
 		handle: handle,
-		bridge: mcp.NewBridge(nil),
 		held:   func() bool { return e.seatProvable(handle) },
 		lease:  lease,
 		cancel: cancel,
 	}
+	// SUPERVISED ON THE SEAT'S TERMS: a child that dies is restarted only
+	// while this node can prove the seat's lease, by the predicate the passes
+	// ask (mcpsupervise.go).
+	s.bridge = mcp.NewBridge(nil, e.seatSupervision(s))
 	s.idle.L = &s.mu
 	return s
 }
@@ -327,7 +315,7 @@ func (s *seatChildren) ask(fresh bool) bool {
 		return false
 	}
 	if fresh {
-		s.failures = 0
+		s.failures, s.retryNow = 0, true
 	}
 	s.again = true
 	if s.running {
@@ -363,10 +351,12 @@ func (e *Engine) runSeatPasses(ctx context.Context, s *seatChildren) {
 	retry := false
 	for s.again && !s.released {
 		s.again = false
+		retryNow := s.retryNow
+		s.retryNow = false
 		pass, end := context.WithCancel(ctx)
 		s.endPass = end
 		s.mu.Unlock()
-		retry = e.seatPass(pass, s)
+		retry = e.seatPass(pass, s, retryNow)
 		end()
 		s.mu.Lock()
 		s.endPass = nil
@@ -398,22 +388,21 @@ func (e *Engine) runSeatPasses(ctx context.Context, s *seatChildren) {
 }
 
 // seatRetryDelay is how long the retry after the nth pass in a row that left a
-// child to retry waits; failures counts from one.
+// child to retry waits; failures counts from one. The restart schedule every
+// MCP server is retried on ([mcp.RestartWait]): fifteen seconds, doubling to
+// five minutes, each wait spread by a fifth either way so a fleet's seats do
+// not retry one vendor in lockstep.
 func (e *Engine) seatRetryDelay(failures int) time.Duration {
-	base := e.seatRetryBase
-	if base <= 0 {
-		base = seatServerRetryBase
-	}
-	return backoff.Jitter(backoff.Doubling(failures, base, seatServerRetryCeiling),
-		seatServerRetryJitter)
+	return mcp.RestartWait(failures, e.mcpRetryBase)
 }
 
 // seatPass brings one seat's children to what the current epoch and this
 // node's snapshot say it should run, files the seat's surface, and reports
-// whether a child was left to retry.
+// whether a child was left to retry. retryNow is an apply's request that
+// every child the bridge is bringing back try now ([seatChildren.retryNow]).
 //
 // ctx is the pass's own, which the release cancels ([seatChildren.endPass]).
-func (e *Engine) seatPass(ctx context.Context, s *seatChildren) bool {
+func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) bool {
 	if !s.held() {
 		log.WarnContext(ctx, "mcp_seat_unprovable", "seat", s.handle,
 			"detail", "this node cannot prove it still holds the seat, so it "+
@@ -435,7 +424,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren) bool {
 		specs, outcomes = seatSpecs(c, seat, e.resolver())
 	}
 	retireUndeclared(ctx, s, specs)
-	started, retry := bringUp(ctx, s, specs)
+	started, retry := bringUp(ctx, s, specs, retryNow)
 	outcomes = append(outcomes, started...)
 
 	e.mcpMu.Lock()
@@ -507,14 +496,28 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec) {
 // a handshake with nothing to do with the others, and a seat is not consuming
 // its mailbox until the slowest one is done.
 //
+// A child that DIED from this very spec is not handed to it either:
+// [mcp.Bridge.Runs] answers yes for it, because its bridge is bringing it back,
+// and a pass that started it too would be a second loop racing the first. An
+// apply's pass (retryNow) asks it to try now instead. One that died from a spec
+// that has since MOVED answers no, and is restarted into the new spec like a
+// running child whose spec moved: its bridge would bring back the old one.
+//
 // A spec that can never launch ([mcp.ErrInvalidSpec]) is not retried: nothing
 // about it changes until a revision does, and an apply runs a pass of its own.
-func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec) ([]mcpOutcome, bool) {
+//
+// Each outcome names the bridge and instance, so the heartbeat reports the
+// child as it is at each beat rather than as this pass found it.
+func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bool) ([]mcpOutcome, bool) {
 	outcomes := make([]mcpOutcome, len(specs))
 	var wg sync.WaitGroup
 	for i, spec := range specs {
 		outcomes[i].server = mcp.ServerName(spec.Name)
+		outcomes[i].bridge, outcomes[i].instance = s.bridge, spec.Name
 		if s.bridge.Runs(spec) {
+			if retryNow {
+				s.bridge.RetryNow(spec.Name)
+			}
 			outcomes[i].tools = len(s.bridge.ServerTools(spec.Name))
 			continue
 		}

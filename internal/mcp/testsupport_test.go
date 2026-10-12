@@ -91,3 +91,12 @@ func (r *logRecorder) hasAttr(event, key string, value any) bool {
 	}
 	return false
 }
+
+// toolOn wraps one listed tool around a session the test connected itself,
+// with no supervisor behind it: for a case about what a Tool does with the
+// session it reaches, rather than about how a bridge keeps one alive.
+func toolOn(c *client, def toolDef, spec Spec) *Tool {
+	s := NewBridge(c.log, Supervision{}).newServer(spec, func() {})
+	s.up(c)
+	return newTool(s, def, spec)
+}

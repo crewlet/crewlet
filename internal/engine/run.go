@@ -59,7 +59,10 @@ import (
 // is the placement package's. That is the whole reason this file is short.
 type Engine struct {
 	// epoch is the company this engine is running, replaced whole by an
-	// apply and never mutated. See epoch.go.
+	// apply and never mutated — but for its tool registry's shared MCP
+	// tools, which the shared bridge's own supervision refiles when a
+	// server comes back with a different catalogue (mcpsupervise.go). See
+	// epoch.go.
 	epoch    epoch
 	backends *Backends
 	node     *node.Node
@@ -454,6 +457,20 @@ type Engine struct {
 	// apply that replaced the bridge would orphan every one of them.
 	mcp *mcp.Bridge
 
+	// mcpFileMu serialises filing the shared bridge's catalogue into an
+	// epoch's registry outside an apply's own build: what the bridge's
+	// supervision changed — a retried start that came up, a restart with
+	// different tools — into the current epoch, and the bridge as it stands
+	// into an epoch being published (mcpsupervise.go). Its own lock rather
+	// than applying: the bridge calls that refile from its supervisor, which
+	// an apply's Stop waits for.
+	//
+	// mcpRetryBase is the restart schedule's first wait for every bridge
+	// this engine builds and for its seats' runners, zero for
+	// [mcp.RestartBase]; [Options.mcpRetryBase].
+	mcpFileMu    sync.Mutex
+	mcpRetryBase time.Duration
+
 	// seatMCP is one bridge per seat this node holds, for that seat's
 	// per-role children, with what keeps them converged while the seat is
 	// held (seatservers.go). Separate from the shared bridge above because a
@@ -481,10 +498,6 @@ type Engine struct {
 	seatTools map[string]*tools.Registry
 	mcpShared []mcpOutcome
 	mcpSeats  map[string][]mcpOutcome
-
-	// seatRetryBase is the first retry's delay for a seat child that would
-	// not start, zero for [seatServerRetryBase]; [Options.seatRetryBase].
-	seatRetryBase time.Duration
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the turn's
@@ -755,19 +768,23 @@ type Options struct {
 	// waiting out fifteen seconds of it.
 	usageEvery time.Duration
 
+	// mcpRetryBase is the first wait of the MCP restart schedule
+	// ([mcp.RestartWait]) — before a start that failed is tried again, a
+	// shared server's by its bridge and a seat's per-role child's by the
+	// seat's runner, and before a child that died soon after starting is
+	// restarted — zero for [mcp.RestartBase], and the rest of the schedule
+	// scales with it. UNEXPORTED for the reason usageEvery is: the schedule
+	// is tied to the seat heartbeat rather than to a deployment, and the
+	// knob exists only so a case can watch a retry bring a server up
+	// without waiting fifteen seconds for it.
+	mcpRetryBase time.Duration
+
 	// sweepEvery is the seat host's placement cadence
 	// ([node.Config.SweepInterval]), zero for [seat.SweepInterval].
 	// UNEXPORTED for the reason usageEvery is: the cadence is the seat
 	// host's decision, and the knob exists only so a case can put the next
 	// tick out of reach and see what claims a seat without one.
 	sweepEvery time.Duration
-
-	// seatRetryBase is the first retry's delay for a seat's per-role child
-	// that would not start, zero for [seatServerRetryBase]. UNEXPORTED for
-	// the reason usageEvery is: the spacing is tied to the seat heartbeat
-	// rather than to a deployment, and the knob exists only so a case can
-	// watch a retry bring a child up without waiting fifteen seconds for it.
-	seatRetryBase time.Duration
 }
 
 // New assembles an engine.
@@ -929,11 +946,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// auxiliary spend reaches the history like its phases do.
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              newSteerDesk(),
-		mcp:                 mcp.NewBridge(nil),
+		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		usageEvery:          opts.usageEvery,
-		seatRetryBase:       opts.seatRetryBase,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
@@ -951,6 +967,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// A runner per caller would give the loop, the API and a disconnect a
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
+	// AFTER the engine exists, because what the bridge's supervision does
+	// with a changed catalogue is refile this engine's registries; BEFORE
+	// equip, which starts the company's shared servers on it.
+	e.mcp = mcp.NewBridge(nil, e.sharedSupervision())
 
 	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
 	// it on every request. Building it lists nothing: it runs
@@ -1180,7 +1200,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	e.installEpoch(company, opts.ActivatedAt)
+	e.installEpoch(ctx, company, opts.ActivatedAt)
 
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a

@@ -12,7 +12,7 @@ import (
 
 func newTestBridge(t *testing.T) *Bridge {
 	t.Helper()
-	b := NewBridge(discardLogger())
+	b := NewBridge(discardLogger(), Supervision{})
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -365,7 +365,7 @@ func TestStopAllDoesNotStrandServersBehindASlowOne(t *testing.T) {
 	// captures the logger it was connected with, so swapping it afterwards
 	// records nothing.
 	log, rec := recorder()
-	b := NewBridge(log)
+	b := NewBridge(log, Supervision{})
 	t.Cleanup(func() { _, _ = b.StopAll(context.Background()) })
 
 	// Five servers that each ignore SIGTERM, so each costs the transport's
@@ -447,7 +447,7 @@ func TestStopAllDropsItsIndexEvenWhenAStopMisbehaves(t *testing.T) {
 func TestCollidingToolNamesResolveDeterministically(t *testing.T) {
 	t.Parallel()
 	log, rec := recorder()
-	b := NewBridge(log)
+	b := NewBridge(log, Supervision{})
 	t.Cleanup(func() { _, _ = b.StopAll(context.Background()) })
 
 	tools := toolsJSON([3]string{"search", "d", ""})

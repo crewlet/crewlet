@@ -27,6 +27,12 @@ import "slices"
 // with an empty Refusal, and a reader that needs a class treats it as the
 // server's own failure rather than guessing one.
 //
+// What IS classed is a call the engine refuses ABOUT a server: one that is not
+// running — down and being restarted, or stopped — or whose session ended
+// under the call. That sentence is the engine's, from a state it observed
+// rather than prose it would have to read, so it carries [RefusalUnavailable]
+// like any other first-party refusal (supervise.go).
+//
 // # Why it is a named string with [Refusal.Valid]
 //
 // The value travels: a newer build may classify a refusal this build has no

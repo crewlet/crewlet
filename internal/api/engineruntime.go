@@ -117,13 +117,17 @@ func (r engineRuntime) Tools() []ToolInfo {
 	if company == nil || company.Tools == nil {
 		return nil
 	}
-	entries := company.Tools.List()
+	// ONE SNAPSHOT for both reads: the epoch's shared MCP tools are refiled
+	// when a server comes back with a different catalogue, and a list and a
+	// delivery map read apart could each describe a different one.
+	snapshot := company.Tools.Snapshot()
+	entries := snapshot.Entries()
 	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
 	// re-derived here: it is not "was this served by MCP" — a proven
 	// read-only MCP tool delivers nowhere, and the native tracker's
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
-	delivers := company.Tools.Deliveries()
+	delivers := snapshot.Deliveries()
 	out := make([]ToolInfo, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, toolInfo(entry, delivers[entry.Name()]))

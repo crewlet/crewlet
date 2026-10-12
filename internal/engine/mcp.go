@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -167,21 +168,35 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 // mcpOutcome is what one start of one MCP instance concluded, kept for the
 // heartbeat's [coord.NodeStatus.MCP].
 //
-// Recorded at the start rather than asked of the bridge on each beat, because
-// a FAILED start leaves nothing in the bridge to ask: a server whose discovery
-// failed is stopped and indexed nowhere (see [mcp.Bridge.Add]), so a report
-// read off the bridge would show a server that would not start as one that
-// was never configured — the one row an operator opening the settings screen
-// is looking for.
+// Recorded at the start, and not only asked of the bridge on each beat,
+// because a FAILED start can leave nothing in the bridge to ask: a seat's
+// bridge keeps nothing of a start whose discovery failed (see [mcp.Bridge.Add];
+// the seat's runner retries it), and a spec whose ${VAR} references did not
+// resolve never reached a bridge at all. A report read off the bridges alone
+// would show such a server as one that was never configured — the one row an
+// operator opening the settings screen is looking for.
 type mcpOutcome struct {
 	server string // the config's own name, never an instance name
 	seat   string // the seat handle, empty for a shared server
 	tools  int
 	err    error
+
+	// bridge and instance name the server this start handed to a bridge,
+	// whose supervision then owns what happens to it: a child that started
+	// can die, and a start that failed can be retried into one that came
+	// up. [Engine.mcpStatus] reports what the bridge says NOW wherever it
+	// still supervises the instance, and this start's conclusion only where
+	// it does not. Nil for a spec that never reached a bridge.
+	bridge   *mcp.Bridge
+	instance string
 }
 
 // mcpStatus is this node's MCP servers as the heartbeat publishes them: one
 // row per configured server, its instances counted.
+//
+// AS THEY ARE, not as they started: an instance its bridge still supervises
+// is reported by the bridge's own record, so a child that died since its
+// start counts as failed, with what took it down, until it is back.
 //
 // Sorted by server, and a server's reported error is its first failure by
 // seat handle, so a beat that re-sends the same facts sends the same bytes.
@@ -201,25 +216,34 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == ""})
 		}
 		row := &out[len(out)-1]
-		if o.err != nil {
+		tools, failure := o.tools, o.err
+		if health, ok := mcpHealth(o); ok {
+			tools, failure = health.Tools, nil
+			if !health.Serving {
+				failure = errors.New(health.Down)
+			}
+		}
+		if failure != nil {
 			row.Failed++
 			if row.Error == "" {
-				row.Error, row.ErrorSeat = o.err.Error(), o.seat
+				row.Error, row.ErrorSeat = failure.Error(), o.seat
 			}
 			continue
 		}
 		row.Started++
-		row.Tools = max(row.Tools, o.tools)
+		row.Tools = max(row.Tools, tools)
 	}
 	return out
 }
 
-// SharedServers names the company-wide MCP children this node is running.
+// SharedServers names the company-wide MCP servers this node's bridge
+// supervises: serving, or down and being brought back — a child that died, or
+// a start that failed and is being retried, which has no process at all.
 //
 // The BRIDGE's own record rather than the config's, which is the whole point:
-// what a revision declares and what this process has running are different
+// what a revision declares and what this process supervises are different
 // facts, and only the second one says whether a server a revision removed was
-// actually stopped.
+// actually stopped. Whether one is answering is [mcp.Bridge.Health]'s.
 func (e *Engine) SharedServers() []string {
 	if e.mcp == nil {
 		return nil
@@ -296,7 +320,8 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge
 	outcomes := make([]mcpOutcome, len(specs))
 	for i, spec := range specs {
 		file(ctx, reg, spec.Name, out[i].change, out[i].err)
-		outcomes[i] = mcpOutcome{server: mcp.ServerName(spec.Name), err: out[i].err}
+		outcomes[i] = mcpOutcome{server: mcp.ServerName(spec.Name), err: out[i].err,
+			bridge: bridge, instance: spec.Name}
 		if out[i].err == nil {
 			outcomes[i].tools = len(bridge.ServerTools(spec.Name))
 		}
@@ -309,8 +334,16 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge
 // The registrations carry their own origin, so nothing here can file a
 // server's tool as a builtin — which is the reading that makes a failed
 // server look like a missing builtin instead.
+//
+// A server that is DOWN ([mcp.ErrNotRunning]: its child died, or its start
+// failed, and its bridge is bringing it back) has its change filed BESIDE the
+// error. Its tools stay listed and refuse until it is back, and they are filed
+// here, in spec order, rather than appended when the epoch is published: a
+// registry renders a prompt in the order it was filed, and the same revision
+// applied while the server was up must list the same tools in the same order.
 func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Change, err error) {
-	if err != nil {
+	down := errors.Is(err, mcp.ErrNotRunning)
+	if err != nil && !down {
 		// Logged, not returned. One vendor's server failing to start
 		// costs that server's tools; failing the apply over it would
 		// take the whole company down with it.
@@ -334,12 +367,18 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 	}
 	filed := 0
 	for _, registration := range change.Registrations() {
-		if err := reg.RegisterMCP(registration); err != nil {
+		if refused := reg.RegisterMCP(registration); refused != nil {
 			log.WarnContext(ctx, "mcp_tool_refused",
-				"server", server, "tool", registration.Tool.Name(), "error", err)
+				"server", server, "tool", registration.Tool.Name(), "error", refused)
 			continue
 		}
 		filed++
+	}
+	if down {
+		log.ErrorContext(ctx, "mcp_server_failed", "server", server, "error", err, "tools", filed,
+			"detail", "this server is down and its bridge is bringing it back; its tools "+
+				"stay listed and refuse until it is")
+		return
 	}
 	log.InfoContext(ctx, "mcp_server_started", "server", server, "tools", filed)
 }

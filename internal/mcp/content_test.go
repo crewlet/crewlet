@@ -166,7 +166,7 @@ func TestToolResultRenderingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listTools: %v", err)
 	}
-	tool := newTool(c, defs[0], Spec{Name: "blocks"})
+	tool := toolOn(c, defs[0], Spec{Name: "blocks"})
 
 	res, err := tool.Call(t.Context(), nil)
 	if err != nil {
@@ -195,7 +195,7 @@ func TestEmptyResultIsNotSilence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listTools: %v", err)
 	}
-	tool := newTool(c, defs[0], Spec{Name: "quiet"})
+	tool := toolOn(c, defs[0], Spec{Name: "quiet"})
 	res, err := tool.Call(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("Call: %v", err)

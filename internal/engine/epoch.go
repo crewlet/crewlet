@@ -73,7 +73,7 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is three things.
+// Today that is four things.
 //
 // THE PARTY REGISTRY, indexed BEFORE the epoch is stored, so no reader can
 // find a company through [Engine.Company] whose parties are not in
@@ -91,13 +91,20 @@ func (e *Engine) RecheckGitHub() {
 // [Engine.buildEmbedder] has already refused any revision that would change
 // it.
 //
+// And THE SHARED MCP SERVERS' CATALOGUE AS IT STANDS NOW, refiled into the
+// epoch's registry once the epoch is current. The registry was filled while
+// the epoch was being built, and a shared server the bridge brought back in
+// between — a retried start, a restart with different tools — told a refile
+// that could only see the epoch being replaced; see
+// [Engine.sharedCatalogueChanged]. Before the audit below, which reads it.
+//
 // And the TOOL-SKILL TRIGGER AUDIT, which reads the epoch that is current
 // and so runs once this one is; see [Engine.auditSkills] for why it takes
 // no epoch.
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
+func (e *Engine) installEpoch(ctx context.Context, c *Company, activatedAt time.Time) {
 	if c != nil {
 		// STAMPED BEFORE IT IS PUBLISHED, so no reader ever sees this
 		// epoch without the instant its configuration took effect — the
@@ -111,6 +118,11 @@ func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
 		e.refreshParties(c)
 	}
 	e.epoch.current.Store(c)
+	if c != nil {
+		e.mcpFileMu.Lock()
+		e.fileSharedTools(ctx, c, false)
+		e.mcpFileMu.Unlock()
+	}
 	if c != nil && c.Models == nil {
 		// Said here, once per epoch, because it is the only line that
 		// reaches the operator of a company nobody has messaged yet: with
@@ -377,7 +389,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.installEpoch(next, activatedAt)
+	e.installEpoch(ctx, next, activatedAt)
 	applied = append(applied, "epoch")
 
 	// THE SWEEP, rebuilt when this apply started the native runtime — its
