@@ -1657,7 +1657,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	// ONE operator surface, handed to the routes that serve it and to the
 	// viewer that says what it serves.
-	operators, err := api.NewEngineOperator(e)
+	operators, err := api.NewEngineOperator(e, nil)
 	if err != nil {
 		return nil, err
 	}

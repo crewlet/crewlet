@@ -76,9 +76,9 @@ var tagKeys = map[string]string{
 	"work_key": "work_key",
 	// WHICH CONVERSATION — a chat thread, a work item, a page — the event
 	// belongs to. channel_id does NOT cover it: that is set on A2A events
-	// alone and never on the phase records that carry the model's
-	// reasoning, so without this no query can ask history for one thread's
-	// turns.
+	// and on the runtime audit of a chat erase or prune, and never on the
+	// phase records that carry the model's reasoning, so without this no
+	// query can ask history for one thread's turns.
 	//
 	// ONE MEANING ACROSS EVERY EVENT TYPE, which is a property of the wire
 	// field rather than of this line: the tag is the conversation IDENTITY
@@ -136,13 +136,15 @@ var tagKeys = map[string]string{
 	// the ONLY record of which host's disk holds the copy, and the backup
 	// record deliberately leaves the node to the envelope.
 	"node": "node",
-	// The RUNTIME AUDIT's three dimensions (types.OperatorActed and
-	// types.BackupRequested, the only events that carry them): the person
-	// the acting credential is bound to, the operator tool a call ran, and
-	// the directory a backup was written to. Tags for the reason every one
-	// here is — the Audit log and the backup history draw these rows from a
-	// listing, which never selects the payload, and without them a row
-	// could say only the summary's prose about who did what and where.
+	// The RUNTIME AUDIT's three dimensions of its own (types.OperatorActed,
+	// types.BackupRequested and the chat destructions' records, the only
+	// events that carry them): the person the acting credential is bound
+	// to, the operator tool a call ran, and the directory a backup was
+	// written to — a chat erase or prune names its room through
+	// `channel_id` above. Tags for the reason every one here is — the Audit
+	// log and the backup history draw these rows from a listing, which
+	// never selects the payload, and without them a row could say only the
+	// summary's prose about who did what and where.
 	"actor_seat": "actor_seat",
 	"tool":       "tool",
 	"dir":        "dir",

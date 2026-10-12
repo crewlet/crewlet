@@ -348,9 +348,10 @@ func destructionUnknown(err error) bool {
 }
 
 // answerDestroyed is how every destructive operator route answers a gesture
-// whose write path gave an outcome — the purge here: 200 whatever the outcome,
-// the gesture's own echo, the three-valued `outcome`, the `op_id` a retry is
-// sent under, and the `position` the record landed at.
+// whose write path gave an outcome — the purge here, and chat's erase and
+// prune beside it: 200 whatever the outcome, the gesture's own echo, the
+// three-valued `outcome`, the `op_id` a retry is sent under, and the
+// `position` the record landed at.
 //
 // 200 FOR ALL THREE, because each is an answer rather than a failure: `pending`
 // is durable and `unknown` is the one to retry, and a status per outcome would
@@ -404,16 +405,43 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 	return opID, true
 }
 
+// heldOpID is [callerOpID] for a gesture whose SUBJECT does not identify it:
+// an id the caller brings back must have been minted under exactly name
+// ([statelog.OpNamed]), or it is answered `400 op_id_invalid` naming the
+// gesture it would have to be — and false is returned with the response
+// written, nothing judged or sent.
+//
+// A chat erase and a prune are those gestures ([chat.EraseOpName]): both
+// arbitrate on the room, and a retry is collapsed onto the record its
+// operation already holds on its subject whatever that record says, so the
+// same id carried to other messages or a later cutoff in the same room was
+// answered `applied` from the first while nothing it named was destroyed. The
+// operator's tracker tools refuse the same mistake the same way. The purge and
+// the gate need none of this: a task, or a node, is the whole of what their
+// gesture is about, so an id carried elsewhere already meets another subject
+// and is refused there ([operationReused]).
+func heldOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	opID, ok := callerOpID(w, r, name)
+	if !ok || r.URL.Query().Get("op_id") == "" {
+		return opID, ok
+	}
+	if !heldTo(w, opID, name, "other messages, a later cutoff or another room",
+		"nothing this one names destroyed") {
+		return "", false
+	}
+	return opID, true
+}
+
 // heldTo reports whether an operation id the caller BROUGHT was minted under
 // exactly name, answering `400 op_id_invalid` — nothing judged or sent — where
 // it was not. carriedTo says where an id from another gesture would have been
 // taken, and lost what this gesture asked for that the first one's record
 // would have been answered in place of.
 //
-// IT TAKES THE NAME RATHER THAN THE REQUEST, because the gesture it holds is
-// one whose name is not known when the request arrives: a file write is named
-// after the content it stores ([tracker.FileWriteOpName]), and the content's
-// hash exists only once the body has been read.
+// SEPARATE FROM [heldOpID] for the one gesture whose name is not known when
+// the request arrives: a file write is named after the content it stores
+// ([tracker.FileWriteOpName]), and the content's hash exists only once the
+// body has been read.
 func heldTo(w http.ResponseWriter, opID, name, carriedTo, lost string) bool {
 	if statelog.OpNamed(opID, name) {
 		return true
@@ -513,7 +541,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				"error": "no_state_log",
 				"detail": "this node runs no state log, so there is no log to " +
 					"write an eviction to — ask a node that runs the native " +
-					"tracker or knowledge base",
+					"tracker, knowledge base or chat",
 			})
 			return
 		}

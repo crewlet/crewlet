@@ -36,8 +36,11 @@ const serverName = "crewlet-operator"
 //
 // IT ADMITS AN UNBOUND TOKEN, which is the difference between this transport
 // and a person's: an assistant connected with a CI token or an ops-bot token
-// is a credential acting as itself, and every write it makes names that
-// credential as its author (see [WorkActor]).
+// is a credential acting as itself, and every tracker or page write it makes
+// names that credential as its author (see [WorkActor]). Chat is the one
+// place such a credential is refused, reads included, by the tool rather than
+// the transport: a message's author is a seat, and a caller bound to none has
+// no membership to read a room by (see [ChatActor]).
 type mcpTransport struct {
 	srv *mcp.Server
 }

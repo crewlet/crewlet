@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -590,6 +591,14 @@ func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
 		if code != http.StatusServiceUnavailable || body["error"] != "no_state_log" {
 			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
 				"no_state_log", verb, code, body)
+		}
+		// AND IT SENDS THE OPERATOR TO A NODE THAT RUNS ONE: native chat
+		// alone runs the state log (config.Company.RunsStateLog), so a
+		// detail naming the tracker and the knowledge base only sends the
+		// operator of a Jira and Confluence company nowhere.
+		if detail, _ := body["detail"].(string); !strings.Contains(detail, "chat") {
+			t.Errorf("%s: detail %q does not name native chat among what runs "+
+				"the state log", verb, detail)
 		}
 	}
 }

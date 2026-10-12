@@ -266,6 +266,34 @@ type Sources struct {
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
 
+	// Chat is the company's own conversation through the estate router,
+	// the third native backend beside the tracker and the wiki and gated
+	// the same way: nil is the honest answer for a company talking on
+	// Slack, which has no native rooms for any node to hold.
+	//
+	// EVERY QUESTION IT SERVES IS ABOUT THE CALLER, resolved from their
+	// credential — see chat.go's file doc. There is no handle parameter
+	// anywhere on this family and no operator arm that reads somebody
+	// else's rooms.
+	Chat ChatReader
+
+	// ChatSearch is the ranked search over that conversation, through the
+	// router: the data node that answers resolves the viewer's rooms beside
+	// the index it reads. A seam of its own rather than a method of
+	// [Sources.Chat] because it is a search FOR A VIEWER rather than a read
+	// of rooms — see [ChatSearcher]. Nil leaves `chat_search`
+	// unregistered, which is what a screen needs in order to offer the
+	// rooms instead of an empty ranking.
+	ChatSearch ChatSearcher
+
+	// ChatReads is where each person's eye has reached, which rooms they
+	// have muted and whether they are in do-not-disturb. It is the ONE
+	// piece of chat state that is not on the log — a fact about one
+	// reader's attention, kept in coordination — and nil is "this process
+	// cannot say", which the rail reports rather than badging every room
+	// with its whole history.
+	ChatReads ChatReads
+
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
 	//
@@ -653,6 +681,38 @@ func Register(r *Registry, s Sources) {
 		// could say existed and never show.
 		r.Register("page_activity", s.pageActivity)
 		r.Register("page_revision", s.pageRevision)
+	}
+	if s.Chat != nil {
+		// OPERATOR-ONLY, ALL OF THEM, and this is the one PERSONAL
+		// read family with no anonymous arm.
+		//
+		// The personal questions above are registered ungated and
+		// scoped inside — see [Sources.viewerHandle] — because their
+		// scope rule has an arm for a caller with no credential: your
+		// own seat. Chat has no such arm, because the SEAT IS RESOLVED
+		// FROM THE CREDENTIAL, so a caller with none is not a person
+		// this surface can answer about. Declaring that in the registry
+		// rather than discovering it six times is also what keeps
+		// `api.allow_anonymous_read` away from a transcript.
+		//
+		// The refusal an operator actually has to act on still reaches
+		// them: a token that resolves to NO seat passes this check and
+		// is refused by [Sources.chatViewer], naming
+		// contact.crewlet_operator_id.
+		r.RegisterOperator("chat_channels", s.chatChannels)
+		r.RegisterOperator("chat_channel", s.chatChannel)
+		r.RegisterOperator("chat_messages", s.chatMessages)
+		// A THREAD IS ITS OWN QUESTION, not a filter on the room: it is
+		// opened beside the transcript and paged in the opposite
+		// direction, because a conversation is read forwards.
+		r.RegisterOperator("chat_thread", s.chatThread)
+		r.RegisterOperator("chat_mentions", s.chatMentions)
+		if s.ChatSearch != nil {
+			// GATED ON BOTH HALVES: a surface handed the rooms and no
+			// search offers the rooms rather than a ranking that
+			// answers nothing.
+			r.RegisterOperator("chat_search", s.chatSearch)
+		}
 	}
 	if s.Memory != nil {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see

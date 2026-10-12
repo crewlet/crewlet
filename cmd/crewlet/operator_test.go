@@ -46,7 +46,7 @@ func TestTheOperatorsSurfacesAreHandedTheRouter(t *testing.T) {
 		t.Errorf("the purge is handed %T, want the router's writer", nativePurger(e))
 	}
 
-	opts := api.EngineOperatorOptions(e)
+	opts := api.EngineOperatorOptions(e, nil)
 	work := opts.Work
 	if work.Reader == nil || opts.Pages.Reader == nil {
 		t.Fatalf("the premise: a company on the native tracker and knowledge base hands "+
@@ -112,7 +112,7 @@ func TestEverySurfaceBindsAPersonThroughTheNodesOwnChain(t *testing.T) {
 	// founder's own, and a read about the founder is by both of their names.
 	t.Run("the_operator_surface", func(t *testing.T) {
 		t.Parallel()
-		work := api.EngineOperatorOptions(e).Work
+		work := api.EngineOperatorOptions(e, nil).Work
 		actor, err := work.Actor(auth.WithOperator(t.Context(), "ops-founder"), nil)
 		if err != nil {
 			t.Fatalf("actor: %v", err)

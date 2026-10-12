@@ -284,51 +284,84 @@ func rebindingChart() func() *org.Organization {
 // between them admitted the act as Jane, wrote it as Pat and audited it as
 // nobody. Over MCP, which admits nobody by seat, the write and the audit still
 // read one answer.
+//
+// A CHAT WRITE IS HELD TO IT AS WELL AS A TRACKER WRITE, because the two
+// actors read the seat differently — a tracker write carries it beside the
+// token, a message is authored by it — and the chat actor once resolved the
+// token afresh on every call, so a message could be written as one person and
+// audited under another.
 func TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs(t *testing.T) {
 	t.Parallel()
 	for _, transport := range []string{types.TransportAct, types.TransportMCP} {
-		t.Run(transport, func(t *testing.T) {
-			t.Parallel()
-			chart := rebindingChart()
-			audit := &auditLog{}
-			work := &recordingWork{}
-			s := newSurface(t, operator.Options{
-				Work: builtin.WorkDeps{
-					Reader: stubWorkReader{}, Writer: work.writer,
-					Actor: operator.WorkActor(chart, nil),
-				},
-				Org:   chart,
-				Audit: audit,
+		for _, gesture := range []string{"work", "chat"} {
+			t.Run(transport+"/"+gesture, func(t *testing.T) {
+				t.Parallel()
+				chart := rebindingChart()
+				audit := &auditLog{}
+				work := &recordingWork{}
+				talk := &recordingChat{}
+				s := newSurface(t, operator.Options{
+					Work: builtin.WorkDeps{
+						Reader: stubWorkReader{}, Writer: work.writer,
+						Actor: operator.WorkActor(chart, nil),
+					},
+					Chat: builtin.ChatDeps{
+						Reader: stubChatReader{}, Writer: talk,
+						Actor: operator.ChatActor(chart, nil),
+					},
+					Org:   chart,
+					Audit: audit,
+				})
+				tool, args := tracker.CreateWorkItemTool, createArgs()
+				if gesture == "chat" {
+					tool, args = builtin.PostMessageTool, postArgs()
+				}
+				switch transport {
+				case types.TransportAct:
+					raw, err := json.Marshal(map[string]any{"request_id": requestA, "args": args})
+					if err != nil {
+						t.Fatal(err)
+					}
+					status, answer := act(t, guarded(s, false), "founder-secret",
+						tool, "application/json", string(raw))
+					if status != http.StatusOK {
+						t.Fatalf("the act answered %d %v", status, answer)
+					}
+				case types.TransportMCP:
+					ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+					defer cancel()
+					if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
+						Name: tool, Arguments: args,
+					}); err != nil {
+						t.Fatalf("%s over MCP: %v", tool, err)
+					}
+				}
+				// WHO THE WRITE WAS MADE AS: the seat beside the token on a
+				// tracker write, the author of a message.
+				var written []string
+				if gesture == "chat" {
+					for _, a := range talk.actors() {
+						written = append(written, a.Handle)
+					}
+				} else {
+					actors, _ := work.writes()
+					for _, a := range actors {
+						written = append(written, a.Seat)
+					}
+				}
+				recorded := audit.published()
+				if len(written) != 1 || len(recorded) != 1 {
+					t.Fatalf("one call wrote %d times and was audited %d times",
+						len(written), len(recorded))
+				}
+				audited := payloadOf(t, recorded[0]).ActorSeat
+				if written[0] != audited {
+					t.Errorf("the call wrote as %q and was audited as %q", written[0], audited)
+				}
+				if transport == types.TransportAct && written[0] != "jane-founder" {
+					t.Errorf("the act was admitted as jane-founder and wrote as %q", written[0])
+				}
 			})
-			switch transport {
-			case types.TransportAct:
-				status, answer := act(t, guarded(s, false), "founder-secret",
-					tracker.CreateWorkItemTool, "application/json", createBody(requestA))
-				if status != http.StatusOK {
-					t.Fatalf("the act answered %d %v", status, answer)
-				}
-			case types.TransportMCP:
-				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-				defer cancel()
-				if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
-					Name: tracker.CreateWorkItemTool, Arguments: createArgs(),
-				}); err != nil {
-					t.Fatalf("create over MCP: %v", err)
-				}
-			}
-			actors, _ := work.writes()
-			recorded := audit.published()
-			if len(actors) != 1 || len(recorded) != 1 {
-				t.Fatalf("one call wrote %d times and was audited %d times",
-					len(actors), len(recorded))
-			}
-			written, audited := actors[0].Seat, payloadOf(t, recorded[0]).ActorSeat
-			if written != audited {
-				t.Errorf("the call wrote as %q and was audited as %q", written, audited)
-			}
-			if transport == types.TransportAct && written != "jane-founder" {
-				t.Errorf("the act was admitted as jane-founder and wrote as %q", written)
-			}
-		})
+		}
 	}
 }

@@ -26,6 +26,30 @@ export type PushKind =
   | "org"
   | "tools"
   | "health"
+  /* THE CHAT ARM. A push kind is WHAT HAPPENED and a query name is WHAT IS
+     BEING ASKED, and the two namespaces are disjoint — an envelope carries a
+     `kind` and nothing else says which direction it was travelling. The past
+     tense is how that is kept true by construction, and the engine's own gate
+     holds these names against the read registry's.
+
+     Six of them are one committed record each, the kind derived from the
+     record's own op (`stream.chatPushKind`) and filtered per socket by
+     whether that viewer may read the room — so a message the viewer cannot
+     see never arrives here and no client-side visibility rule exists or is
+     wanted. The other two are not records at all: `chat_cursor_moved` reaches
+     ONE person's own sockets, because a read cursor is a fact about one
+     reader's attention, and `chat_presence` is below. `stream.ChatPushKinds`
+     is the whole list of eight this arm sends. */
+  | "chat_posted"
+  | "chat_edited"
+  | "chat_deleted"
+  | "chat_reacted"
+  | "chat_room_changed"
+  | "chat_membership_changed"
+  | "chat_cursor_moved"
+  /* NOT PAST TENSE, because it is not a thing that happened: it is the current
+     answer, whole, for the rooms this socket said it is looking at. */
+  | "chat_presence"
   | "result"
   | "error"
   | "pong";

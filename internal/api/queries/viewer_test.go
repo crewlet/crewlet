@@ -467,3 +467,51 @@ func TestTheViewerSaysWhetherItMayChangeTheCompany(t *testing.T) {
 		})
 	}
 }
+
+// WHICH CHAT THE COMPANY RUNS IS SAID TO AN OPERATOR BEFORE A CHAT QUESTION IS
+// ASKED. Every chat question is registered only where chat is the engine's
+// own, so on a company whose chat is on Mattermost or Slack the chat screen
+// was answered `unknown_query` — read as a subsystem down on this node, which
+// sends an operator to debug a node over a line of company configuration.
+func TestTheViewerSaysWhichChatTheCompanyRuns(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, extra, backend string
+		vendors              []string
+	}{
+		{"no chat declared is the engine's own", "", "native", nil},
+		{"a Mattermost company is a vendor's", "integrations:\n  mattermost: " +
+			"{enabled: true, url: https://mm.example.com, team: acme}\n",
+			"vendor", []string{"mattermost"}},
+		{"a company with no chat says so", "chat:\n  backend: none\n", "none", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := config.ParseCompany([]byte(viewerCompany + c.extra))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			s := queries.Sources{Company: func() *config.Company { return cfg }}
+			answered, err := askAsOperator(t, s, "viewer", nil)
+			got := answerMap(t, answered, err)
+			if got["chat_backend"] != c.backend {
+				t.Errorf("chat_backend = %v, want %s", got["chat_backend"], c.backend)
+			}
+			vendors, _ := got["chat_vendors"].([]string)
+			if !slices.Equal(vendors, c.vendors) && (len(vendors) != 0 || len(c.vendors) != 0) {
+				t.Errorf("chat_vendors = %v, want %v", got["chat_vendors"], c.vendors)
+			}
+			if got["chat_vendors"] == nil {
+				t.Errorf("chat_vendors is null; an empty list is a value a reader can test")
+			}
+		})
+	}
+
+	// AND TO NOBODY ELSE, as the integrations are named to nobody else.
+	answered, err := askNative(t, viewerSources(t, &stubWork{}), "viewer", nil)
+	got := answerMap(t, answered, err)
+	if got["chat_backend"] != "" {
+		t.Errorf("an anonymous reader was told chat_backend %v", got["chat_backend"])
+	}
+}

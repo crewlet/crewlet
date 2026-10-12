@@ -2,6 +2,7 @@ package types
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -17,8 +18,14 @@ import (
 // tracker or wiki write (a backup, and the seat controls the dashboard gains)
 // leaves nothing anywhere. The configuration and credential surfaces keep
 // their own history (a revision names who created it, a credential row who
-// stored it) and are not repeated here. These two events are the fifth
-// source the Audit log reads: every CALL, whatever became of it.
+// stored it) and are not repeated here. These events are the fifth source the
+// Audit log reads: every CALL, whatever became of it.
+//
+// The chat destructions are here for the second reason at full strength. An
+// erase or a prune is a route rather than a tool, so it is no
+// [OperatorActed]; and what it removed is gone from every node, so no record
+// of the change survives in the room either. Its runtime record is the only
+// account of it a person can read afterwards.
 //
 // # Who has to agree on it
 //
@@ -31,6 +38,8 @@ import (
 func init() {
 	events.Register[OperatorActed]()
 	events.Register[BackupRequested]()
+	events.Register[ChatErased]()
+	events.Register[ChatPruned]()
 }
 
 // OperatorSource is the envelope source every runtime audit event carries —
@@ -49,6 +58,8 @@ const OperatorSource = "operator"
 var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
+	ChatErased{}.EventType(),
+	ChatPruned{}.EventType(),
 }
 
 // AuditOutcome is what became of an audited call.
@@ -188,6 +199,102 @@ func (e BackupRequested) SummaryFor(actor string) string {
 // NewBackupRequested builds the audit record for one backup, with [Failed]
 // derived from the outcome.
 func NewBackupRequested(e BackupRequested) BackupRequested {
+	e.Failed = e.Outcome.failed()
+	return e
+}
+
+// ChatErased is one `POST /chat/channels/{id}/erase`: message rows destroyed
+// on every node, with no inverse.
+//
+// IT CARRIES THE REASON, where [OperatorActed] carries no argument at all, and
+// that is the point of it. The rows it names are gone from every node and the
+// room keeps no history row of them, so the reason the operator was made to
+// give is the account a reader of this log is left with — the route refuses
+// an erase without one for exactly that. The ids are NOT here: they name rows
+// that no longer exist anywhere, and how many is what a reader can use.
+type ChatErased struct {
+	OperatorID string `json:"operator_id"`
+	ActorSeat  string `json:"actor_seat,omitempty"`
+
+	// ChannelID is the room, promoted to the row's `channel_id` tag so a
+	// listing can say which room without its payload.
+	ChannelID string `json:"channel_id"`
+	Messages  int    `json:"messages"`
+	Reason    string `json:"reason"`
+
+	// OpID is the operation the erase ran under — the id a caller retries
+	// an `unknown` with, so a retry's record reads as the same gesture.
+	OpID string `json:"op_id"`
+
+	Outcome AuditOutcome `json:"outcome"`
+	// Position is where the record landed, absent for `unknown`.
+	Position string `json:"position,omitempty"`
+	// Refusal is the route's refusal code of a `refused` erase.
+	Refusal string `json:"refusal,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
+}
+
+// EventType is the "chat_erased" wire type.
+func (ChatErased) EventType() string { return "chat_erased" }
+
+// Actor is the credential.
+func (e ChatErased) Actor() string { return e.OperatorID }
+
+// SummaryFor names the room, how many messages and why — the reason being the
+// one account of them that survives.
+func (e ChatErased) SummaryFor(actor string) string {
+	what := strconv.Itoa(e.Messages) + " message(s) in room " + e.ChannelID
+	if e.Outcome == AuditApplied {
+		return lead(asPerson(actor, e.ActorSeat), "erased "+what+": "+e.Reason)
+	}
+	return lead(asPerson(actor, e.ActorSeat), "erase of "+what+" "+
+		outcomeWords(e.Outcome, e.Refusal)+": "+e.Reason)
+}
+
+// NewChatErased builds the audit record for one erase, with [Failed] derived
+// from the outcome.
+func NewChatErased(e ChatErased) ChatErased {
+	e.Failed = e.Outcome.failed()
+	return e
+}
+
+// ChatPruned is one `POST /chat/channels/{id}/prune`: everything a room said
+// before an instant destroyed on every node, now. The retention duty's own
+// prunes are the engine's, on a schedule, and are not a person's act.
+type ChatPruned struct {
+	OperatorID string `json:"operator_id"`
+	ActorSeat  string `json:"actor_seat,omitempty"`
+
+	ChannelID string `json:"channel_id"`
+	// Cutoff is the instant: everything the room said before it went.
+	Cutoff time.Time `json:"cutoff"`
+	OpID   string    `json:"op_id"`
+
+	Outcome  AuditOutcome `json:"outcome"`
+	Position string       `json:"position,omitempty"`
+	Refusal  string       `json:"refusal,omitempty"`
+	Failed   bool         `json:"failed,omitempty"`
+}
+
+// EventType is the "chat_pruned" wire type.
+func (ChatPruned) EventType() string { return "chat_pruned" }
+
+// Actor is the credential.
+func (e ChatPruned) Actor() string { return e.OperatorID }
+
+// SummaryFor names the room and the instant everything before it went.
+func (e ChatPruned) SummaryFor(actor string) string {
+	what := "room " + e.ChannelID + " before " + e.Cutoff.UTC().Format(time.RFC3339)
+	if e.Outcome == AuditApplied {
+		return lead(asPerson(actor, e.ActorSeat), "pruned "+what)
+	}
+	return lead(asPerson(actor, e.ActorSeat), "prune of "+what+" "+
+		outcomeWords(e.Outcome, e.Refusal))
+}
+
+// NewChatPruned builds the audit record for one prune, with [Failed] derived
+// from the outcome.
+func NewChatPruned(e ChatPruned) ChatPruned {
 	e.Failed = e.Outcome.failed()
 	return e
 }

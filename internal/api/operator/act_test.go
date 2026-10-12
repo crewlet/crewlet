@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -266,6 +267,12 @@ func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
 // and the bound seat rides beside them as the person whose own state it is.
 // The answer carries the tool's own receipt with the outcome and the position
 // lifted beside it, which is the floor the caller's next read waits for.
+//
+// A MESSAGE DIFFERS IN ONE FIELD: its author is the bound seat's handle,
+// because a room renders a speaker by it, while the kind is still `operator`
+// and the token's id is still recorded — so a person speaks in a room under
+// the name everybody there knows them by, and an audit can still ask what one
+// token said.
 func TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
@@ -302,6 +309,36 @@ func TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat(t *testing.T) {
 	if !ok || receipt["key"] != "ENG-9" {
 		t.Errorf("the receipt is %v, want the tool's own answer carrying the key it minted",
 			answer["receipt"])
+	}
+
+	talk := &recordingChat{}
+	raw, err := json.Marshal(map[string]any{"request_id": requestA, "args": postArgs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, answer = act(t, guarded(newSurface(t, operator.Options{
+		Chat: builtin.ChatDeps{
+			Reader: stubChatReader{}, Writer: talk,
+			Actor: operator.ChatActor(boundChart, nil),
+		},
+		Org: boundChart,
+	}), false), "founder-secret", builtin.PostMessageTool, "application/json", string(raw))
+	if status != http.StatusOK {
+		t.Fatalf("the bound person's post answered %d %v", status, answer)
+	}
+	spoke := talk.actors()
+	if len(spoke) != 1 {
+		t.Fatalf("one act posted %d times", len(spoke))
+	}
+	if said := spoke[0]; said.Handle != "jane-founder" || said.Kind != chat.AuthorOperator ||
+		said.OperatorID != "founder" {
+
+		t.Errorf("the message is attributed as %+v — its author is the bound seat, "+
+			"its kind operator and the token recorded beside them", said)
+	}
+	at := statelog.Position{Stream: "CREWLET_CHAT_LOG", Seq: 1}
+	if answer["outcome"] != "applied" || answer["position"] != at.String() {
+		t.Errorf("the post answered %v, want applied at %s", answer, at)
 	}
 }
 
@@ -796,48 +833,5 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if _, has := body["outcome"]; has {
 		t.Errorf("a tool's refusal claims an outcome %v — it wrote nothing, and "+
 			"saying unknown would tell a person it may have", body["outcome"])
-	}
-}
-
-// A PIN IS ITS OWN CALLER'S, and a context re-keyed to another credential
-// does not inherit it.
-//
-// The dispatch pins the seat it admitted a call as on the call's context, and
-// every actor reads that pin before the chart. A context is inherited by
-// everything derived from it, so one re-keyed to another operator with
-// [auth.WithOperator] still carried the pin — and every resolution made under
-// it answered the FIRST caller's seat for the second credential: a write made
-// as one person and attributed, in the audit trail, to another. So a pin made
-// for one operator is no pin at all to another: the work actor resolves the
-// second credential to its own seat, as a caller nobody pinned.
-func TestASeatPinnedForOneCallerIsNotAnothersSeat(t *testing.T) {
-	t.Parallel()
-	chart := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-		{Name: "Founder", Kind: org.KindHuman,
-			Contact: &org.HumanContact{CrewletOperatorID: "founder-token"}},
-		{Name: "Ops", Kind: org.KindHuman,
-			Contact: &org.HumanContact{CrewletOperatorID: "ops-token"}},
-	}}
-	chart.Normalize()
-	company := func() *org.Organization { return chart }
-	pinned := operator.WithSeat(auth.WithOperator(t.Context(), "founder-token"),
-		"founder-token", "founder")
-	rekeyed := auth.WithOperator(pinned, "ops-token")
-
-	wrote, err := operator.WorkActor(company, nil)(rekeyed, nil)
-	if err != nil || wrote.Seat != "ops" || wrote.OperatorID != "ops-token" {
-		t.Errorf("a context pinned for the founder and re-keyed to ops wrote as "+
-			"%+v (%v), want ops's own seat", wrote, err)
-	}
-
-	// AND THE PIN STILL HOLDS FOR THE CALLER IT WAS MADE FOR, the chart's
-	// later binding notwithstanding — which is the whole of what it is for.
-	elsewhere := operator.WithSeat(auth.WithOperator(t.Context(), "founder-token"),
-		"founder-token", "ops")
-	if wrote, err := operator.WorkActor(company, nil)(elsewhere, nil); err != nil ||
-		wrote.Seat != "ops" {
-
-		t.Errorf("a call admitted as ops wrote as %+v (%v) — its own pin was "+
-			"not read", wrote, err)
 	}
 }

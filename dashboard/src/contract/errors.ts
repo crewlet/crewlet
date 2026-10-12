@@ -24,6 +24,12 @@ export type QueryErrorCode =
    *  second is an answer a person acts on. A source this node does not have
    *  at all is `unknown_query`, which waiting never changes. */
   | "unavailable"
+  /** Refused because of WHO is asking: a token bound to no person, and one
+   *  bound to an agent seat. The act transport's own words for the same
+   *  caller, so a screen handles them once; neither is fixed by asking again,
+   *  and the refusal's `detail` names the line of configuration that is. */
+  | "unbound"
+  | "agent_seat"
   | "timeout"
   | "closed";
 

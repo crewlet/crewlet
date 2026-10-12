@@ -199,11 +199,14 @@ func readOnly(name string) bool {
 // # Who the write is attributed to does not change here
 //
 // The author is the token, the kind `operator`, the bound seat rides beside
-// them — all decided by [WorkActor] off the request's own credential, exactly
-// as on the MCP transport. This handler adds nothing to the actor but the
-// operation its request id names ([WithOperation]) and the seat it admitted
-// the caller as ([withSeat]), so a config apply that rebinds the token while
-// the call runs cannot make it somebody else's.
+// them — all decided by the catalogue's actors ([WorkActor], [PageActor],
+// [ChatActor]) off the request's own credential, exactly as on the MCP
+// transport. A message differs in one field, on both transports alike: its
+// author is the bound seat, because a room renders a speaker by it. This
+// handler adds nothing to the actor but the operation its request id names
+// ([WithOperation]) and the seat it admitted the caller as ([withSeat]), so a
+// config apply that rebinds the token while the call runs cannot make it
+// somebody else's.
 func (s *Server) ActHandler() http.Handler {
 	return http.HandlerFunc(s.act)
 }

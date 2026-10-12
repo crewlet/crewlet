@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -71,11 +72,26 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// the same reason. ALWAYS AN ARRAY; empty is not managed.
 		"config_writer":     false,
 		"config_managed_by": []string{},
+		// WHICH CHAT THIS COMPANY RUNS — `native`, `vendor` or `none` —
+		// and, on a vendor, which of the vendor surfaces it declares. The
+		// chat questions are registered only where chat is the engine's
+		// own, so a screen that asked them of a company on Mattermost was
+		// answered `unknown_query`, which reads as a subsystem down on this
+		// node rather than as a company's choice. Answered here so the
+		// screen can say which it is before it asks anything. Named to an
+		// operator only, as the integrations are; "" and empty for anybody
+		// else and for a node that has no company yet.
+		"chat_backend": "",
+		"chat_vendors": []string{},
 	}
 	if operatorID != "" {
 		writers := s.companyWriters()
 		out["config_managed_by"] = writers
 		out["config_writer"] = s.Access == nil || s.Access.MayWriteCompany(operatorID)
+		if backend, vendors := s.chatBackend(); backend != "" {
+			out["chat_backend"] = string(backend)
+			out["chat_vendors"] = vendors
+		}
 	}
 	seat := s.seatForOperator(operatorID)
 	if seat == nil {
@@ -100,6 +116,24 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	// project promised here is the project the create files into.
 	out["project"] = s.projectOf(seat.Handle())
 	return out, nil
+}
+
+// chatBackend is the chat surface the company runs and, on a vendor, the
+// vendor surfaces it declares, in the order the dashboard names them — or ""
+// with no company. The vendors are never nil.
+func (s Sources) chatBackend() (config.ChatBackend, []string) {
+	if s.Company == nil {
+		return "", []string{}
+	}
+	c := s.Company()
+	if c == nil {
+		return "", []string{}
+	}
+	backend := c.ChatBackendFor()
+	if backend != config.ChatVendor {
+		return backend, []string{}
+	}
+	return backend, c.ChatVendors()
 }
 
 // companyWriters is the managed document's writers, or empty — never nil.

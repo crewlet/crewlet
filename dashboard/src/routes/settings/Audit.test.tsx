@@ -550,3 +550,45 @@ test("an empty To cell says why in the row's own terms", async () => {
   expect(screen.getByText("No directory recorded")).toBeTruthy();
   expect(screen.queryByText("Not recorded")).toBeNull();
 });
+
+// A CHAT DESTRUCTION IS A RUNTIME ROW, NAMED BY THE ROOM IT EMPTIED.
+//
+// An erase and a prune are routes rather than tools, so neither is an
+// `operator_acted` row, and what they removed is gone from every node — their
+// own record is the only account of them left. The room still stands, so the
+// row links there; the reason an erase was given rides in its detail.
+test("a chat erase and a prune are drawn as what they did, to which room", async () => {
+  const room = "6dd4b0df-f455-448e-80e9-1f2a3b4c5d6e";
+  serving({
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-erase",
+          type: "chat_erased",
+          failed: false,
+          summary: `U0FOUNDER (jane) erased 2 message(s) in room ${room}: a pasted key`,
+          tags: { node: "node-a", actor_seat: "jane", channel_id: room },
+        }),
+        runtimeEvent({
+          id: "ev-prune",
+          type: "chat_pruned",
+          failed: false,
+          summary: `U0FOUNDER (jane) pruned room ${room} before 2025-01-01T00:00:00Z`,
+          tags: { node: "node-a", actor_seat: "jane", channel_id: room },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/erased 2 message\(s\)/)).toBeTruthy());
+  expect(screen.getByText("chat erase")).toBeTruthy();
+  expect(screen.getByText("chat prune")).toBeTruthy();
+  const links = screen.getAllByRole("link", { name: "room 6dd4b0df" });
+  expect(links).toHaveLength(2);
+  for (const link of links) expect(link.getAttribute("href")).toBe(`#/chat/${room}`);
+  expect(screen.getByText(/a pasted key/)).toBeTruthy();
+  // NEVER the tool call's "Not recorded": a destruction's subject is the room.
+  expect(screen.queryByText("Not recorded")).toBeNull();
+});

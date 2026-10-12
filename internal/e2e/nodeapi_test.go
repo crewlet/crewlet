@@ -128,7 +128,7 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	operators, err := api.NewEngineOperator(e)
+	operators, err := api.NewEngineOperator(e, nil)
 	if err != nil {
 		return fail("operator surface", err)
 	}

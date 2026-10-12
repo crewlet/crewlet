@@ -98,8 +98,8 @@ func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"tools", server.Tools(),
 		"detail", "an operator's own AI assistant can read and write the "+
-			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry")
+			"company's tracker, knowledge base and chat here, authenticated "+
+			"with an api.auth.tokens entry")
 	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only,
 	// one tool per request, admitting a token bound to a seat and nobody
 	// else (ADR-0024). Under the same always-guarded prefix, so the guard in

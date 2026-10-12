@@ -639,6 +639,8 @@ var QUERY_ERROR_CODES = {
 	bad_params: true,
 	not_found: true,
 	unavailable: true,
+	unbound: true,
+	agent_seat: true,
 	timeout: true,
 	closed: true
 };

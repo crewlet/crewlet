@@ -42,8 +42,8 @@ var publicRoutes = []struct{ method, path string }{
 }
 
 // adminRoutes are the routes that stay on api.port: the probes, the dashboard
-// shell and its assets, the REST and query reads, and a write. Each is mounted
-// on [listenerApp] as well.
+// shell and its assets, the REST and query reads, a write, and a destructive
+// chat route. Each is mounted on [listenerApp] as well.
 var adminRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/health"},
 	{http.MethodGet, "/ready"},
@@ -53,11 +53,13 @@ var adminRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/agents"},
 	{http.MethodGet, "/query/viewer"},
 	{http.MethodPost, "/backup"},
+	{http.MethodPost, "/chat/channels/x/erase"},
 }
 
 // listenerApp is a configured, authenticated node with every optional surface
-// mounted — the webhook edge, the telemetry receiver, the tool bridge and the
-// operator surface — and the public listener set or not.
+// mounted — the webhook edge, the telemetry receiver, the tool bridge, the
+// operator surface and chat's two destructive routes — and the public listener
+// set or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
 	b := closedPosture()
@@ -79,7 +81,8 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 		Operator: operatorSurface(t, operator.Options{
 			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
 		}),
-		Sources: queries.Sources{Company: active()},
+		Sources:    queries.Sources{Company: active()},
+		ChatPurger: &recordingPurger{},
 	})
 }
 

@@ -35,7 +35,11 @@ func newSocket(t *testing.T, authOpts func(*config.APIAuth), query stream.Query)
 	guard := auth.New(&b)
 	svc := buildService(t, stream.Options{})
 
-	srv := httptest.NewServer(stream.Handler(guard, svc, query))
+	// No chat arm: these cases are about the query channel and the
+	// credential, and a nil hub is a node that serves no native chat —
+	// every method on one is a no-op, which is what lets the socket carry
+	// no branch for it.
+	srv := httptest.NewServer(stream.Handler(guard, svc, query, nil))
 	t.Cleanup(srv.Close)
 	return &socketFixture{
 		server: srv, svc: svc,
@@ -464,6 +468,73 @@ func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the query never ran")
+	}
+}
+
+// A SOCKET'S SEAT IS RESOLVED FROM THE CREDENTIAL THE GUARD ADMITTED IT WITH,
+// and a frame-carried token never asks the question again.
+//
+// The resolution is handed the credential and nothing else
+// ([stream.ChatHubOptions.Viewer] takes no context, so no request a pass runs
+// on behalf of can lend it an identity). What is left to hold at the socket is
+// WHICH credential: the one the socket was accepted with — and a query frame
+// carrying another token upgrades that one question, never the push stream.
+func TestASocketsSeatIsResolvedFromTheCredentialItWasAcceptedWith(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "founder", Token: "secret"}, {ID: "ops", Token: "ops-secret"},
+	}
+	asked := make(chan string, 8)
+	hub := stream.NewChatHub(stream.ChatHubOptions{
+		Viewer: func(operatorID string) string {
+			asked <- operatorID
+			return "alice"
+		},
+	})
+	answered := make(chan string, 1)
+	srv := httptest.NewServer(stream.Handler(auth.New(&b),
+		buildService(t, stream.Options{}),
+		func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
+			answered <- operatorID
+			return nil, nil
+		}, hub))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.Dial(t.Context(),
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream?token=secret", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	next(t, conn)
+
+	select {
+	case got := <-asked:
+		if got != "founder" {
+			t.Fatalf("the socket's seat was resolved for %q, want the founder "+
+				"the guard admitted it as", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the socket's seat was never resolved")
+	}
+
+	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config",
+		"token": "ops-secret"})
+	select {
+	case got := <-answered:
+		if got != "ops" {
+			t.Fatalf("the premise: the frame's query ran as %q, want ops", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the query never ran")
+	}
+	// THE HUB IS NOT RUNNING, so no pass re-reads the founder either: the
+	// only thing that could ask now is the frame, and it must not.
+	select {
+	case got := <-asked:
+		t.Errorf("a frame-carried token resolved the push stream's seat again, "+
+			"for %q", got)
+	default:
 	}
 }
 

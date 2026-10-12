@@ -130,6 +130,28 @@ test("a seat card links through seatPath, so an empty handle still reaches a pag
   );
 });
 
+// A TOKEN THAT IS NOBODY IS TOLD WHICH LINE MAKES IT SOMEBODY — never that the
+// screen asked wrong. Every chat read refuses it under the act transport's own
+// code, and the engine's sentence names the binding; without one, the banner
+// says the same thing in its own words.
+test("an unbound or agent-seat refusal says what binds the token, in the engine's words when it has them", () => {
+  render(
+    <QueryState
+      error="unbound"
+      detail="the token ci is bound to no seat — set contact.crewlet_operator_id: ci"
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/the token ci is bound to no seat/)).toBeTruthy();
+  expect(screen.queryByText(/screen’s bug/)).toBeNull();
+  cleanup();
+  render(<QueryState error="unbound" loading={false} />);
+  expect(screen.getByText(/not bound to a person/)).toBeTruthy();
+  cleanup();
+  render(<QueryState error="agent_seat" loading={false} />);
+  expect(screen.getByText(/bound to an agent seat/)).toBeTruthy();
+});
+
 // A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
 // `bad_params` banner says only that the engine refused; the engine's words
 // name the parameter, so they replace it.
