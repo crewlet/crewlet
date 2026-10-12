@@ -135,7 +135,10 @@ Two things read it, and both break when it is wrong:
   removed) or one of its entries **character for character**, so a SiteURL
   written with capitals stops matching the lower-case `Origin` every browser
   sends. With no SiteURL at all, the check compares the `Origin` with the
-  host the request was sent to.
+  request's `Host` header, which a reverse proxy has to forward as the
+  browser sent it: Mattermost's documented nginx configuration does
+  (`proxy_set_header Host $http_host`), while nginx's own default sends the
+  upstream's name instead.
 - **Every absolute URL the server and its plugins build.** Email links,
   OAuth redirects and the prepackaged plugins all use SiteURL. A browser
   loading `http://203.0.113.7:8065` with SiteURL still on localhost issues
@@ -200,7 +203,7 @@ differing from the address it dials:
 
 | Event | When | What breaks |
 |---|---|---|
-| `mattermost_site_url_unset` | SiteURL is empty | Mattermost's email links, email batching and OAuth sign-in. Browsers keep their live feed |
+| `mattermost_site_url_unset` | SiteURL is empty | Mattermost's email links, email batching and OAuth sign-in. Browsers keep their live feed wherever what is in front of the server forwards the `Host` they typed |
 | `mattermost_site_url_refuses_browsers` | SiteURL is not an absolute http(s) address — `localhost:8065` and `/mattermost` pass Mattermost's own validation — or spells out a default port | Every person's live feed, and every link the server builds; the agents keep working |
 | `mattermost_instance_unread` | The configuration could not be read through `url`. A redirect, or a web page where the API's JSON should be, is named in its `error` with the `url` to set | When it is the `url`: every call the engine makes, so no seat connects |
 
@@ -229,12 +232,19 @@ curl -s "http://203.0.113.7:8065/api/v4/config/client?format=old" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["SiteURL"])'
 ```
 
-Or let the engine's own check do it, which also proves a browser-shaped
-upgrade and every seat's socket:
+Or let the engine's own check do it, which also sends a browser's websocket
+upgrade to that address and opens every seat's socket:
 
 ```bash
-crewlet mattermost doctor my_company.yaml
+crewlet mattermost doctor my_company.yaml -browser-url http://203.0.113.7:8065
 ```
+
+`-browser-url` is the address people type, and only you can give it: the
+server reports where it *believes* it is browsed, and the engine's own `url`
+may be any route to it. Left out, it is read from `MATTERMOST_PUBLIC_URL`,
+which a shell that sourced the compose stack's `.env` already has; with
+neither, the doctor judges the Site URL on its own and says it did not ask
+whether people browse there.
 
 Three things that do **not** work, and cost an afternoon each:
 
@@ -560,17 +570,20 @@ limit, that is the number to watch — not the agent count.
 ## Checking an install: `crewlet mattermost doctor`
 
 ```
-crewlet mattermost doctor my_company.yaml
+crewlet mattermost doctor my_company.yaml [-browser-url URL] [-admin-token TOKEN]
 ```
 
 Reads the same company YAML the engine boots from and checks the whole
-inbound path, in the order it breaks:
+inbound path, in the order it breaks. `-browser-url` (or
+`MATTERMOST_PUBLIC_URL`) is the address people type into their browser —
+the one fact about browsers the company's configuration cannot give it,
+because `integrations.mattermost.url` may be any route to the server:
 
 | Check | Why it is here |
 |---|---|
 | `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead — and that `url` is where the server answers its API: a redirect, or a web page in its place, stops the run and names the `url` to set (see [The address the engine dials](#the-address-the-engine-dials)) |
-| `SiteURL` | The [one setting](#the-site-url) whose failure has no error message: unset, not an absolute http(s) address, or a default port spelled out. A Site URL on another address than `url` is not a finding — see [The address the engine dials](#the-address-the-engine-dials) |
-| A **browser-shaped** websocket upgrade | Sent to `url`'s host, under the Site URL's path, *with* the `Origin` a browser at the Site URL sends, which is the only difference between a browser and the engine — this is the check that predicts what a human sees, `AllowCorsFrom` included, which no unprivileged read can show. It cannot see a proxy standing in front of the Site URL |
+| `SiteURL` | The [one setting](#the-site-url) whose failure has no error message: unset, not an absolute http(s) address, a default port spelled out, or — given `-browser-url` — not the address people type, scheme and host. A Site URL on another address than `url` is not a finding — see [The address the engine dials](#the-address-the-engine-dials). Without `-browser-url` the line says that question was not asked |
+| A **browser-shaped** websocket upgrade | *With* a browser's `Origin`, which is the only difference between a browser and the engine — what a human's live feed does, `AllowCorsFrom` included, which no unprivileged read can show. Given `-browser-url`, it is a browser there: sent to that address under the Site URL's path, through whatever is in front of the server, so a proxy that drops `Upgrade` fails it too. Without it, it carries the Site URL's own `Origin` and is sent to `url`, so it can only find an `AllowCorsFrom` that refuses the server's own browsers. With no Site URL, it stands in for a browser at `url` itself |
 | The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed |
 | Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined. The socket is opened exactly as the engine opens it, with no `Origin` |
 
@@ -596,11 +609,13 @@ authenticates is worth knowing either way.
 
 ```
 ok    reachable        http://203.0.113.7:8065 answers
-ok    site url         the server agrees it is served at http://203.0.113.7:8065
+ok    site url         people browse the server at http://203.0.113.7:8065, and its Site
+                       URL, http://203.0.113.7:8065, agrees.
 ok    credential       authenticates as agent-pm
 ok    team             team "nimbus" resolves (kx8f...)
-ok    browser socket   an upgrade carrying Origin http://203.0.113.7:8065, as a browser at
-                       http://203.0.113.7:8065 sends, was accepted
+ok    browser socket   an upgrade carrying Origin http://203.0.113.7:8065 — what a browser
+                       at http://203.0.113.7:8065 sends, sent where it sends it — was
+                       accepted at ws://203.0.113.7:8065/api/v4/websocket
 ok    seat pm          agent-pm authenticates, opens a socket, and is in 3 channel(s)
 FAIL  seat swe         agent-swe authenticates and opens a socket but has joined no
                        channel, so it will only ever hear direct messages. Name channels
@@ -983,7 +998,9 @@ docker compose --profile mattermost up -d --wait
 COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 
 # 3. Check the plan before it touches the server again, and prove the
-#    whole path before booting
+#    whole path before booting. .env carries MATTERMOST_PUBLIC_URL, so the
+#    doctor holds the Site URL to the address you browse and sends its
+#    browser probe there
 set -a; . ./.env; set +a
 crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run --print
 crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
@@ -1138,10 +1155,14 @@ to the server than people do — an internal DNS name, say — and never point
 | An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 
-`crewlet mattermost doctor <company.yaml>` checks all of the above in one
-pass: reachability (and that `url` is answered without a redirect), the
-Site URL, a **browser-shaped** websocket upgrade (with the `Origin`
-a browser at the Site URL sends, which is what distinguishes a browser from
-the engine), and one real authenticated socket per seat, opened as the engine
-opens it. It exits non-zero when anything is wrong.
+`crewlet mattermost doctor <company.yaml> -browser-url <address people type>`
+checks all of the above in one pass: reachability (and that `url` is answered
+without a redirect), the Site URL against the address people type, a
+**browser-shaped** websocket upgrade sent there (with the `Origin` a browser
+sends, which is what distinguishes a browser from the engine), and one real
+authenticated socket per seat, opened as the engine opens it. It exits
+non-zero when any check fails. Without `-browser-url` or
+`MATTERMOST_PUBLIC_URL` it cannot tell a Site URL from the address people
+type, nor see what stands in front of the server, and its `site url` line
+says so.
 

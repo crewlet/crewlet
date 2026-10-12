@@ -79,15 +79,21 @@ func JudgeSiteURL(reported string) (SiteURLFault, bool) {
 		// Mattermost logs "SiteURL must be set" at every start and lists
 		// the consequences in its own documentation; the live feed is
 		// not among them, because with no Site URL the origin check
-		// compares the Origin with the host the request was sent to.
+		// compares the Origin with the request's Host header. That holds
+		// only where a proxy in front forwards the Host a browser sent,
+		// which Mattermost's documented nginx configuration does
+		// (proxy_set_header Host $http_host) and nginx's own default does
+		// not (it sends the upstream's), so the sentence says so.
 		return SiteURLFault{Event: EventSiteURLUnset, Detail: "ServiceSettings.SiteURL " +
 			"is unset. Mattermost builds every absolute address it hands out " +
 			"from it, so the links in its notification emails are broken, " +
 			"email batching does not run and OAuth sign-in fails. Browsers " +
-			"keep their live feed: with no Site URL the server admits a " +
-			"websocket whose Origin names the host it was sent to. Set it to " +
-			"the address people type into their browser, in System Console " +
-			"→ Environment → Web Server"}, true
+			"keep their live feed wherever whatever is in front of the server " +
+			"forwards the Host they typed, as Mattermost's documented proxy " +
+			"configuration does: with no Site URL the server admits a " +
+			"websocket whose Origin names the host in the request's Host " +
+			"header. Set it to the address people type into their browser, " +
+			"in System Console → Environment → Web Server"}, true
 	case BrowserOrigin(site) == "":
 		return SiteURLFault{Event: EventSiteURLRefusesBrowsers, Detail: fmt.Sprintf(
 			"ServiceSettings.SiteURL is %q, which is not an absolute http or "+

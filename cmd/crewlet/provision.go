@@ -664,6 +664,11 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	adminToken := fs.String("admin-token", "",
 		"a Mattermost token to run the checks as; empty reads "+
 			"MATTERMOST_ADMIN_TOKEN, and failing that borrows a seat's own")
+	browserURL := fs.String("browser-url", "",
+		"the address people type into their browser to reach Mattermost: the "+
+			"Site URL is held to it and the browser probe is sent there. Empty "+
+			"reads MATTERMOST_PUBLIC_URL; with neither, the Site URL is judged "+
+			"on its own")
 	bootstrap := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -671,7 +676,8 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]")
+			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] "+
+				"[-browser-url URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -717,9 +723,17 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// WHERE PEOPLE BROWSE IS THE OPERATOR'S TO SAY, and the variable is only
+	// a way not to retype the flag: MATTERMOST_PUBLIC_URL is what the
+	// compose stack sets the Site URL from and the bootstrap writes to .env,
+	// so a shell that sourced it asks the question without being told to.
+	browsedAt := strings.TrimSpace(*browserURL)
+	if browsedAt == "" {
+		browsedAt = strings.TrimSpace(config.EnvOnly().Lookup("MATTERMOST_PUBLIC_URL"))
+	}
 	report, err := mattermost.Doctor(ctx, mattermost.DoctorOptions{
 		Client: client, Config: &resolved, Org: organization,
-		SeatToken: mattermost.SeatTokens(env),
+		SeatToken: mattermost.SeatTokens(env), BrowsedAt: browsedAt,
 	})
 	if err != nil {
 		return err
@@ -749,7 +763,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():
-		fmt.Fprintln(w, "\nEverything this command can check is working.")
+		fmt.Fprintln(w, "\nEverything this command checked is working.")
 	}
 }
 
