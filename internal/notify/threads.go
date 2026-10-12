@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -42,6 +43,45 @@ const (
 	// FollowExplicit means something subscribed the seat directly.
 	FollowExplicit FollowReason = "explicit"
 )
+
+// followReasons is the vocabulary, strongest signal first. One list, so
+// [FollowReason.Valid] and [AddressingFollows] cannot know different sets.
+var followReasons = []FollowReason{
+	FollowMention, FollowExplicit, FollowCollective, FollowParticipated,
+}
+
+// Valid reports whether r is a reason the engine knows.
+//
+// A reason read back out of a follow store or off a notification's metadata
+// is a VALUE rather than a panic: the row may have been written by a build
+// that knew a reason this one does not, which a rolling upgrade guarantees.
+func (r FollowReason) Valid() bool { return slices.Contains(followReasons, r) }
+
+// Addresses reports whether a seat in a conversation FOR THIS REASON owes
+// its next message a reply.
+//
+// MENTION AND EXPLICIT ONLY. A collective address, and having spoken in a
+// thread once, put the seat in the room; neither makes it the addressee of
+// everything said there afterwards. Read as an obligation — which is what
+// the presence of a `thread_following` marker used to mean — every later
+// reply in every thread a seat had ever posted in became a turn that may not
+// end in silence, and a company of agents answering each other's threads
+// does not stop.
+//
+// MENTION IS A PROXY HERE, deliberately. What the obligation really wants is
+// "this conversation is the seat's own": a reply under a root it wrote, or a
+// message naming it. A vendor parser cannot see who wrote a thread's root —
+// it holds one delivery, not the thread, and no chat backend puts the root's
+// author on a reply — so being named is the closest evidence available. It
+// errs toward answering, which is the half a person notices: to them,
+// silence is indistinguishable from a message that was lost.
+func (r FollowReason) Addresses() bool {
+	switch r {
+	case FollowMention, FollowExplicit:
+		return true
+	}
+	return false
+}
 
 // MentionGrammar is how one backend writes a mention.
 //
