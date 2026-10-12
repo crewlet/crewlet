@@ -3132,8 +3132,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   window, so the other three are asked for their newest page and narrowed on
   the client. A page that fills up before it reaches the start of the window is
   older rows the screen never saw, and a caption reading "some of this may be
-  missing" is one nobody can act on where "Knowledge answered one page" says
-  where to look.
+  missing" is one nobody can act on where "Knowledge shows only its newest
+  rows" says where to look.
 - **The engine** vs **a stated writer.** An empty actor on a tracker or wiki
   commit is the engine's own write, and the Audit screen draws it as "the
   engine". A configuration revision is different: the revision states WHAT

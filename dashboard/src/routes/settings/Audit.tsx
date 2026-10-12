@@ -736,13 +736,13 @@ export function Audit() {
       )}
       <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime rows" />
       {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
-          the card's subtitle: a header line is one line, and the sentence was
-          cut at "those rows are the newest, n…" — its whole point, lost at
-          every width. */}
+          the card's subtitle: a header line is one line, and an earlier
+          sentence there was cut at "those rows are the newest, n…", its whole
+          point lost at every width. */}
       {truncated.length > 0 && (
         <Callout variant="warning">
-          {truncated.join(" and ")} answered one page, which does not reach the start of this window
-          — those rows are the newest, not all of them.
+          {truncated.join(" and ")}{" "}
+          {truncated.length === 1 ? "shows only its newest rows." : "show only their newest rows."}
         </Callout>
       )}
       <QueryState
@@ -753,7 +753,7 @@ export function Audit() {
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle="Every write a person or a token made, every call they made at runtime, and every configuration revision, whoever wrote it."
+            subtitle="Writes, runtime calls and configuration revisions"
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -765,7 +765,7 @@ export function Audit() {
             isFailed={(row) => row.failed === true}
             empty={{
               title: "Nothing in this window",
-              hint: "No person and no operator token wrote anything here over this range. Widen the window, or clear the filters.",
+              hint: "Widen the window, or clear the filters.",
               icon: "file-text",
             }}
             loadedNote={`${shown.length} loaded`}
