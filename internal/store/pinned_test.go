@@ -63,6 +63,15 @@ func TestTheApplierIsNeverQueuedBehindReaders(t *testing.T) {
 	//
 	// Waiting for four rather than five is the point: the fifth is EXPECTED
 	// to be blocked in the correct implementation.
+	//
+	// EVERY READER IS WAITED FOR before the test returns: released, the four
+	// holders end and only then does the fifth get its connection. Left
+	// running, it was still at the store while the cleanup removed the
+	// store's directory, and the removal failed "directory not empty" — a
+	// red run of a test whose property held. Deferred in this order, the
+	// release runs first and the wait second.
+	var readers sync.WaitGroup
+	defer readers.Wait()
 	held := make(chan struct{})
 	defer close(held)
 	var up sync.WaitGroup
@@ -70,7 +79,9 @@ func TestTheApplierIsNeverQueuedBehindReaders(t *testing.T) {
 	var once sync.Once
 	var got int64
 	for range 5 {
+		readers.Add(1)
 		go func() {
+			defer readers.Done()
 			_ = db.Read(t.Context(), func(tx *sql.Tx) error {
 				var n int
 				_ = tx.QueryRowContext(t.Context(),

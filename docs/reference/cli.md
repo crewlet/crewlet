@@ -1699,7 +1699,7 @@ Point your editor at it for completion, inline field docs, and typo
 squiggles:
 
 ```yaml
-# yaml-language-server: $schema=https://docs.crewlet.ai/schema/company.schema.json
+# yaml-language-server: $schema=https://docs.crewlet.ai/engine/latest/schema/company.schema.json
 name: "Acme AI"
 ```
 

@@ -13,8 +13,9 @@
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
+import { loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
@@ -70,6 +71,15 @@ const INCOMPLETE: CoverageFacts = {
     scope: [],
   },
 };
+
+// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
+// chunk's, loaded on first open, and what these cases assert is that the
+// frame opens it, not how long a cold `import()` of that chunk takes under a
+// test transformer, which a `waitFor` would otherwise be measuring (the same
+// reason `App.test.tsx` loads every chunk first).
+beforeAll(async () => {
+  await loadChunk("work");
+});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -588,7 +598,7 @@ describe("the sidebar's figures", () => {
     // A PIN RUNS THE VIEW: the list with the view's key as `view=`, not the
     // inventory page that describes the view and offers to run it.
     const pin = screen.getByRole("link", { name: /^Blocked, org-wide/ });
-    expect(pin.getAttribute("href")).toBe("#/work?view=blocked");
+    expect(pin.getAttribute("href")).toBe("#/work/tasks?view=blocked");
     expect(pin.textContent).toContain("7");
     expect(screen.queryByText("Not pinned")).toBeNull();
   });
@@ -704,13 +714,11 @@ describe("the sidebar's figures", () => {
     ).toHaveLength(1);
   });
 
-  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, the
-  // sidebar's head `+` and the Projects group's `+` — not a second form each, and
-  // not the palette it stood in for until the sheet landed.
-  test.each([
-    ["Home's New task", "button", /^New task$/],
-    ["the sidebar's head +", "button", /^New task$/],
-  ] as const)("%s opens the frame's New task sheet", async (who, role, name) => {
+  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
+  // a second form, and not the palette it stood in for until the sheet landed.
+  // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
+  // second New task there is a door nobody decided to put back.
+  test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
       work_workload: { rows: [] },
@@ -719,18 +727,18 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     await settle();
-    const presses = screen.getAllByRole(role, { name });
-    // The page bar's button comes after the sidebar's in document order.
-    const press = who === "Home's New task" ? presses[presses.length - 1]! : presses[0]!;
+    const presses = screen.getAllByRole("button", { name: /^New task$/ });
+    expect(presses).toHaveLength(1);
+    expect(document.querySelector(".side-head button")).toBeNull();
     await act(async () => {
-      fireEvent.click(press);
+      fireEvent.click(presses[0]!);
     });
     await waitFor(() => expect(screen.getByRole("dialog", { name: "New task" })).toBeTruthy());
   });
 
-  // THE PROJECTS GROUP'S `+` FILES INTO THE PROJECT THE READER IS IN, which
-  // the sheet shows as its chosen project before anything is sent.
-  test("the Projects group's + opens the sheet on the project the reader is in", async () => {
+  // A PROJECT IS NOT A SIDEBAR ROW: it is a scope of Work, switched where
+  // Work's trail names it, so the rail carries no group of them.
+  test("the sidebar draws no Projects group", async () => {
     location.hash = "#/work/ENG";
     const eng = {
       key: "ENG",
@@ -745,61 +753,10 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket);
     await settle();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "New task in ENG" }));
-    });
-    const sheet = await waitFor(() => screen.getByRole("dialog", { name: "New task" }));
-    expect(sheet.textContent).toContain("ENG · Core platform");
-  });
-
-  // THE PROJECT A READER IS IN IS THE ROUTE'S OWN ANSWER, the one the sidebar's
-  // head `+` asks — never the path's second segment. Read off the path, every
-  // other Work page was a project: `#/work/views` offered "New task in views"
-  // and opened the sheet asking for a project called `views`, and a task
-  // opened by its uuid named the uuid.
-  test.each([
-    ["#/work/views", ""],
-    ["#/work/projects", ""],
-    ["#/work/history", ""],
-    ["#/work/search", ""],
-    ["#/work/5f0c2a4e-8b1d-4c3a-9e2f-7a6b5c4d3e2f", ""],
-    ["#/work/ENG-12", "ENG"],
-    ["#/work/ENG", "ENG"],
-  ])("on %s the Projects group's + files into %j", async (hash, project) => {
-    location.hash = hash;
-    const eng = {
-      key: "ENG",
-      name: "Core platform",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { todo: 2, active: 1, done: 0, closed: 0 },
-    };
-    const asked: { what: string; params?: Record<string, unknown> }[] = [];
-    const { store, socket } = answering(
-      {
-        work_projects: { projects: [eng], complete: true },
-        work_project: { ...eng, statuses: [], types: [], fields: [], complete: true },
-      },
-      asked,
-    );
-    mountShell(store, socket);
-    await settle();
-    const row = screen.getByRole("link", { name: /^ENG Core platform/ });
-    // THE ROW MARKED CURRENT IS THE SAME ANSWER as the `+`'s project.
-    expect(row.getAttribute("aria-current")).toBe(project === "ENG" ? "page" : null);
-    const press = screen.getByRole("button", {
-      name: project ? `New task in ${project}` : "New task in a project",
-    });
-    await act(async () => {
-      fireEvent.click(press);
-    });
-    await waitFor(() => screen.getByRole("dialog", { name: "New task" }));
-    await settle();
-    // NO SEGMENT OF THE PATH IS ASKED FOR AS A PROJECT.
-    const projectsAsked = asked
-      .filter((a) => a.what === "work_project")
-      .map((a) => String(a.params?.key));
-    expect(projectsAsked.every((key) => key === "ENG")).toBe(true);
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    expect(within(nav).queryByText("Projects")).toBeNull();
+    expect(nav.querySelector('a[href="#/work/ENG"]')).toBeNull();
+    expect(within(nav).queryByRole("button", { name: /^New task in/ })).toBeNull();
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
@@ -870,12 +827,17 @@ describe("the page header", () => {
     location.hash = "#/work/ENG-42";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    expect(screen.queryByRole("navigation", { name: "Work sections" })).toBeNull();
+    expect(document.querySelector(".section-tabs")).toBeNull();
     cleanup();
-    location.hash = "#/work/projects";
+    location.hash = "#/live/turns/5f0c2a4e-8b1d-4c3a-9e2f-7a6b5c4d3e2f";
+    const turn = answering({});
+    mountShell(turn.store, turn.socket);
+    expect(screen.queryByRole("navigation", { name: "Live sections" })).toBeNull();
+    cleanup();
+    location.hash = "#/live/turns";
     const again = answering({});
     mountShell(again.store, again.socket);
-    expect(screen.getByRole("navigation", { name: "Work sections" })).toBeDefined();
+    expect(screen.getByRole("navigation", { name: "Live sections" })).toBeDefined();
   });
 
   // SETTINGS DRAWS A COLUMN, with a lock on a section for a reader holding
@@ -1130,7 +1092,7 @@ test("the health card reads the push and links to the nodes", async () => {
 });
 
 // A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·
-// Items | About | History`. As a row of their own under it they cost the
+// Tasks | About | History | Files`. As a row of their own under it they cost the
 // first screenful a line the approved Board does not spend. And the row on
 // the bar still controls the region in the page, by id.
 test("an object's lenses sit on the page bar beside the breadcrumb and control the page", async () => {
@@ -1163,7 +1125,7 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   expect(panel?.closest("main")).toBeTruthy();
   // AND A PAGE WITH NO LENSES LEAVES THE SLOT EMPTY, which draws nothing.
   cleanup();
-  location.hash = "#/work";
+  location.hash = "#/work/views";
   const bare = answering({});
   mountShell(bare.store, bare.socket);
   expect(document.getElementById(PAGE_LENSES_SLOT)?.childElementCount).toBe(0);
@@ -1241,11 +1203,11 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1166);
+    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1167);
     try {
-      expect(win.asked).toContain("(width >= 1167px)");
+      expect(win.asked).toContain("(width >= 1168px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1167);
+      win.set(1168);
       expect(app.getAttribute("data-peek")).toBe("column");
     } finally {
       win.restore();

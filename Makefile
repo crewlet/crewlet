@@ -61,9 +61,11 @@ export CREWLET_GO = $(GO)
 # fmt` and `make fmt-check` agree with CI on any host.
 GOFMT = $(shell $(GO) env GOROOT)/bin/gofmt
 
-# ./crewlet is where `go build ./cmd/crewlet` drops the binary, and — with
-# goreleaser's dist/ — the only build output .gitignore already knows about.
-# Nothing here writes anywhere else, so `make clean` has nothing to guess at.
+# ./crewlet is where `go build ./cmd/crewlet` drops the binary; dist/ is
+# goreleaser's, and build/ holds what its before hook generates and the image
+# context `make image-context` stages. Those three are the build output
+# .gitignore knows about and `make clean` removes; nothing here writes
+# anywhere else, so `make clean` has nothing to guess at.
 BIN := crewlet
 
 # -count=1 bypasses the test cache: a cached PASS recorded before the change
@@ -228,7 +230,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -265,9 +267,9 @@ tidy: ## tidy go.mod / go.sum
 # directories beside them are a checkout's own company state, not something
 # this file produced, so removing them is the developer's call and not a
 # side effect of cleaning a build.
-clean: ## remove the build output (./crewlet and dist/)
+clean: ## remove the build output (./crewlet, dist/ and build/)
 	rm -f $(BIN)
-	rm -rf dist
+	rm -rf dist build
 	rm -rf $(UI)/node_modules
 
 ##@ Dashboard
@@ -710,3 +712,44 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 	} >&2
 	goreleaser check
 	goreleaser release --snapshot --clean --skip=sign
+
+# THE BUILD CONTEXT OF THE IMAGE OF MAIN, which .github/workflows/main-image.yml
+# pushes as ghcr.io/crewlet/crewlet:main. A release's image is goreleaser's
+# (`snapshot` above rehearses it); this one is stamped with a version no tag
+# carries, which neither way goreleaser runs can do, so the build is written
+# out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
+# the -X stamp) and staged in the layout its dockers_v2 stages: each binary
+# under its platform, beside the license and both notices files the Dockerfile
+# copies. A change to the release build is a change to both files.
+#
+# VERSION is required, because an unstamped binary reports a module version:
+# a name for a build nobody made. And the binary this host can run is run and
+# must report it, because a -X flag that names nothing still links and that is
+# its only symptom.
+IMAGE_CONTEXT ?= build/image
+IMAGE_PLATFORMS := linux/amd64 linux/arm64
+
+image-context: ## stage the engine image's build context, stamped VERSION (ci: main image)
+	@test -n "$(VERSION)" || { \
+	  echo "VERSION is required, e.g. make image-context VERSION=main-dev"; exit 1; } >&2
+	@for platform in $(IMAGE_PLATFORMS); do \
+	  echo "==> build $$platform"; \
+	  CGO_ENABLED=0 GOOS=$${platform%/*} GOARCH=$${platform#*/} $(GO) build -trimpath \
+	    -ldflags "-s -w -X github.com/crewlet/crewlet/internal/version.value=$(VERSION)" \
+	    -o $(IMAGE_CONTEXT)/$$platform/crewlet ./cmd/crewlet || exit 1; \
+	done
+	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
+	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
+	mkdir -p $(IMAGE_CONTEXT)/static/dashboard
+	cp LICENSE $(IMAGE_CONTEXT)/LICENSE
+	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
+	@host=$$($(GO) env GOHOSTOS)/$$($(GO) env GOHOSTARCH); \
+	case " $(IMAGE_PLATFORMS) " in \
+	  *" $$host "*) \
+	    reported=$$($(IMAGE_CONTEXT)/$$host/crewlet --version | awk '{print $$2}'); \
+	    if [ "$$reported" != "$(VERSION)" ]; then \
+	      echo "the $$host binary reports $$reported, not $(VERSION)" >&2; exit 1; \
+	    fi; \
+	    echo "==> the $$host binary reports $(VERSION)";; \
+	  *) echo "==> NOT CHECKED: this $$host host runs none of $(IMAGE_PLATFORMS), so no binary's version was read";; \
+	esac

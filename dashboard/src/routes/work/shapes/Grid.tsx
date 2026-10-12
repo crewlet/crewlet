@@ -900,7 +900,7 @@ function trashColumns(
       header: "",
       label: "Restore",
       shrink: true,
-      cell: (row) => <RestoreButton item={row.key} />,
+      cell: (row) => <RestoreButton item={itemAddress(row)} label={row.key} />,
     },
   ];
 }

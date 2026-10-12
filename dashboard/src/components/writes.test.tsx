@@ -182,7 +182,7 @@ test("a view's name past the engine's cap is held whole and said", async () => {
   fireEvent.change(name, { target: { value: typed } });
   expect(name.value).toBe(typed);
   expect(document.body.textContent).toContain(
-    `${VIEW_NAME_MAX_BYTES + 20} bytes — a view's name holds at most ${VIEW_NAME_MAX_BYTES}.`,
+    `${VIEW_NAME_MAX_BYTES + 20} bytes, but a view's name holds at most ${VIEW_NAME_MAX_BYTES}.`,
   );
   fireEvent.click(screen.getByRole("button", { name: "Save view" }));
   expect(sent).toEqual([]);

@@ -272,19 +272,6 @@ describe("structure", () => {
       running: true,
     });
 
-    // Becoming human, it will not run at all.
-    const human = record(state, {
-      type: "changeKind",
-      target: seatKey("dev"),
-      kind: "human",
-      contact: { slack: "U0DEV" },
-    });
-    expect(seatOf(human, seatKey("dev"))).toMatchObject({
-      kind: "human",
-      saved: { handle: "dev", name: "Dev" },
-      running: false,
-    });
-
     // A new seat has no saved identity, and carries the handle it was given.
     const added = record(state, {
       type: "addSeat",
@@ -426,7 +413,7 @@ describe("reporting", () => {
 });
 
 describe("what every surface reads about a node", () => {
-  // The chart's badge, the Delete and Change kind dialogs and the editor all
+  // The chart's badge, the Delete dialog and the editor all
   // ask this one question, so none of them can call a seat the fallback while
   // the engine routes nothing to it.
   test("the Datadog fallback is the engine's: only while Datadog is on, and trimmed", () => {

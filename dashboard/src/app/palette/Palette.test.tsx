@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
+import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS } from "./hits.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -21,6 +22,8 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { remember } from "~/lib/recents.ts";
 import { noteReader } from "~/lib/reader.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -196,7 +199,10 @@ function mount({
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <Router>
-            <CommandPalette onClose={closed} onShowKeys={keys} />
+            {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
+            <ProjectSwitcherProvider>
+              <CommandPalette onClose={closed} onShowKeys={keys} />
+            </ProjectSwitcherProvider>
           </Router>
         </ClientContext.Provider>
       </LayerHost>
@@ -1067,7 +1073,7 @@ describe("the search bound", () => {
     expect(posted).toEqual([]);
     expect(
       screen.getByText(
-        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
       ),
     ).toBeDefined();
     // BYTES, as the engine counts, not characters.
@@ -1092,5 +1098,173 @@ describe("closing", () => {
     await p.press("Enter");
     expect(p.keys).toHaveBeenCalledTimes(1);
     expect(p.closed).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * CHANGE THEME IS A STEP OF THE PALETTE, the kit's own: a list of the themes
+ * in place of the results, whose highlight previews behind the palette and
+ * whose Enter applies. A preview is never written, and leaving the step puts
+ * back the theme in effect.
+ */
+describe("the theme step", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => reloadForTest());
+  afterEach(() => {
+    root().removeAttribute("data-palette");
+    localStorage.clear();
+    reloadForTest();
+  });
+
+  async function intoStep() {
+    const p = mount();
+    await p.type(">");
+    await act(async () => {
+      fireEvent.click(p.row("Change theme…"));
+    });
+    return p;
+  }
+
+  const labels = () =>
+    screen
+      .getAllByRole("option")
+      .map((o) => o.querySelector(".crewlet-palette__label")?.textContent);
+
+  test("Actions offers Change theme with the theme in effect, and the modes not in use", async () => {
+    const p = mount();
+    await p.type(">");
+    expect(p.row("Change theme…").textContent).toContain("Crewlet is on");
+    // The mode in effect is the system's, so it is not offered again.
+    expect(screen.queryByText("Mode: match system")).toBeNull();
+    expect(screen.getByText("Mode: dark")).toBeTruthy();
+    expect(screen.queryByText(/^Theme: /)).toBeNull();
+  });
+
+  test("it opens on the theme in effect, keeps the palette open and draws no scopes", async () => {
+    const p = await intoStep();
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "Change theme" })).toBe(p.input);
+    expect(screen.getByRole("button", { name: "Back from Change theme" })).toBeTruthy();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    const active = document.getElementById(p.input.getAttribute("aria-activedescendant")!);
+    expect(active?.textContent).toContain("Crewlet");
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    // Every theme, under its group.
+    expect(screen.getByRole("group", { name: "High contrast" })).toBeTruthy();
+    expect(labels()).toHaveLength(10);
+  });
+
+  test("the highlight previews, a query narrows by group, and Enter applies and closes with Undo", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+    // A group's name finds its themes, and a tag finds its own: Origin's is
+    // "Purple on charcoal". The best match leads, and is previewed.
+    await p.type("purple");
+    expect(labels()).toEqual(["Origin", "Abyss", "Iris", "Dusk"]);
+    expect(root().getAttribute("data-palette")).toBe("origin");
+    await p.type("abyss");
+    expect(labels()).toEqual(["Abyss"]);
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    await p.press("Enter");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBe("abyss");
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    expect(p.closed).toHaveBeenCalledOnce();
+    expect(screen.getAllByText("Theme set to Abyss").length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    });
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+  });
+
+  test("Escape goes back to Actions and puts back the theme in effect", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    await p.press("Escape");
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(p.tab()).toBe("Actions");
+    expect(screen.getByText("Change theme…")).toBeTruthy();
+  });
+
+  test("a query that matches no theme says how to find one", async () => {
+    const p = await intoStep();
+    await p.type("zzz");
+    expect(screen.getByText(/No theme matches/)).toBeTruthy();
+    expect(root().hasAttribute("data-palette")).toBe(false);
+  });
+});
+
+// THE COMPANY'S PROJECTS ARE A GROUP IN ALL, ranked as the switcher ranks
+// them, and the switcher itself is a row, Switch project…, which opens the
+// panel over wherever the palette was. And the company's work has its full
+// ranked search one row away.
+describe("projects, the switcher and the full search", () => {
+  const listing = async () => ({
+    projects: [
+      {
+        key: "ENG",
+        name: "Core platform",
+        unit: { name: "Engineering" },
+        task_counts: { todo: 2, active: 1, done: 0, closed: 0 },
+        version: 1,
+      },
+      {
+        key: "OPS",
+        name: "Operations",
+        unit: { name: "Platform" },
+        task_counts: { todo: 0, active: 0, done: 4, closed: 0 },
+        version: 1,
+      },
+    ],
+    total: 2,
+    census: { active: 2, archived: 0 },
+    complete: true,
+  });
+
+  test("a term ranks the projects as the switcher does, each going to its page", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    await act(async () => Promise.resolve());
+    await p.type("o");
+    const group = screen.getByRole("group", { name: "Projects" });
+    const rows = within(group).getAllByRole("option");
+    // A KEY THAT STARTS WITH IT before a name that merely contains it.
+    expect(rows.map((r) => r.querySelector(".crewlet-key-chip")?.textContent)).toEqual([
+      "OPS",
+      "ENG",
+    ]);
+    expect(rows[1]!.textContent).toContain("3 open");
+    fireEvent.click(rows[0]!);
+    expect(location.hash).toBe("#/work/OPS");
+    expect(p.closed).toHaveBeenCalled();
+  });
+
+  test("Switch project… is a place to go, and opens the switcher as the palette closes", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    const go = screen.getByRole("group", { name: "Go to" });
+    const row = within(go).getByRole("option", { name: /Switch project…/ });
+    expect(row.textContent).toContain("or G then P, from anywhere");
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(p.closed).toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "Switch project" })).toBeTruthy();
+  });
+
+  test("it is a command too, found by its name", async () => {
+    const p = mount();
+    await p.type(">switch");
+    expect(p.row("Switch project…")).toBeTruthy();
+  });
+
+  test("Search all work for a term goes to the ranked search", async () => {
+    const p = mount();
+    await p.type("invoice");
+    fireEvent.click(p.row("Search all work for “invoice”"));
+    expect(location.hash).toBe("#/work/search?q=invoice");
   });
 });

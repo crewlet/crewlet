@@ -91,7 +91,7 @@ export function Work({
               work.data ? `${work.data.total_hint}${work.data.total_capped ? "+" : ""}` : undefined
             }
             actions={
-              <a className="t-link" href={href(["work"], { assignee: handle })}>
+              <a className="t-link" href={href(["work", "tasks"], { assignee: handle })}>
                 Open in Work
               </a>
             }

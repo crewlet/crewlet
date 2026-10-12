@@ -19,7 +19,7 @@
 // constant rather than the component keeps this module free of React, which is
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { dates, zone } from "./prefs.ts";
+import { zone } from "./prefs.ts";
 
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
 
@@ -70,37 +70,16 @@ export function oldestFirst(
 // ---------------------------------------------------------------------------
 
 /**
- * The zone and the date shape every formatter below renders in.
+ * The zone every formatter below renders in, and the date's shape: the
+ * browser's own zone and its locale's own spelling of a date.
  *
- * READ FROM THE MODULE rather than taken as an argument, which is the one
- * place this file departs from its own "pass what you need" rule. A zone is a
- * preference held by one browser and read by three hundred call sites; passing
- * it would mean threading it through every component that renders a timestamp,
- * and the ones that forgot would silently render in a different zone from the
- * ones beside them — the exact inconsistency the preference exists to end.
- *
- * `lib/prefs.ts` announces a change, so a component that must re-render on one
- * subscribes with `useViewerPrefs()`. The formatters themselves stay pure
- * functions of (timestamp, preference): same inputs, same output.
+ * THE ZONE IS READ FROM THE MODULE rather than taken as an argument, which is
+ * the one place this file departs from its own "pass what you need" rule: a
+ * suite pins it (`pinZoneForTest`) to reach a date-line edge, and threading it
+ * through three hundred call sites would let the ones that forgot render in a
+ * different zone from the ones beside them.
  */
-function dateParts(): Intl.DateTimeFormatOptions {
-  switch (dates()) {
-    case "iso":
-      // 2026-06-15. `en-CA` is the locale whose numeric date IS ISO order,
-      // which is how this is spelled without hand-assembling the string and
-      // losing the runtime's own calendar handling.
-      return { year: "numeric", month: "2-digit", day: "2-digit" };
-    case "long":
-      return { year: "numeric", month: "long", day: "numeric" };
-    default:
-      return { year: "numeric", month: "short", day: "2-digit" };
-  }
-}
-
-/** The locale each date shape is written in. */
-function dateLocale(): string | undefined {
-  return dates() === "iso" ? "en-CA" : undefined;
-}
+const DATE_PARTS: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "2-digit" };
 
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
@@ -117,8 +96,8 @@ export function fmtTime(ts: string | null | undefined): string {
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -130,7 +109,7 @@ export function fmtDateTime(ts: string | null | undefined): string {
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
+  return d.toLocaleDateString(undefined, { ...DATE_PARTS, timeZone: zone() });
 }
 
 /**
@@ -145,8 +124,8 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -169,11 +148,12 @@ export function fmtMinute(ts: string | null | undefined): string {
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
-  // read the browser's calendar on both counts while every other formatter in
-  // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
-  // whose browser sat in `UTC` saw a due date one day earlier here than in the
-  // tooltip beside it — and, for thirteen hours a year, a year earlier.
+  // BOTH YEARS READ IN [zone], and the date rendered in it. This read the
+  // machine's calendar on both counts while every other formatter in this file
+  // rendered through [zone], so wherever the two differ (a suite pinning a
+  // zone, a zone the preference once set) a due date drew one day earlier here
+  // than in the tooltip beside it — and, for thirteen hours a year, a year
+  // earlier.
   const thisYear = calendarYear(new Date(now));
   return d.toLocaleDateString(undefined, {
     month: "short",
@@ -373,11 +353,11 @@ export function elapsedMs(from?: string | null, to?: string | null): number | nu
  * notices the day one of them changes. A bar and a calendar cell disagreeing
  * about which day a task is due is a silent wrong answer, not a broken screen.
  *
- * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the browser's own
+ * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the machine's own
  * calendar (`getFullYear`/`getDate`) while every spelling went through
- * [zone], which was harmless only while nothing could set a zone: once the
- * preference had a control, a reader in Berlin who chose `Asia/Tokyo` saw a
- * task stamped "Sep 23" filed in the cell for the 22nd.
+ * [zone], which held only while the two could not differ: when a zone
+ * preference existed, a reader in Berlin who chose `Asia/Tokyo` saw a task
+ * stamped "Sep 23" filed in the cell for the 22nd.
  */
 export function readerDay(at: Date | number): string {
   const p = wallParts(typeof at === "number" ? at : at.getTime(), zone());
@@ -469,7 +449,7 @@ export interface TextBudget {
   limit: number;
   /** Past the cap: the engine would refuse it. */
   over: boolean;
-  /** The line under the field — a count near the cap, the refusal past it. */
+  /** The line under the field: a count near the cap, the refusal past it. */
   line: string | undefined;
 }
 
@@ -493,7 +473,7 @@ export function textBudget(
   const bytes = utf8Bytes(value.trim());
   const over = bytes > limit;
   const line = over
-    ? `${bytes} bytes — ${what} holds at most ${limit}. ${remedy}`
+    ? `${bytes} bytes, but ${what} holds at most ${limit}. ${remedy}`
     : bytes >= limit * COUNT_FROM
       ? `${bytes} of ${limit} bytes`
       : undefined;
@@ -576,12 +556,12 @@ export function plural(n: number, one: string, many?: string): string {
 /**
  * An instant as `<input type="datetime-local">` carries it, and back.
  *
- * THE INPUT IS ALWAYS IN THE BROWSER'S ZONE and the dashboard renders in the
- * VIEWER'S CHOSEN one, so the naive `new Date(value)` / `toISOString().slice()`
- * pair is wrong for every reader who set the preference: a reader in `UTC`
- * whose company runs in `Asia/Tokyo` typed 09:00, meant 09:00 Tokyo, and got a
- * window starting nine hours late. These two convert through the chosen zone,
- * so what a reader types is what the heading above the rows says.
+ * THROUGH [zone], NOT THE NAIVE PAIR. The naive `new Date(value)` /
+ * `toISOString().slice()` pair reads a wall time as the machine's and writes
+ * one back in UTC, so it is wrong wherever [zone] and UTC differ — which is
+ * every reader outside UTC: one in `Asia/Tokyo` who typed 09:00 got a window
+ * starting nine hours late. These two convert through the zone every timestamp
+ * is drawn in, so what a reader types is what the heading above the rows says.
  */
 
 /** The wall-clock reading of an instant, `YYYY-MM-DDTHH:mm`. */

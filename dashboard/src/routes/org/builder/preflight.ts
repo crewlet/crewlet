@@ -1,15 +1,14 @@
 /**
  * What an operation will do before a dialog confirms it.
  *
- * A DIALOG PREVIEWS THE OPERATION ITSELF. The Move, Delete and Change kind
- * dialogs record the operation they are about to dispatch through the
- * reducer's own door (`recordIntent`) and apply it to a copy of the draft, so
- * the references it clears, the fields it strips and the seats it removes are
- * the ones the model will clear, strip and remove, not a second account of
- * the rules written for a dialog.
+ * A DIALOG PREVIEWS THE OPERATION ITSELF. The Move and Delete dialogs record
+ * the operation they are about to dispatch through the reducer's own door
+ * (`recordIntent`) and apply it to a copy of the draft, so the references it
+ * clears and the seats it removes are the ones the model will clear and
+ * remove, not a second account of the rules written for a dialog.
  *
- * SCHEDULE RUNNERS ARE THE ONE RULE RESTATED, and only as a warning. A move,
- * a removal or a kind change can leave a schedule nothing could ever run, and
+ * SCHEDULE RUNNERS ARE THE ONE RULE RESTATED, and only as a warning. A move
+ * or a removal can leave a schedule nothing could ever run, and
  * the engine refuses the whole company for it (`ErrUnrunnableSchedule`), often
  * on a unit the operator never touched. The builder authors no schedules, so
  * the refusal would arrive with no way out in view. The two rules are

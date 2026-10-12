@@ -67,11 +67,13 @@ const ROW: WorkSummary = {
 };
 
 let posted: { tool: string; args: Record<string, unknown> }[];
+let asked: { what: string; params: Record<string, unknown> }[];
 let reply: { status: number; body: unknown };
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   posted = [];
+  asked = [];
   reply = {
     status: 200,
     body: { tool: "update_work_item", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:4" },
@@ -95,12 +97,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(viewer: Record<string, unknown> = JANE, answers: Record<string, unknown> = {}) {
+function mount(
+  viewer: Record<string, unknown> = JANE,
+  answers: Record<string, unknown> = {},
+  row: WorkSummary = ROW,
+) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   const socket = new LiveSocket(store);
   const all: Record<string, unknown> = { viewer, ...answers };
-  socket.query = ((what: string) => Promise.resolve(all[what] ?? {})) as typeof socket.query;
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
+    asked.push({ what, params: params ?? {} });
+    return Promise.resolve(all[what] ?? {});
+  }) as typeof socket.query;
   render(
     <ToastProvider>
       <LayerHost>
@@ -108,17 +117,17 @@ function mount(viewer: Record<string, unknown> = JANE, answers: Record<string, u
           <ViewerProvider>
             <InlineEdits seatName={seatName}>
               <div role="row">
-                <StatusCell row={ROW} />
-                <PriorityCell row={ROW} word />
+                <StatusCell row={row} />
+                <PriorityCell row={row} word />
                 <AssigneeCell
-                  row={ROW}
+                  row={row}
                   chrome={{ seatName }}
                   seats={[
                     { handle: "jane", name: "Jane Founder", human: true },
                     { handle: "maya", name: "Maya Ops", human: true },
                   ]}
                   named
-                  readOnly={<span>{seatName(ROW.assignee!)}</span>}
+                  readOnly={<span>{seatName(row.assignee!)}</span>}
                 />
               </div>
             </InlineEdits>
@@ -188,6 +197,36 @@ describe("a writer", () => {
         "ENG-1 was changed by Maya Ops since you opened it. Look again, then retry.",
       ),
     ).toBeTruthy();
+  });
+
+  // AND ON A ROW WHOSE KEY ANOTHER TASK CLAIMED FIRST, the history that names
+  // the winner is the row's own, asked by the id its write went to: asked by
+  // the key, it named whoever last changed the claimant.
+  test("a lost race on a duplicate row reads the duplicate's history", async () => {
+    reply = { status: 409, body: { error: "stale_version", tool: "update_work_item", detail: "" } };
+    mount(
+      JANE,
+      {
+        work_activity: {
+          records: [{ id: "h-9", kind: "status_changed", actor: "maya", actor_kind: "human" }],
+          complete: true,
+        },
+      },
+      { ...ROW, id: "eng-1-dup", key_collision: true },
+    );
+    await settle();
+    choose("Status", "Done");
+    await settle();
+    await settle();
+    expect(posted.map((p) => p.args.item)).toEqual(["eng-1-dup"]);
+    expect(
+      await screen.findByText(
+        "ENG-1 was changed by Maya Ops since you opened it. Look again, then retry.",
+      ),
+    ).toBeTruthy();
+    const histories = asked.filter((q) => q.what === "work_activity").map((q) => q.params.task);
+    expect(histories.length).toBeGreaterThan(0);
+    expect(new Set(histories)).toEqual(new Set(["eng-1-dup"]));
   });
 });
 

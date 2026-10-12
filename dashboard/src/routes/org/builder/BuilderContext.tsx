@@ -98,12 +98,23 @@ export interface BuilderDerived {
 
 /**
  * A part of the node editor it can be opened at: a seat's Reports (whom it
- * manages) or a unit's Leadership (its lead). The editor then starts on that
- * part's first field rather than on the name at the top of a long form, so an
- * action about one field ("Edit reports", a lead chosen outside the unit)
- * lands on it. A part the node does not have opens the editor as usual.
+ * manages), a unit's Leadership (its lead), or either's Project (the tracker
+ * project it owns, where Work's New project arrives). The editor then starts
+ * on that part's first field rather than on the name at the top of a long
+ * form, so an action about one field ("Edit reports", a lead chosen outside
+ * the unit) lands on it. A part the node does not have opens the editor as
+ * usual.
  */
-export type EditorSectionName = "reports" | "leadership";
+export type EditorSectionName = "reports" | "leadership" | "project";
+
+/**
+ * What an address asks an opening editor to hold on top of the node's own
+ * values: New project's key, in the Project field, as a change the reader has
+ * still to apply. A node that already owns a project keeps it.
+ */
+export interface EditorPreset {
+  project?: string;
+}
 
 /** What the mounted view does for the Builder. */
 export interface BuilderViewHandle {
@@ -134,7 +145,6 @@ export interface BuilderApi {
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;
   openDelete(key: NodeKey): void;
-  openChangeKind(key: NodeKey): void;
   /** Says a sentence through the Builder's one polite live region. */
   announce(message: string): void;
   /** Focuses and reveals a node in whichever view is mounted. */

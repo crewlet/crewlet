@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // parsed decodes a document without validating it.
@@ -355,101 +353,6 @@ func authoredSeatFields(t *testing.T) []seatField {
 		}
 	}
 	return out
-}
-
-// holdsSecret reports whether a value of type t can carry a credential: a
-// field somewhere inside it that a config read masks.
-func holdsSecret(t reflect.Type, seen map[reflect.Type]bool) bool {
-	switch t.Kind() {
-	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
-		return holdsSecret(t.Elem(), seen)
-	case reflect.Struct:
-		if seen[t] {
-			return false
-		}
-		seen[t] = true
-		for i := range t.NumField() {
-			if secrets.Field(t.Field(i)) || holdsSecret(t.Field(i).Type, seen) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// THE ORG BUILDER STRIPS WHAT EACH KIND REFUSES, and calls out every credential
-// it strips. A kind change in the dashboard removes the fields the new kind may
-// not carry before it records the change, from lists it keeps itself
-// (`dashboard/src/contract/config.ts`) because it cannot import these rules. A
-// field a list misses is kept, and the next validation refuses the change over
-// a field the change itself made wrong; a field it spells differently is a
-// path no seat has — which is how a seat's `project` and `space` survived every
-// change to human while the list named `integrations.jira` and
-// `integrations.confluence`. And a credential it does not call out is lost
-// without the warning, because the builder holds it masked and nobody can type
-// it back in.
-func TestTheBuilderStripsWhatEachKindRefuses(t *testing.T) {
-	t.Parallel()
-	tree := clientsource.Tree(t)
-	declared := func(name string) []string {
-		t.Helper()
-		body, err := clientsource.Literal(tree, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := clientsource.Strings(body)
-		if len(out) == 0 {
-			t.Fatalf("the dashboard's %s names nothing, so this gate certifies nothing", name)
-		}
-		return out
-	}
-
-	// A HUMAN SEAT: the org model's refusals in its order — which the table is
-	// held to above — and then the admission rule's.
-	var human []string
-	for _, rule := range []string{agentOnlyOnHuman, githubAppOnHuman, avatarOnHuman} {
-		for _, k := range humanSeatKeys {
-			if k.refusal == rule {
-				human = append(human, k.key)
-			}
-		}
-	}
-	if got := declared("HUMAN_FORBIDDEN"); !slices.Equal(got, human) {
-		t.Errorf("the builder strips %v from a seat becoming human, want what the engine "+
-			"refuses on one, in its order: %v", got, human)
-	}
-
-	// AN AGENT SEAT, read off the engine's own refusal of a seat carrying every
-	// key there is: what that one message lists is everything an agent seat may
-	// not carry, in the order the engine lists it.
-	agent := declared("AGENT_FORBIDDEN")
-	const humanOnly = "human-only field set on an agent seat"
-	problems := config.Problems(parsed(t,
-		seatWith("    contact: {slack_user_id: U0SARAH}\n", humanSeatKeys...)).Validate())
-	want := []located{{"roles[0]", "conflict", "sarah", ""}}
-	if got := locatedOf(problems, humanOnly); !reflect.DeepEqual(got, want) {
-		t.Fatalf("human-only refusals = %+v, want %+v\nall: %+v", got, want, problems)
-	}
-	for _, p := range problems {
-		if strings.Contains(p.Message, humanOnly) &&
-			!strings.HasSuffix(p.Message, ": "+strings.Join(agent, ", ")+" (did you mean kind: human?)") {
-			t.Errorf("the builder strips %v from a seat becoming an agent, want what the "+
-				"engine refuses on one, in its order: %s", agent, p.Message)
-		}
-	}
-
-	// THE CREDENTIALS: every seat key whose value holds a field a config read
-	// masks, in config.Role's order.
-	var secret []string
-	for _, f := range authoredSeatFields(t) {
-		if secrets.Field(f.field) || holdsSecret(f.field.Type, map[reflect.Type]bool{}) {
-			secret = append(secret, f.key)
-		}
-	}
-	if got := declared("SEAT_CREDENTIALS"); !slices.Equal(got, secret) {
-		t.Errorf("the builder calls out %v as credentials, want every seat key a config "+
-			"read masks inside, in config.Role's order: %v", got, secret)
-	}
 }
 
 // assertProblemsAreTheRefusal holds the contract between the text and the

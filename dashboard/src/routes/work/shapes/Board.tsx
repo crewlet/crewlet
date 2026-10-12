@@ -65,7 +65,8 @@ import { presetForLane, type NewTaskPreset } from "~/app/newTask.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
-import type { CardLive, SeatRing } from "~/lib/seats.ts";
+import type { AvatarStatus } from "@crewlethq/ui";
+import type { CardLive } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { GroupMark, headingOf } from "./group.tsx";
 import { keyboardDrop, moveFor, withDrop, type Drop } from "./boardMove.ts";
@@ -78,11 +79,11 @@ export interface BoardFacts {
   live: ReadonlyMap<string, CardLive>;
   /** A coding run on a task parked waiting on the reader, by task id. */
   waiting: ReadonlyMap<string, CardWaiting>;
-  /** A holder's state ring, by handle. */
-  ring: (handle: string) => SeatRing | undefined;
+  /** A holder's state, as the glyph on their badge, by handle. */
+  status: (handle: string) => AvatarStatus | undefined;
 }
 
-const NO_FACTS: BoardFacts = { live: new Map(), waiting: new Map(), ring: () => undefined };
+const NO_FACTS: BoardFacts = { live: new Map(), waiting: new Map(), status: () => undefined };
 
 export function Board({
   groups,
@@ -413,7 +414,7 @@ export function Board({
                         onOpen={() => onOpen(row)}
                         live={facts.live.get(row.id)}
                         waiting={facts.waiting.get(row.id)}
-                        ring={row.assignee ? facts.ring(row.assignee) : undefined}
+                        status={row.assignee ? facts.status(row.assignee) : undefined}
                         pending={drop?.drop.id === row.id && !drop.settled}
                         tagName={tagName}
                         drag={dragProps(row)}

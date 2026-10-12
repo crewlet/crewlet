@@ -17,6 +17,11 @@
  * OBJECT and carries no link: a trail whose final crumb links to the page you
  * are already on teaches a reader that the control does nothing.
  *
+ * WORK'S PAGES END IN THEIR SCOPE, All projects or one project, and that crumb
+ * SWITCHES it ([Crumb.switch]): Work › All projects on its lenses, Work ›
+ * FAIR Product and Engineering on a project's. On Work's landing the workspace
+ * is plain words, because a link there would lead to the page it is on.
+ *
  * `labels` is what a screen knows and the route does not — a project's name
  * for its key, a seat's display name for its handle, a page's title for its
  * id. A label that has not arrived yet falls back to the segment itself,
@@ -28,6 +33,7 @@ import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
 import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
+import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
 export type Labels = Record<string, string>;
 
@@ -52,6 +58,14 @@ export interface Crumb {
    * the kind is its outline. Only on the seat's own crumb.
    */
   seat?: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
+  /**
+   * The crumb names a scope the reader can switch, and is drawn as the
+   * switcher's button (`header/ProjectSwitcher.tsx`). Only Work's last crumb
+   * carries it, and a project is the one kind of scope there is.
+   */
+  switch?: "project";
+  /** The project is archived: the switcher's button carries a tag saying so. */
+  archived?: boolean;
 }
 
 /**
@@ -103,10 +117,17 @@ export const pageUpKey = (id: string, depth: number) => `\u0000page-up:${id}:${d
 export const turnSeatKey = (turnId: string) => `\u0000turn-seat:${turnId}`;
 export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
 
-/** A title for the browser tab, derived from the same trail. */
-export function titleOf(crumbs: Crumb[]): string {
+/**
+ * A title for the browser tab, derived from the same trail.
+ *
+ * ON WORK'S SCOPE PAGES THE LENS COMES FIRST, given where the reader is
+ * ([ScopeAt]): "Tasks · All projects", "About · Product and Engineering", so
+ * two tabs open on one project's board and its history read apart.
+ */
+export function titleOf(crumbs: Crumb[], at?: ScopeAt | null): string {
   const last = crumbs[crumbs.length - 1];
-  return last ? last.label : "Crewlet";
+  if (!last) return "Crewlet";
+  return at && last.switch ? `${LENS_LABELS[at.lens]} · ${last.label}` : last.label;
 }
 
 /** The label a screen supplied, or the raw segment drawn as an identifier. */
@@ -130,10 +151,17 @@ function ownName(labels: Labels, key: string): Crumb {
   return { label: labels[key] ?? key };
 }
 
+/**
+ * The label key a project's page publishes when the project is archived, so
+ * its crumb can say so. NUL-prefixed for the reason the seat keys are.
+ */
+export const projectArchivedKey = (key: string) => `\u0000archived:${key}`;
+
 /** A project: its name with its key as a chip, or the key alone until the name arrives. */
 function projectCrumb(labels: Labels, key: string): Crumb {
   const crumb = named(labels, key);
-  return crumb.mono ? crumb : { ...crumb, tag: key };
+  const archived = labels[projectArchivedKey(key)] ? { archived: true } : {};
+  return crumb.mono ? { ...crumb, ...archived } : { ...crumb, tag: key, ...archived };
 }
 
 /** What each screen outside the frame is called. */
@@ -174,7 +202,6 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   switch (where.screen) {
     case "home":
     case "inbox":
-    case "work":
     case "org-chart":
     case "live":
     case "knowledge":
@@ -191,15 +218,18 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "me":
       return sectionPage(where.section);
     case "work-projects":
-      return sectionPage("projects");
+      // WORK'S LANDING: All projects' first lens, where a link back to Work
+      // would lead to the page it is on.
+      return [root(row, false), allProjects()];
+    case "work-tasks":
     case "work-history":
-      return sectionPage("history");
+      return [root(row, true), allProjects()];
     case "work-search":
       return sectionPage("search");
     case "work-views":
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
-      return [root(row, true), projectCrumb(labels, where.key)];
+      return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
       // with no lookup. An id names nothing, and the trail is Work › item.
@@ -306,6 +336,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         named(labels, where.id),
       ];
     }
+    case "new-page":
+      // WHERE THE PAGE WILL BE FILED is the composer's own first row, where
+      // the writer can change it, so the trail names only what this is.
+      return [root(row, true), { label: "New page" }];
     case "skills":
       return sectionPage("skills");
     case "diaries":
@@ -364,7 +398,14 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         : sectionPage("backups");
     case "audit":
       return sectionPage("audit");
+    case "appearance":
+      return sectionPage("appearance");
   }
+}
+
+/** All projects, as the scope Work's lenses end in. */
+function allProjects(): Crumb {
+  return { label: ALL_PROJECTS, switch: "project" };
 }
 
 function root(row: WorkspaceRow, link: boolean): Crumb {

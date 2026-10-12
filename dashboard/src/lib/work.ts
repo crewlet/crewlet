@@ -661,9 +661,8 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * PERSON by handle, rather than somebody's own prose: a reorder of somebody's
  * list (`tracker.prioritisedWake`, "<person> put ENG-1 at position 1 of your
  * priorities"). Every other excerpt is a comment or a description, whose
- * words are whoever wrote them — and a purge's line names the operator's
- * CREDENTIAL (`tracker.purgeExcerpt`; the purge route binds no seat), which
- * no screen renames and every row draws as "An operator".
+ * words are whoever wrote them — and a purge's line names the credential's
+ * login (`tracker.purgeExcerpt`), which no screen renames.
  */
 export const ENGINE_SENTENCES: ReadonlySet<string> = new Set(["prioritised"]);
 
@@ -1392,7 +1391,9 @@ export function viewRun(view: Pick<WorkView, "key" | "container">): {
   query: Record<string, string>;
 } {
   const path =
-    view.container.kind === "project" && view.container.id ? ["work", view.container.id] : ["work"];
+    view.container.kind === "project" && view.container.id
+      ? ["work", view.container.id]
+      : ["work", "tasks"];
   return { path, query: { view: view.key } };
 }
 

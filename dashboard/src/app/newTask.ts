@@ -3,12 +3,13 @@
  *
  * # One sheet, several doors
  *
- * The sidebar's head `+`, the Projects group's `+`, a screen's own "New task"
- * in the page bar and a board lane's `+` all open the SAME sheet
- * (`routes/work/NewTask.tsx`), which the frame mounts (`app/Shell.tsx`). Four
- * forms would be four ideas of which fields a task is filed with and which
- * project it lands in, and the first one to learn about a new field would be
- * the only one that offered it.
+ * A screen's own "New task" in the page bar (Home, the Tasks lens and every
+ * lens of a project), a board lane's `+` and a seat's Message all open the
+ * SAME sheet (`routes/work/NewTask.tsx`), which the frame mounts
+ * (`app/Shell.tsx`). Three forms would be three ideas of which fields a task
+ * is filed with and which project it lands in, and the first one to learn
+ * about a new field would be the only one that offered it. The sidebar's
+ * head carries no `+`: filing is a screen's action, in its page bar.
  *
  * A door says only what it KNOWS: the lane a `+` sits in knows the value that
  * puts a task in it, a project's page knows its project. Everything else is

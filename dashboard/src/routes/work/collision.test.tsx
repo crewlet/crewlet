@@ -7,10 +7,12 @@
  * link, its peek, its stepper and its "this is the open one" check out of
  * `row.key`, so both cards opened the claimant and the duplicate could not be
  * reached by clicking it anywhere. These cases click each of the pair in each
- * shape and read where it went.
+ * shape and read where it went — and, in the trash, which of the two a Restore
+ * brings back. The duplicate's own page is held to the same rule in
+ * `WorkItem.test.tsx`.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, afterAll, expect, test, vi } from "vitest";
 
 import { Work } from "./Work.tsx";
@@ -31,6 +33,7 @@ import {
   collidingRows,
   peekNow,
 } from "~/test/keyCollision.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -64,9 +67,10 @@ const rows = (): WorkSummary[] =>
   collidingRows({ start: "2031-04-08T00:00:00Z", due: "2031-04-10T00:00:00Z" });
 
 /** The engine, answering the list with the pair — as columns for a board. */
-function serving(shape: string) {
+function serving(shape: string, more: Partial<Record<QueryName, unknown>> = {}) {
   const pair = rows();
   const answers: Partial<Record<QueryName, unknown>> = {
+    ...more,
     work_items:
       shape === "board"
         ? {
@@ -213,4 +217,64 @@ test("[ and ] step the rail between two tasks under one key", async () => {
     fireEvent.keyDown(window, { key: "[" });
   });
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+});
+
+// THE TRASH RESTORES EACH OF THE PAIR AS ITSELF. Both rows read `ENG-7`, and
+// each brings back the task it is drawn for: restored by the key, the
+// duplicate's button brought back the claimant — or was refused, the claimant
+// never having been removed.
+test("the trash restores each of two removed tasks under one key as itself", async () => {
+  const posted: { tool: string; item: unknown }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, item: body.args.item });
+      return new Response(
+        JSON.stringify({ tool, outcome: "applied", position: "CREWLET_TRACKER_LOG@1:9" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  location.hash = "#/work?removed=true&shape=list";
+  serving("list", {
+    work_activity: { records: [], complete: true },
+    // THE FRAME'S OWN READS for a viewer holding a seat — the inbox count.
+    work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+    decisions: { handle: "jane", items: [], total: 0, capped: false },
+    viewer: {
+      login: "U0FOUNDER",
+      grants: ["state:read", "work:write"],
+      handle: "jane",
+      owner: "jane",
+      name: "Jane Founder",
+      kind: "human",
+      acts: ["restore_work_item"],
+    },
+  });
+  // CONNECTED, so a write control is offered rather than held offline.
+  client.store.applyHealth(healthFrame({ nodes: 1 }));
+  try {
+    render(framed(<Work />));
+    await waitFor(() => expect(anchorOf("list", DUPLICATE_TITLE)).toBeTruthy());
+    // BOTH NAMED BY THE KEY a person reads.
+    expect(screen.getAllByRole("button", { name: `Restore ${SHARED_KEY}` })).toHaveLength(2);
+
+    const restore = (title: string) =>
+      within(anchorOf("list", title)).getByRole("button", { name: `Restore ${SHARED_KEY}` });
+    await waitFor(() =>
+      expect(restore(DUPLICATE_TITLE).getAttribute("aria-disabled")).not.toBe("true"),
+    );
+    fireEvent.click(restore(DUPLICATE_TITLE));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    fireEvent.click(restore(CLAIMANT_TITLE));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted).toEqual([
+      { tool: "restore_work_item", item: DUPLICATE },
+      { tool: "restore_work_item", item: SHARED_KEY },
+    ]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -72,8 +72,11 @@ type PageDeps struct {
 
 	Mentions MentionResolver
 
-	// DefaultContainer is where a seat writes a page that names none — its
-	// unit's space. Empty makes the container argument required.
+	// DefaultContainer is where a write that names no container lands — the
+	// writer's own unit's space — asked of the handle the write is recorded
+	// under: a seat's, a person's seat, or the login of a credential nobody
+	// is bound through, which no seat matches. Empty makes the container
+	// argument required.
 	DefaultContainer func(handle string) string
 
 	// SkillsContainer is the tool-skills container at this instant, or
@@ -416,7 +419,7 @@ var _ tools.SeatCallable = (*writePage)(nil)
 func (t *writePage) Name() string { return WritePageTool }
 
 func (t *writePage) Description() string {
-	return "Write a NEW page. Search first — a second page on one subject " +
+	return "Write a NEW page. Search first: a second page on one subject " +
 		"splits what the company knows in half, and the next reader finds " +
 		"whichever they happen to search for. The title is the page's " +
 		"address and must be unique in its container; to change an existing " +
@@ -433,8 +436,10 @@ func (t *writePage) Parameters() map[string]any {
 					"within the container.",
 			},
 			"body": map[string]any{
-				"type":        "string",
-				"description": "The page, in markdown. " + pageLinkHelp,
+				"type": "string",
+				"description": "The page, in markdown. An EMPTY body files a " +
+					"folder: a page that groups the pages filed under it and " +
+					"has nothing of its own to read. " + pageLinkHelp,
 			},
 			"container": map[string]any{
 				"type":        "string",
@@ -442,11 +447,23 @@ func (t *writePage) Parameters() map[string]any {
 			},
 			"parent": map[string]any{
 				"type": "string",
-				"description": "The id of the page this belongs under — a " +
+				"description": "The id of the page this belongs under: a " +
 					"page in the same container that is not in the trash. " +
 					"Leave it out to file the page at the container's top.",
 			},
-			"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"labels": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": fmt.Sprintf("Labels to file the page under: at "+
+					"most %d, each at most %d bytes.", pages.MaxLabels, pages.MaxLabelLength),
+			},
+			"status": map[string]any{
+				"type": "string",
+				"enum": []any{string(pages.StatusPublished), string(pages.StatusDraft)},
+				"description": "published, the default, is a page every reader " +
+					"and every search finds. draft is unfinished: it is listed " +
+					"in its container marked as a draft, and no search returns " +
+					"it until somebody publishes it.",
+			},
 			"message": map[string]any{
 				"type":        "string",
 				"description": "One line on why this page exists.",
@@ -470,15 +487,24 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		return unconfiguredKB(WritePageTool), nil
 	}
 	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
+	status, refusal := createStatus(args)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
 	in := pages.NewPage{
 		Title:     strings.TrimSpace(argString(args, "title")),
 		Body:      argString(args, "body"),
 		Container: strings.ToUpper(strings.TrimSpace(argString(args, "container"))),
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Labels:    argStrings(args, "labels"),
+		Status:    status,
 		Message:   strings.TrimSpace(argString(args, "message")),
 	}
 	if in.Container == "" {
+		// THE WRITER'S OWN TEAM, keyed on the handle the write is recorded
+		// under: a seat's, and a person's, who writes as their seat. A
+		// credential nobody is bound through writes under its login, which
+		// no seat matches, so it names a container or is refused below.
 		if t.deps.DefaultContainer != nil {
 			in.Container = t.deps.DefaultContainer(actor.Handle)
 		}
@@ -511,6 +537,31 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		"revision": got.Revision, "outcome": outcomeOf(got.Outcome),
 		"position": positionOf(got.Outcome.Position),
 	})
+}
+
+// createStatus is the status a new page is written in, or the sentence that
+// refuses the one the call named.
+//
+// PUBLISHED OR DRAFT, and nothing else, whatever the store accepts: a page
+// written straight into the trash would be deleted before anybody read it, and
+// the trash is a state a page is MOVED into, with the thirty days that start
+// then. An absent or empty status is published, which is what every caller
+// that predates the argument meant.
+func createStatus(args map[string]any) (pages.Status, string) {
+	raw, present := args["status"]
+	if !present || raw == nil {
+		return pages.StatusPublished, ""
+	}
+	text, ok := raw.(string)
+	switch status := pages.Status(strings.TrimSpace(text)); {
+	case ok && status == "":
+		return pages.StatusPublished, ""
+	case ok && (status == pages.StatusPublished || status == pages.StatusDraft):
+		return status, ""
+	}
+	return "", fmt.Sprintf("write_page writes a page as `%s` or `%s`, and was "+
+		"asked for %s. Leave `status` out to publish it.",
+		pages.StatusPublished, pages.StatusDraft, clip(fmt.Sprint(raw)))
 }
 
 // ---- save_page --------------------------------------------------------- //
@@ -652,7 +703,15 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		labels := argStrings(args, "labels")
 		save.Labels = &labels
 	}
-	if watch, ok := args["watch"].(bool); ok {
+	if raw, ok := args["watch"]; ok && raw != nil {
+		// A WATCH IS A YES OR A NO, and anything else is refused rather than
+		// read as "no change": a caller that sent "false" as text would
+		// otherwise be told the save landed while still following the page.
+		watch, isBool := raw.(bool)
+		if !isBool {
+			return failed(fmt.Sprintf("save_page takes `watch` as true or false, "+
+				"and was sent %s.", clip(fmt.Sprint(raw)))), nil
+		}
 		save.Watch = &watch
 	}
 

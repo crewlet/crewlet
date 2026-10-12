@@ -49,19 +49,21 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { AppShell } from "@crewlethq/ui";
+import { Announcer, AppShell } from "@crewlethq/ui";
 import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./palette/Palette.tsx";
-import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
+import { LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
 import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
 import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
+import { ProjectSwitcherProvider } from "./header/ProjectSwitcher.tsx";
+import { scopeAt } from "./scope.ts";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
@@ -105,6 +107,8 @@ export interface PageContext {
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
   setFleet: (fleet: PublishedFleet | null) => void;
+  /** The screen carries the page's star in its own menu ([useOwnStar]). */
+  setOwnStar: (own: boolean) => void;
 }
 
 /**
@@ -125,6 +129,7 @@ const noop: PageContext = {
   setShowWorking: () => {},
   setMenu: () => {},
   setFleet: () => {},
+  setOwnStar: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -292,6 +297,20 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 }
 
 /**
+ * Say that this screen's own menu carries the page's star, so the frame draws
+ * none: one control per action on screen, and a screen whose design keeps the
+ * star with its other page actions (Knowledge's page) would otherwise show it
+ * twice. Cleared when the screen goes, for the reason [usePageLabels] gives.
+ */
+export function useOwnStar(): void {
+  const { setOwnStar } = usePageContext();
+  useEffect(() => {
+    setOwnStar(true);
+    return () => setOwnStar(false);
+  }, [setOwnStar]);
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * how much is waiting on them, and how much open work is on them.
  *
@@ -338,7 +357,11 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <SessionReading>
       <FrameReadings>
-        <Frame>{children}</Frame>
+        {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
+            Work's pages, and the same panel centred for G then P anywhere. */}
+        <ProjectSwitcherProvider>
+          <Frame>{children}</Frame>
+        </ProjectSwitcherProvider>
       </FrameReadings>
     </SessionReading>
   );
@@ -400,10 +423,10 @@ function Frame({ children }: { children: ReactNode }) {
   // rather than narrows. See `app/frame/peekWidth.ts`.
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
-  // holds it for the reason it holds the palette: four doors — the sidebar's
-  // head, the Projects group, a screen's page bar, a board lane — open ONE
-  // sheet, and a route change does not close it (the reader may have followed
-  // a link to check a name while filing).
+  // holds it for the reason it holds the palette: every door (a screen's page
+  // bar, a board lane, a seat's Message) opens ONE sheet, and a route change
+  // does not close it (the reader may have followed a link to check a name
+  // while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
@@ -413,6 +436,7 @@ function Frame({ children }: { children: ReactNode }) {
   const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
   const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
+  const [ownStar, setOwnStar] = useState(false);
 
   // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
@@ -475,11 +499,12 @@ function Frame({ children }: { children: ReactNode }) {
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
-  // them apart.
+  // them apart: on Work's scope pages, the lens and then the scope.
   const where = titleOf(crumbs);
+  const tab = titleOf(crumbs, scopeAt(route.path, route.query));
   useEffect(() => {
-    document.title = where === "Crewlet" ? "Crewlet" : `${where} · Crewlet`;
-  }, [where]);
+    document.title = tab === "Crewlet" ? "Crewlet" : `${tab} · Crewlet`;
+  }, [tab]);
 
   // AND THE PALETTE REMEMBERS THE OBJECTS, so an empty palette has something
   // to offer before the reader types. OBJECTS ONLY — a fixed destination is in
@@ -499,7 +524,7 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet, setOwnStar }),
     [],
   );
 
@@ -563,6 +588,7 @@ function Frame({ children }: { children: ReactNode }) {
               workspace={workspace}
               working={showWorking}
               menu={menu}
+              star={!ownStar}
             >
               <StateBar degraded={degraded} coverage={coverage} />
             </PageHeader>
@@ -581,18 +607,12 @@ function Frame({ children }: { children: ReactNode }) {
               className="section-frame"
               style={{ "--section-column": `${column}px` } as CSSProperties}
             >
-              {row.renderer === "tree" ? (
-                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
-                  <KnowledgeTree />
-                </ColumnBoundary>
-              ) : (
-                <SectionColumn
-                  row={row}
-                  path={route.path}
-                  grants={viewer.loading ? null : viewer.grants}
-                  figures={figures}
-                />
-              )}
+              <SectionColumn
+                row={row}
+                path={route.path}
+                grants={viewer.loading ? null : viewer.grants}
+                figures={figures}
+              />
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -620,17 +640,13 @@ function Frame({ children }: { children: ReactNode }) {
           </LayerBoundary>
         )}
         {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
+        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
+            without moving focus (the switcher's "3 projects"). */}
+        <Announcer />
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );
 }
-
-/**
- * Knowledge's tree, out of the Knowledge chunk: the one `tree` renderer, and
- * it is the workspace's own code — it reads spaces and pages — so the frame
- * loads it the way it loads a screen rather than carrying it in the entry.
- */
-const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);

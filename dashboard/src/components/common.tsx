@@ -26,7 +26,7 @@ import {
   activityOf,
   activityWord,
   handleLabel,
-  ringOf,
+  statusOf,
   roundLabel,
   seatPath,
   stateLine,
@@ -93,7 +93,7 @@ export function SeatChip({
 }
 
 /**
- * A seat's state as a pill: the engine's word and its ring's tone. An idle
+ * A seat's state as a pill: the engine's word and its status badge's tone. An idle
  * seat is the neutral pill — a green one read as activity.
  */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
@@ -116,9 +116,9 @@ export function SeatCard({
   nameOf: NameOf;
 }) {
   const now = useNow();
-  // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
-  // seat draws no edge, for the reason `ringOf` gives.
-  const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
+  // THE STATUS, OR NONE: a person is not run by the engine, and an idle seat
+  // draws none, for the reason `statusOf` gives.
+  const status = seat.kind === "human" ? undefined : statusOf(activityOf(agent));
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
@@ -126,16 +126,18 @@ export function SeatCard({
   return (
     // `seatPath`, not a path spelled out again: a seat's address is one rule,
     // kept in one place.
-    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
+    <a className="seat-card" href={href(seatPath(seat))}>
       <div className="row">
-        {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
-            and it is what the seat is doing. */}
+        {/* THE STATE IS THE GLYPH ON THE BADGE and the pill beside the name,
+            never a line round the badge or down the card's edge: a card in
+            a state's colour beside a plate in the agent's own put two hues
+            on one seat. */}
         <SeatAvatar
           name={seat.name}
           size="lg"
           kind={seat.kind === "human" ? "human" : "agent"}
           avatar={seat.avatar}
-          {...(tone ? { ring: tone } : {})}
+          status={status}
           decorative
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>

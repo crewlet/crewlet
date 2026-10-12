@@ -42,7 +42,8 @@ import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import type { CardLive, SeatKind, SeatRing } from "~/lib/seats.ts";
+import type { AvatarStatus } from "@crewlethq/ui";
+import type { CardLive, SeatKind } from "~/lib/seats.ts";
 import {
   DEFAULT_TYPE,
   fmtMinutes,
@@ -246,7 +247,7 @@ export function Assignee({
   seatAvatar,
   size = "sm",
   name: showName,
-  ring,
+  status,
 }: {
   handle?: string;
   seatName?: (handle: string) => string;
@@ -255,11 +256,11 @@ export function Assignee({
   size?: "sm" | "md";
   name?: boolean;
   /**
-   * The holder's STATE, as the ring round their badge — the one place a
-   * seat's state has a hue (`lib/seats.ts` `ringOf`). Never the only carrier:
-   * the caller says the state in words beside it, and so does the title.
+   * The holder's STATE, as the glyph on their badge's corner (`lib/seats.ts`
+   * `statusOf`). Never the only carrier: the badge says it in its name where
+   * it names itself, and the caller says it in words beside it.
    */
-  ring?: SeatRing;
+  status?: AvatarStatus | undefined;
 }) {
   if (!handle) {
     // THE SQUARE IS A FIXED 20px BOX, so the word goes BESIDE it, never in
@@ -300,7 +301,7 @@ export function Assignee({
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
         avatar={seatAvatar?.(handle)}
         decorative={showName}
-        ring={ring}
+        status={status}
       />
       {showName && <span className="truncate">{label}</span>}
     </span>
@@ -609,7 +610,7 @@ export function WorkCard({
   chrome = {},
   live,
   waiting,
-  ring,
+  status,
   pending,
   tagName,
   drag,
@@ -627,8 +628,8 @@ export function WorkCard({
   live?: CardLive | null;
   /** A coding run on this task parked waiting on the reader. */
   waiting?: CardWaiting | null;
-  /** The holder's state ring, where the engine reports one. */
-  ring?: SeatRing;
+  /** The holder's state, as the glyph on their badge, where the engine reports one. */
+  status?: AvatarStatus | undefined;
   /** A move of this card is in flight and the engine has not answered. */
   pending?: boolean;
   /** A tag slug in the project's own words. */
@@ -664,7 +665,7 @@ export function WorkCard({
           seatName={chrome.seatName}
           seatKind={chrome.seatKind}
           seatAvatar={chrome.seatAvatar}
-          ring={ring}
+          status={status}
         />
       </div>
       <div className="work-card-title clamp">{row.title}</div>

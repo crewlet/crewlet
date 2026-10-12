@@ -29,13 +29,19 @@ invented field is a hard error rather than a silent no-op. The
 authoritative field list is a JSON Schema generated from the code
 itself:
 
-- Tier B (`company.yaml`) — <https://docs.crewlet.ai/schema/company.schema.json>
-- Tier A (`crewlet.yaml`) — <https://docs.crewlet.ai/schema/bootstrap.schema.json>
+- Tier B (`company.yaml`) — <https://docs.crewlet.ai/engine/latest/schema/company.schema.json>
+- Tier A (`crewlet.yaml`) — <https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json>
 
 **Fetch the Tier B schema before you write any YAML.** It carries every
 field name, type, and enum, plus `additionalProperties: false`
 throughout. If you cannot fetch it, say so and stop — do not proceed
 from memory.
+
+Those URLs are the current release's schema. When `crewlet` is
+installed, `crewlet schema company` (and `crewlet schema bootstrap`)
+prints the schema of the binary that will run the config, which is the
+one to trust when the two differ — a binary older or newer than the
+current release knows a different field list.
 
 ### The loop: write → validate → fix
 
@@ -147,7 +153,7 @@ live-editable, so the first version does not need to be the last.
    reason is usually about their people — a team already living in Jira
    should not be asked to watch a second board — and never about the
    agents, who cannot tell the difference. Say so, then point them at
-   [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack/)
+   [Choosing your stack](https://docs.crewlet.ai/engine/latest/getting-started/choosing-your-stack/)
    rather than re-deriving the trade-offs. **Do not wire integrations in
    the first pass** — see the sequencing rule below.
 
@@ -197,7 +203,7 @@ integrations one at a time, validating after each.
 Full worked examples to model the shape on — read them, don't
 reinvent them:
 
-- [Quickstart](https://docs.crewlet.ai/getting-started/quickstart/) — four seats,
+- [Quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
   a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
@@ -338,17 +344,17 @@ cannot @-mention them, and `crewlet validate` warns about the seat at its
 `contact`. Scope their `manages` to the top roles — a
 founder managing every seat floods them. Give every other person who will
 sign in a `kind: human` seat the same way, where they sit in the chart. See
-[Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
+[Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
 reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
 which needs `providers.sandbox` configured. See
-[Code sandbox](https://docs.crewlet.ai/concepts/code-sandbox/).
+[Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with
 `crewlet confluence import`, not prompt text in
-the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills/).
+the config. See [Tool skills](https://docs.crewlet.ai/engine/latest/concepts/tool-skills/).
 
 **`workers:` are helpers, not seats.** A worker template is a
 short-lived delegate a seat's executor hands narrowly-scoped work to
@@ -386,7 +392,7 @@ a template can never hand a seat a tool the seat does not already have.
 Declare `output` where the parent will *act* on the answer — fields it
 can index beat prose it has to re-read. Leave `roles[].workers` off
 unless a seat should see a narrower set; empty means every template. See
-[Turn engine — workers](https://docs.crewlet.ai/concepts/turn-engine/#workers).
+[Turn engine — workers](https://docs.crewlet.ai/engine/latest/concepts/turn-engine/#workers).
 
 ## Writing style for the fields that become prompts
 
@@ -438,16 +444,16 @@ crewlet run crewlet.yaml -company company.yaml
    jane-founder -grants …` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
    way, by whoever holds `people:manage`. See [How the first person
-   exists](https://docs.crewlet.ai/concepts/identity-and-access/#how-the-first-person-exists).
+   exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:
-[Configuration](https://docs.crewlet.ai/getting-started/configuration/). Two-tier
+[Configuration](https://docs.crewlet.ai/engine/latest/getting-started/configuration/). Two-tier
 design, live reload, and secrets-at-rest:
-[Configuration concepts](https://docs.crewlet.ai/concepts/configuration/).
+[Configuration concepts](https://docs.crewlet.ai/engine/latest/concepts/configuration/).
 
 Add this line at the top of each file so their editor autocompletes and
 flags typos as they type:
 
 ```yaml
-# yaml-language-server: $schema=https://docs.crewlet.ai/schema/company.schema.json
+# yaml-language-server: $schema=https://docs.crewlet.ai/engine/latest/schema/company.schema.json
 ```

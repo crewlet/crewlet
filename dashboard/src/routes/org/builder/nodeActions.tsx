@@ -188,13 +188,6 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
       icon: <NetworkGlyph />,
       onSelect: () => api.openEditor(view.key, "reports"),
     },
-    {
-      key: "kind",
-      label: view.kind === "human" ? "Change to agent seat" : "Change to human seat",
-      icon: view.kind === "human" ? <NodeGlyph kind="agent" /> : <UserGlyph />,
-      disabled: api.readOnly,
-      onSelect: () => api.openChangeKind(view.key),
-    },
     move,
     { kind: "separator", key: "sep-delete" },
     remove,

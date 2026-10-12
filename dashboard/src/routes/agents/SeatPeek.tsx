@@ -101,10 +101,10 @@ import {
   nameOfIn,
   resolvedAbsence,
   resolvedWithheld,
-  ringOf,
   roundOf,
   seatPath,
   stateLine,
+  statusOf,
   toneOf,
   type Seat,
 } from "~/lib/seats.ts";
@@ -213,7 +213,7 @@ function SeatPeekBody({
   const sandboxes = useSandboxes();
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
@@ -268,7 +268,7 @@ function SeatPeekBody({
           size="lg"
           kind={human ? "human" : "agent"}
           avatar={seat.avatar}
-          {...(ring ? { ring } : {})}
+          status={status}
           decorative
         />
         <div className="seat-peek-who">
@@ -423,7 +423,7 @@ function SeatPeekBody({
           ) : !workload.data ? (
             <EmptyValue label="Reading the tracker" />
           ) : load && load.open > 0 ? (
-            <a className="t-link" href={href(["work"], { assignee: seat.handle })}>
+            <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
               {plural(load.open, "task")}
               {load.blocked > 0 && ` · ${load.blocked} blocked`}
               {load.overdue > 0 && ` · ${load.overdue} overdue`}

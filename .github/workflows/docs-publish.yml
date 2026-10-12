@@ -1,20 +1,32 @@
 name: Publish docs
 
-# The documentation site (docs.crewlet.ai) renders this repository's docs/ tree.
-# The renderer is a separate repository that pulls from here on a schedule; this
-# workflow just tells it not to wait, so a docs change is live in a minute
-# instead of within the hour.
+# The documentation site (docs.crewlet.ai) renders this repository's docs/ tree
+# under /engine/: /engine/latest/ is the newest release (until this engine's
+# first release, a redirect to main's pages), /engine/next/ is main, and
+# /engine/vX.Y/ an older release line. The renderer is a separate
+# repository with no schedule of its own: it rebuilds when it is asked, and
+# this workflow is what asks, so a docs change is live in a minute. Without it
+# a change waits for whatever next rebuilds the site.
 #
 # Both the target repository and the token are secrets, so this file names
 # neither, and no trigger below can hand them to a fork. A push to main is a
 # real merge. The workflow_run trigger IS reachable from a fork — the release
 # workflow also runs on pull requests that touch the release surface, and a
-# workflow_run job runs on the default branch WITH this repository's secrets
-# whatever triggered the run it watched. What holds is the job condition, not
+# workflow_run job runs on the default branch, with the secrets main's jobs
+# get, whatever triggered the run it watched. What holds is the job condition, not
 # the trigger: it fires only for a release run whose own event was a push,
 # which for that workflow means a v* tag. Nothing here checks out the
 # triggering ref either — the job only POSTs a dispatch — so there is no
 # fork-authored code in the run at all.
+#
+# They are secrets of the docs-publish ENVIRONMENT rather than of the
+# repository, and that environment admits main and nothing else. The token
+# needs Contents: read and write on the site's repository, the permission
+# repository_dispatch sits under, and that permission also pushes to it.
+# Anybody who can push a branch here can push one whose own workflow prints
+# every repository secret, since a branch's runs get them all; an environment
+# secret reaches only a job its deployment-branch rule admits, and a branch
+# reaches main only through a reviewed merge.
 
 on:
   push:
@@ -34,9 +46,9 @@ on:
       - "skills/**"
 
   # A release changes which versions the site publishes, not just the content of
-  # one: the newest tag takes the bare URLs and the line it replaces moves to
-  # /vX.Y/. Nothing above notices that happening, and the two obvious ways to
-  # catch it do not work:
+  # one: the newest tag takes /engine/latest/ and the line it replaces moves to
+  # /engine/vX.Y/ (main stays /engine/next/). Nothing above notices that
+  # happening, and the two obvious ways to catch it do not work:
   #
   #   - `tags: ["v*"]` here would be ANDed with the `paths` filter above, and a
   #     tag pointing at a commit already on main changes no files at all — so
@@ -47,22 +59,25 @@ on:
   #     workflows triggering each other in a loop.
   #
   # Watching the release workflow itself sidesteps both. Without it a new
-  # version waits for the docs site's hourly poll.
+  # version is not published until something else rebuilds the site.
   #
   # The name must match `name:` in .github/workflows/release.yml EXACTLY —
   # GitHub matches this list against that string and reports no error when
-  # nothing matches, so a mismatch just silently never fires and the site
-  # falls back to the hourly poll this trigger exists to pre-empt. Nothing
+  # nothing matches, so a mismatch just silently never fires and a release
+  # waits for an unrelated rebuild to reach the site. Nothing
   # asserts the two strings match, and "silently never fires" has no other
   # symptom, so re-read both on any workflow rename.
   workflow_run:
     workflows: [release]
     types: [completed]
 
+  # By hand, from main: after configuring the secrets, or to republish. Run
+  # from any other branch, the environment refuses the job and the run fails.
   workflow_dispatch:
 
-permissions:
-  contents: read
+# The job checks nothing out and calls GitHub's API with its own token, never
+# with GITHUB_TOKEN.
+permissions: {}
 
 concurrency:
   group: publish-docs
@@ -71,6 +86,10 @@ concurrency:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # In this repository only. A fork has neither the secrets nor a site to
+    # publish, and without this its every docs push would fail below; here a
+    # missing secret fails the run, on purpose.
+    #
     # Only a release run that actually released something is worth a rebuild:
     # a failed one published no version, and every run that is not a push is a
     # goreleaser snapshot — a manual rehearsal or a pull request touching the
@@ -79,9 +98,17 @@ jobs:
     # of `push` is exactly "a version tag was published". Every other trigger
     # of THIS workflow passes through.
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+      github.repository == 'crewlet/crewlet' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    # Where DOCS_REPO and DOCS_TOKEN live. Its deployment-branch rule must allow
+    # main and nothing else: a push to main and a workflow_run run, which runs
+    # on the default branch, pass it; a branch's workflow is refused it and
+    # never sees the token. An environment nobody created is created bare by
+    # the first run that names it, with no secrets, so the job then fails with
+    # the message below.
+    environment: docs-publish
     steps:
       - name: Ask the docs site to rebuild
         env:
@@ -99,17 +126,21 @@ jobs:
           DOCS_TOKEN: ${{ secrets.DOCS_TOKEN }}
         run: |
           # Report presence, never the value — echoing a secret would only print
-          # ***, and printing the target is exactly what this must not do.
+          # ***, and printing the target is exactly what this must not do. A
+          # missing one FAILS the run: publishing is the job, and a green run
+          # that asked nothing reads as a site that is up to date.
           if [ -z "${DOCS_REPO}" ] || [ -z "${DOCS_TOKEN}" ]; then
-            echo "Docs publish hook not configured — skipping."
+            echo "::error title=Docs not published::DOCS_REPO and DOCS_TOKEN are not both set in the docs-publish environment, so the documentation site was not asked to rebuild."
             echo "  DOCS_REPO   $([ -n "${DOCS_REPO}" ]  && echo set || echo MISSING)"
             echo "  DOCS_TOKEN  $([ -n "${DOCS_TOKEN}" ] && echo set || echo MISSING)"
             echo
-            echo "Both are repository secrets, under Settings → Secrets and variables → Actions."
+            echo "Both are secrets of the docs-publish environment (Settings → Environments),"
+            echo "whose deployment branches are limited to main; never repository secrets, which"
+            echo "any branch's workflow can read."
             echo "DOCS_REPO is the docs site repository as owner/name; DOCS_TOKEN needs"
             echo "Contents: read and write on it (repository_dispatch lives under Contents)."
-            echo "Without them the docs site still picks the change up on its hourly poll."
-            exit 0
+            echo "Without them the docs site picks the change up only when something else rebuilds it."
+            exit 1
           fi
           curl --fail-with-body --silent --show-error \
             -X POST \

@@ -16,6 +16,13 @@
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
  *
+ * WORK DRAWS NO SECOND ROW. Its sections are the lenses of the scope its
+ * trail names (`renderer: "lenses"` in `nav.ts`), drawn as chips beside the
+ * trail's switcher ([AllProjectsLenses]) the way a project draws its own, so
+ * the bar reads one way in either scope. The frame's star is not drawn there:
+ * the scope is switched in the trail, and a shortcut to one of its lenses is
+ * a second way to the same place.
+ *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
  * its own row in WORKSPACES holds more sections, and cross-links to the
  * reader's Account and to Budgets, in its groups, than a tab strip can — a row
@@ -37,31 +44,23 @@
  * nothing for a section the screen did not count.
  */
 
-import {
-  useCallback,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AppShell,
   AvatarStack,
+  Breadcrumb,
   Button,
   Menu,
   SidebarNav,
-  cx,
+  Tabs,
+  Tag,
   useToast,
+  type BreadcrumbCrumb,
   type MenuEntry,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   ChevronDownGlyph,
-  ChevronRightGlyph,
-  CopyGlyph,
   EllipsisGlyph,
   KeyGlyph,
   StarGlyph,
@@ -77,8 +76,17 @@ import {
   type Section,
   type WorkspaceRow,
 } from "../nav.ts";
+import {
+  ALL_PROJECTS_LENSES,
+  LENS_LABELS,
+  allProjectsPath,
+  scopeAt,
+  type AllProjectsLens,
+} from "../scope.ts";
+import { preload } from "../lazyScreen.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
-import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
+import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, lensLabel } from "../frame/PageActions.tsx";
+import { ScopeSwitcher, useScopeFigures } from "./ProjectSwitcher.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useReader } from "~/lib/reader.ts";
@@ -112,6 +120,7 @@ export function PageHeader({
   workspace,
   working = false,
   menu = [],
+  star = true,
   children,
 }: {
   crumbs: Crumb[];
@@ -126,20 +135,29 @@ export function PageHeader({
   working?: boolean;
   /** The screen's secondary actions, folded into "More" on a phone. */
   menu?: readonly PageMenuEntry[];
+  /** The frame draws the star; false where the screen's own menu carries it. */
+  star?: boolean;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
   const route = useRoute();
   const controls = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(controls);
+  // WORK'S SCOPE PAGES: All projects' lenses, or a project's.
+  const at = scopeAt(route.path, route.query);
   return (
     <div className="page-head">
       <AppShell.Topbar className="page-bar">
-        <Breadcrumb crumbs={crumbs} />
-        {/* AN OBJECT'S LENSES, beside the name they are lenses on — see
-            `PageLenses`. Empty on every other page, where it takes no room
+        <Trail crumbs={crumbs} />
+        {/* A SCOPE'S LENSES, beside the name they are lenses on: All
+            projects' drawn here, a project's portalled in by its page (see
+            `PageLenses`). Empty on every other page, where it takes no room
             (`.page-lenses:empty`). */}
-        <div className="page-lenses" id={PAGE_LENSES_SLOT} />
+        <div className="page-lenses" id={PAGE_LENSES_SLOT}>
+          {row?.renderer === "lenses" && at?.scope.kind === "all" ? (
+            <AllProjectsLenses lens={at.lens as AllProjectsLens} />
+          ) : null}
+        </div>
         <div className="page-controls" ref={controls} {...edges}>
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
               controls: a portal needs a node to land in, and one that appears
@@ -147,17 +165,25 @@ export function PageHeader({
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
           {working && <WorkingNow />}
-          {/* THE FRAME'S OWN QUIET PAIR, drawn inline on a wide bar and folded
+          {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
-              action in view. */}
-          <span className="page-frame-actions">
-            <StarPage path={route.path} label={title} workspace={workspace} />
-            <CopyLink />
-          </span>
+              action in view. Not on Work's scope pages (see the module doc),
+              and not where the screen's own menu carries the star. */}
+          {star && !at && (
+            <span className="page-frame-actions">
+              <StarPage path={route.path} label={title} workspace={workspace} />
+            </span>
+          )}
           {/* BEFORE THE SLOT IN THE DOCUMENT, so the screen's controls stay the
               bar's last element on a wide bar (where this is not drawn); on a
               phone the slot leads the line (`order: -1`) and this ends it. */}
-          <PageMore path={route.path} label={title} workspace={workspace} entries={menu} />
+          <PageMore
+            path={route.path}
+            label={title}
+            workspace={workspace}
+            entries={menu}
+            star={star && !at}
+          />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
       </AppShell.Topbar>
@@ -195,8 +221,9 @@ export function WorkingNow() {
         // here beside `SW` everywhere else the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
+          // NO STATUS ON A MEMBER: each overlaps the one before it, and
+          // the sentence beside the stack already says they are working.
           ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
-          ring: "info" as const,
         }))}
       />
       <span>{plural(working.length, "agent")} working</span>
@@ -559,214 +586,113 @@ export function SectionColumn({
 }
 
 /**
- * The trail, and it is a SCROLLPORT — so while it overflows it is a tab stop.
+ * The trail, as the kit's `Breadcrumb` draws it, from the route table's
+ * crumbs (`crumbs.ts`). Its floor, its tab stop while it overflows and the
+ * page's `h1` are the kit's; what is here is how a crumb of this product
+ * becomes one of the kit's.
  *
- * `.crumbs` scrolls sideways past its floor rather than clipping the ancestry
- * as a box (see frame.css), and its scrollbar is not drawn, because on a bar
- * this short it would sit on the baseline the trail is written on. Both of
- * those together are what make the tab stop load-bearing: a pointer can drag
- * a hidden scrollport and a trackpad can swipe it, but a keyboard reaches a
- * scroll container's arrow keys only once it can be FOCUSED, and there is no
- * other route to the overflowed crumbs — the links inside it are focusable
- * and scroll into view, but the deepest trail this route table builds
- * overflows on its ancestor SPANS, which are not links and take no focus of
- * their own.
- *
- * ONLY WHILE IT OVERFLOWS. A trail that fits — nearly every trail, at any
- * width the frame draws a sidebar beside — has nowhere for the arrow keys to
- * go, and a stop on it was a Tab press on every page that did nothing. So the
- * stop is measured (`scrollWidth > clientWidth`), again whenever the trail's
- * box or its crumbs change, and the `aria-label` is what makes it announce
- * itself as the breadcrumb rather than as a bare group when it is there.
- *
- * EACH LABEL IS ITS OWN BOX (`.crumb-text`). The part that takes the cut is a
- * flex container, and text directly inside one is an anonymous flex item that
- * `text-overflow` does not reach: the last crumb was clipped mid-word at the
- * edge with no ellipsis at all. A span is a real flex item, blockified, which
- * is the box an ellipsis applies to.
- *
- * ITS FLOOR IS THE WAY BACK OUT (`--crumb-floor`, [useCrumbFloor]): the
- * ancestors at their width and the last crumb at its stub. The bar breaks a
- * line when the trail's floor cannot sit beside the controls, and a floor of
- * 20ch alone let a seat's trail share a phone's line with its one button at
- * two hundred pixels — "Agents › Engineering · Co" cut mid-letter under
- * Message, the seat's own crumb scrolled out of sight. Measured, the floor is
- * what the trail must show, so a trail that cannot show it beside the
- * controls takes a line of its own, and it scrolls only when its ancestry
- * alone is wider than the whole bar.
+ * WORK'S LAST CRUMB NAMES A SCOPE THE READER CAN SWITCH ([Crumb.switch]), and
+ * is drawn as the switcher's button ([ScopeSwitcher]): the heading is the
+ * control, so the name a reader lands on by heading is the one they change.
  */
-export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
-  const trail = useRef<HTMLElement>(null);
-  const overflows = useOverflows(trail, crumbs);
-  const floor = useCrumbFloor(trail, crumbs);
+export function Trail({ crumbs }: { crumbs: Crumb[] }) {
+  const last = crumbs[crumbs.length - 1];
   return (
-    <nav
-      ref={trail}
-      className="crumbs"
-      aria-label="Breadcrumb"
-      tabIndex={overflows ? 0 : undefined}
-      style={floor > 0 ? ({ "--crumb-floor": `${floor}px` } as CSSProperties) : undefined}
-    >
-      {crumbs.map((crumb, i) => {
-        const last = i === crumbs.length - 1;
-        const Glyph = crumb.icon ? glyphFor(crumb.icon) : undefined;
-        const face = cx(crumb.mono && "mono");
-        const words = (
-          <>
-            {Glyph && <Glyph size="sm" className="crumb-glyph" aria-hidden="true" />}
-            {crumb.tag && <span className="project-key mono crumb-tag">{crumb.tag}</span>}
-            {crumb.seat && (
-              <SeatAvatar
-                name={crumb.seat.name}
-                kind={crumb.seat.kind}
-                avatar={crumb.seat.avatar}
-                size="xs"
-                decorative
-                className="crumb-seat"
-              />
-            )}
-            <span className="crumb-text">{crumb.label}</span>
-          </>
-        );
-        return (
-          <span key={`${crumb.label}-${i}`} className="crumb-part">
-            {i > 0 && <ChevronRightGlyph size="xs" className="crumb-sep" aria-hidden="true" />}
-            {crumb.path && !last ? (
-              <a className={cx("crumb-link", face)} href={href(crumb.path, crumb.query)}>
-                {words}
-              </a>
-            ) : last ? (
-              // THE OBJECT IS THE PAGE'S HEADING. The bar is the page's banner
-              // and outside `main`, and the name of the place the reader is at
-              // is what a reader navigating by heading lands on first — so the
-              // last crumb is the `h1`, and every screen's own headings start
-              // at level 2 under it.
-              <h1 className={cx("crumb-here", face)} aria-current="page">
-                {words}
-              </h1>
-            ) : (
-              <span className={cx("crumb-here", face)}>{words}</span>
-            )}
-          </span>
-        );
-      })}
-    </nav>
+    <Breadcrumb
+      className="page-trail"
+      crumbs={crumbs.map(kitCrumb)}
+      current={
+        last?.switch ? (
+          <ScopeSwitcher
+            trigger={{
+              label: last.label,
+              ...(last.tag ? { keyChip: last.tag } : {}),
+              ...(last.mono ? { mono: true } : {}),
+              ...(last.archived
+                ? {
+                    tag: (
+                      <Tag size="xs" appearance="outline">
+                        Archived
+                      </Tag>
+                    ),
+                  }
+                : {}),
+            }}
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
-/**
- * The narrowest the trail can be and still show the way back out: where the
- * last crumb's name starts, measured from the trail's own start, plus the stub
- * that part keeps (its `min-width`) — or 0 before anything is laid out.
- *
- * NEVER MORE THAN THE ROOM BESIDE WHAT LEADS THE BAR. Below the shell
- * breakpoint the kit's drawer toggle opens the bar's first line, and a floor
- * wider than what the toggle leaves pushed the trail under it — a line holding
- * the toggle alone, then the trail, then the controls. Capped at that room, a
- * trail whose ancestry is wider still scrolls beside the toggle, as it always
- * has past its floor.
- *
- * STABLE UNDER ITS OWN EFFECT. The ancestors never shrink (`frame.css`), so
- * where the last part starts does not depend on how wide the trail is drawn,
- * and neither the bar's width nor the toggle's does either — so the floor it
- * sets cannot move what it was measured from. Measured again whenever a crumb
- * or the bar changes size: a screen publishing its object's name, a font
- * finishing loading, the window.
- */
-function useCrumbFloor(el: RefObject<HTMLElement | null>, content: unknown): number {
-  const [floor, setFloor] = useState(0);
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const bar = node.parentElement;
-    const measure = () => {
-      const last = node.querySelector(
-        ".crumb-part:last-child > .crumb-here, .crumb-part:last-child > .crumb-link",
-      );
-      if (!last) return setFloor(0);
-      const start = node.getBoundingClientRect().left - node.scrollLeft;
-      const offset = last.getBoundingClientRect().left - start;
-      const stub = parseFloat(getComputedStyle(last).minWidth) || 0;
-      const wanted = Math.max(0, Math.ceil(offset + stub));
-      setFloor(bar ? Math.min(wanted, roomBeside(bar, node)) : wanted);
-    };
-    measure();
-    const watch = new ResizeObserver(measure);
-    for (const part of node.querySelectorAll(".crumb-part")) watch.observe(part);
-    if (bar) watch.observe(bar);
-    return () => watch.disconnect();
-  }, [el, content]);
-  return floor;
+/** One crumb of this product as the kit draws it. */
+function kitCrumb(crumb: Crumb): BreadcrumbCrumb {
+  const Glyph = crumb.icon ? glyphFor(crumb.icon) : undefined;
+  return {
+    label: crumb.label,
+    ...(crumb.path ? { href: href(crumb.path, crumb.query) } : {}),
+    ...(Glyph ? { icon: <Glyph size="sm" /> } : {}),
+    ...(crumb.tag ? { keyChip: crumb.tag } : {}),
+    ...(crumb.seat
+      ? {
+          badge: (
+            <SeatAvatar
+              name={crumb.seat.name}
+              kind={crumb.seat.kind}
+              avatar={crumb.seat.avatar}
+              size="xs"
+              decorative
+            />
+          ),
+        }
+      : {}),
+    ...(crumb.mono ? { mono: true } : {}),
+  };
 }
 
 /**
- * How wide `item` can be on its bar's first line: the bar's content box less
- * everything drawn before it (the drawer toggle, below the shell breakpoint)
- * and the gap after each. A bar not laid out yet has no room to report, and
- * caps nothing.
- */
-function roomBeside(bar: HTMLElement, item: HTMLElement): number {
-  const style = getComputedStyle(bar);
-  const content =
-    bar.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-  if (content <= 0) return Infinity;
-  const gap = parseFloat(style.columnGap) || 0;
-  let before = 0;
-  for (let sib = item.previousElementSibling; sib; sib = sib.previousElementSibling) {
-    const width = sib.getBoundingClientRect().width;
-    if (width > 0) before += width + gap;
-  }
-  return Math.max(0, Math.floor(content - before));
-}
-
-/**
- * Whether `el` is wider inside than it is drawn: a scrollport with somewhere
- * to scroll. Measured after layout, and again whenever the box is resized or
- * `content` (what it holds) changes — a trail grows when a screen publishes a
- * name for its object, which resizes nothing.
- */
-function useOverflows(el: RefObject<HTMLElement | null>, content: unknown): boolean {
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const measure = () => setOverflows(node.scrollWidth > node.clientWidth);
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(node);
-    return () => watch.disconnect();
-  }, [el, content]);
-  return overflows;
-}
-
-/**
- * Copy this page's own address.
+ * All projects' lenses: Work's own sections, drawn as the chips a project's
+ * lenses are, beside the scope's name in the trail.
  *
- * THE WHOLE URL, not the hash: what a reader pastes into chat has to open on
- * somebody else's machine, and a bare `#/work/ENG-42` opens nothing.
+ * LINKS, each to its section's address: the kit's router mode, a `nav` with
+ * `aria-current` on the lens the reader is on, because each of these lenses
+ * is a page with its own URL rather than a panel of this one. Hovering or
+ * focusing one starts fetching where it leads, as the sidebar's rows do.
+ *
+ * THE FIGURES ARE THE LISTING'S ([useScopeFigures]): how many projects are
+ * active, and how much work is open across them, the same open figure the
+ * switcher's All projects row carries.
  */
-export function CopyLink({ label = "Copy link" }: { label?: string }) {
-  const [said, setSaid] = useState("");
-  const copy = useCallback(() => {
-    void copyPageLink().then((word) => {
-      setSaid(word);
-      window.setTimeout(() => setSaid(""), 1_600);
-    });
-  }, []);
-  // NOT `Copyable`, which is the right part for an identifier: it DRAWS the
-  // value it copies, and what this copies is the page's whole URL. A page bar
-  // that rendered `http://host:8000/#/work/ENG-42?peek=seat:ada` where "Copy
-  // link" is would push the breadcrumb off the bar.
+function AllProjectsLenses({ lens }: { lens: AllProjectsLens }) {
+  const figures = useScopeFigures();
+  const figure = (key: AllProjectsLens) =>
+    key === "projects"
+      ? lensLabel(LENS_LABELS[key], figures.projects, "active")
+      : key === "tasks"
+        ? lensLabel(LENS_LABELS[key], figures.open, "open")
+        : LENS_LABELS[key];
   return (
-    <Button
-      size="small"
-      variant="ghost"
-      leadingIcon={<CopyGlyph size="sm" />}
-      onClick={copy}
-      title={label}
-    >
-      {said || label}
-    </Button>
+    <Tabs
+      variant="chip"
+      ariaLabel="Lens"
+      value={lens}
+      items={ALL_PROJECTS_LENSES.map((key) => ({ value: key, label: figure(key) }))}
+      renderItem={({ item, className, isActive, children }) => {
+        const path = allProjectsPath(item.value as AllProjectsLens);
+        const warm = () => preload(path);
+        return (
+          <a
+            className={className}
+            href={href(path)}
+            aria-current={isActive ? "page" : undefined}
+            onPointerEnter={warm}
+            onFocus={warm}
+          >
+            {children}
+          </a>
+        );
+      }}
+    />
   );
 }
 
@@ -845,39 +771,17 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
 }
 
 /**
- * Copy this page's whole address, and say what the browser did with it.
- *
- * The clipboard is refused outright on an insecure origin and by permission
- * policy, and a control that silently did nothing would read as a broken
- * button rather than as a browser that said no. BOTH REFUSALS ARE SAID:
- * permission policy rejects the write, but an insecure origin — this engine
- * serves plain HTTP on `api.port` unless something terminates TLS in front of
- * it — has no `navigator.clipboard` at all, and an optional call on it skipped
- * the whole chain, so the ordinary deployment was exactly the one where the
- * button did nothing and said nothing.
- */
-export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
-  if (!navigator.clipboard) return "Blocked";
-  try {
-    await navigator.clipboard.writeText(location.href);
-    return "Copied";
-  } catch {
-    return "Blocked";
-  }
-}
-
-/**
  * "More": the page bar's secondary actions, in one menu, on a phone.
  *
  * DRAWN ONLY UNDER THE PHONE'S WIDTH (`.page-more`), where the frame's star
- * and Copy link — and whatever a screen folds with [usePageMenu] — leave the
+ * and whatever a screen folds with [usePageMenu] leave the
  * bar for this one control, so the screen's primary action stays in view
  * beside it and an object's lenses and its actions share a line. On a wider
  * bar every one of them is drawn inline and this is not drawn at all, so no
  * action is ever in two places a reader can see at once.
  *
  * What a press did is said in a toast, because the menu closes on it: the
- * inline controls say "Copied" or "50 is the limit" on themselves, and a menu
+ * inline star says "50 is the limit" on itself, and a menu
  * item has no self left to say it on.
  */
 export function PageMore({
@@ -885,7 +789,15 @@ export function PageMore({
   label,
   workspace,
   entries,
-}: Omit<Star, "at"> & { entries: readonly PageMenuEntry[] }) {
+  star = true,
+}: Omit<Star, "at"> & {
+  entries: readonly PageMenuEntry[];
+  /**
+   * Whether the frame's star is offered here: not on Work's scope pages, nor
+   * where the screen's own menu carries it.
+   */
+  star?: boolean;
+}) {
   const stars = useStarred();
   const toggle = useToggleStar();
   const toast = useToast();
@@ -899,11 +811,12 @@ export function PageMore({
     disabled: e.disabled,
     description: e.description,
   }));
-  if (items.length > 0) items.push({ kind: "separator", key: "frame" });
-  // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one and
-  // for a tab that has not learned who reads it, unavailable and saying why on
-  // a workspace's own page.
-  if (reader !== null && resolves(path)) {
+  // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
+  // whose own entries carry it, or for a tab that has not learned who reads
+  // it, and unavailable and saying why on a workspace's own page.
+  const frameStar = star && reader !== null && resolves(path);
+  if (items.length > 0 && frameStar) items.push({ kind: "separator", key: "frame" });
+  if (frameStar) {
     items.push(
       path.length < 2
         ? {
@@ -925,22 +838,9 @@ export function PageMore({
           },
     );
   }
-  items.push({
-    key: "copy-link",
-    label: "Copy link",
-    icon: <CopyGlyph size="sm" />,
-    onSelect: () => {
-      void copyPageLink().then((word) =>
-        word === "Copied"
-          ? toast.ok("Copied the link to this page")
-          : toast.show({
-              variant: "warning",
-              title: "The browser refused the clipboard",
-              message: "Copy the address from the address bar instead.",
-            }),
-      );
-    },
-  });
+  // NOTHING TO OFFER IS NO MENU: a screen whose entries carry the star has
+  // none until its page has answered.
+  if (items.length === 0) return null;
   return (
     <span className="page-more">
       <Menu

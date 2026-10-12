@@ -621,14 +621,7 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
     // The same actions, in the same order, as the seat's own card offers.
-    expect(labels(menu)).toEqual([
-      "Edit",
-      "Open seat",
-      "Edit reports",
-      "Change to human seat",
-      "Move to",
-      "Delete",
-    ]);
+    expect(labels(menu)).toEqual(["Edit", "Open seat", "Edit reports", "Move to", "Delete"]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
     // THE SEAT'S OWN PAGE, asked for the way every other link in this tree
     // asks: `seatPath` is the ONE place that knows where a seat lives, so
@@ -642,8 +635,8 @@ describe("the selection in the URL", () => {
 
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
-  // not have; its kind, like any seat's, can still be changed.
-  test("a seat added in the draft is offered no screen, and can change kind", async () => {
+  // not have; its reports, like any seat's, can still be edited.
+  test("a seat added in the draft is offered no screen, and its reports can be edited", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -658,8 +651,8 @@ describe("the selection in the URL", () => {
     };
     let menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
-    expect(kind.getAttribute("aria-disabled")).not.toBe("true");
+    const reports = within(menu).getByRole("menuitem", { name: "Edit reports" });
+    expect(reports.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // Then once a check has derived its handle: the URL names it, and there
@@ -669,7 +662,7 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(location.hash).toContain("seat=analyst"));
     menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: "Change to human seat" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Edit reports" })).toBeDefined();
   });
 });
 
@@ -975,4 +968,35 @@ describe("a document another system manages", () => {
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.queryByText(/managed by gitops/)).toBeNull();
   });
+});
+
+// WORK'S NEW PROJECT ARRIVES HERE, naming the unit by its key: the node's
+// editor opens on its Project field holding the key, as a change still to
+// apply, and the address lets go of the key so a reload asks nothing twice.
+test("a link naming a unit and a project opens its editor on the Project field holding the key", async () => {
+  const engine = new Engine(company());
+  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=engineering&project=ENG" });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  const field = within(editor).getByRole("combobox", { name: /Tracker project/ });
+  expect((field as HTMLInputElement).value).toBe("ENG");
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  // A CHANGE STILL TO APPLY: the editor marks the part holding it as changed.
+  expect(within(editor).getByRole("tab", { name: /^Work/ }).textContent).toContain("Changed");
+  await waitFor(() => expect(location.hash).not.toContain("project="));
+  expect(location.hash).toContain("unit=engineering");
+});
+
+// A NODE THAT ALREADY OWNS A PROJECT KEEPS IT: the key is offered only where
+// there is none.
+test("a project link to a node that owns one leaves its project as it is", async () => {
+  const doc = company();
+  doc.units![0]!.project = "CORE";
+  const engine = new Engine(doc);
+  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=engineering&project=ENG" });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  expect(
+    (within(editor).getByRole("combobox", { name: /Tracker project/ }) as HTMLInputElement).value,
+  ).toBe("CORE");
 });

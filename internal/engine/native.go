@@ -1577,14 +1577,10 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		return builtin.PageDeps{}
 	}
 	return builtin.PageDeps{
-		Reader:   reader,
-		Writer:   writer,
-		Mentions: seatMentions{org: c.Org},
-		DefaultContainer: func(handle string) string {
-			return scopeOfSeat(e.Company().Org, handle,
-				func(u *org.Unit) string { return u.Space },
-				func(r *org.Role) string { return r.Space })
-		},
+		Reader:           reader,
+		Writer:           writer,
+		Mentions:         seatMentions{org: c.Org},
+		DefaultContainer: LiveSeatSpace(e),
 		// THE TOOL-SKILLS CONTAINER, read off the CURRENT epoch for the
 		// reason the defaults are: a write into it is asked the grant a
 		// tool skill takes, and the store itself refuses a seat every
@@ -1762,6 +1758,30 @@ func (e *Engine) Zone() *time.Location {
 		return time.UTC
 	}
 	return c.Config.Location()
+}
+
+// LiveSeatSpace is the container a page lands in when its write names none: the
+// space of the writing seat's own team, or of the seat itself, read off the
+// chart CURRENT at the call.
+//
+// Exported because the OPERATOR surface needs the same rule, and there must
+// not be a second copy of it: a person writes there AS their seat
+// ([iam.ActorFor]), and without it their "Save as a page" from the dashboard
+// named no container and was refused, while the same write from their own
+// seat's turn landed in their team's space. Keyed on the actor's handle, as
+// [LiveDefaultProject] is: a credential nobody is bound through writes under
+// its login, which no seat matches, so its write names a container or is
+// refused naming the argument rather than filed somewhere guessed for it.
+func LiveSeatSpace(e *Engine) func(handle string) string {
+	return func(handle string) string {
+		c := e.Company()
+		if c == nil || handle == "" {
+			return ""
+		}
+		return scopeOfSeat(c.Org, handle,
+			func(u *org.Unit) string { return u.Space },
+			func(r *org.Role) string { return r.Space })
+	}
 }
 
 // LiveMentions resolves @-mentions against the chart CURRENT when the comment

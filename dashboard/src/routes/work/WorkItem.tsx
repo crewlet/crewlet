@@ -49,7 +49,7 @@ import {
   authorKinds,
   indexOrg,
   kindWithAuthors,
-  ringOf,
+  statusOf,
   activityOf,
   seatResolvers,
 } from "~/lib/seats.ts";
@@ -225,9 +225,9 @@ export function WorkItem({ id }: { id: string }) {
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   useFillScreen(!phone);
   const live = item ? liveOn(agents, item) : null;
-  const ringFor = useMemo(() => {
+  const statusFor = useMemo(() => {
     const byHandle = new Map(agents.map((row) => [row.handle ?? "", row]));
-    return (handle: string) => ringOf(activityOf(byHandle.get(handle)));
+    return (handle: string) => statusOf(activityOf(byHandle.get(handle)));
   }, [agents]);
 
   // THE TRAIL IS THE PAGE BAR'S, keyed on the key rather than the uuid the
@@ -237,14 +237,15 @@ export function WorkItem({ id }: { id: string }) {
     item ? { [id]: item.key, ...(projectName ? { [item.project]: projectName } : {}) } : {},
   );
   const liveTurn = turnIdOf(live);
+  // THE TASK'S ADDRESS, which every write, peek and step on this page names
+  // it by: its key, or its id where another task claimed that key first.
+  const address = state.data ? itemAddress(detailItem(state.data)) : "";
 
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
   const openOnBoard = () => {
-    if (item && state.data) {
-      nav.to(projectPath(item.project), {
-        peek: refToken({ kind: "item", id: itemAddress(detailItem(state.data)) }),
-      });
+    if (item && address) {
+      nav.to(projectPath(item.project), { peek: refToken({ kind: "item", id: address }) });
     }
   };
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
@@ -266,7 +267,7 @@ export function WorkItem({ id }: { id: string }) {
     <>
       <PageActions>
         {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM. */}
-        {item && state.data && <ListPosition address={itemAddress(detailItem(state.data))} />}
+        {item && address && <ListPosition address={address} />}
         {/* WATCH LIVE ONLY WHILE A TURN IS RUNNING ON THIS TASK. */}
         {live && liveTurn && (
           <ButtonLink
@@ -279,8 +280,8 @@ export function WorkItem({ id }: { id: string }) {
           </ButtonLink>
         )}
         {/* A task in the trash is offered the way back. */}
-        {item?.removed && state.data && (
-          <RestoreButton key={item.id} item={itemAddress(detailItem(state.data))} />
+        {item?.removed && address && (
+          <RestoreButton key={item.id} item={address} label={item.key} />
         )}
         {item && (
           <span className="page-action-folds">
@@ -306,7 +307,12 @@ export function WorkItem({ id }: { id: string }) {
       )}
       <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data && item && (
-          <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
+          <ItemEditsProvider
+            item={address}
+            label={item.key}
+            version={item.version}
+            seatName={chrome.seatName}
+          >
             <div className="task-frame">
               <div className="task-main">
                 <div className="task-col">
@@ -323,10 +329,17 @@ export function WorkItem({ id }: { id: string }) {
                     refusal={children.refusal}
                     chrome={chrome}
                     parent={item.removed ? undefined : item}
-                    ringOf={ringFor}
+                    statusOf={statusFor}
                     peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
                   />
-                  <Activity item={item} chrome={chrome} index={index} now={now} live={live} />
+                  <Activity
+                    item={item}
+                    address={address}
+                    chrome={chrome}
+                    index={index}
+                    now={now}
+                    live={live}
+                  />
                 </div>
               </div>
               <aside className="task-rail" aria-label={`Properties of ${item.key}`}>
@@ -363,6 +376,8 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   const { state, item, project, children } = useTask(itemKey);
   const chrome = useItemChrome(index, state.data, project.data);
   const live = item ? liveOn(agents, item) : null;
+  // THE ADDRESS ITS WRITES NAME, as the page's — see [WorkItem].
+  const address = state.data ? itemAddress(detailItem(state.data)) : "";
 
   return (
     <>
@@ -372,7 +387,12 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
       <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data &&
           (item ? (
-            <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
+            <ItemEditsProvider
+              item={address}
+              label={item.key}
+              version={item.version}
+              seatName={chrome.seatName}
+            >
               {/* IDENTITY AND STATE MARKS ONLY: the rail below is in the SAME
                   column and states every field once. */}
               <ObjectHeader
@@ -407,6 +427,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 />
                 <Activity
                   item={item}
+                  address={address}
                   chrome={chrome}
                   index={index}
                   now={now}

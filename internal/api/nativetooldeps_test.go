@@ -4,11 +4,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A PERSON'S SURFACES ARE HANDED EVERY WRITER SEAM A SEAT'S ARE.
@@ -79,6 +81,74 @@ func TestAPersonsSurfacesAreHandedEveryWriterSeam(t *testing.T) {
 		if !slices.Contains(wired, seam) {
 			t.Errorf("NativeToolDeps leaves builtin.WorkDeps.%s unwired, so every "+
 				"tool it serves is missing from a person's surfaces", seam)
+		}
+	}
+}
+
+// A PERSON'S PAGE WRITES ARE HANDED EVERY SEAM A SEAT'S ARE.
+//
+// The knowledge half has no per-actor seam to read off the struct, so the
+// list is the ENGINE'S: whatever its own [builtin.PageDeps] for a seat's turn
+// names, the person's surfaces name too. The default container is the seam that
+// went missing: a seat's page that named no space landed in its team's, while
+// the same write from the dashboard's "Save as a page" was refused for every
+// person who made it, because the operator surface was handed none. The two
+// the operator surface sets itself (who a write is attributed to, and the
+// authority decision) are not seams of this constructor.
+//
+// Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
+// reason, and against the engine's own literal so a seam added there is a
+// failure here the day it lands.
+func TestAPersonsPageWritesAreHandedEverySeamASeatsAre(t *testing.T) {
+	t.Parallel()
+	keys := func(path, fn string) []string {
+		t.Helper()
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		var out []string
+		found := false
+		ast.Inspect(file, func(n ast.Node) bool {
+			decl, ok := n.(*ast.FuncDecl)
+			if !ok || decl.Name.Name != fn {
+				return true
+			}
+			ast.Inspect(decl.Body, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok || !isSelector(lit.Type, "builtin", "PageDeps") || len(lit.Elts) == 0 {
+					return true
+				}
+				found = true
+				for _, elt := range lit.Elts {
+					if kv, ok := elt.(*ast.KeyValueExpr); ok {
+						if key, ok := kv.Key.(*ast.Ident); ok {
+							out = append(out, key.Name)
+						}
+					}
+				}
+				return false
+			})
+			return false
+		})
+		if !found {
+			t.Fatalf("no builtin.PageDeps literal in %s's %s, so this gate certifies "+
+				"nothing", path, fn)
+		}
+		return out
+	}
+	seat := keys(filepath.Join(sourcetree.Root(t), "internal", "engine", "native.go"), "pageDeps")
+	person := keys("humans.go", "NativeToolDeps")
+	if !slices.Contains(seat, "DefaultContainer") {
+		t.Fatal("the engine's own page deps name no DefaultContainer, so this gate is " +
+			"not reading the literal it is about")
+	}
+	for _, seam := range seat {
+		if !slices.Contains(person, seam) {
+			t.Errorf("NativeToolDeps leaves builtin.PageDeps.%s unwired, which every "+
+				"seat's own page tools are handed: a person's write through the "+
+				"operator surface or the HTTP write surface goes without it", seam)
 		}
 	}
 }

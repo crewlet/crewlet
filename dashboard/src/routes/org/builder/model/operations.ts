@@ -40,15 +40,16 @@
  * operation clears or carries are resolved when it is recorded and carried,
  * with their values, as preconditions.
  *
- * The seat rules mirrored here are the ones an operation's own meaning needs
- * and nothing more: which fields a kind forbids (a kind change strips them,
- * and the engine refuses a seat that keeps them). The engine remains the
- * validator of the result: every draft these functions produce is checked by a
- * dry run.
+ * The engine remains the validator of the result: every draft these functions
+ * produce is checked by a dry run.
+ *
+ * A seat's kind is never an operation. A seat keeps the kind it was added
+ * with, and becoming the other kind is a removal and a new seat: the two kinds
+ * share almost no fields, and a seat's memory, mailbox and vendor accounts
+ * belong to what it was.
  */
 
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
-import { AGENT_FORBIDDEN, HUMAN_FORBIDDEN, SEAT_CREDENTIALS } from "~/contract/config.ts";
 import { REDACTED, plural } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath } from "./json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./keys.ts";
@@ -262,19 +263,6 @@ export interface SetManages {
   readonly after?: readonly string[];
 }
 
-export interface ChangeKind {
-  readonly type: "changeKind";
-  readonly target: NodeKey;
-  /** The `kind` as written; omitted when unwritten. */
-  readonly before?: string;
-  readonly after: SeatKind;
-  /** Every field the new kind forbids, as it stood. Stripped. */
-  readonly stripped: readonly FieldChange[];
-  /** A human seat's contact identity, when becoming human. */
-  readonly contact?: Record<string, string>;
-  readonly routeTo?: RouteToChange;
-}
-
 export interface SetScheduleEnabled {
   readonly type: "setScheduleEnabled";
   readonly target: NodeKey;
@@ -305,7 +293,7 @@ export interface ApplyTemplate {
 
 /**
  * The operations a node editor's form can make of one node, and nothing else:
- * no structure (add, remove, move, reorder), no kind change and no template.
+ * no structure (add, remove, move, reorder) and no template.
  * Each keeps the precondition and reference rules of its own type inside an
  * [Edit].
  */
@@ -370,7 +358,6 @@ export type Operation =
   | UpdateUnit
   | SetLead
   | SetManages
-  | ChangeKind
   | SetScheduleEnabled
   | SetDatadogRouteTo
   | UpdateCompany
@@ -447,13 +434,6 @@ type SingleIntent =
   | { readonly type: "setLead"; readonly target: NodeKey; readonly lead?: string }
   | { readonly type: "setManages"; readonly target: NodeKey; readonly manages: readonly string[] }
   | {
-      readonly type: "changeKind";
-      readonly target: NodeKey;
-      readonly kind: SeatKind;
-      readonly contact?: Record<string, string>;
-      readonly routeTo?: string;
-    }
-  | {
       readonly type: "setScheduleEnabled";
       readonly target: NodeKey;
       readonly schedule: string;
@@ -504,9 +484,8 @@ export type Outcome =
  * Most conflicts are about a field, and their values are that field's values
  * as the document writes them. The rest carry the builder's own structures,
  * which are not something to print: node keys never leave the builder, a
- * placement is two of them, a removal's snapshot is a whole node (masked
- * credentials and all), and a kind change records the very fields it strips.
- * So each of those says which structure it holds, and the view names what it
+ * placement is two of them, and a removal's snapshot is a whole node (masked
+ * credentials and all). So each of those says which structure it holds, and the view names what it
  * is about instead of dumping it.
  *
  * - `sibling`: the node key a node sits after, or `null` for none.
@@ -514,9 +493,8 @@ export type Outcome =
  * - `placement`: a [Placement].
  * - `snapshot`: a whole node as it stood (`mine` is absent: a removal).
  * - `placed`: the seats a unit reference places, as `{ key, json }` entries.
- * - `fields`: [FieldChange] entries of the fields a kind change removes.
  */
-export type ConflictShape = "sibling" | "parent" | "placement" | "snapshot" | "placed" | "fields";
+export type ConflictShape = "sibling" | "parent" | "placement" | "snapshot" | "placed";
 
 /** One precondition that no longer holds, with every value a person needs to choose. */
 export interface Conflict {
@@ -546,17 +524,11 @@ export interface ReferenceEffect {
 export interface ApplyReport {
   readonly cleared: readonly ReferenceEffect[];
   readonly followed: readonly ReferenceEffect[];
-  /** Fields a kind change removed, by authored name. */
-  readonly stripped: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
 // Seat kind rules
 // ---------------------------------------------------------------------------
-
-// The fields each kind refuses and the ones holding a credential are the
-// engine's sets, declared in `~/contract/config.ts` where a Go gate holds them
-// against its refusals: HUMAN_FORBIDDEN, AGENT_FORBIDDEN and SEAT_CREDENTIALS.
 
 /** Who holds a seat, as the engine reads its `kind`. */
 export function kindOf(data: ConfigRole): SeatKind {
@@ -566,23 +538,6 @@ export function kindOf(data: ConfigRole): SeatKind {
 /** The authored name of a field path: `integrations.slack`. */
 export function fieldName(path: readonly string[]): string {
   return path.join(".");
-}
-
-/** Whether a field path holds a credential a kind change would strip. */
-export function isCredentialField(path: readonly string[]): boolean {
-  return (SEAT_CREDENTIALS as readonly string[]).includes(fieldName(path));
-}
-
-/** The fields a seat holds that `kind` forbids, with their values. */
-function forbiddenFor(data: ConfigRole, kind: SeatKind): FieldChange[] {
-  const fields = kind === "human" ? HUMAN_FORBIDDEN : AGENT_FORBIDDEN;
-  const out: FieldChange[] = [];
-  for (const field of fields) {
-    const path = field.split(".");
-    const value = getPath(data, path);
-    if (value !== undefined) out.push({ path, before: cloneJson(value) });
-  }
-  return out;
 }
 
 /**
@@ -641,10 +596,11 @@ function dropMasked(value: unknown, at: readonly string[], masked: string[]): un
 /**
  * The seat fields `updateSeat` may not write, each because another operation
  * owns it and carries what that change means: a rename is a name and nothing
- * else, a kind change strips forbidden fields, `manages` is compared whole, a
- * move replaces `unit:` with a placement, and a schedule is only ever toggled
- * here. `handle` is refused on a seat of the base, whose handle is its
- * identity; a seat this draft created may still choose one.
+ * else, `manages` is compared whole, a move replaces `unit:` with a placement,
+ * and a schedule is only ever toggled here. `kind` is written by no operation:
+ * a seat keeps the kind it was added with. `handle` is refused on a seat of
+ * the base, whose handle is its identity; a seat this draft created may still
+ * choose one.
  */
 const SEAT_OWNED = new Set(["name", "kind", "manages", "unit", "schedules"]);
 
@@ -743,11 +699,6 @@ const refuse = (refusal: RecordRefusal, message: string): Recorded => ({
   message,
 });
 const recorded = (op: Operation): Recorded => ({ ok: true, op });
-
-/** The kind a seat writes, or `undefined` when it writes none (read the same way everywhere). */
-function writtenKind(data: ConfigRole): string | undefined {
-  return typeof data.kind === "string" ? data.kind : undefined;
-}
 
 /** The access level entry for a handle in the draft, when there is one. */
 function accessLevel(draft: Draft, handle: string): string | undefined {
@@ -1215,33 +1166,6 @@ export function record(
       });
     }
 
-    case "changeKind": {
-      const found = seatAt(intent.target);
-      if (!found) return missing(intent.target);
-      if (kindOf(found.node.data) === intent.kind)
-        return refuse("no_change", "The seat is already that kind.");
-      if (intent.routeTo !== undefined && !hasBlock(draft.company, DATADOG_BLOCK)) {
-        return refuse(
-          "no_datadog",
-          "Datadog is not connected, so there is no fallback seat to replace.",
-        );
-      }
-      const routeTo = routeToChange(draft, intent.routeTo);
-      return recorded({
-        type: "changeKind",
-        target: intent.target,
-        ...(writtenKind(found.node.data) !== undefined
-          ? { before: writtenKind(found.node.data) }
-          : {}),
-        after: intent.kind,
-        stripped: forbiddenFor(found.node.data, intent.kind),
-        ...(intent.kind === "human" && intent.contact
-          ? { contact: cloneJson(intent.contact) }
-          : {}),
-        ...(routeTo ? { routeTo } : {}),
-      });
-    }
-
     case "setScheduleEnabled": {
       const found = locate(draft, intent.target);
       if (!found) return refuse("missing_target", "That node is no longer in the draft.");
@@ -1323,7 +1247,7 @@ export function record(
         if (!EDIT_PART_TYPES.has(part.type) || partTarget(part) !== intent.target) {
           return refuse(
             "not_editable",
-            "An edit changes the fields of one node. Add, remove, move or change the kind of a node on its own.",
+            "An edit changes the fields of one node. Add, remove or move a node on its own; a seat keeps the kind it was added with.",
           );
         }
         const result = record(at, part, options);
@@ -1434,14 +1358,6 @@ export function intentOf(op: Operation): Intent {
       };
     case "setManages":
       return { type: "setManages", target: op.target, manages: op.after ?? [] };
-    case "changeKind":
-      return {
-        type: "changeKind",
-        target: op.target,
-        kind: op.after,
-        ...(op.contact ? { contact: op.contact } : {}),
-        ...(op.routeTo?.after !== undefined ? { routeTo: op.routeTo.after } : {}),
-      };
     case "setScheduleEnabled":
       return {
         type: "setScheduleEnabled",
@@ -1667,21 +1583,6 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       return finish();
     }
 
-    case "changeKind": {
-      const found = locate(draft, op.target);
-      if (found?.kind !== "seat") return gone("The seat is no longer in the organization.");
-      expect("kind", op.before, writtenKind(found.node.data), op.after);
-      expect(
-        "fields the new kind removes",
-        op.stripped,
-        forbiddenFor(found.node.data, op.after),
-        undefined,
-        "fields",
-      );
-      expectRouteTo(op.routeTo);
-      return finish();
-    }
-
     case "setScheduleEnabled": {
       const found = locate(draft, op.target);
       if (!found) return gone("It is no longer in the organization.");
@@ -1762,7 +1663,7 @@ export class ApplyError extends Error {
   }
 }
 
-const NO_EFFECTS: ApplyReport = { cleared: [], followed: [], stripped: [] };
+const NO_EFFECTS: ApplyReport = { cleared: [], followed: [] };
 
 /**
  * Applies an operation whose preconditions hold, and says what it did to
@@ -1821,7 +1722,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         cleared.push({ kind: "gitlab_access_level", holder: COMPANY_KEY, from: change.handle });
       }
       if (op.routeTo) next = { ...next, company: withRouteTo(next.company, op.routeTo.after) };
-      return { draft: next, report: { cleared, followed: [], stripped: [] } };
+      return { draft: next, report: { cleared, followed: [] } };
     }
 
     case "replaceSeat": {
@@ -1837,7 +1738,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       for (const change of op.accessLevels) {
         next = { ...next, company: withAccessLevel(next.company, change.handle, change.after) };
       }
-      return { draft: next, report: { cleared: [], followed, stripped: [] } };
+      return { draft: next, report: { cleared: [], followed } };
     }
 
     case "renameSeat":
@@ -1872,7 +1773,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
           cleared.push({ kind: "lead", holder: clear.unit, from: clear.before });
         }
       }
-      return { draft: next, report: { cleared, followed: [], stripped: [] } };
+      return { draft: next, report: { cleared, followed: [] } };
     }
 
     case "updateSeat": {
@@ -1890,7 +1791,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         const to = handleOf(now.node);
         if (from !== to) next = followHandle(next, from, to, followed);
       }
-      return { draft: next, report: { cleared: [], followed, stripped: [] } };
+      return { draft: next, report: { cleared: [], followed } };
     }
 
     case "updateUnit": {
@@ -1905,7 +1806,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         const to = unitIdOf(now.node);
         if (from !== to) next = followUnitKey(next, from, to, followed);
       }
-      return { draft: next, report: { cleared: [], followed, stripped: [] } };
+      return { draft: next, report: { cleared: [], followed } };
     }
 
     case "setLead":
@@ -1932,21 +1833,6 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         ),
         report: NO_EFFECTS,
       };
-
-    case "changeKind": {
-      let next = updateSeatData(draft, op.target, (data) => {
-        let out = data;
-        for (const field of op.stripped) out = setPath(out, field.path, undefined) as ConfigRole;
-        out = setPath(out, ["kind"], op.after === "human" ? "human" : undefined) as ConfigRole;
-        if (op.contact) out = setPath(out, ["contact"], cloneJson(op.contact)) as ConfigRole;
-        return out;
-      });
-      if (op.routeTo) next = { ...next, company: withRouteTo(next.company, op.routeTo.after) };
-      return {
-        draft: next,
-        report: { cleared: [], followed: [], stripped: op.stripped.map((f) => fieldName(f.path)) },
-      };
-    }
 
     case "setScheduleEnabled": {
       const update = <T extends ConfigRole | ConfigUnit>(data: T): T => ({
@@ -2001,15 +1887,13 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       let next = draft;
       const cleared: ReferenceEffect[] = [];
       const followed: ReferenceEffect[] = [];
-      const stripped: string[] = [];
       for (const part of op.ops) {
         const applied = apply(next, part);
         next = applied.draft;
         cleared.push(...applied.report.cleared);
         followed.push(...applied.report.followed);
-        stripped.push(...applied.report.stripped);
       }
-      return { draft: next, report: { cleared, followed, stripped } };
+      return { draft: next, report: { cleared, followed } };
     }
   }
 }
@@ -2201,8 +2085,6 @@ export function describeOperation(op: Operation, before: Draft): string {
         : `Set the lead of ${nameOf(op.target)} to ${seatNamed(op.after)}.`;
     case "setManages":
       return `Changed whom ${nameOf(op.target)} manages.`;
-    case "changeKind":
-      return `Changed ${nameOf(op.target)} to ${op.after === "human" ? "a human" : "an agent"} seat.`;
     case "setScheduleEnabled":
       return `${op.after ? "Enabled" : "Disabled"} schedule ${op.schedule} on ${nameOf(op.target)}.`;
     case "setDatadogRouteTo":

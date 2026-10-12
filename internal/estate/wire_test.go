@@ -57,6 +57,9 @@ var carriedByServer = map[string]string{
 
 	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
 		"answers what it committed to in reply.Written, and the router adds it there",
+
+	"pages.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
+		"an answer carries its result as SavedBy and SavedAt",
 }
 
 // extraField is the one field name every record type keeps a newer build's

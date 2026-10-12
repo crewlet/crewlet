@@ -103,10 +103,10 @@ words are half of what was asked for.
 phrase is the seam's PROBE: it runs nothing and reads nothing, and answers
 `modes` and — for the mode asked — the `degraded` the CONFIGURATION decides
 (`no_embeddings`, `unsupported`; never a transient `embedding_failed`, which is
-a property of one search). The dashboard's Knowledge tree asks it for
-`semantic` and disables a mode the answer does not list, with the reason
-written under the control, rather than letting a reader pick Meaning and find
-out from a degraded answer. The same answer sets the dashboard's DEFAULT:
+a property of one search). The dashboard's Knowledge search asks it for
+`semantic` and disables a mode the answer does not list, with the reason as
+that mode's second line in the menu beside the field, rather than letting a
+reader pick Meaning and find out from a degraded answer. The same answer sets the dashboard's DEFAULT:
 Hybrid where it is served, otherwise the first mode listed — Keyword on a
 company with no embeddings provider — so a search nobody chose a mode for runs
 in a mode the engine serves as asked instead of reporting a degradation of a

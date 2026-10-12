@@ -778,8 +778,8 @@ const adaActs = {
   acts: ["comment_on_work_item", "set_priorities", "update_work_item", "place_work_item"],
 };
 
-// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND — the row Home
-// draws, with the options as the answer. The literal tool call this section
+// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND: the list
+// Home draws, grouped under who asked, with Accept and Change as the answer. The literal tool call this section
 // once printed was the gesture a person's assistant makes; the dashboard makes
 // it itself now, as the person (ADR-0024).
 test("an ask on your own day is answered in place with the option chosen", async () => {
@@ -791,10 +791,15 @@ test("an ask on your own day is answered in place with the option chosen", async
   });
   mount("asked-of-me");
   // THE PERSON WHO ASKED, never the credential that wrote it.
-  await waitFor(() => expect(screen.getByText(/Rui Santos asks: Read the parent/)).toBeTruthy());
+  await waitFor(() =>
+    expect(document.querySelector(".decision-group-who")?.textContent).toBe("Rui Santos"),
+  );
+  expect(screen.getByText("Read the parent or the replies?")).toBeTruthy();
   expect(screen.getByText(/you are the approver/)).toBeTruthy();
   expect(screen.queryByText(/comment_on_work_item\(/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "The replies" }));
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  fireEvent.click(screen.getByRole("radio", { name: /The replies/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
   await waitFor(() => expect(posted.length).toBe(1));
   expect(posted[0]).toEqual({
     tool: "comment_on_work_item",
@@ -824,10 +829,11 @@ test("an ask on somebody else's day is written about them and cannot be answered
   // SAID ONCE ON THE PAGE, not only on a hover: a row of dimmed options with
   // nothing said reads as a broken screen.
   expect(screen.getByText(/^Answering is off\. This is Rui Santos’s day/)).toBeTruthy();
-  const option = screen.getByRole("button", { name: "The parent" });
-  expect(option.getAttribute("aria-disabled")).toBe("true");
-  expect(option.getAttribute("title")).toContain("This is Rui Santos’s day");
-  fireEvent.click(option);
+  const accept = screen.getByRole("button", { name: "Accept" });
+  expect(accept.getAttribute("aria-disabled")).toBe("true");
+  expect(accept.getAttribute("title")).toContain("This is Rui Santos’s day");
+  expect(screen.getByRole("button", { name: "Change" }).getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(accept);
   await new Promise((r) => setTimeout(r, 20));
   expect(posted).toEqual([]);
 });
@@ -1463,8 +1469,8 @@ describe("somebody else's day", () => {
     location.hash = "#/me/asked-of-me?handle=rui";
     serving(day("rui"), ledOrg);
     mount("asked-of-me");
-    const option = await screen.findByRole("button", { name: "The parent" });
-    expect(option.getAttribute("aria-disabled")).toBe("true");
+    const accept = await screen.findByRole("button", { name: "Accept" });
+    expect(accept.getAttribute("aria-disabled")).toBe("true");
   });
 
   test("a reader who does not lead them cannot reorder it, and is told who can", async () => {

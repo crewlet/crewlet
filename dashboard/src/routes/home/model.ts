@@ -180,8 +180,9 @@ function weekday(at: string, zone: string | undefined): string {
 }
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
- *  when the longest one began. Null while it is not known — anonymous,
- *  unbound, or not answered yet — which is never drawn as zero. */
+ *  when the longest one began. Null while it is not known (nobody signed in,
+ *  or not answered yet), which is never drawn as zero: an unbound reader is
+ *  somebody, asked under their login like anybody. */
 export interface Waiting {
   count: number;
   floor: boolean;

@@ -141,9 +141,6 @@ var contract = []Entry{
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
 	{"SeatHeldHolder", ReadInterface,
 		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
-	{"HUMAN_FORBIDDEN", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
-	{"AGENT_FORBIDDEN", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
-	{"SEAT_CREDENTIALS", ReadLiteral, "internal/config.TestTheBuilderStripsWhatEachKindRefuses"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -276,6 +273,10 @@ var contract = []Entry{
 	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
 	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_BODY_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABELS_MAX", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_CHANGES", ReadLiteral, "internal/pages.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
 }
 
 // Contract is every declaration the engine's gates read out of the

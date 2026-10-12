@@ -18,10 +18,15 @@
 // focused control the baseline's radius and squared off every button the
 // moment a reader tabbed to it.
 //
-// Cascade order within the set: the kit's variables, the themes that repaint
-// them, density, the faces, the document baseline, then the components.
+// Cascade order within the set: the kit's variables, the default palettes
+// and the named themes that repaint them, density, the faces, the document
+// baseline, then the components.
 import "@crewlethq/tokens/css";
 import "@crewlethq/tokens/css/themes";
+// EVERY NAMED THEME, in one sheet: a theme is switched by the root's
+// `data-palette` with no request, so a preview is instant and nothing new
+// reaches the content security policy. See `lib/prefs.ts`.
+import "@crewlethq/tokens/css/themes/all";
 import "@crewlethq/tokens/css/density";
 import "@crewlethq/tokens/css/fonts";
 import "@crewlethq/tokens/css/base";

@@ -137,33 +137,6 @@ describe("stranded schedules", () => {
     const stranded = draftOf(fanOut([]));
     expect(newlyStranded(stranded, stranded)).toEqual([]);
   });
-
-  test("a kind change the Change kind dialog previews strands the lead schedule it breaks", () => {
-    const doc: CompanyDocument = {
-      name: "X",
-      units: [
-        {
-          name: "Team",
-          id: "team",
-          lead: "lead",
-          schedules: [{ name: "standup", cron: "0 9 * * *", task: "Standup", target: "lead" }],
-          roles: [
-            { name: "Lead", handle: "lead" },
-            { name: "Member", handle: "member" },
-          ],
-        },
-      ],
-    };
-    const state = keyedState(doc);
-    const preview = simulate(state, {
-      type: "changeKind",
-      target: "seat:lead",
-      kind: "human",
-      contact: { github_login: "lead" },
-    });
-    if (!preview.ok) throw new Error(preview.message);
-    expect(newlyStranded(state.draft, preview.after).map((s) => s.schedule)).toEqual(["standup"]);
-  });
 });
 
 describe("removals", () => {

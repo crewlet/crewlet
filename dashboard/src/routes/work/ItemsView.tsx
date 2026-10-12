@@ -3,8 +3,8 @@
  *
  * # One machine, three frames
  *
- * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
- * over one project, and `#/me`'s Queue and Asked by me are this over one
+ * `#/work/tasks` is this over the whole company, `#/work/{KEY}`'s Tasks lens is
+ * this over one project, and `#/me`'s Queue and Asked by me are this over one
  * person. They
  * ask the same question with one parameter different, so they are one
  * component: written twice, the second copy is the one that quietly falls
@@ -91,20 +91,13 @@ import {
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
-import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Skeleton, type AvatarStatus } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  activityOf,
-  indexOrg,
-  liveOnItems,
-  ringOf,
-  seatResolvers,
-  type SeatRing,
-} from "~/lib/seats.ts";
+import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
@@ -174,7 +167,7 @@ function useFieldFilters(): Record<string, string> {
 /**
  * What a HOST screen fixes about this list, where one is holding it.
  *
- * Absent, this IS the screen — `#/work` and the project's Items lens — and
+ * Absent, this IS the screen (`#/work/tasks` and the project's Tasks lens), and
  * everything below is the reader's. Present, the list is a panel inside
  * somebody else's tabs and three things belong to that screen rather than to
  * the reader. The type has no optional field for that reason: a host that
@@ -541,16 +534,16 @@ export function ItemsView({
   usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state ring, and — for a bound reader — the coding runs parked
+  // its holder's state, and — for a bound reader — the coding runs parked
   // on a question put to THEM. All the engine's words: `activity` from the
   // push, the item the turn is charged to, and `decisions`' own reading of
   // which runs wait on this person.
   const live = useMemo(() => liveOnItems(agents), [agents]);
-  const rings = useMemo(() => {
-    const out = new Map<string, SeatRing>();
+  const statuses = useMemo(() => {
+    const out = new Map<string, AvatarStatus>();
     for (const a of agents) {
-      const ring = ringOf(activityOf(a));
-      if (a.handle && ring) out.set(a.handle, ring);
+      const status = statusOf(activityOf(a));
+      if (a.handle && status) out.set(a.handle, status);
     }
     return out;
   }, [agents]);
@@ -569,8 +562,8 @@ export function ItemsView({
     return out;
   }, [decisions.data]);
   const facts = useMemo(
-    () => ({ live, waiting, ring: (handle: string) => rings.get(handle) }),
-    [live, waiting, rings],
+    () => ({ live, waiting, status: (handle: string) => statuses.get(handle) }),
+    [live, waiting, statuses],
   );
 
   // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED — the
@@ -814,7 +807,9 @@ export function ItemsView({
             <ViewTabs
               views={saved}
               chosen={chosenView}
-              containerLabel={project ? "All in this project" : "All work"}
+              // THE TRAIL NAMES THE SCOPE, so the container's own list
+              // reads one way in either: All tasks.
+              containerLabel="All tasks"
               onView={(key) => applyView(key, saved, setViewKey)}
             />
             {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
@@ -1261,9 +1256,9 @@ function EmptyList({
             {archivedProjects === 1
               ? "The company’s one project has been archived"
               : `All ${archivedProjects} of the company’s projects have been archived`}
-            , so nothing is listed here — an archived project keeps its work and stops taking new
+            , so nothing is listed here. An archived project keeps its work and stops taking new
             items.{" "}
-            <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
+            <a className="prose-link" href={href(["work"], { shown: "archived" })}>
               See them under Archived
             </a>
             .
@@ -1340,7 +1335,7 @@ export function NoWorkYet() {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
+      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item. An inbound webhook or a schedule is usually what starts them."
     />
   );
 }

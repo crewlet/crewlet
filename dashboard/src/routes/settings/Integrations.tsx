@@ -54,6 +54,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
+import { TOOL_TONE } from "~/lib/toolState.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
@@ -88,7 +89,6 @@ import {
   INTEGRATION_TOOLS,
   type IntegrationRow,
   type IntegrationTool,
-  type IntegrationToolState,
   type ReconcileFinding,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
@@ -127,18 +127,29 @@ export interface Entry {
   /** The API rows that together are this tool. Most tools have one. */
   surfaces: Surface[];
   /**
-   * This tool's page on docs.crewlet.ai, under `integrations/`, for the one
-   * tile that has nothing a person can do from here: Learn more.
+   * This tool's page on docs.crewlet.ai, `docs/integrations/<doc>.md` in the
+   * engine's tree, for the one tile that has nothing a person can do from
+   * here: Learn more.
    */
   doc: string;
 }
 
-/** Where the product documentation is published. See `docs/index.md`. */
-const DOCS_BASE = "https://docs.crewlet.ai/";
+/**
+ * Where the engine's documentation is published: the newest release's copy
+ * (`/engine/latest/`; main is `/engine/next/`, an older line `/engine/vX.Y/`).
+ * See `docs/index.md`.
+ */
+const DOCS_BASE = "https://docs.crewlet.ai/engine/latest/";
 
-/** The published address of an integration's own page. */
+/**
+ * The published address of an integration's own page.
+ *
+ * WITH ITS TRAILING SLASH, because every page on the site is a directory: the
+ * slashless spelling answers a redirect to this one, a round trip on every
+ * click before the page loads.
+ */
 export function docHref(entry: Entry): string {
-  return `${DOCS_BASE}integrations/${entry.doc}`;
+  return `${DOCS_BASE}integrations/${entry.doc}/`;
 }
 
 /**
@@ -377,22 +388,6 @@ export function entryState(
     surface: tool.surface,
   };
 }
-
-/**
- * The tone each state is drawn in.
- *
- * CONNECTED IS ONLY EVER GREEN, and nothing else is: the engine never sends
- * `connected` over a surface nothing can reach. `not_connected` is AMBER for the
- * reason every in-progress phase is — an integration that does not work yet,
- * which is not the neutral this screen keeps for a state nobody needs to come
- * back to. `not_in_use` is that neutral.
- */
-const TOOL_TONE: Record<IntegrationToolState, Tone> = {
-  attention: "warning",
-  not_connected: "warning",
-  connected: "success",
-  not_in_use: "neutral",
-};
 
 // ---------------------------------------------------------------------------
 // What an integration IS, in facts

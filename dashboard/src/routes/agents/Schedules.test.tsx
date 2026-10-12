@@ -31,7 +31,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { Router } from "~/app/router.tsx";
-import { setZone } from "~/lib/prefs.ts";
+import { pinZoneForTest } from "~/lib/prefs.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 
@@ -39,12 +39,12 @@ beforeEach(() => {
   // The READER's zone, which is what each instant is rendered in and is a
   // different question from the one under test. Pinned so the assertions are
   // about the schedule's zone alone.
-  setZone("UTC");
+  pinZoneForTest("UTC");
 });
 
 afterEach(() => {
   cleanup();
-  setZone("");
+  pinZoneForTest("");
 });
 
 const NOW = Date.parse("2026-06-15T00:30:00Z");

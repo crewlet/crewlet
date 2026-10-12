@@ -18,11 +18,15 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
+  ChoiceButtons,
+  ChoiceList,
   Combobox,
+  Composer,
   FormField,
   Input,
   Modal,
   Select,
+  Stack,
   Textarea,
   type ComboboxOption,
   type SelectOption,
@@ -67,11 +71,18 @@ import { textBudget } from "~/lib/format.ts";
  */
 export function AssignButton({
   item,
+  label,
   version,
   assignee,
 }: {
-  /** The task's key (ENG-42) or id. */
+  /**
+   * The task's address ([itemAddress]): its key (ENG-42), or its id where
+   * another task claimed that key first and the key would hand off the
+   * claimant.
+   */
   item: string;
+  /** What the dialog's words call the task — its key — where `item` is its id. */
+  label?: string;
   /** The `task.version` the page is drawn from. */
   version: number;
   /** Who holds it now, or "". */
@@ -94,6 +105,7 @@ export function AssignButton({
       {open && (
         <AssignDialog
           item={item}
+          named={label || item}
           version={version}
           assignee={assignee}
           write={write}
@@ -112,12 +124,15 @@ const NOBODY = "";
 
 function AssignDialog({
   item,
+  named,
   version,
   assignee,
   write,
   onClose,
 }: {
   item: string;
+  /** What the dialog's words call the task. */
+  named: string;
   version: number;
   assignee: string;
   write: ReturnType<typeof useAct<"update_work_item">>;
@@ -155,7 +170,7 @@ function AssignDialog({
         // unassignment.
         ...(who !== NOBODY && reason.trim() ? { reason: reason.trim() } : {}),
       },
-      { done: who === NOBODY ? `Unassigned ${item}` : `Assigned ${item} to ${name}` },
+      { done: who === NOBODY ? `Unassigned ${named}` : `Assigned ${named} to ${name}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -163,7 +178,7 @@ function AssignDialog({
     <Modal
       open
       size="sm"
-      title={`Assign ${item}`}
+      title={`Assign ${named}`}
       icon={<UserPlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
@@ -226,16 +241,29 @@ function AssignDialog({
  * which task each brings back. The visible word leads the name, so a person
  * speaking "Restore" to voice control still reaches it.
  */
-export function RestoreButton({ item }: { item: string }) {
+export function RestoreButton({
+  item,
+  label,
+}: {
+  /**
+   * The task's address ([itemAddress]): restored by its key, a duplicate in
+   * the trash beside the task that claimed its key would bring back the
+   * claimant — or be refused because the claimant was never removed.
+   */
+  item: string;
+  /** What the control and its toast call the task — its key — where `item` is its id. */
+  label?: string;
+}) {
   const write = useAct("restore_work_item");
+  const named = label || item;
   return (
     <WriteButton
       write={write}
       size="small"
       variant="ghost"
       leadingIcon={<UndoGlyph />}
-      aria-label={`Restore ${item}`}
-      onPress={() => void write.run({ item }, { done: `Restored ${item}` })}
+      aria-label={`Restore ${named}`}
+      onPress={() => void write.run({ item }, { done: `Restored ${named}` })}
     >
       Restore
     </WriteButton>
@@ -590,172 +618,311 @@ function SaveViewDialog({
 }
 
 /**
- * Answer a structured ask with one of its options — the decision, made in
- * place.
+ * How an ask was answered, for the line that replaces its controls.
+ *
+ * `recommended` is set on a choice that was the asker's own recommendation,
+ * which the line says beside it.
+ */
+export type AskAnswer =
+  { kind: "choice"; label: string; recommended: boolean } | { kind: "reply"; text: string };
+
+/** The value the "Something else" choice carries in the list of options. */
+const OTHER = "\u0000other";
+
+/**
+ * The longest reply a decision's "Something else" takes. A reply here is one
+ * direction for the asker, read into its next turn; the engine's comment
+ * ceiling (32 KiB) is the bound on a whole comment and far past what a reader
+ * types into a card, so the field counts down from here instead.
+ */
+const DECISION_REPLY_MAX = 2000;
+
+/**
+ * Answer an ask in place: accept its recommendation, choose another option,
+ * or reply in your own words.
+ *
+ * AT REST, ONE LINE: "Recommended: Greedy only" with Accept and Change.
+ * Accept sends the recommended option; Change opens every option with its
+ * detail line, plus "Something else", whose field sends a reply instead of a
+ * choice. An ask with no recommendation offers Answer in their place, and an
+ * ask with no options at all offers Reply, which opens the field alone. While
+ * the options are open the recommendation line is hidden: the list says it
+ * on the option itself.
  *
  * THE CHOICE IS AN ANSWER TO THE ASK IT BELONGS TO (`answers` names the ask's
  * comment), so the engine checks the option is one the ask offered, closes the
- * ask, and wakes the asker with what was chosen. The recommended option is
- * the primary button: it is the one most answers are, and the asker said so.
+ * ask, and wakes the asker with what was chosen. A reply is the same answer
+ * with a body instead of a choice. ONE WRITE FOR THE WHOLE ASK: an ask takes
+ * one answer, so every way of sending one goes through the one `useAct`, and
+ * nothing else is pressable while it is in flight.
  *
- * ONE WRITE FOR THE WHOLE ASK, never one per option. An ask takes one answer,
- * and with a write per button the other options stayed pressable while the
- * first was in flight — a second, different choice sent to the same ask. So
- * every option sends through the one `useAct`: the pressed one shows it is
- * sending, the rest are disabled with the reason until it settles, and the
- * refusal, if there is one, is drawn once for the ask.
- */
-export function AnswerAskButtons({
-  item,
-  comment,
-  options,
-  recommended,
-}: {
-  /** The task's key or id. */
-  item: string;
-  /** The ask's comment id. */
-  comment: string;
-  /** The ask's options, whose words are the buttons'. */
-  options: readonly { id: string; label: string }[];
-  /** The option the asker recommends, if any. */
-  recommended?: string;
-}) {
-  const write = useAct("comment_on_work_item");
-  const [pressed, setPressed] = useState<string | null>(null);
-  return (
-    <>
-      {options.map((option) => {
-        const mine = write.busy && pressed === option.id;
-        return (
-          <WriteButton
-            key={option.id}
-            write={write}
-            size="small"
-            variant={option.id === recommended ? "primary" : "secondary"}
-            pressing={mine}
-            blocked={write.busy && !mine ? "Your answer to this ask is being sent" : undefined}
-            showRefusal={false}
-            onPress={() => {
-              setPressed(option.id);
-              void write.run(
-                { item, answers: comment, choice: option.id },
-                { done: `Answered ${item}: ${option.label}` },
-              );
-            }}
-          >
-            {option.label}
-          </WriteButton>
-        );
-      })}
-      <RefusalNote write={write} />
-    </>
-  );
-}
-
-/**
- * Answer an ask that offers no options — in words, in place.
+ * THE OPEN STATE IS THE CALLER'S, so a card that lists several asks keeps one
+ * open at a time: opening one closes whichever was.
  *
- * THE SAME ANSWER AN OPTION SENDS, WITH A BODY INSTEAD OF A CHOICE:
- * `comment_on_work_item{item, answers, body}` names the ask's comment, so the
- * engine closes that ask and wakes the asker with the reply. The dialog is the
- * one `AnswerRunButton` opens, because the gesture is the same one — read the
- * question, write the answer, send it as yourself — and a second shape for it
- * would be a second thing to learn.
+ * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
+ * is one row among others. `buttons` is for a screen where the question is
+ * the whole of what is open (the Inbox's pane): every option is a button that
+ * sends it with one press, the recommended one first and filled, and
+ * "Something else" opens the field in their place. An ask with no options is
+ * answered in that field from the start. Either way the answer goes through
+ * this one write, so the rules above hold for both.
  */
-export function ReplyAskButton({
+export function AnswerAsk({
   item,
   comment,
   asker,
-  question,
+  options,
+  recommended,
+  open,
+  onOpenChange,
+  onAnswered,
+  layout = "line",
+  label,
 }: {
-  /** The task's key or id. */
+  /**
+   * The task's address ([itemAddress]): its key, or its id where another
+   * task claimed that key first and the key would answer on the claimant.
+   */
   item: string;
-  /** The ask's comment id, which the reply answers. */
+  /** What the answer's toast calls the task — its key — where `item` is its id. */
+  label?: string;
+  /** The ask's comment id, which the answer names. */
   comment: string;
-  /** Who asked, by name, for the dialog's title. */
+  /** Who asked, by name, for the reply field's placeholder. */
   asker: string;
-  /** What they asked, quoted above the answer. */
-  question: string;
+  /** The ask's options; empty for an ask answered in words. */
+  options: readonly { id: string; label: string; detail?: string }[];
+  /** The option the asker recommends, if any. */
+  recommended?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called once the engine has the answer. */
+  onAnswered: (answer: AskAnswer) => void;
+  /** How the answer is laid out; see above. */
+  layout?: "line" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
-  const [open, setOpen] = useState(false);
+  const named = label || item;
+  const rec = options.find((o) => o.id === recommended);
+  const words = options.length === 0;
+  const [chosen, setChosen] = useState<string>(rec?.id ?? (words ? OTHER : ""));
   const [text, setText] = useState("");
+
   const close = () => {
     write.dismiss();
-    setOpen(false);
+    setChosen(rec?.id ?? (words ? OTHER : ""));
+    onOpenChange(false);
   };
-  const blocked = text.trim() ? undefined : "Write the reply first.";
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit: a reply is a comment,
-    // and a second one is not the first sent again.
-    if (!pressable(write, blocked)) return;
+
+  const send = async (choice: string) => {
+    const option = options.find((o) => o.id === choice);
     const body = text.trim();
-    const result = await write.run(
-      { item, answers: comment, body },
-      { done: `Replied to ${asker} on ${item}` },
+    const result = option
+      ? await write.run(
+          { item, answers: comment, choice: option.id },
+          { done: `Answered ${named}: ${option.label}` },
+        )
+      : await write.run(
+          { item, answers: comment, body },
+          { done: `Replied to ${asker} on ${named}` },
+        );
+    if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
+    onAnswered(
+      option
+        ? { kind: "choice", label: option.label, recommended: option.id === recommended }
+        : { kind: "reply", text: body },
     );
-    if (result && (result.kind === "applied" || result.kind === "pending")) {
-      setText("");
-      close();
-    }
   };
-  return (
+
+  const other = chosen === OTHER;
+  const blocked = other
+    ? text.trim()
+      ? undefined
+      : "Write the reply first."
+    : chosen
+      ? undefined
+      : "Choose an answer first.";
+  const submit = () => {
+    if (pressable(write, blocked)) void send(chosen);
+  };
+  const actions = (
     <>
+      <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+        Cancel
+      </Button>
       <WriteButton
         write={write}
         size="small"
-        variant="secondary"
-        leadingIcon={<MessageSquareGlyph />}
+        variant="primary"
+        blocked={blocked}
         showRefusal={false}
-        onPress={() => setOpen(true)}
+        onPress={submit}
       >
-        Reply
+        Submit
       </WriteButton>
-      {open && (
-        <Modal
-          open
-          size="md"
-          title={`Reply to ${asker}`}
-          icon={<MessageSquareGlyph />}
-          onClose={close}
-          onSubmit={() => void submit()}
-          closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
-          footer={
-            <>
-              <Button variant="secondary" onClick={close} disabled={write.busy}>
-                Cancel
-              </Button>
-              <WriteButton
-                write={write}
-                variant="primary"
-                showRefusal={false}
-                onPress={() => void submit()}
-                blocked={blocked}
-              >
-                Send reply
-              </WriteButton>
-            </>
-          }
-        >
-          <div className="col gap-3">
-            {question && <blockquote className="answer-run-question">{question}</blockquote>}
-            <FormField
-              label="Your reply"
-              htmlFor={`reply-ask-${comment}`}
-              helper={`Posted on ${item} as the answer to this question; ${asker} is woken with it.`}
-            >
-              <Textarea
-                id={`reply-ask-${comment}`}
-                rows={5}
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-              />
-            </FormField>
-            <RefusalNote write={write} />
-          </div>
-        </Modal>
-      )}
     </>
+  );
+  const composer = (
+    <Composer
+      label={words ? `Reply to ${asker}` : "Something else"}
+      value={text}
+      onChange={setText}
+      onSubmit={submit}
+      maxLength={DECISION_REPLY_MAX}
+      placeholder={`Tell ${asker} what you want instead`}
+      disabled={!write.access.can || write.busy}
+      actions={actions}
+      autoFocus
+    />
+  );
+
+  if (layout === "buttons") {
+    // THE FIELD IN THE OPTIONS' PLACE, once "Something else" opened it, and
+    // from the start for an ask that offers none. It takes the focus only
+    // when a press opened it: stepping onto an ask with j or k must not drop
+    // the reader into a field.
+    if (words || open) {
+      return (
+        <Stack gap={2}>
+          <Composer
+            label={`Reply to ${asker}`}
+            value={text}
+            onChange={setText}
+            onSubmit={submit}
+            maxLength={DECISION_REPLY_MAX}
+            placeholder={`Tell ${asker} what you want`}
+            disabled={!write.access.can || write.busy}
+            autoFocus={!words}
+            actions={
+              <>
+                {!words && (
+                  <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+                    Cancel
+                  </Button>
+                )}
+                <WriteButton
+                  write={write}
+                  size="small"
+                  variant="primary"
+                  blocked={text.trim() ? undefined : "Write the reply first."}
+                  showRefusal={false}
+                  onPress={submit}
+                >
+                  Send
+                </WriteButton>
+              </>
+            }
+          />
+          <RefusalNote write={write} />
+        </Stack>
+      );
+    }
+    return (
+      <Stack gap={2}>
+        <ChoiceButtons
+          label="Answers"
+          options={options.map((o) => ({ value: o.id, label: o.label, detail: o.detail }))}
+          recommended={recommended}
+          pending={write.busy ? chosen : null}
+          disabledReason={write.access.can ? undefined : write.access.reason}
+          onChoose={(choice) => {
+            if (!pressable(write)) return;
+            setChosen(choice);
+            void send(choice);
+          }}
+        />
+        <WriteButton
+          write={write}
+          size="small"
+          variant="ghost"
+          pressing={false}
+          showRefusal={false}
+          blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+          onPress={() => {
+            setChosen(OTHER);
+            onOpenChange(true);
+          }}
+        >
+          Something else
+        </WriteButton>
+        <RefusalNote write={write} />
+      </Stack>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div className="decision-answer">
+        <span className="decision-rec">
+          {rec ? (
+            <>
+              Recommended: <strong>{rec.label}</strong>
+            </>
+          ) : words ? (
+            "Answered in words"
+          ) : (
+            "No recommendation"
+          )}
+        </span>
+        <span className="decision-answer-actions">
+          {rec && (
+            <WriteButton
+              write={write}
+              size="small"
+              variant="primary"
+              showRefusal={false}
+              onPress={() => void send(rec.id)}
+            >
+              Accept
+            </WriteButton>
+          )}
+          <WriteButton
+            write={write}
+            size="small"
+            variant={rec ? "secondary" : "primary"}
+            showRefusal={false}
+            pressing={false}
+            blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+            onPress={() => onOpenChange(true)}
+          >
+            {rec ? "Change" : words ? "Reply" : "Answer"}
+          </WriteButton>
+        </span>
+        <RefusalNote write={write} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="decision-answer is-open">
+      {words ? (
+        composer
+      ) : (
+        <ChoiceList
+          label="Answers"
+          value={chosen}
+          onChange={setChosen}
+          disabled={!write.access.can || write.busy}
+          options={[
+            ...options.map((o) => ({
+              value: o.id,
+              label: o.label,
+              detail: o.detail,
+              tag: o.id === recommended ? "Recommended" : undefined,
+            })),
+            {
+              value: OTHER,
+              label: "Something else",
+              detail: "Reply in your own words instead.",
+              separated: true,
+              panel: composer,
+            },
+          ]}
+          footer={other ? undefined : actions}
+        />
+      )}
+      <RefusalNote write={write} />
+    </div>
   );
 }
 

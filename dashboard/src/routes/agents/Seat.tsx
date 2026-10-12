@@ -96,7 +96,7 @@ import {
   handleLabel,
   indexOrg,
   nameOfIn,
-  ringOf,
+  statusOf,
   seatPath,
   seatResolvers,
   stoppedLine,
@@ -439,7 +439,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const place = unitPath(seat.unit);
   return (
     <div className="prof-id">
@@ -448,7 +448,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
         kind={human ? "human" : "agent"}
         avatar={seat.avatar}
         size={60}
-        {...(ring ? { ring } : {})}
+        status={status}
         decorative
       />
       <div className="prof-who">
@@ -544,7 +544,7 @@ function Notices({
           {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
         </Callout>
       )}
-      {/* THE STATE'S OWN TONE, the pill's and the ring's: a stopped seat is
+      {/* THE STATE'S OWN TONE, the pill's and the badge's: a stopped seat is
           the one red state in the seat vocabulary, and a warning callout
           under a danger pill named one fact in two colours. */}
       {state === "stopped" &&

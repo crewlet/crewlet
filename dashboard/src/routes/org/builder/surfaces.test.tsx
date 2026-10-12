@@ -11,7 +11,6 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
-import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
@@ -93,7 +92,6 @@ test("each structural action opens its own dialog", () => {
   expect(builderSurfaces.add).toBe(AddNodeDialog);
   expect(builderSurfaces.move).toBe(MoveDialog);
   expect(builderSurfaces.remove).toBe(DeleteDialog);
-  expect(builderSurfaces.changeKind).toBe(ChangeKindDialog);
 });
 
 test("the toolbar's Delete opens the delete dialog for the selected seat", async () => {

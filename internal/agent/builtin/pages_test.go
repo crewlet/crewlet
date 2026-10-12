@@ -958,3 +958,86 @@ func TestAPageWriteReportsItsOutcomeAndPosition(t *testing.T) {
 		}
 	}
 }
+
+// A NEW PAGE IS WRITTEN PUBLISHED OR AS A DRAFT, and in no other status: a page
+// written straight into the trash would be deleted before anybody read it.
+func TestWritePageTakesADraftAndRefusesAnyOtherStatus(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+
+	for _, args := range []map[string]any{
+		{"title": "Pricing", "body": "a thought", "container": "PROD", "status": "draft"},
+		{"title": "Brief", "body": "settled", "container": "PROD"},
+		{"title": "Roadmap", "body": "settled", "container": "PROD", "status": ""},
+	} {
+		if got := callWork(t, reg, builtin.WritePageTool, args); got.Failed {
+			t.Fatalf("%v was refused: %s", args, got.Output)
+		}
+	}
+	got := []pages.Status{kb.created[0].Status, kb.created[1].Status, kb.created[2].Status}
+	if !slices.Equal(got, []pages.Status{pages.StatusDraft, pages.StatusPublished, pages.StatusPublished}) {
+		t.Fatalf("the pages were written as %v, want a draft and two published", got)
+	}
+
+	for _, status := range []any{"trashed", "archived", 7, true} {
+		result := callWork(t, reg, builtin.WritePageTool, map[string]any{
+			"title": "Elsewhere", "body": "x", "container": "PROD", "status": status,
+		})
+		if !result.Failed || !strings.Contains(result.Output, "`draft`") {
+			t.Errorf("status %v was not refused naming the two it takes: %s", status, result.Output)
+		}
+	}
+	if len(kb.created) != 3 {
+		t.Errorf("a refused status reached the store: %d creates", len(kb.created))
+	}
+}
+
+// A FOLDER IS A NEW PAGE WITH AN EMPTY BODY, and the tool says so on `body`
+// rather than refusing the empty one.
+func TestWritePageFilesAnEmptyBodyAsAFolder(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	if got := callWork(t, reg, builtin.WritePageTool, map[string]any{
+		"title": "Designs", "body": "", "container": "ENG",
+	}); got.Failed {
+		t.Fatalf("an empty body was refused: %s", got.Output)
+	}
+	if len(kb.created) != 1 || kb.created[0].Body != "" {
+		t.Fatalf("the folder reached the store as %+v", kb.created)
+	}
+	entry, _ := reg.Lookup(builtin.WritePageTool)
+	body := entry.Tool.Parameters()["properties"].(map[string]any)["body"].(map[string]any)
+	if !strings.Contains(body["description"].(string), "folder") {
+		t.Errorf("write_page's body does not say an empty one is a folder: %q", body["description"])
+	}
+}
+
+// A WATCH IS TRUE OR FALSE. Anything else is refused rather than read as "no
+// change", which would tell a caller that sent "false" as text that the save
+// landed while they still followed the page.
+func TestSavePageRefusesAWatchThatIsNotABoolean(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	for _, watch := range []any{"false", 0, "yes"} {
+		got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+			"page": "p1", "base_version": 4, "watch": watch,
+		})
+		if !got.Failed || !strings.Contains(got.Output, "true or false") {
+			t.Errorf("watch %v was not refused: %s", watch, got.Output)
+		}
+	}
+	if len(kb.saved) != 0 {
+		t.Fatalf("a malformed watch reached the store: %+v", kb.saved)
+	}
+	if got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "watch": false,
+	}); got.Failed {
+		t.Fatalf("a proper unwatch failed: %s", got.Output)
+	}
+	if len(kb.saved) != 1 || kb.saved[0].Watch == nil || *kb.saved[0].Watch {
+		t.Fatalf("the unwatch reached the store as %+v", kb.saved)
+	}
+}

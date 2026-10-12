@@ -275,7 +275,6 @@ describe("what a lead's draft refuses", () => {
         placement: { parent: top, after: null },
         data: { name: "Infra", id: "infra", project: "INF" },
       },
-      { type: "changeKind", target: seatKey("qa"), kind: "human", contact: { github_login: "q" } },
       { type: "replaceSeat", target: seatKey("ops"), key: "new:o", handle: "operations" },
     ] as const) {
       const answer = recordIntent(withKeys, intent);
@@ -287,7 +286,6 @@ describe("what a lead's draft refuses", () => {
     // The control: the same gestures without a key are a lead's.
     for (const intent of [
       { type: "updateSeat", target: seatKey("qa"), set: [{ path: ["goal"], value: "Test" }] },
-      { type: "changeKind", target: seatKey("qa"), kind: "human" },
       { type: "replaceSeat", target: seatKey("qa"), key: "new:q", handle: "quality" },
     ] as const) {
       expect(recordIntent(withKeys, intent), intent.type).toMatchObject({ ok: true });

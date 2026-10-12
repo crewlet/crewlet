@@ -153,7 +153,7 @@ const first = (rows: number[]) => rows[0]! / 2 + f()! / 3;
 const quoted = (s: string) => !/^"/.test(s);
 const CATEGORIES = ["task", "system"] as const;
 `
-	got := literalStrings(t, "routes/inbox/SnoozeMenu.tsx", source)
+	got := literalStrings(t, "routes/inbox/NoticeActions.tsx", source)
 	if !slices.Equal(got, []string{"task", "system"}) {
 		t.Errorf("strings = %q, want the one declaration after the divisions", got)
 	}
@@ -233,11 +233,11 @@ func TestASecondDeclarationInTheSameFileIsTwo(t *testing.T) {
 
 // A NEIGHBOUR IS ANOTHER DECLARATION, AND SO IS A NAME THAT CONTAINS THE NAME.
 //
-// The wake reasons' `PHRASES` has a neighbour of the same SHAPE: the Inbox's
+// The wake reasons' `PHRASES` had a neighbour of the same SHAPE: the Inbox's
 // `CONDITION_PILLS`, a map of words keyed by a state, kept out of that table
-// because its keys are not reasons. The fixture holds the real pair, so a
-// reader that matched a declaration by its shape rather than its name would
-// read two tables where there is one.
+// because its keys were not reasons. The fixture holds that pair, so a reader
+// that matched a declaration by its shape rather than its name would read two
+// tables where there is one.
 //
 // And it holds two names that CONTAIN the name asked for, one before it and one
 // after — `WAKE_PHRASES` and `PHRASES_SHOWN`. A regular expression over a

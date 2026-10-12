@@ -462,7 +462,7 @@ test("an agent's profile has six tabs, and Work counts the engine's total rather
   await waitFor(() => expect(work?.textContent).toBe("Work7"));
   // AND THE OVERVIEW'S CARD OFFERS ALL SEVEN, from the same answer.
   expect(screen.getByRole("link", { name: "All 7" }).getAttribute("href")).toBe(
-    "#/work?assignee=swe",
+    "#/work/tasks?assignee=swe",
   );
 });
 
@@ -2312,9 +2312,9 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   await settle();
   const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
   const here = trail.querySelector("[aria-current='page']");
-  expect(here?.querySelector(".crumb-text")?.textContent).toBe("SWE");
+  expect(here?.querySelector(".crewlet-breadcrumb__text")?.textContent).toBe("SWE");
   // ITS BADGE, the outline every other seat badge wears.
-  expect(here?.querySelector(".crumb-seat")).not.toBeNull();
+  expect(here?.querySelector(".crewlet-breadcrumb__badge")).not.toBeNull();
   // BY THE UNIT'S KEY, never its name — which two units may share.
   const unit = within(trail).getByRole("link", { name: "Engineering · Core" });
   expect(unit.getAttribute("href")).toBe("#/agents/teams/core");

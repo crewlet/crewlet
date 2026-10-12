@@ -335,7 +335,7 @@ and Helix) you get completion, inline docs from the field docstrings, and
 typo squiggles as you type:
 
 ```yaml
-# yaml-language-server: $schema=https://docs.crewlet.ai/schema/company.schema.json
+# yaml-language-server: $schema=https://docs.crewlet.ai/engine/latest/schema/company.schema.json
 name: "Acme AI"
 ```
 

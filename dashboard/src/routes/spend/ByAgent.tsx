@@ -31,7 +31,7 @@ import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
-import { activityOf, ringOf, useSeatBadgeOf } from "~/lib/seats.ts";
+import { activityOf, statusOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Window } from "~/lib/range.ts";
 import { isRange, windowParam } from "~/lib/range.ts";
@@ -138,7 +138,7 @@ export function ByAgent({
             sortValue: (l) => badgeOf(l.row.handle || l.row.role).name,
             cell: (l) => {
               const badge = badgeOf(l.row.handle || l.row.role);
-              const ring = ringOf(activityOf(byAgent.get(l.row.agent_id)));
+              const status = statusOf(activityOf(byAgent.get(l.row.agent_id)));
               return (
                 <span className="cell-seat" title={badge.name}>
                   <SeatAvatar
@@ -146,7 +146,7 @@ export function ByAgent({
                     size="xs"
                     kind={badge.kind === "human" ? "human" : "agent"}
                     avatar={badge.avatar}
-                    ring={ring}
+                    status={status}
                     decorative
                   />
                   <span className="truncate">{badge.name}</span>

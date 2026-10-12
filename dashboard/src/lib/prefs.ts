@@ -1,13 +1,22 @@
 /**
- * What this reader has said about how the product should look and read —
- * theme, density, timezone and date format — persisted per browser and shared
- * by every reader of them.
+ * What this reader has said about how the product should look (mode, theme
+ * and density) persisted per browser and shared by every reader of them, and
+ * the zone every timestamp is drawn in.
  *
- * NAMED FOR WHAT IT HOLDS. It was `theme.ts` and already held density; adding
- * a timezone to a file called "theme" is how a name starts lying, and the next
- * person looking for the zone looks in `format.ts` and finds the browser's.
+ * THE ZONE AND THE DATE SHAPE ARE THE BROWSER'S, and not preferences. A
+ * timestamp is drawn in the zone the reader's machine is in and a date in its
+ * locale's own spelling, which is right for almost everybody and asks nothing
+ * of them; a per-browser override of either was a setting few readers needed
+ * and every screenshot had to be read against.
  *
- * Three theme states, not two: `system` follows `prefers-color-scheme` and is
+ * MODE AND THEME ARE TWO CHOICES. The mode is light, dark or the system's,
+ * kept as `ThemeChoice` and written as `data-theme`, the name the design
+ * system's contract gives it; the theme is a named palette from
+ * `@crewlethq/tokens`, written as `data-palette`. A theme is a pair of
+ * palettes and the mode chooses the half, so neither choice ever changes the
+ * other.
+ *
+ * Three mode states, not two: `system` follows `prefers-color-scheme` and is
  * the DEFAULT. The dashboard this replaces hard-coded `data-theme="dark"` on
  * the html element and had no `prefers-color-scheme` rule anywhere, so a
  * reader whose machine is set to light got a dark page on first visit and no
@@ -28,31 +37,18 @@
  */
 
 import { useCallback, useSyncExternalStore } from "react";
+import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from "@crewlethq/tokens";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 export type ThemeChoice = "system" | "light" | "dark";
 export type Density = "compact" | "normal" | "comfortable";
 
-/**
- * How a date is written out.
- *
- * `auto` follows the browser's own locale, which is right for almost
- * everybody and is why it is the default. The other two exist because a date
- * of `03/04/2026` means two different days on two sides of one video call, and
- * an operator reading a colleague's screenshot has no way to tell which — so
- * `iso` is offered as the spelling with no ambiguity at all, and `long` as the
- * one with none either, at the cost of width.
- */
-export type DateFormat = "auto" | "iso" | "long";
-
 /** The closed sets, in the order a control offers them. */
 export const THEMES: ThemeChoice[] = ["system", "light", "dark"];
 export const DENSITIES: Density[] = ["compact", "normal", "comfortable"];
-export const DATE_FORMATS: DateFormat[] = ["auto", "iso", "long"];
 
 /**
- * The zone the browser is in, which is the default and the honest one: a
- * timestamp is rendered where the reader is unless they say otherwise.
+ * The zone the browser is in: a timestamp is rendered where the reader is.
  *
  * WRAPPED, because `resolvedOptions()` is allowed to throw and has been known
  * to answer an empty string in a locked-down environment — and a dashboard
@@ -67,28 +63,16 @@ export function browserZone(): string {
   }
 }
 
-/**
- * Whether a string is a zone this browser can actually format in.
- *
- * ASKED OF `Intl`, never matched against a list: the IANA database ships with
- * the runtime and changes with it, so any list here would be a second, stale
- * opinion about which zones exist. A zone it refuses throws, which is exactly
- * the question being asked.
- */
-export function zoneExists(zone: string): boolean {
-  if (!zone) return false;
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone: zone }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const THEME_KEY = STORAGE_KEYS.theme;
 const DENSITY_KEY = STORAGE_KEYS.density;
-const ZONE_KEY = STORAGE_KEYS.timezone;
-const DATE_KEY = STORAGE_KEYS.dateFormat;
+const PALETTE_KEY = STORAGE_KEYS.palette;
+
+/**
+ * The theme a machine that asks for more contrast gets while its reader has
+ * chosen none. A choice the reader makes, the default included, wins over it.
+ */
+export const CONTRAST_THEME_ID: ThemeId = "high-contrast";
+const MORE_CONTRAST = "(prefers-contrast: more)";
 
 function read(key: string, fallback: string, allowed: readonly string[]): string {
   try {
@@ -113,6 +97,38 @@ function write(key: string, value: string): void {
   }
 }
 
+function forget(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* nothing was remembered, or nothing can be */
+  }
+}
+
+/**
+ * The theme this reader chose, or null for none. VALIDATED AGAINST THE
+ * REGISTRY the design system exports: an id no build ships (a theme since
+ * removed, a hand edit) is no choice, and paints the default rather than a
+ * page no stylesheet answers.
+ */
+function readPalette(): ThemeId | null {
+  try {
+    const stored = localStorage.getItem(PALETTE_KEY);
+    return isThemeId(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The theme for a reader who chose none: high contrast where the machine asks for it. */
+function systemPalette(): ThemeId {
+  try {
+    return window.matchMedia(MORE_CONTRAST).matches ? CONTRAST_THEME_ID : DEFAULT_THEME_ID;
+  } catch {
+    return DEFAULT_THEME_ID;
+  }
+}
+
 function applyTheme(choice: ThemeChoice): void {
   const root = document.documentElement;
   // `system` removes the attribute entirely rather than resolving it here: the
@@ -128,39 +144,48 @@ function applyDensity(density: Density): void {
   else root.setAttribute("data-density", density);
 }
 
+/** The default theme paints the bare root, so it is the absence of the attribute. */
+function applyPalette(id: ThemeId): void {
+  const root = document.documentElement;
+  if (id === DEFAULT_THEME_ID) root.removeAttribute("data-palette");
+  else root.setAttribute("data-palette", id);
+}
+
 let theme = read(THEME_KEY, "system", THEMES) as ThemeChoice;
 let density = read(DENSITY_KEY, "normal", DENSITIES) as Density;
-let dateFormat = read(DATE_KEY, "auto", DATE_FORMATS) as DateFormat;
-// THE ZONE IS NOT A CLOSED SET, so it is validated by asking `Intl` rather
-// than by membership — see [zoneExists]. An empty stored value means "the
-// browser's", which is a real choice rather than an absent one: a reader who
-// travels wants the zone to follow them.
-let timezone = readZone();
+/** What the reader chose; null is no choice. */
+let chosenPalette = readPalette();
+/** The theme in effect: the choice, or the system's while there is none. */
+let palette: ThemeId = chosenPalette ?? systemPalette();
+/**
+ * A theme a list is showing while the reader decides, painted over the one in
+ * effect and never written. NOT ANNOUNCED: nothing renders from it but the
+ * root, and every control goes on reading the theme in effect.
+ */
+let previewing: ThemeId | null = null;
 const listeners = new Set<() => void>();
 
-function readZone(): string {
-  let stored = "";
-  try {
-    stored = localStorage.getItem(ZONE_KEY) ?? "";
-  } catch {
-    stored = "";
-  }
-  return stored && zoneExists(stored) ? stored : "";
+/** Paint what the root should show: the preview while there is one, else the theme in effect. */
+function paintPalette(): void {
+  applyPalette(previewing ?? palette);
 }
 
-/** The zone every timestamp is rendered in: the reader's choice, or theirs. */
+/**
+ * A zone a suite pins the formatters to, or empty for the browser's. A TEST
+ * SEAM ONLY: a date-line edge (Kiritimati, a midnight that moves) cannot be
+ * reached from whatever zone the machine running the suite is in.
+ */
+let pinnedZone = "";
+
+/** The zone every timestamp is rendered in: the browser's. */
 export function zone(): string {
-  return timezone || browserZone();
+  return pinnedZone || browserZone();
 }
 
-/** Whether the zone is the reader's own choice rather than the browser's. */
-export function zoneIsChosen(): boolean {
-  return timezone !== "";
-}
-
-/** How dates are written: the reader's choice. */
-export function dates(): DateFormat {
-  return dateFormat;
+/** Test seam: draw every timestamp in `next`, or in the browser's zone again for "". */
+export function pinZoneForTest(next: string): void {
+  pinnedZone = next;
+  announce();
 }
 
 function announce(): void {
@@ -179,6 +204,39 @@ export function setTheme(next: ThemeChoice): void {
   applyTheme(next);
   write(THEME_KEY, next);
   announce();
+}
+
+/**
+ * Set the theme for this browser, now and on the next visit; null forgets the
+ * choice, and the theme follows the system again. Applying ends any preview.
+ */
+export function setPalette(next: ThemeId | null): void {
+  if (next !== null && !isThemeId(next)) return;
+  chosenPalette = next;
+  palette = next ?? systemPalette();
+  previewing = null;
+  if (next === null) forget(PALETTE_KEY);
+  else write(PALETTE_KEY, next);
+  paintPalette();
+  announce();
+}
+
+/**
+ * Paint a theme the reader is looking at without choosing it, or end the
+ * preview with null. Nothing is written: a preview lives as long as the list
+ * that started it, and the list ending it (closing, emptying, the pointer
+ * leaving) is what puts back the theme in effect.
+ */
+export function previewPalette(next: ThemeId | null): void {
+  if (next !== null && !isThemeId(next)) return;
+  if (previewing === next) return;
+  previewing = next;
+  paintPalette();
+}
+
+/** What the reader chose, or null for none: what an Undo goes back to. */
+export function chosenTheme(): ThemeId | null {
+  return chosenPalette;
 }
 
 /** Set the density for this browser, now and on the next visit. */
@@ -201,6 +259,15 @@ export function useTheme(): [ThemeChoice, (next: ThemeChoice) => void] {
   return [value, useCallback(setTheme, [])];
 }
 
+export function usePalette(): [ThemeId, (next: ThemeId | null) => void] {
+  const value = useSyncExternalStore(
+    subscribe,
+    () => palette,
+    () => DEFAULT_THEME_ID,
+  );
+  return [value, useCallback(setPalette, [])];
+}
+
 export function useDensity(): [Density, (next: Density) => void] {
   const value = useSyncExternalStore(
     subscribe,
@@ -210,70 +277,89 @@ export function useDensity(): [Density, (next: Density) => void] {
   return [value, useCallback(setDensity, [])];
 }
 
-/** Set the zone every timestamp renders in. Empty means the browser's. */
-export function setZone(next: string): void {
-  // A ZONE THIS RUNTIME CANNOT FORMAT IN IS REFUSED rather than stored: it
-  // would make every `toLocaleString` on every screen throw, which is a blank
-  // product rather than a wrong time.
-  if (next !== "" && !zoneExists(next)) return;
-  timezone = next;
-  write(ZONE_KEY, next);
-  announce();
-}
-
-/** Set how dates are written. */
-export function setDateFormat(next: DateFormat): void {
-  if (!DATE_FORMATS.includes(next)) return;
-  dateFormat = next;
-  write(DATE_KEY, next);
-  announce();
-}
-
 /** Every preference and its setter, for a surface that offers all of them. */
 export interface ViewerPrefs {
+  /** The mode. Named `theme` for the attribute it writes, `data-theme`. */
   theme: ThemeChoice;
   density: Density;
-  /** The zone in effect — the reader's choice, or the browser's. */
-  timezone: string;
-  /** Whether that zone was chosen rather than inherited. */
-  timezoneChosen: boolean;
-  dateFormat: DateFormat;
+  /** The theme in effect. */
+  palette: ThemeId;
   setTheme: (next: ThemeChoice) => void;
   setDensity: (next: Density) => void;
-  setTimezone: (next: string) => void;
-  setDateFormat: (next: DateFormat) => void;
+  setPalette: (next: ThemeId | null) => void;
 }
 
 export function useViewerPrefs(): ViewerPrefs {
   const [themeValue, applyThemeChoice] = useTheme();
   const [densityValue, applyDensityChoice] = useDensity();
-  const zoneValue = useSyncExternalStore(subscribe, zone, () => "UTC");
-  const chosen = useSyncExternalStore(subscribe, zoneIsChosen, () => false);
-  const dateValue = useSyncExternalStore(subscribe, dates, () => "auto" as DateFormat);
+  const [paletteValue, applyPaletteChoice] = usePalette();
   return {
     theme: themeValue,
     density: densityValue,
-    timezone: zoneValue,
-    timezoneChosen: chosen,
-    dateFormat: dateValue,
+    palette: paletteValue,
     setTheme: applyThemeChoice,
     setDensity: applyDensityChoice,
-    setTimezone: useCallback(setZone, []),
-    setDateFormat: useCallback(setDateFormat, []),
+    setPalette: applyPaletteChoice,
   };
+}
+
+/** Read every stored preference again: another tab wrote, or a test did. */
+function reread(): void {
+  theme = read(THEME_KEY, "system", THEMES) as ThemeChoice;
+  density = read(DENSITY_KEY, "normal", DENSITIES) as Density;
+  chosenPalette = readPalette();
+  palette = chosenPalette ?? systemPalette();
+}
+
+let watching = false;
+
+/**
+ * Follow what changes outside this tab: another tab of this browser writing a
+ * preference, so two tabs never disagree about the theme, and the machine's
+ * contrast setting while the reader has chosen no theme. Once per page.
+ */
+function watch(): void {
+  if (watching) return;
+  watching = true;
+  window.addEventListener("storage", (event) => {
+    // A null key is a storage cleared whole, which took every choice with it.
+    if (
+      event.key !== null &&
+      event.key !== THEME_KEY &&
+      event.key !== DENSITY_KEY &&
+      event.key !== PALETTE_KEY
+    ) {
+      return;
+    }
+    reread();
+    applyTheme(theme);
+    applyDensity(density);
+    paintPalette();
+    announce();
+  });
+  try {
+    window.matchMedia(MORE_CONTRAST).addEventListener("change", () => {
+      if (chosenPalette !== null) return;
+      palette = systemPalette();
+      paintPalette();
+      announce();
+    });
+  } catch {
+    /* a platform with no media queries has no contrast setting to follow */
+  }
 }
 
 /** Apply the stored preferences before React mounts, so there is no flash. */
 export function bootTheme(): void {
   applyTheme(theme);
   applyDensity(density);
+  paintPalette();
+  watch();
 }
 
 /** Test seam: re-read storage after a test has written to it. */
 export function reloadForTest(): void {
-  theme = read(THEME_KEY, "system", THEMES) as ThemeChoice;
-  density = read(DENSITY_KEY, "normal", DENSITIES) as Density;
-  dateFormat = read(DATE_KEY, "auto", DATE_FORMATS) as DateFormat;
-  timezone = readZone();
+  reread();
+  previewing = null;
   announce();
 }

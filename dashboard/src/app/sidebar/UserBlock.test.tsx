@@ -5,9 +5,9 @@
  * THREE STATES, ONE OF THEM A PERSON, each a sentence rather than a blank
  * avatar — because "who does the engine think I am" is the question every
  * write this dashboard makes turns on — and the grants beside it, because
- * they decide which of those writes the reader reaches. And the zone and the
- * date format had no control anywhere before this block: `lib/prefs.ts` kept
- * both and nothing could set them.
+ * they decide which of those writes the reader reaches. The preferences are
+ * the mode, the density and the theme; the zone and the date's shape are the
+ * browser's.
  *
  * The session's own gestures were the page bar's identity menu, and they
  * keep its invariants here: a sign-out ends in a RELOAD at the sign-in —
@@ -18,22 +18,22 @@
  * answers for is still offered its sign-outs.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { themeRegistry } from "@crewlethq/tokens";
+import { HIGHLIGHT_REST_MS, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import {
   AccountActions,
   Preferences,
   UserBlock,
   accountOf,
-  supportedZones,
   whoLine,
   type Account,
 } from "./UserBlock.tsx";
 import { Router } from "~/app/router.tsx";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
-import { dates, reloadForTest, zone, zoneIsChosen } from "~/lib/prefs.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
 import { currentReader, noteReader } from "~/lib/reader.ts";
 import { recentsKey } from "~/lib/recents.ts";
 import { page } from "~/lib/session.ts";
@@ -149,23 +149,41 @@ afterEach(() => {
   reloadForTest();
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-density");
+  document.documentElement.removeAttribute("data-palette");
   location.hash = "#/";
 });
 
 describe("who the block says this is", () => {
-  test("a bound person is their name, with their login and seat and never a bare handle", () => {
+  test("a bound person is their name, with their login and their seat's role and never a bare handle", () => {
     expect(whoLine(ada, "Founder")).toEqual({
       name: "Ada Lovelace",
-      detail: "ada.lovelace · Founder · human seat",
+      detail: "ada.lovelace · Founder",
       grants: "Holds state:read, work:write",
     });
-    // A seat whose name IS the person's says so once.
-    expect(whoLine(ada, "Ada Lovelace").detail).toBe("ada.lovelace · human seat");
+    // A seat whose name IS the person's adds nothing to the login, and a
+    // person is never captioned "human seat", which says what the block
+    // already shows.
+    expect(whoLine(ada, "Ada Lovelace").detail).toBe("ada.lovelace");
     expect(whoLine(ada, "Founder").detail).not.toContain("@");
+    // Nor is the seat's kind captioned at all: every binding is to a human
+    // seat, and a viewer on any other is refused before it answers.
+    expect(whoLine({ ...ada, kind: "agent" }, "Release Bot").detail).toBe(
+      "ada.lovelace · Release Bot",
+    );
   });
 
-  // UNBOUND IS AN ORDINARY STATE — an operator outside the chart, a pipeline —
-  // so it is said as a fact under the login the engine records them as.
+  // THE SECOND LINE IS THE LOGIN, and nothing beside it where the seat has no
+  // role to add. Mutation: caption a person "human seat" and this goes red.
+  test("a person with no role to show draws their login alone under their name", () => {
+    render(block(ada, "Ada Lovelace"));
+    const who = screen.getByRole("link", { name: /Ada Lovelace/ });
+    expect(who.querySelector(".user-block-detail")?.textContent).toBe("ada.lovelace");
+    expect(who.textContent).not.toContain("human seat");
+  });
+
+  // UNBOUND IS AN ORDINARY STATE — a Tier A token's session, a service
+  // account — so it is said as a fact under the login the engine records them
+  // as.
   test("an unbound principal is its login, and says it holds no seat", () => {
     const r = whoLine({ ...nobody, login: "token:ops", unbound: true, grants: [] }, "");
     expect(r).toEqual({
@@ -535,15 +553,15 @@ describe("the preferences", () => {
     render(<Preferences />);
   }
 
-  // THE THEME IS THREE CHOICES, and the third is what makes the popover the
+  // THE MODE IS THREE CHOICES, and the third is what makes the popover the
   // place to set it: the one-press flip beside the name can only say light or
   // dark, and "follow the system" is a choice a reader has to be able to get
   // back to. Each choice is read back from `lib/prefs.ts` and from the root
-  // attribute the stylesheet keys on — and "system" REMOVES the attribute, so
+  // attribute the stylesheet keys on, and "system" REMOVES the attribute, so
   // the media query decides and keeps deciding when the OS setting changes.
-  test("the theme is light, dark or the system's, and each is kept", () => {
+  test("the mode is light, dark or the system's, and each is kept", () => {
     open();
-    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    const theme = screen.getByRole("radiogroup", { name: "Mode" });
     const pick = (name: string) => fireEvent.click(within(theme).getByRole("radio", { name }));
 
     pick("Dark");
@@ -575,38 +593,83 @@ describe("the preferences", () => {
     expect(localStorage.getItem(STORAGE_KEYS.density)).toBe("normal");
   });
 
-  // THE ZONE AND THE DATE FORMAT HAD NO CONTROL. Both were read by every
-  // timestamp in the product, and a reader could set neither.
-  test("the date format is a control, and it writes the preference", async () => {
+  // THE ZONE AND THE DATE'S SHAPE ARE THE BROWSER'S, so the panel offers
+  // neither: a control here would be a setting nothing reads.
+  test("offers no time zone and no date format", () => {
     open();
-    fireEvent.click(screen.getByRole("combobox", { name: "Dates" }));
-    // The kit's listbox commits on the press, as a native select does.
-    fireEvent.mouseDown(await screen.findByRole("option", { name: "2026-09-22" }));
-    await waitFor(() => expect(dates()).toBe("iso"));
+    expect(screen.queryByText("Time zone")).toBeNull();
+    expect(screen.queryByText("Dates")).toBeNull();
+    // The one list here is the theme's.
+    expect(screen.getAllByRole("combobox").map((box) => box.getAttribute("aria-label"))).toEqual([
+      "Theme",
+    ]);
   });
 
-  test("the zone is a control, empty is the browser's, and a choice is kept", async () => {
+  // THE ROWS ARE MODE, DENSITY, THEME, in that order, and the two switchers
+  // draw one box: the same width, three equal cells each.
+  test("the mode, the density and the theme are one column of one width", () => {
     open();
-    expect(zoneIsChosen()).toBe(false);
-    // A SEARCHABLE select: the trigger is a button, and the field inside the
-    // list is the combobox.
-    fireEvent.click(screen.getByRole("button", { name: "Time zone" }));
-    fireEvent.change(await screen.findByPlaceholderText("Find a zone"), {
-      target: { value: "UTC" },
-    });
-    const utc = await screen.findAllByRole("option", { name: "UTC" });
-    fireEvent.mouseDown(utc[0]!);
-    await waitFor(() => expect(zone()).toBe("UTC"));
-    expect(zoneIsChosen()).toBe(true);
+    const rows = [...document.querySelectorAll(".preferences-row")].map(
+      (row) => row.querySelector(".t-label")?.textContent,
+    );
+    expect(rows).toEqual(["Mode", "Density", "Theme"]);
+    for (const name of ["Mode", "Density"]) {
+      const group = screen.getByRole("radiogroup", { name });
+      expect(group.classList.contains("crewlet-segmented--fill"), name).toBe(true);
+      expect(group.parentElement?.className, name).toBe("preferences-switch");
+    }
+    // The theme's field sits in the same box, so the three draw one width.
+    const theme = screen.getByRole("combobox", { name: "Theme" });
+    expect(theme.closest(".preferences-switch")).toBeTruthy();
   });
 
-  test("every zone offered is one this runtime can format in, UTC among them", () => {
-    const zones = supportedZones();
-    expect(zones.length).toBeGreaterThan(0);
-    // The runtime's canonical list omits it; the reader reading logs wants it.
-    expect(zones).toContain("UTC");
-    for (const z of zones.slice(0, 50)) {
-      expect(() => new Intl.DateTimeFormat("en", { timeZone: z }), z).not.toThrow();
+  test("the theme lists every theme under its group, applies the pick and keeps it", () => {
+    render(
+      <ToastProvider>
+        <Preferences />
+      </ToastProvider>,
+    );
+    const field = screen.getByRole("combobox", { name: "Theme" });
+    expect(field.textContent).toContain("Crewlet");
+    fireEvent.click(field);
+    const list = screen.getByRole("listbox", { name: "Theme" });
+    const names = within(list)
+      .getAllByRole("option")
+      .map((option) => option.querySelector(".crewlet-select__option-label")?.textContent);
+    expect(names).toEqual(themeRegistry.map((theme) => theme.name));
+    expect(within(list).getByRole("group", { name: "Purple" })).toBeTruthy();
+    fireEvent.mouseDown(within(list).getByRole("option", { name: /Abyss/ }));
+    expect(document.documentElement.getAttribute("data-palette")).toBe("abyss");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBe("abyss");
+    expect(screen.getByRole("combobox", { name: "Theme" }).textContent).toContain("Abyss");
+    // Said, with the way back, and the way back is the choice before.
+    const undo = screen.getByRole("button", { name: "Undo" });
+    // Drawn, and announced in the toaster's live region as well.
+    expect(screen.getAllByText("Theme set to Abyss").length).toBeGreaterThan(0);
+    fireEvent.click(undo);
+    expect(document.documentElement.hasAttribute("data-palette")).toBe(false);
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+  });
+
+  // A PREVIEW IS THE LIST'S, NEVER STORAGE'S: the frame takes the theme the
+  // highlight rests on, and the list closing puts back the one in effect.
+  test("the highlight previews the theme across the frame, and Escape puts back the one in effect", () => {
+    vi.useFakeTimers();
+    try {
+      open();
+      const field = screen.getByRole("combobox", { name: "Theme" });
+      fireEvent.click(field);
+      fireEvent.keyDown(field, { key: "ArrowDown" });
+      expect(document.documentElement.getAttribute("data-palette")).toBe("violet");
+      expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+      fireEvent.mouseEnter(screen.getByRole("option", { name: /Ledger/ }));
+      act(() => vi.advanceTimersByTime(HIGHLIGHT_REST_MS));
+      expect(document.documentElement.getAttribute("data-palette")).toBe("ledger");
+      fireEvent.keyDown(field, { key: "Escape" });
+      expect(document.documentElement.hasAttribute("data-palette")).toBe(false);
+      expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -31,7 +31,7 @@
  * has happened, ordered by the log rather than by anything the rows sort on.
  * FILES is what the work produced and keeps beside it.
  *
- * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
+ * A LENS IS A SECTION, so each pushes history: a reader who walked Tasks →
  * About → History and pressed Back three times walks out through them.
  *
  * # What a person can change here
@@ -46,7 +46,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
-import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
+import { PageActions, PageLenses, lensLabel } from "~/app/frame/PageActions.tsx";
+import { LENS_LABELS, PROJECT_LENSES, type ProjectLens } from "~/app/scope.ts";
+import { projectArchivedKey } from "~/app/crumbs.ts";
 import { EditProjectButton } from "~/components/writes.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -61,7 +63,6 @@ import { Coverage, type RowChrome } from "~/components/work.tsx";
 import {
   Callout,
   Card,
-  Count,
   EmptyState,
   EmptyValue,
   Skeleton,
@@ -102,9 +103,6 @@ import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
-/** The lenses, in the order the strip draws them; the first is the default. */
-const LENSES = ["items", "about", "history", "files"] as const;
-
 /**
  * The region the lenses control. The row is on the page bar and the panel is
  * in the page, so they are tied by id — a screen reader moves from a lens to
@@ -115,7 +113,7 @@ const LENS_PANEL = "project-lens";
 export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const [lens, setLens] = useTab("lens", LENSES);
+  const [lens, setLens] = useTab("lens", PROJECT_LENSES);
   // THE TRASH IS THE ONE THING THE MAINTAINED COUNTS CANNOT SEE: a removed
   // task leaves them (`internal/tracker/projectsread.go`), so a project whose
   // every item was removed counts zero while `removed=true` has rows to draw.
@@ -134,7 +132,15 @@ export function Project({ projectKey }: { projectKey: string }) {
   // THE NAME THE HEADER DRAWS IS THE NAME THE TRAIL GETS, and it is one
   // string: a screen that resolved it twice would offer the palette a word the
   // page never showed.
-  usePageLabels(detail?.name ? { [projectKey]: detail.name } : {});
+  usePageLabels(
+    detail?.name
+      ? {
+          [projectKey]: detail.name,
+          // AN ARCHIVED PROJECT SAYS SO IN ITS TRAIL, where its name is.
+          ...(detail.archived ? { [projectArchivedKey(projectKey)]: "archived" } : {}),
+        }
+      : {},
+  );
   usePageCoverage(detail);
   // EDIT PROJECT, AS THE BAR'S "MORE" OFFERS IT ON A PHONE: the same dialog
   // the inline button opens, disabled with the same sentence when this reader
@@ -164,12 +170,14 @@ export function Project({ projectKey }: { projectKey: string }) {
     <>
       {detail && (
         <PageLenses>
+          {/* THE CHIPS ALL PROJECTS' LENSES WEAR (`header/PageHeader.tsx`),
+              so the bar reads one way in either scope. */}
           <Tabs
-            size="sm"
+            variant="chip"
             ariaLabel="Lens"
             panelId={LENS_PANEL}
             value={lens}
-            onValueChange={(value) => setLens(value as (typeof LENSES)[number])}
+            onValueChange={(value) => setLens(value as ProjectLens)}
             items={[
               // THE COUNT IS ON THE LENS A READER IS CHOOSING BETWEEN, from
               // the project's own maintained census — no new read, and it
@@ -186,19 +194,14 @@ export function Project({ projectKey }: { projectKey: string }) {
               // read as a contradiction. The kit's Count carries the noun
               // for a screen reader; the title carries it for a pointer.
               {
-                value: "items",
-                label: (
-                  <span className="lens-count" title={`${unfinished(detail.task_counts)} open`}>
-                    Items
-                    <Count value={unfinished(detail.task_counts)} label="open" />
-                  </span>
-                ),
+                value: "tasks",
+                label: lensLabel(LENS_LABELS.tasks, unfinished(detail.task_counts), "open"),
               },
-              { value: "about", label: "About" },
-              { value: "history", label: "History" },
+              { value: "about", label: LENS_LABELS.about },
+              { value: "history", label: LENS_LABELS.history },
               // FILES IS A COLLECTION, but a paged one, so it takes no count
               // for History's reason.
-              { value: "files", label: "Files" },
+              { value: "files", label: LENS_LABELS.files },
             ]}
           />
         </PageLenses>
@@ -236,7 +239,7 @@ export function Project({ projectKey }: { projectKey: string }) {
                 narrowing — and it REPLACES the list, because a toolbar of
                 filters over nothing is a set of controls with nothing to
                 control. */}
-            {lens === "items" &&
+            {lens === "tasks" &&
               (nothingFiled ? (
                 <NothingFiled detail={detail} />
               ) : (
@@ -453,7 +456,9 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   </div>
                 );
               })}
-              <a className="t-link" href={href(["work", "history"], { project: detail.key })}>
+              {/* THIS PROJECT'S OWN HISTORY LENS: the company's log no longer
+                  narrows to one project, because that is what this lens is. */}
+              <a className="t-link" href={href(["work", detail.key], { lens: "history" })}>
                 Every change →
               </a>
             </div>
@@ -586,7 +591,7 @@ function ProjectHead({
           THE RAIL SAYS SO IN WORDS AND THE PAGE DOES NOT, which is the one
           place the two frames differ and the reason is structural: on the
           page this header is the About lens, whose lede already ends "Nothing
-          has been filed in it yet" ([projectLede]) and whose Items lens
+          has been filed in it yet" ([projectLede]) and whose Tasks lens
           draws [NothingFiled] — saying it a third time in one viewport is
           noise. The rail has neither to carry the sentence. */}
       {filed(detail.task_counts) > 0 ? (
@@ -681,7 +686,7 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
       size="compact"
       icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      description="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the directory is what this company actually has."
+      description="A project key is declared by a team, or a seat above every team, in the company configuration, and none has declared this one. Renaming a team moves no key it declares. Projects, in Work, lists what this company actually has."
     />
   );
 }

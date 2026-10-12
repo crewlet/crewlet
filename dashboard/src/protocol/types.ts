@@ -3215,6 +3215,16 @@ export interface PageSummary {
    *  show (its status and skill narrowing applied), so a tree draws an
    *  expander only where one opens onto something. Absent means none. */
   children?: number;
+  /** A page with nothing written in it: its body is empty. Derived by the
+   *  engine on every read and never stored, so it cannot disagree with the
+   *  page. */
+  folder?: boolean;
+  /** The last change to what the page SAYS (its create, a save or a rename),
+   *  which `updated_at` is not: a label, a watch or a move moves that. Who
+   *  made it is named as `author` is: a seat's handle for a person or an
+   *  agent, a credential's login for one bound to no seat. */
+  saved_by?: string;
+  saved_at?: string;
 }
 
 export interface PagesAnswer {
@@ -3278,7 +3288,12 @@ export interface PageRevision {
 export interface Page extends PageSummary {
   body?: string;
   watchers?: string[];
+  /** Who stopped following the page. A watch is a seat in `watchers` that is
+   *  not here: an unwatch keeps the seat in `watchers` and mutes it, so a
+   *  later mention does not re-subscribe them silently. */
+  muted?: string[];
   created_at?: string;
+  trashed_at?: string;
 }
 
 /** One change to a page, from the wiki's own history table. */
@@ -3339,6 +3354,8 @@ export interface PageDetail {
    *  wrote. */
   skill: boolean;
   onboarding: boolean;
+  /** The page's body is empty: a folder, a page that only groups pages. */
+  folder?: boolean;
   /** For a tool-skill page: the seats it reached as a skill over thirty
    *  company days, most recent first. Absent on any other page. */
   skill_loaded_by?: SkillLoad[];

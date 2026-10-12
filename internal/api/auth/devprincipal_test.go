@@ -91,9 +91,12 @@ func TestDevPrincipalIsRefusedByAReleasedBinary(t *testing.T) {
 	}
 	// AND THE PREDICATE FAILS CLOSED, which is the half that protects a
 	// release: anything it does not positively recognise as a development
-	// build is treated as one somebody could be running.
+	// build is treated as one somebody could be running — the image every
+	// push to main publishes included (`main-` and twelve hex digits of the
+	// commit, main-image.yml), which is not a tag but is pulled and run.
 	for _, released := range []string{
 		"v1.2.3", "v0.1.0", "v0.0.0-20260101120000-abcdef123456",
+		"main-0123456789ab",
 		"1.2.3", "", "unknown", "(development)",
 	} {
 		if version.IsDevelopmentFor(released) {

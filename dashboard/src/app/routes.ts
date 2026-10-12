@@ -105,8 +105,8 @@ export type FramedScreen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
-  | { screen: "work" }
   | { screen: "work-projects" }
+  | { screen: "work-tasks" }
   | { screen: "work-views"; id?: string }
   | { screen: "work-history" }
   | { screen: "work-search" }
@@ -129,6 +129,7 @@ export type FramedScreen =
   | { screen: "knowledge" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
+  | { screen: "new-page" }
   | { screen: "skills" }
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
@@ -145,7 +146,8 @@ export type FramedScreen =
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
   | { screen: "audit" }
-  | { screen: "account" };
+  | { screen: "account" }
+  | { screen: "appearance" };
 
 /** Every screen the dashboard draws. */
 export type Screen = FramedScreen | SignInScreen;
@@ -267,7 +269,9 @@ type Under = (label: string) => string;
 
 function work(rest: string[], screen: Make, under: Under): Route {
   const [first, second] = rest;
-  if (first === undefined) return screen({ screen: "work" });
+  // WORK OPENS ON ITS PROJECTS: the landing is All projects' first lens, and
+  // the company's task list is the lens beside it.
+  if (first === undefined) return screen({ screen: "work-projects" });
   if (first === "views") {
     if (rest.length > 2) return missing("work", under("Work"));
     return screen(second ? { screen: "work-views", id: second } : { screen: "work-views" });
@@ -275,15 +279,11 @@ function work(rest: string[], screen: Make, under: Under): Route {
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
   // its own route, and a change is a record on the item it changed.
-  if (first === "projects" || first === "history" || first === "search") {
+  if (first === "tasks" || first === "history" || first === "search") {
     if (rest.length > 1) return missing("work", under("Work"));
     return screen({
       screen:
-        first === "projects"
-          ? "work-projects"
-          : first === "history"
-            ? "work-history"
-            : "work-search",
+        first === "tasks" ? "work-tasks" : first === "history" ? "work-history" : "work-search",
     });
   }
   if (rest.length > 1) return missing("work", under("Work"));
@@ -382,6 +382,9 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
     }
     return screen({ screen: "page", id });
   }
+  // A NEW PAGE, written in the composer. Where it is filed rides the query
+  // (`?space=…&parent=…`), because the composer lets the writer change it.
+  if (first === "new" && tail.length === 0) return screen({ screen: "new-page" });
   // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
   if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
   // EVERY AGENT'S DIARY, and one agent's, by its handle — which lives here as
@@ -458,6 +461,8 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     case "audit":
       // NO TAIL: every row has a page of its own somewhere else.
       return tail.length ? none() : screen({ screen: "audit" });
+    case "appearance":
+      return tail.length ? none() : screen({ screen: "appearance" });
     default:
       return none();
   }

@@ -2503,7 +2503,9 @@ var ACTIONS = {
 			"title",
 			"body",
 			"container",
-			"parent"
+			"parent",
+			"labels",
+			"status"
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],
@@ -2514,7 +2516,8 @@ var ACTIONS = {
 			"page",
 			"base_version",
 			"body",
-			"message"
+			"message",
+			"watch"
 		],
 		domain: "pages",
 		refreshes: ["knowledge"],

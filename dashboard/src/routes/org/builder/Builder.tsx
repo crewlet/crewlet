@@ -81,6 +81,7 @@ import {
   type BuilderApi,
   type BuilderViewHandle,
   type ChartKind,
+  type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
 import { allSeats, allUnits, handleOf, locate, unitIdOf, type Draft } from "./model/draft.ts";
@@ -192,6 +193,7 @@ export interface NodeDialogProps {
 /** What the node editor is given: a dialog about one node, opened at a part of it. */
 export interface EditorDialogProps extends NodeDialogProps {
   section?: EditorSectionName;
+  preset?: EditorPreset;
 }
 
 /** What the Add dialog is given. */
@@ -247,13 +249,17 @@ export interface BuilderSurfaces {
   add: ComponentType<AddDialogProps>;
   move: ComponentType<NodeDialogProps>;
   remove: ComponentType<NodeDialogProps>;
-  changeKind: ComponentType<NodeDialogProps>;
 }
 
 /** A dialog the builder is asked to open. */
 type DialogRequest =
-  | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
-  | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
+  | {
+      readonly type: "editor";
+      readonly key: NodeKey;
+      readonly section?: EditorSectionName;
+      readonly preset?: EditorPreset;
+    }
+  | { readonly type: "move" | "remove"; readonly key: NodeKey }
   | { readonly type: "add"; readonly parent: NodeKey | null; readonly kind?: AddKind }
   | { readonly type: "discard" };
 
@@ -519,6 +525,12 @@ interface Arrival {
   readonly unit: string;
   readonly seat: string;
   readonly add: string;
+  /**
+   * A tracker project key for the node, from Work's New project: its editor
+   * opens on the Project field holding the key, not yet applied. Taken out of
+   * the address once answered, as `add=` is, so a reload asks nothing twice.
+   */
+  readonly project: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +678,7 @@ function BuilderScreen({
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
+  const [projectParam] = useParam("project", "", "filter");
   const viewPanel = useId();
   const chartPanel = useId();
 
@@ -1135,7 +1148,7 @@ function BuilderScreen({
   // reader moves the selection before the builder could answer it.
   const arrival = useRef<Arrival | null>(
     unitParam !== "" || seatParam !== "" || addParam !== ""
-      ? { unit: unitParam, seat: seatParam, add: addParam }
+      ? { unit: unitParam, seat: seatParam, add: addParam, project: projectParam }
       : null,
   );
   useEffect(() => {
@@ -1159,8 +1172,14 @@ function BuilderScreen({
       openDialog({ type: "add", parent, kind });
       return;
     }
+    if (asked.project !== "") nav.filter({ project: null });
     const key = keyOfParams(state, { unit: asked.unit, seat: asked.seat });
-    if (key !== null) openDialog({ type: "editor", key });
+    if (key === null) return;
+    openDialog(
+      asked.project !== ""
+        ? { type: "editor", key, section: "project", preset: { project: asked.project } }
+        : { type: "editor", key },
+    );
   }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
 
   const exitFullscreen = useFullscreenExit();
@@ -1406,7 +1425,6 @@ function BuilderScreen({
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
-      openChangeKind: (key) => openIfWritable({ type: "changeKind", key }),
       announce,
       focusNode,
       readOnly,
@@ -2236,6 +2254,7 @@ function DialogHost({
           key={dialog.opening}
           nodeKey={follow(dialog.key)}
           section={dialog.section}
+          preset={dialog.preset}
           onClose={onClose}
         />
       );

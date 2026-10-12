@@ -90,9 +90,9 @@ export type WriteAccess =
 export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
   refused:
     "The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold.",
-  offline: "Offline — reconnect to make changes. Nothing is queued while you are away.",
+  offline: "Offline. Reconnect to make changes; nothing is queued while you are away.",
   loading: "Checking who you are before anything can be changed.",
-  anonymous: "Sign in to make changes — every change is recorded under your name.",
+  anonymous: "Sign in to make changes: every change is recorded under your name.",
   not_served: "This engine does not make this change for you.",
 };
 

@@ -22,11 +22,9 @@
  *
  * # Every sentence is the engine's, and none prints a zero
  *
- * The status line is the health push and the engine's own seat vocabulary;
- * the day is written on the COMPANY's clock, because the company's day is the
- * one every due date and budget window is cut on; the greeting is the
- * reader's own, because it is their morning. See `model.ts` for how each
- * clause reads for none, one and many.
+ * The status line is the health push and the engine's own seat vocabulary,
+ * and the greeting is the reader's own, because it is their morning. See
+ * `model.ts` for how each clause reads for none, one and many.
  */
 
 import { useMemo } from "react";
@@ -141,7 +139,7 @@ export function Home() {
   // they cannot act on.
   const conditions =
     raised.length + (waiting ? seats.others.length : seats.mine.length + seats.others.length);
-  // WHERE THEY ARE LISTED: the Inbox's "Needs a decision" group, opened on the
+  // WHERE THEY ARE LISTED: the Inbox's "Needs you" group, opened on the
   // one condition when there is exactly one.
   const conditionsHref =
     conditions === 1 && raised.length === 1
@@ -172,7 +170,6 @@ export function Home() {
 
       <header className="home-head">
         <div className="home-head-text">
-          <span className="home-date">{companyDay(now, org?.timezone)}</span>
           <h2 className="home-greeting">{greeting(now, viewer.name || own || "")}</h2>
           <p className="home-status">
             {sentence.map((run, i) =>
@@ -239,31 +236,12 @@ export function Home() {
  * and with the first word of their name. A reader nobody named is greeted
  * without one rather than as "there" or as a token id.
  *
- * THE READER'S CLOCK IS THE ZONE THEY CHOSE (`toWall`), the same one every
- * timestamp on the page is drawn in — not the browser's, which a reader who
- * set a zone has said is not theirs.
+ * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
+ * timestamp on the page is drawn in.
  */
 export function greeting(now: number, name: string): string {
   const hour = Number(toWall(now).slice(11, 13));
   const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   const first = name.trim().split(/\s+/)[0] ?? "";
   return first ? `Good ${part}, ${first}` : `Good ${part}`;
-}
-
-/**
- * The date on the company's clock: "Tuesday, September 22". The zone is the
- * one the engine resolved (`org.timezone`); before it arrives the browser's
- * own is used, which is the same day for almost every reader and never a
- * blank line.
- */
-export function companyDay(now: number, zone: string | undefined): string {
-  const options: Intl.DateTimeFormatOptions = { weekday: "long", month: "long", day: "numeric" };
-  try {
-    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: zone || undefined }).format(
-      now,
-    );
-  } catch {
-    // A ZONE THIS RUNTIME CANNOT FORMAT IN is not a reason to lose the line.
-    return new Intl.DateTimeFormat(undefined, options).format(now);
-  }
 }

@@ -230,8 +230,6 @@ export function outsideScope(scope: string | null, draft: Draft, intent: Intent)
       return writesKeyed(intent.set, "seat") ? limit(intent.target, "key") : null;
     case "updateUnit":
       return writesKeyed(intent.set, "unit") ? limit(intent.target, "key") : null;
-    case "changeKind":
-      return intent.contact !== undefined ? limit(intent.target, "key") : null;
     // The new seat is an ADDITION carrying the old one's fields, its keys
     // included, and the engine judges every field an addition carries.
     case "replaceSeat": {

@@ -73,6 +73,9 @@ const BESIDE: Record<string, string> = {
   // toolbar is inside the SECOND, `.section-body` — so the two never overlap,
   // and an offset would park the column a toolbar's height down for nothing.
   "frame.css .section-column": "beside the section body, never under its toolbar",
+  // The node editor's tab band sticks inside the SHEET's own scroller, which
+  // is a dialog over the page: no toolbar is ever in the column it scrolls.
+  "screens.css .node-editor-tabs": "inside a sheet's own scroller, which holds no toolbar",
 };
 
 test("every other sticky band starts below it, never at zero", () => {

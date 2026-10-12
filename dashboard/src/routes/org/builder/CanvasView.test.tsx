@@ -575,7 +575,6 @@ describe("keys", () => {
     expect(within(menu).getAllByRole("menuitem").map(label)).toEqual([
       "Open seat",
       "Edit reports",
-      "Change to human seat",
       "Move to",
       "Move up",
       "Move down",
@@ -970,7 +969,6 @@ describe("menus", () => {
      */
     expect(names).toEqual([
       ["Edit reports", false],
-      ["Change to human seat", true],
       ["Move to", true],
       ["Move up", true],
       ["Move down", true],

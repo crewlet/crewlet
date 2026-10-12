@@ -22,11 +22,11 @@
  *
  * # What storage is for in this product
  *
- * Per-browser conveniences and nothing else: a theme, the stars and recents a
- * reader keeps, the width they dragged a panel to, an org draft not yet
- * saved, and which person a tab was last read by. Nothing the COMPANY agrees
- * on lives here — that is the engine's — and every reader wraps each access
- * in a try/catch, because a private window throws on the accessor and a
+ * Per-browser conveniences and nothing else: a mode and a theme, the stars and
+ * recents a reader keeps, the width they dragged a panel to, an org draft not
+ * yet saved, and which person a tab was last read by. Nothing the COMPANY
+ * agrees on lives here (that is the engine's), and every reader wraps each
+ * access in a try/catch, because a private window throws on the accessor and a
  * cleared profile answers nothing.
  *
  * AND NEVER A CREDENTIAL. The session is a cookie no script can read, and a
@@ -39,14 +39,15 @@
  */
 
 export const STORAGE_KEYS = {
-  /** Light, dark or the system's (`lib/prefs.ts`). */
+  /** The mode: light, dark or the system's (`lib/prefs.ts`). */
   theme: "crewlet_theme",
+  /**
+   * The theme, one of `themeRegistry`'s ids (`lib/prefs.ts`); anything else
+   * reads as no choice, which is the default theme.
+   */
+  palette: "crewlet_palette",
   /** Compact, normal or comfortable (`lib/prefs.ts`). */
   density: "crewlet_density",
-  /** The zone timestamps are drawn in; empty is the browser's (`lib/prefs.ts`). */
-  timezone: "crewlet_timezone",
-  /** How a date is written (`lib/prefs.ts`). */
-  dateFormat: "crewlet_date_format",
   /**
    * The PREFIX of each reader's list of objects they opened, for the palette
    * (`lib/recents.ts`): the reader's id follows it.
@@ -67,8 +68,6 @@ export const STORAGE_KEYS = {
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
-  /** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
-  knowledgeOpen: "crewlet.knowledge.open",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

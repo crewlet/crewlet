@@ -240,38 +240,31 @@ test("a refusal for want of state:read asks who this is again, and says no acces
   expect(within(panel).queryByText(/you hold state:read/)).toBeNull();
 });
 
-// THE `+` IS HELD IN A FRAME THE ENGINE SERVES NO COMPANY, saying why. It was
-// pressable for a person invited with no grants and opened the whole New task
-// sheet, its project stuck on "Reading the projects…" over a footer saying
-// "Offline — reconnect to make changes" to somebody online and refused. The
-// CONTROL is the same frame for a session holding state:read, whose `+` is
-// offered. Mutation: drop the hold and the sheet opens.
+// NO NEW TASK IS OFFERED IN A FRAME THE ENGINE SERVES NO COMPANY. The
+// sidebar's head `+` was pressable for a person invited with no grants and
+// opened the whole New task sheet, its project stuck on "Reading the
+// projects…" over a footer saying "Offline. Reconnect to make changes" to
+// somebody online and refused. The head carries no `+` now, and every other
+// door is on a screen the panel replaces. The CONTROL is the same frame for a
+// session holding state:read, whose Tasks lens offers New task in its page
+// bar. Mutation: draw the screen behind the panel and its New task is found.
 test("a session without state:read is offered no New task, and is told why", async () => {
+  location.hash = "#/work/tasks";
   grants = [];
   const { store } = await mount(null);
   await panelTitled("You have no access to the company yet");
-  const plus = sidebarPlus();
-  expect(plus.getAttribute("aria-disabled")).toBe("true");
-  expect(plus.getAttribute("title")).toMatch(/not serving you the company/);
-  fireEvent.click(plus);
-  await act(async () => {});
-  expect(screen.queryByRole("dialog", { name: /New task/ })).toBeNull();
+  expect(screen.queryAllByRole("button", { name: /^New task/ })).toEqual([]);
   // AND THE REFUSAL IS THE ONE EVERY SURFACE READS, never "offline".
   expect(store.state.accessRefused).not.toBeNull();
-  expect(screen.queryByText(/Offline — reconnect/)).toBeNull();
+  expect(screen.queryByText(/Offline\. Reconnect/)).toBeNull();
 });
 
 test("a session holding state:read is offered New task", async () => {
+  location.hash = "#/work/tasks";
   await mount(null);
-  await waitFor(() => expect(sidebarPlus()).toBeDefined());
-  expect(sidebarPlus().getAttribute("aria-disabled")).toBeNull();
+  const press = await screen.findByRole("button", { name: /^New task$/ });
+  expect(press.getAttribute("aria-disabled")).toBeNull();
 });
-
-/** The sidebar head's own `+`, beside the company's name. */
-function sidebarPlus(): HTMLElement {
-  const head = document.querySelector(".side-head") as HTMLElement;
-  return within(head).getByRole("button", { name: "New task" });
-}
 
 // A GRANT WITHDRAWN DROPS WHAT THE SOCKET SENT: the tab went on naming the
 // company and listing its agents from the snapshot it held, while a session

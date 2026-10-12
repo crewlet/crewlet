@@ -18,7 +18,7 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { reloadForTest, setZone } from "~/lib/prefs.ts";
+import { reloadForTest, pinZoneForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -390,7 +390,9 @@ describe("the figures", () => {
 });
 
 describe("the decisions", () => {
-  test("an option is answered in place, as the choice", async () => {
+  // GROUPED BY WHO IS ASKING: the asker, the item and the role are said once
+  // on the head, and each question carries its answer in place.
+  test("an ask is answered by accepting its recommendation, and says so", async () => {
     mount({
       answers: {
         decisions: {
@@ -404,25 +406,99 @@ describe("the decisions", () => {
     });
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
-    expect(card.textContent).toContain(
-      "CTO asks: Hold the 2.4 release until the scheduler migration lands?",
+    const group = card.querySelector(".decision-group") as HTMLElement;
+    expect(group.querySelector(".decision-group-who")?.textContent).toBe("CTO");
+    expect(group.querySelector(".decision-group-head")?.textContent).toContain(
+      "on LEAD-12 · you are the approver",
     );
-    expect(card.textContent).toContain("you are the approver");
-    expect(card.textContent).toContain("CTO reports to you");
-    expect(card.textContent).toContain("recommends Hold release");
+    // THE STATE ON THE ASKER'S BADGE: a question glyph, never a ring round it.
+    expect(group.querySelector(".crewlet-avatar__status--needs")).not.toBeNull();
+    expect(group.innerHTML).not.toContain("ring-");
+    expect(card.textContent).toContain("Hold the 2.4 release until the scheduler migration lands?");
+    expect(card.querySelector(".decision-rec")?.textContent).toBe("Recommended: Hold release");
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Hold release" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
     await settle();
     expect(posted).toEqual([
       { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "hold" } },
     ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe(
+      "Answered Hold release (Recommended)",
+    );
   });
 
-  // AN ASK TAKES ONE ANSWER: while one choice is in flight, the ask's other
-  // options refuse a press — with a write per button, "Ship anyway" stayed
-  // pressable and sent a second, different choice to the same ask.
-  test("while one choice is being sent, the ask's other options cannot send another", async () => {
+  test("Change opens every option, hides the recommendation line, and sends the one chosen", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    expect(card.querySelector(".decision-rec")).toBeNull();
+    const radios = within(card).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.checked)).toEqual([true, false, false]);
+    expect(within(card).getByRole("radio", { name: /Something else/ })).toBeTruthy();
+    fireEvent.click(within(card).getByRole("radio", { name: /Ship anyway/ }));
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+    });
+    await settle();
+    expect(posted).toEqual([
+      { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
+    ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe("Answered Ship anyway");
+  });
+
+  test("Something else sends a reply as the answer, and quotes it", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    fireEvent.click(within(card).getByRole("radio", { name: /Something else/ }));
+    const submit = within(card).getByRole("button", { name: "Submit" });
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(within(card).getByRole("textbox", { name: "Something else" }), {
+      target: { value: "Hold, and ship the hotfix alone." },
+    });
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+    });
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "comment_on_work_item",
+        args: { item: "LEAD-12", answers: "c-12", body: "Hold, and ship the hotfix alone." },
+      },
+    ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe(
+      "Answered “Hold, and ship the hotfix alone.”",
+    );
+  });
+
+  test("one ask's options are open at a time", async () => {
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [ask(), ask({ comment: "c-13", decision: { ...DECISION, question: "Second?" } })],
+          total: 2,
+          capped: false,
+        },
+      },
+    });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    // ONE HEAD FOR BOTH: the same asker, the same item.
+    expect(card.querySelectorAll(".decision-group")).toHaveLength(1);
+    const [first, second] = within(card).getAllByRole("button", { name: "Change" });
+    fireEvent.click(first!);
+    expect(within(card).getAllByRole("radiogroup")).toHaveLength(1);
+    fireEvent.click(second!);
+    expect(within(card).getAllByRole("radiogroup")).toHaveLength(1);
+    expect(within(card).getAllByRole("button", { name: "Change" })).toHaveLength(1);
+  });
+
+  // AN ASK TAKES ONE ANSWER: while it is in flight nothing else can send one.
+  test("while the answer is being sent, the ask cannot send another", async () => {
     let release: (r: Response) => void = () => {};
     vi.stubGlobal(
       "fetch",
@@ -436,12 +512,12 @@ describe("the decisions", () => {
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Hold release" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
-    const other = within(card).getByRole("button", { name: /Ship anyway/ });
-    expect(other.getAttribute("aria-disabled")).toBe("true");
+    const change = within(card).getByRole("button", { name: "Change" });
+    expect(change.getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
-      fireEvent.click(other);
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
     expect(posted.map((p) => p.args.choice)).toEqual(["hold"]);
     await act(async () => {
@@ -458,8 +534,7 @@ describe("the decisions", () => {
   test("the inform line appears only where the ask promised a channel", async () => {
     mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
     await settle();
-    expect(screen.getByText("CTO continues from your answer")).toBeTruthy();
-    expect(screen.queryByText(/posts it to #/)).toBeNull();
+    expect(screen.queryByText(/answer posted to #/)).toBeNull();
     cleanup();
     mount({
       answers: {
@@ -474,9 +549,7 @@ describe("the decisions", () => {
       },
     });
     await settle();
-    expect(
-      screen.getByText("CTO is woken with your answer and posts it to #releases"),
-    ).toBeTruthy();
+    expect(screen.getByText("answer posted to #releases")).toBeTruthy();
   });
 
   test("a reader nobody signed in is told why there is nothing to decide, and asked nothing", async () => {
@@ -584,7 +657,12 @@ describe("the decisions", () => {
       ],
     });
     await settle();
-    expect(screen.getByText("DevRel stopped — daily token budget exhausted")).toBeTruthy();
+    expect(screen.getByText("DevRel stopped: daily token budget exhausted")).toBeTruthy();
+    const row = screen
+      .getByText("DevRel stopped: daily token budget exhausted")
+      .closest(".decision-row") as HTMLElement;
+    expect(row.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
+    expect(row.querySelector(".decision-state")?.textContent).toBe("Stopped");
     expect(tile("Waiting on your decision").textContent).toContain("1");
     // RAISED IN PLACE: the button opens the seat's own ceilings — its day is
     // the window refusing — rather than sending the reader to find it.
@@ -635,9 +713,8 @@ describe("the decisions", () => {
     expect(link?.textContent).toMatch(/1 condition needs a look/);
   });
 
-  // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, ON ITS ROW. The row linked
-  // to the Inbox by the ask's comment id, which is not the id the Inbox opens
-  // a row by — and the pane it would have opened has nowhere to write.
+  // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, IN PLACE: Reply opens the
+  // field under the question, and Submit sends it as the answer to that ask.
   test("an ask with no options is replied to in place, as an answer to that ask", async () => {
     mount({
       answers: {
@@ -652,15 +729,12 @@ describe("the decisions", () => {
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     expect(within(card).queryByRole("link", { name: "Reply" })).toBeNull();
-    await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
-    });
-    const dialog = screen.getByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/Your reply/), {
+    fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
+    fireEvent.change(within(card).getByRole("textbox", { name: "Reply to CTO" }), {
       target: { value: "Use the one we already pay for." },
     });
     await act(async () => {
-      fireEvent.click(within(dialog).getByRole("button", { name: "Send reply" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
     });
     await settle();
     expect(posted).toEqual([
@@ -673,7 +747,8 @@ describe("the decisions", () => {
 
   // "REVIEW" LANDS ON WHAT IT COUNTED. It pointed at the Inbox filtered on a
   // notice reason no notice carries: Home said a decision was waiting, and
-  // the page it sent the reader to drew "decisions 0" and no ask at all.
+  // the page it sent the reader to drew "decisions 0" and no ask at all. The
+  // Inbox has no filter now, and its list opens with Needs you.
   test("Review and Open inbox land on an Inbox that draws the waiting decision", async () => {
     const waiting = { handle: "jane", items: [ask()], total: 1, capped: false };
     mount({ answers: { decisions: waiting } });
@@ -686,18 +761,17 @@ describe("the decisions", () => {
     location.hash = review;
     mount({ answers: { decisions: waiting }, page: <Inbox /> });
     await settle();
-    // THE DECISIONS CHIP, PRESSED, over the one decision — opened in the
-    // pane with its options to answer — and no notice group beside it.
-    expect(screen.getByRole("radio", { name: /Decisions/ }).getAttribute("aria-checked")).toBe(
-      "true",
-    );
+    // NEEDS YOU, over the one decision, opened in the pane with its options
+    // to answer, and no updates group beside it.
+    expect(review).toBe("#/inbox");
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy();
     expect(
       screen.getByRole("heading", {
         name: "Hold the 2.4 release until the scheduler migration lands?",
       }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Hold release/ })).toBeTruthy();
-    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Updates" })).toBeNull();
   });
 });
 
@@ -861,13 +935,13 @@ describe("the feed", () => {
 });
 
 describe("the head", () => {
-  test("the greeting is in the zone the reader chose", () => {
+  test("the greeting is in the zone timestamps are drawn in", () => {
     const at = Date.parse("2026-09-22T20:00:00Z");
-    setZone("Asia/Tokyo");
+    pinZoneForTest("Asia/Tokyo");
     reloadForTest();
     // 05:00 in Tokyo; 22:00 in the browser's own Berlin.
     expect(greeting(at, "Ada Lovelace")).toBe("Good morning, Ada");
-    setZone("");
+    pinZoneForTest("");
     reloadForTest();
     expect(greeting(at, "Ada Lovelace")).toBe("Good evening, Ada");
     expect(greeting(at, "")).toBe("Good evening");

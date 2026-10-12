@@ -132,9 +132,8 @@ test("a draft of a configuration that is no longer active offers to discard and 
 });
 
 // A CONFLICT IS SHOWN AS A PERSON READS IT. The builder's own structures
-// (node keys, placements, a removed node, a kind change's stripped fields)
-// were printed as JSON, which put internal keys and credential masks in a
-// table an operator decides from.
+// (node keys, placements, a removed node) were printed as JSON, which put
+// internal keys and credential masks in a table an operator decides from.
 describe("a conflict's values", () => {
   const names: Record<string, string> = {
     "seat:dev": "Dev",
@@ -193,7 +192,7 @@ describe("a conflict's values", () => {
     });
   });
 
-  test("a removed node reads as the fields that changed, and stripped fields by name only", () => {
+  test("a removed node reads as the fields that changed, never their values", () => {
     const removal = cells({
       subject: "the whole seat",
       shape: "snapshot",
@@ -202,27 +201,8 @@ describe("a conflict's values", () => {
     });
     expect(removal).toEqual({ base: "As it was", theirs: "Changed: goal", mine: "Removed" });
 
-    const stripped = cells({
-      subject: "fields the new kind removes",
-      shape: "fields",
-      base: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["project"], before: "OPS" },
-      ],
-      theirs: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["project"], before: "SUP" },
-        { path: ["email"], before: "dev@example.com" },
-      ],
-    });
-    expect(stripped).toEqual({
-      base: "mcp_env, project",
-      theirs: "mcp_env, project (changed), email (added)",
-      mine: "Removed",
-    });
-    const shown = JSON.stringify([removal, stripped]);
+    const shown = JSON.stringify(removal);
     expect(shown).not.toContain("__redacted__");
-    expect(shown).not.toContain("OPS");
 
     expect(
       cells({

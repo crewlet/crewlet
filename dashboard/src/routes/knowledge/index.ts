@@ -1,8 +1,9 @@
-/** The Knowledge workspace's chunk: its screens, its peeks and its tree column. See `app/lazyScreen.ts`. */
+/** The Knowledge workspace's chunk: its screens and its peeks. See `app/lazyScreen.ts`. */
 
-export { ContainerPeek, Knowledge } from "./Knowledge.tsx";
+export { Composer } from "./Composer.tsx";
 export { Diaries, Diary } from "./Diaries.tsx";
-export { KnowledgeTree } from "./KnowledgeTree.tsx";
-export { PagePeek, Pages } from "./Pages.tsx";
+export { Knowledge } from "./Knowledge.tsx";
+export { Pages } from "./Pages.tsx";
 export { PageView } from "./page/PageView.tsx";
+export { ContainerPeek, PagePeek } from "./peeks.tsx";
 export { Skills } from "./Skills.tsx";

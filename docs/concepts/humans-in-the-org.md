@@ -484,29 +484,29 @@ seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 screen (Home), is the queue of the principal the request resolved to — a person
 signed in with a session, or a token the identity directory binds — read under
 that principal's own record name (`iam.RecordOwner`): the seat they hold, or a
-credential's own login when the directory binds it to none. First comes what is waiting
-on their decision — the questions agents put to them, the coding runs parked on
-a question to them, a seat stopped on its budget — then their notices by the
-company's day, each with the one reason of eighteen that routed it, and the row
-they open fills the pane beside the list with the answer to it right there.
+credential's own login when the directory binds it to none. First comes
+**Needs you** — the questions agents put to them, the coding runs parked on a
+question to them, a seat stopped on its budget, the conditions a person
+decides — then **Updates**, what reached them and is not read yet, and the
+item they open is read in full beside the list with the answer to it right
+there.
 Nothing on the screen names whose queue to read: there is no way to ask for
 somebody else's from it, and a lead reading a report's queue does so by name,
 decided by the [authority table](identity-and-access.md#the-authority-table-one-function-decides).
 `#/me` is the same principal's own work.
 
 **Answering an agent's decision.** When an agent asks you to choose, the
-question arrives with its options, the one it recommends and why, and the
-evidence it cites. Each option is a card; pressing one sends it as your
-answer, and "Reply with instructions" answers in your own words instead. The
-pane tells you what happens next: *"&lt;asker&gt; is
-woken with your answer and posts it to #&lt;channel&gt;"* when the agent
-promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
-your answer"* when it did not. The first is enforced, not hoped for: the
-agent's turn is held open until it has posted on that chat surface. It is also
-why **your own** asks cannot carry that promise — the engine keeps it by
-holding the asker's turn, and a person has none, so an ask you put through the
-dashboard or your assistant with an `inform` is refused; post the outcome
-yourself.
+question arrives in your Inbox with its options, the one it recommends and
+why, and the evidence it cites. Each option is a button, the recommended one
+first; one press sends it as your answer, and **Something else** answers in
+your own words instead. The agent is woken with your answer either way. Where
+it promised to report the outcome in a channel, the line under the answer says
+*"Your answer is also posted to #&lt;channel&gt;"*, and that is enforced, not
+hoped for: the agent's turn is held open until it has posted on that chat
+surface. It is also why **your own** asks cannot carry that promise. The
+engine keeps it by holding the asker's turn, and a person has none, so an ask
+you put through the dashboard or your assistant with an `inform` is refused;
+post the outcome yourself.
 
 ---
 

@@ -1351,7 +1351,7 @@
       ]
     }
   },
-  "$id": "https://docs.crewlet.ai/schema/bootstrap.schema.json",
+  "$id": "https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "allOf": [

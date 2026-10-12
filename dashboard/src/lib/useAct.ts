@@ -12,10 +12,10 @@
  * WHAT EACH OUTCOME TELLS A PERSON:
  *
  *  - `applied` — a toast naming what changed, which goes by itself;
- *  - `pending` — "Sent — this node has not applied it yet", because the
+ *  - `pending`: "Sent. This node has not applied it yet", because the
  *    reads that follow wait for it and a person watching a spinner deserves
  *    to know why;
- *  - `unknown` — a toast that STAYS: "Could not confirm — it may have
+ *  - `unknown`: a toast that STAYS: "Could not confirm. It may have
  *    landed", with a Retry that sends the SAME operation key, which the engine
  *    scopes to the person and takes as the write's identity, so a retry is
  *    the first attempt again rather than a second change. Never retried on
@@ -104,10 +104,10 @@ export interface Act<T extends ActionTool> {
 }
 
 /** The sentence a pending answer is shown as. */
-export const PENDING_SENTENCE = "Sent — this node has not applied it yet.";
+export const PENDING_SENTENCE = "Sent. This node has not applied it yet.";
 
 /** The title an unknown answer is shown under. */
-export const UNKNOWN_TITLE = "Could not confirm — it may have landed";
+export const UNKNOWN_TITLE = "Could not confirm. It may have landed";
 
 /**
  * One press: what was sent, under which operation key, and what it is called.

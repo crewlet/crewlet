@@ -40,6 +40,8 @@ import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
+import { pick } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -1300,6 +1302,47 @@ test("a comment is posted on the task", async () => {
   ]);
 });
 
+// A REPLY SENT CLOSES ITS TARGET. The "Replying to" banner stayed over the
+// field after the reply was posted, offering to cancel a reply already sent:
+// the page's callback was one the composer only called from an answer mode
+// this page never used.
+test("a reply sent closes the banner that said who it answers", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: {
+        item: "t-1",
+        key: "ENG-42",
+        title: "Fix the login race",
+        comments: [
+          {
+            id: "c-9",
+            task: "t-1",
+            author: "ada",
+            author_kind: "agent",
+            body: "Is the port flapping?",
+            created_at: "2031-04-12T09:00:00Z",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  expect(screen.getByText(/^Replying to/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: /^Reply to/ }), {
+    target: { value: "Yes, every 20s." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Send$/ }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "comment_on_work_item",
+      args: { item: "ENG-42", body: "Yes, every 20s.", reply_to: "c-9" },
+    },
+  ]);
+  expect(screen.queryByText(/^Replying to/)).toBeNull();
+});
+
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
 // sliced to 200 characters — not even the engine's figure, which is 300 bytes —
 // so a long opening line arrived as half a sentence nobody wrote. Past the cap
@@ -1321,7 +1364,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   }) as HTMLInputElement;
   expect(question.value).toBe(opening);
   expect(document.body.textContent).toContain(
-    `${opening.length} bytes — a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
+    `${opening.length} bytes, but a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
   );
 });
 
@@ -1596,4 +1639,155 @@ test("a task removed alongside its parent names the parent", () => {
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// A task whose key another task claimed first
+// ---------------------------------------------------------------------------
+
+/**
+ * The duplicate of a pair holding one key, as its own page reads it: opened at
+ * its id, flagged `key_collision` on the answer, and drawn under the key.
+ */
+const duplicate = () =>
+  detail({
+    task: task({
+      id: DUPLICATE,
+      key: SHARED_KEY,
+      title: DUPLICATE_TITLE,
+      assignee: "ada",
+      checklists: [
+        {
+          id: "l-1",
+          name: "Done when",
+          items: [{ id: "i-2", name: "An integration test covers it" }],
+        },
+      ],
+    }),
+    key_collision: true,
+  });
+
+// A DUPLICATE'S PAGE CHANGES THE DUPLICATE. Two tasks hold `ENG-7`, and the
+// engine opens that key on the one that claimed it first. The page is opened
+// at the duplicate's id and draws the duplicate, but every write on it went by
+// the key: a tick, a watch, a comment and a hand-off landed on the claimant, a
+// conditional edit was refused against the claimant's version, and the turns
+// it listed were the claimant's. The KEY is still what every sentence says.
+test("a duplicate's page writes and reads by its id, and names it by its key", async () => {
+  mount(<WorkItemPage id={DUPLICATE} />, { answers: { work_item: duplicate() } });
+  await settle();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "An integration test covers it" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "In review" })
+      .catch(() => screen.findByRole("menuitem", { name: "In review" })),
+  );
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: `Comment on ${SHARED_KEY}` }), {
+    target: { value: "Seen on the duplicate." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain(`Assign ${SHARED_KEY}`);
+  pick(within(dialog).getByLabelText("Assignee"), /^SWE/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Assign" }));
+  await settle();
+
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: DUPLICATE, checklist: { op: "set_done", item: "i-2", done: true } },
+    },
+    { tool: "update_work_item", args: { item: DUPLICATE, watch: true } },
+    { tool: "update_work_item", args: { item: DUPLICATE, if_match: 7, status: "in_review" } },
+    { tool: "comment_on_work_item", args: { item: DUPLICATE, body: "Seen on the duplicate." } },
+    { tool: "update_work_item", args: { item: DUPLICATE, assignee: "swe", if_match: 7 } },
+  ]);
+  // AND ITS TURNS ARE ITS OWN, asked by the id the way its history and its
+  // comments are.
+  const turns = asked.filter((q) => q.kind === "work_item_turns").map((q) => q.params.id);
+  expect(turns.length).toBeGreaterThan(0);
+  expect(new Set(turns)).toEqual(new Set([DUPLICATE]));
+});
+
+// A LOST RACE ON THE DUPLICATE NAMES WHO CHANGED THE DUPLICATE. The note asks
+// the task's newest history entry; asked by the key, it named whoever last
+// changed the claimant.
+test("a race lost on a duplicate's page reads the duplicate's history", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(JSON.stringify({ error: "stale_version", tool, detail: "" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  mount(<WorkItemPage id={DUPLICATE} />, {
+    answers: {
+      work_item: duplicate(),
+      work_activity: async (params: Record<string, unknown>) => ({
+        records:
+          params.task === DUPLICATE
+            ? [{ id: "h-9", kind: "status_changed", actor: "ada", actor_kind: "agent" }]
+            : [{ id: "h-1", kind: "status_changed", actor: "swe", actor_kind: "agent" }],
+        complete: true,
+      }),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "Done" })
+      .catch(() => screen.findByRole("menuitem", { name: "Done" })),
+  );
+  await settle();
+  expect(posted.map((p) => p.args.item)).toEqual([DUPLICATE]);
+  expect(
+    await screen.findByText(
+      `${SHARED_KEY} was changed by Ada Okonkwo since you opened it. Look again, then retry.`,
+    ),
+  ).toBeTruthy();
+  expect(asked).toContainEqual({
+    kind: "work_activity",
+    params: expect.objectContaining({ task: DUPLICATE, limit: 1 }),
+  });
+  expect(asked.filter((q) => q.kind === "work_activity").map((q) => q.params.task)).not.toContain(
+    SHARED_KEY,
+  );
+});
+
+// LINKING ONE OF A PAIR LINKS THAT ONE. A search finds both tasks under one
+// key; keyed on the key they were one radio, and the duplicate was linked by
+// a key that names the claimant.
+test("linking a task under a shared key links the one chosen", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_search: { hits: collidingHits(), available: true } },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link a task" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Find a task"), { target: { value: "ENG-7" } });
+  await settle();
+  const radios = within(dialog).getAllByRole("radio");
+  expect(radios).toHaveLength(2);
+  fireEvent.click(radios[1]!);
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(radios[0]!.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", linked: { add: [DUPLICATE] } } },
+  ]);
 });

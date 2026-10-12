@@ -34,11 +34,11 @@
  * (`app/Shell.tsx`), so a body that published it from inside another screen
  * fought that screen's own answer: on `#/work/{KEY}?lens=history` both this and
  * `Project` wrote the slot, whichever polled last won, and switching back to
- * the Items lens unmounted this one and cleared the slot to nothing over a page
+ * the Tasks lens unmounted this one and cleared the slot to nothing over a page
  * still showing a project it had read. So: ONLY A SCREEN PUBLISHES TO THE
  * FRAME. The screen publishes and draws no coverage of its own; the lens
  * publishes nothing and states its own rows' coverage inline, which is exactly
- * what the Items lens beside it already does.
+ * what the Tasks lens beside it already does.
  *
  * # The bars are OURS and the rows are the engine's
  *
@@ -108,37 +108,23 @@ const HISTORY_OFFER: Offer = {
   buckets: ["hour", "day"],
 };
 
+/**
+ * All projects' History lens: every change across the company.
+ *
+ * NO PROJECT NARROWING HERE. One project's changes are that project's own
+ * History lens, a switch away in the trail, and a `project=` key on this page
+ * was a second address for the same rows.
+ */
 export function History() {
-  const [project, setProject] = useParam("project", "");
-  return (
-    <>
-      <HistoryView
-        container={project ? `project:${project}` : "workspace"}
-        projectKey={project}
-        onProject={setProject}
-      />
-    </>
-  );
+  return <HistoryView container="workspace" />;
 }
 
 export function HistoryView({
   container,
-  projectKey = "",
-  onProject,
   embedded = false,
 }: {
   /** `workspace`, or `project:KEY`. */
   container: string;
-  projectKey?: string;
-  /**
-   * Narrow to one project, or clear it with `""`.
-   *
-   * ABSENT WHERE THE CONTAINER ALREADY IS ONE PROJECT. On the lens under a
-   * project's header every loaded row carries the same key, so a rail there
-   * would be one chip that narrows nothing and a chip labelled "Show every
-   * project" would leave the page it sits on.
-   */
-  onProject?: (next: string) => void;
   /**
    * This is a LENS inside another screen rather than the screen itself.
    *
@@ -332,20 +318,6 @@ export function HistoryView({
       },
     );
   }, [records, state.data, index]);
-  // THE THIRD DIMENSION THE RECORD CARRIES. `work_activity` filters on the
-  // project the engine already stamps on every row, and the page already owns
-  // the `project=` key its chip removes — so until this rail existed the only
-  // way into a project narrowing was a link from the project's own page.
-  const projects = useMemo(
-    () =>
-      tally(
-        records,
-        (r) => r.project || "",
-        !!state.data,
-        (value) => value,
-      ),
-    [records, state.data],
-  );
 
   return (
     <>
@@ -361,15 +333,6 @@ export function HistoryView({
         {/* THE DIMENSIONS, as pickers in the one bar — see the file's doc. */}
         <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
         <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
-        {onProject && (
-          <FacetPicker
-            name="Project"
-            all="Every project"
-            value={projectKey}
-            onChange={onProject}
-            facets={projects}
-          />
-        )}
         {/* SAID ONCE, and only where a count is: before the first answer the
             options carry none. */}
         {state.data && records.length > 0 && (

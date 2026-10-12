@@ -735,7 +735,7 @@ func recipientsOf(watchers, muted []string) []string {
 func (s *Store) checkTitle(title string) error {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return invalid("title", "a page needs a title — it is its address")
+		return invalid("title", "a page needs a title, because it is its address")
 	}
 	if len(title) > MaxTitle {
 		return invalid("title", "%d bytes, past the %d-byte cap",

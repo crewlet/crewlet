@@ -700,6 +700,14 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		kb = builtin.PageDeps{
 			Reader: pageReader, Writer: pageWriter,
 			Mentions: engine.LiveMentions(e),
+			// A PERSON'S PAGE THAT NAMES NO CONTAINER lands in their own
+			// team's space, on the rule a seat's own writes follow
+			// ([engine.LiveSeatSpace]), keyed on the actor's handle as
+			// DefaultProject is above: a person writes as their seat, and a
+			// credential nobody is bound through names a container or is
+			// refused naming the argument. With none, the inbox's "Save as
+			// a page" was refused for every person who used it.
+			DefaultContainer: engine.LiveSeatSpace(e),
 			// THE SKILLS CONTAINER, so a person's write into it is asked
 			// for the grant a tool skill takes rather than admitted on
 			// knowledge:write alone — the store exempts every person,

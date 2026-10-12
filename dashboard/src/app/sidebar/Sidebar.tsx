@@ -5,12 +5,14 @@
  *
  * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
  * (Home, Inbox, My work), then the company's five, and Settings at the foot.
- * Then four LIVE SHORTCUTS, each a real object with its own path: the
- * company's projects, the views this reader pinned, the pages they starred,
- * and the turns running now. Nothing else. A workspace's own sections are tabs
- * in its page header and its objects are rows on the section that lists them;
- * a sidebar that carried either becomes a tree with a different shape on every
- * screen, which is the two-column navigation this replaced.
+ * Then three LIVE SHORTCUTS, each a real object with its own path: the views
+ * this reader pinned, the pages they starred, and the turns running now.
+ * Nothing else. A workspace's own sections are tabs in its page header and its
+ * objects are rows on the section that lists them; a sidebar that carried
+ * either becomes a tree with a different shape on every screen, which is the
+ * two-column navigation this replaced. The company's projects are no group
+ * here for that reason: a project is a scope of Work, switched where Work's
+ * trail names it (`header/ProjectSwitcher.tsx`).
  *
  * # Running is the way to a turn from anywhere
  *
@@ -29,7 +31,7 @@
  * two kinds of figure are two props: a BADGE is how many things are waiting
  * on the reader (the Inbox's unread primary notices, the one accent fill in
  * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a project's open tasks, a pinned view's total). A
+ * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
  * # Settings is never hidden
@@ -50,14 +52,13 @@ import { useMemo, type ReactNode } from "react";
 import {
   AppShell,
   BrandLockup,
-  IconButton,
   Kbd,
   SearchTrigger,
   SidebarNav,
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { ActivityGlyph, KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   WORKSPACES,
@@ -73,13 +74,11 @@ import { useViewer } from "~/lib/viewer.ts";
 import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { activityOf, indexOrg, ringOf, turnItemKey } from "~/lib/seats.ts";
+import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
 import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
-import { pageCount, unfinished, viewRun, projectPath } from "~/lib/work.ts";
-import { routeProject } from "../palette/hits.ts";
-import { useOpenNewTask } from "../newTask.ts";
+import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
@@ -89,10 +88,6 @@ import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
-import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-
-/** How many projects the sidebar asks for: the engine's own page of them. */
-const PROJECTS_PAGE = 200;
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
@@ -110,13 +105,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
   const org = useOrg();
   const agents = useAgents();
-  const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused } = useConnection();
   // THE ENGINE SERVES THIS BROWSER NO COMPANY — no access yet, or refused —
-  // and nothing of one is offered: the rows are locked, the `+` is held, and
-  // the live sections, whose answers an earlier socket may have left behind,
-  // are not drawn. `noAccess` as well as the store's refusal, because the
+  // and nothing of one is offered: the rows are locked, and the live
+  // sections, whose answers an earlier socket may have left behind, are not
+  // drawn. `noAccess` as well as the store's refusal, because the
   // frame records the first in the second only once it has rendered.
   const unserved = noAccess || accessRefused !== null;
   const inbox = useInboxCounts();
@@ -222,25 +216,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             // can read it and hold it against the proxy table.
             mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
           />
-          {/* THE ONE CREATE THE CHROME CARRIES, beside the company's name as
-              the approved design draws it: filing work is the thing a person
-              does from anywhere, so its door is on every screen. It files
-              into the project on screen when there is one — the sheet says
-              where before anything is sent. NOT GATED HERE: the sheet's own
-              Create is the write control, and it says why a reader who
-              cannot file cannot — except in a frame the engine serves no
-              company to, where the sheet could not even read the projects
-              it offers and sat on "Reading the projects…" beside an
-              "Offline" nobody was. */}
-          <IconButton
-            size="sm"
-            variant="ghost"
-            label="New task"
-            icon={<PlusGlyph size="sm" />}
-            disabledReason={unserved ? WRITE_REASONS.refused : undefined}
-            title={unserved ? WRITE_REASONS.refused : undefined}
-            onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
-          />
         </div>
       }
       footer={
@@ -317,18 +292,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
         {!unserved && (
-          <>
-            <RailBoundary label="Projects" resetKey={at}>
-              <ProjectsSection path={route.path} />
-            </RailBoundary>
-            <RailBoundary label="Pinned" resetKey={at}>
-              <PinnedSection
-                path={route.path}
-                viewKey={route.query.get("view") ?? ""}
-                owner={viewer.owner}
-              />
-            </RailBoundary>
-          </>
+          <RailBoundary label="Pinned" resetKey={at}>
+            <PinnedSection
+              path={route.path}
+              viewKey={route.query.get("view") ?? ""}
+              owner={viewer.owner}
+            />
+          </RailBoundary>
         )}
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
@@ -410,55 +380,6 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
         <a className={className} {...link} onPointerEnter={warm} onFocus={warm} />
       )}
     />
-  );
-}
-
-/**
- * The company's projects, each as its key and name, with its open work.
- *
- * THE ENGINE'S MAINTAINED CENSUS, not a count over a page: the project row
- * carries `task_counts`, so the sidebar sums what is still to do — waiting and
- * started — with no aggregation of its own. A project the answer carries no
- * census for draws no figure rather than a zero.
- */
-function ProjectsSection({ path }: { path: string[] }) {
-  const projects = useQuery("work_projects", { limit: PROJECTS_PAGE }, { pollMs: 120_000 });
-  const openNewTask = useOpenNewTask();
-  const rows = projects.data?.projects ?? [];
-  if (rows.length === 0) return null;
-  // THE PROJECT A READER IS INSIDE is the one marked — its page, or an item
-  // filed in it, whose key names the project — and the one this group's `+`
-  // files into. THE ROUTE'S OWN RESOLVER, the one the sidebar's head `+` asks:
-  // the path's second segment with a number stripped read every other Work
-  // page as a project, so on `#/work/views` this `+` offered "New task in
-  // views" and opened the sheet on a project called `views`, and on a task
-  // opened by its uuid it named the uuid.
-  const inside = routeProject(path);
-  return (
-    <SidebarNav.Group
-      label="Projects"
-      // A TASK IN A PROJECT — the one the reader is inside, preselected, or
-      // the sheet's own choice when they are in none. Not "New project": a
-      // project is minted by the company configuration, never by hand.
-      action={{
-        label: inside ? `New task in ${inside}` : "New task in a project",
-        icon: <PlusGlyph size="sm" />,
-        onClick: () => openNewTask(inside ? { project: inside } : {}),
-      }}
-    >
-      {rows.map((p) => (
-        <NavRow
-          key={p.key}
-          label={p.name || p.key}
-          lead={p.key}
-          path={projectPath(p.key)}
-          current={inside === p.key}
-          count={
-            p.task_counts == null ? undefined : { value: unfinished(p.task_counts), label: "open" }
-          }
-        />
-      ))}
-    </SidebarNav.Group>
   );
 }
 
@@ -558,7 +479,7 @@ function StarredSection({ path }: { path: string[] }) {
 
 /**
  * The turns running now, one row per seat the engine says is WORKING: the
- * seat's badge with its ring, its name, the key of the item the turn is
+ * seat's badge with its status, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
  * phase it is on open, or a parked turn's coding run live above its phases.
  *
@@ -608,7 +529,7 @@ function RunningSection({
                 kind="agent"
                 avatar={avatars(row)}
                 size="xs"
-                ring={ringOf(activityOf(row))}
+                status={statusOf(activityOf(row))}
                 decorative
               />
             }

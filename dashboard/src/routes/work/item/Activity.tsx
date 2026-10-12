@@ -68,7 +68,7 @@ import {
   humanize,
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
-import { activityOf, doingWords, ringOf, type OrgIndex } from "~/lib/seats.ts";
+import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
 import {
   changeClauses,
   changeMark,
@@ -112,6 +112,7 @@ const EMPTY: Record<ActivityTab, string> = {
 
 export function Activity({
   item,
+  address,
   chrome,
   index,
   now,
@@ -119,6 +120,12 @@ export function Activity({
   param = "activity",
 }: {
   item: WorkItem;
+  /**
+   * The task's address ([itemAddress]), which a comment, a reply, an ask and
+   * a link are posted on: the key, or the id where another task claimed the
+   * key first — the key would post them on the claimant.
+   */
+  address: string;
   chrome: RowChrome & LabelContext;
   index: OrgIndex;
   now: number;
@@ -136,7 +143,8 @@ export function Activity({
 
   const { socket } = useClient();
   // BY ITS ID, which names this task and no other: a key two tasks hold
-  // reads the history and the comments of whichever claimed it first.
+  // reads the history, the comments and the turns of whichever claimed it
+  // first.
   const changesAsked = { task: item.id, limit: CHANGES_PAGE };
   const changes = usePaged(
     useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS }),
@@ -163,7 +171,7 @@ export function Activity({
     commentId,
     nextCursor,
   );
-  const turnsAsked = { id: item.key, limit: TURNS_PAGE };
+  const turnsAsked = { id: item.id, limit: TURNS_PAGE };
   const turns = usePaged(
     useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS }),
     turnsAsked,
@@ -299,7 +307,8 @@ export function Activity({
             </div>
           )}
           <Composer
-            item={item.key}
+            item={address}
+            label={item.key}
             mode={compose}
             to={replyTo ? (chrome.seatName?.(replyTo.author) ?? replyTo.author) : item.key}
             index={index}
@@ -307,10 +316,12 @@ export function Activity({
               replyTo
                 ? undefined
                 : assignee
-                  ? `Leave a comment — Ask… to put a question to ${assignee} directly`
-                  : "Leave a comment — @mention to bring someone in"
+                  ? `Leave a comment, or use Ask… to put a question to ${assignee} directly`
+                  : "Leave a comment. @mention to bring someone in"
             }
-            onReply={() => setReplyTo(null)}
+            // A REPLY SENT CLOSES ITS TARGET: the banner over the field said
+            // who it answered, and kept saying so after it was posted.
+            onSent={() => setReplyTo(null)}
           />
         </div>
       )}
@@ -753,7 +764,7 @@ function LiveRow({
           kind="agent"
           avatar={chrome.seatAvatar?.(handle)}
           size={28}
-          ring={ringOf(activityOf(row))}
+          status={statusOf(activityOf(row))}
           decorative
         />
       </span>

@@ -150,7 +150,7 @@ test("pending tells the person this node has not applied it, and the reads wait 
   mount();
   await waitFor(() => expect(sent).toHaveLength(1));
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  expect((await screen.findAllByText(/this node has not applied it yet/)).length).toBeGreaterThan(
+  expect((await screen.findAllByText(/This node has not applied it yet/)).length).toBeGreaterThan(
     0,
   );
   await waitFor(() => expect(sent).toHaveLength(2));
@@ -166,7 +166,7 @@ test("unknown stays on screen, and its Retry sends the same operation key", asyn
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   expect(
-    (await screen.findAllByText(/Could not confirm — it may have landed/)).length,
+    (await screen.findAllByText(/Could not confirm\. It may have landed/)).length,
   ).toBeGreaterThan(0);
   await new Promise((r) => setTimeout(r, 20));
   expect(posts).toHaveLength(1);
@@ -228,7 +228,7 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
-  await screen.findAllByText(/Could not confirm — it may have landed/);
+  await screen.findAllByText(/Could not confirm\. It may have landed/);
   fireEvent.click(screen.getByRole("button", { name: "Pin B" }));
   await waitFor(() => expect(posts).toHaveLength(2));
   await screen.findAllByText("Pinned B");

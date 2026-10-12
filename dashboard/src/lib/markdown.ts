@@ -45,6 +45,7 @@
  */
 
 import { createElement, type ReactNode } from "react";
+import { Highlight } from "@crewlethq/ui";
 
 /** One parsed block. The renderer walks these; nothing else does. */
 type Block =
@@ -752,10 +753,17 @@ export interface RenderOptions {
    * an "On this page" list. Nothing to address under `headings: "text"`.
    */
   anchors?: boolean;
+  /**
+   * The terms a search matched, marked where they start a word of the TEXT a
+   * reader reads (`Highlight`). Never inside a code span, a link's address or
+   * an image's source: those are not prose, and a mark there points at a
+   * match the search never made.
+   */
+  highlight?: readonly string[];
 }
 
 /** What the inline walk needs of [RenderOptions], and one thing only it does. */
-export interface InlineOptions extends Pick<RenderOptions, "breaks"> {
+export interface InlineOptions extends Pick<RenderOptions, "breaks" | "highlight"> {
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
    * an autolink its address, as plain text — for a run drawn INSIDE a control,
@@ -778,7 +786,9 @@ export function renderInline(
   const hard = options.breaks === "hard";
 
   for (const { index, end, groups: g } of inlineMatches(text)) {
-    if (index > at) out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard));
+    if (index > at) {
+      out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard, options.highlight));
+    }
     const key = `${keyPrefix}-${n++}`;
     at = end;
 
@@ -828,7 +838,9 @@ export function renderInline(
       out.push(createElement("del", { key }, renderInline(g.del, key, options)));
     }
   }
-  if (at < text.length) out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard));
+  if (at < text.length) {
+    out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard, options.highlight));
+  }
   return out;
 }
 
@@ -859,13 +871,23 @@ function anchor(key: string, href: string, children: ReactNode[]): ReactNode {
  * for `breaks: "hard"`, where every newline is a break and the two markers
  * that ask for one are consumed with it rather than left as stray characters.
  */
-function breakLines(text: string, key: string, hard: boolean): ReactNode {
+function breakLines(
+  text: string,
+  key: string,
+  hard: boolean,
+  highlight: readonly string[] | undefined,
+): ReactNode {
+  // A RUN OF PROSE, marked where a search matched it when the caller asked.
+  const run = (part: string, at: number): ReactNode =>
+    highlight && highlight.length > 0
+      ? createElement(Highlight, { key: `${key}-h${at}`, text: soften(part), terms: highlight })
+      : soften(part);
   const parts = text.split(hard ? /(?:  +|\\)?\n/ : /(?:  +|\\)\n/);
-  if (parts.length === 1) return createElement("span", { key }, soften(text));
+  if (parts.length === 1) return createElement("span", { key }, run(text, 0));
   const nodes: ReactNode[] = [];
   parts.forEach((part, i) => {
     if (i > 0) nodes.push(createElement("br", { key: `${key}-br${i}` }));
-    nodes.push(soften(part));
+    nodes.push(run(part, i));
   });
   return createElement("span", { key }, ...nodes);
 }
@@ -974,9 +996,18 @@ function renderBlock(
         ),
       );
     case "table":
+      // THE WRAPPER SCROLLS a table wider than its column, so it is a tab stop
+      // with a name: a scroller no keyboard can reach is a table no keyboard
+      // can read to its end, and "region" alone says nothing about which.
       return createElement(
         "div",
-        { key, className: "md-table" },
+        {
+          key,
+          className: "md-table",
+          tabIndex: 0,
+          role: "region",
+          "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
+        },
         createElement(
           "table",
           null,

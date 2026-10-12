@@ -40,7 +40,14 @@
 # stdio MCP servers whose runtime is NOT here (node, python, uv) still need a
 # derived image. That is deliberate: an image that guessed at three runtimes
 # would be wrong for everyone and large for everyone.
-FROM debian:trixie-slim
+#
+# PINNED BY DIGEST, the multi-arch index's, with the tag beside it. A bare tag
+# is whatever Docker Hub serves for it at the moment a build runs, and the
+# release signs what it builds: a base that moved underneath would ship, signed
+# under this repository's identity, with no change anybody reviewed. The digest
+# is what Dependabot's `docker` entry moves, so a new base arrives as a
+# `build(deps)` pull request, which release.yml's snapshot job builds.
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than
@@ -62,14 +69,17 @@ WORKDIR /home/crewlet
 
 # goreleaser stages each platform's binary under its own TARGETPLATFORM
 # directory in the build context, so ONE Dockerfile serves every architecture
-# and no stage here cross-compiles anything.
+# and no stage here cross-compiles anything. The image of main is built from
+# this file too, from the context `make image-context` stages in the same
+# layout: a path changed here is changed there.
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 
 # The license and third-party notices, where Debian keeps a package's: the
 # image redistributes the binary and everything it links, so it owes the same
 # notices the release archives carry. goreleaser stages these three files from
-# the checkout (dockers_v2 extra_files in .goreleaser.yaml).
+# the checkout (dockers_v2 extra_files in .goreleaser.yaml), and
+# `make image-context` stages the same three.
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 

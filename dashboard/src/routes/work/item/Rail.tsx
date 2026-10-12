@@ -68,6 +68,8 @@ import {
   typeName,
   itemPath,
   linkedItem,
+  detailItem,
+  itemAddress,
 } from "~/lib/work.ts";
 import type {
   WorkFieldDef,
@@ -115,6 +117,9 @@ export function ItemRail({
   compact?: boolean;
 }) {
   const item = detail.task;
+  // WHAT A HAND-OFF NAMES THE TASK BY: its key, or its id where another task
+  // claimed the key first and the key would hand off the claimant.
+  const address = itemAddress(detailItem(detail));
   const edits = useItemEdits();
   const can = Boolean(edits?.can);
   const seatName = chrome.seatName ?? ((h: string) => h);
@@ -223,7 +228,8 @@ export function ItemRail({
                   reaches nobody, and the page offers Restore instead. */}
               {!item.removed && (
                 <AssignButton
-                  item={item.key}
+                  item={address}
+                  label={item.key}
                   version={item.version}
                   assignee={item.assignee ?? ""}
                 />
@@ -834,7 +840,7 @@ function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
   }
   const key = unit?.key || stored;
   return (
-    <a className="t-link truncate" href={href(["work"], { unit: key })}>
+    <a className="t-link truncate" href={href(["work", "tasks"], { unit: key })}>
       {unit?.name || key}
     </a>
   );

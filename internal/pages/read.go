@@ -134,7 +134,40 @@ type Summary struct {
 	// nothing else. A tree draws an expander off it, and a count that included
 	// a trashed child would draw one that opens onto nothing.
 	Children int `json:"children,omitempty"`
+
+	// Folder marks a page with nothing written in it: its body is EMPTY. A
+	// folder is not a kind of page the engine stores. It is what a page that
+	// only groups pages IS, so the mark cannot disagree with the page: write a
+	// paragraph into one and it is a page with children, empty one and it is
+	// a folder again.
+	Folder bool `json:"folder,omitempty"`
+
+	// SavedBy and SavedAt are the last change to what the page SAYS: its
+	// create, a save or a rename, each of which writes a revision.
+	// [Summary.Updated] moves with every change, a label, a watch and a move
+	// included, which is the wrong instant for "last saved". SavedBy is the
+	// writer under the one name every row of theirs carries ([Actor.Name]): a
+	// seat's handle, which is a person's seat too, or the login of a credential
+	// nobody is bound through.
+	SavedBy string    `json:"saved_by,omitempty"`
+	SavedAt time.Time `json:"saved_at"`
+
+	// savedID is the history row the two fields above are read from.
+	savedID string
 }
+
+// savedKinds are the changes that write a revision: what "last saved" means.
+const savedKinds = `'created', 'saved', 'renamed'`
+
+// summarySaved is the read-time column every listing row carries beyond its
+// head: the history row of its last save, which [Reader.attachSaves] reads in
+// one statement for the whole page of rows. FROM THE HISTORY because the head
+// keeps who CREATED the page and when anything last moved it, and neither is
+// who last changed what it says.
+const summarySaved = `
+		       (SELECT h.id FROM pages_history h
+		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
+		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
 
 // Listing is a page listing and what it is true as of.
 //
@@ -371,7 +404,8 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		       p.updated_at, MAX(p.version, p.scoped_through),
 		       (SELECT COUNT(*) FROM pages_heads c
 		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE `+strings.Join(child.where, " AND ")+`)
+		         WHERE `+strings.Join(child.where, " AND ")+`),
+		       p.body = '',`+summarySaved+`
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+where+`
@@ -385,16 +419,18 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	var out []Summary
 	for rows.Next() {
 		var (
-			s                 Summary
-			skill, onboarding int
-			updated, revision int64
+			s                         Summary
+			skill, onboarding, folder int
+			updated, revision         int64
+			savedID                   sql.NullString
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children); err != nil {
+			&s.Children, &folder, &savedID); err != nil {
 			return listPage{}, fmt.Errorf("pages: scan page: %w", err)
 		}
-		s.Skill, s.Onboarding = skill != 0, onboarding != 0
+		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
+		s.savedID = savedID.String
 		s.Updated = store.DecodeTime(updated)
 		s.Revision = uint64(revision)
 		out = append(out, s)
@@ -408,7 +444,46 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
 	}
 	page.rows = out
-	return page, r.attachLabels(ctx, tx, out)
+	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	return page, r.attachSaves(ctx, tx, out)
+}
+
+// attachSaves fills each row's last save from the history row the listing
+// named for it, in one statement for the whole page of rows.
+func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) error {
+	ids := make([]any, 0, len(items))
+	at := make(map[string]int, len(items))
+	for i, item := range items {
+		if item.savedID == "" {
+			continue
+		}
+		ids = append(ids, item.savedID)
+		at[item.savedID] = i
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, actor, created_at FROM pages_history WHERE id IN (`+
+			placeholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return fmt.Errorf("pages: read who last saved: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, actor string
+		var when int64
+		if err := rows.Scan(&id, &actor, &when); err != nil {
+			return fmt.Errorf("pages: scan who last saved: %w", err)
+		}
+		if i, ok := at[id]; ok {
+			items[i].SavedBy = actor
+			items[i].SavedAt = store.DecodeTime(when)
+		}
+	}
+	return rows.Err()
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -455,6 +530,10 @@ type Detail struct {
 	// opened did not.
 	Skill      bool `json:"skill"`
 	Onboarding bool `json:"onboarding"`
+
+	// Folder is [Summary.Folder]: the page's body is empty, so it is a page
+	// that only groups pages.
+	Folder bool `json:"folder"`
 
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
@@ -537,6 +616,7 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			return fmt.Errorf("pages: read what %s was derived as: %w", id, serr)
 		}
 		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
+		detail.Folder = page.Body == ""
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
 			return err
 		}

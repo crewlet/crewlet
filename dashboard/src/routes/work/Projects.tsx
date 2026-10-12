@@ -4,11 +4,12 @@
  * # Where the overview went
  *
  * The four workspace totals and the ranked bar chart of open work used to sit
- * above every board and every list on `#/work`, on every visit. They are an
- * OVERVIEW — a question about the containers rather than about the work — so
- * they are a page, and the totals are one sentence in this page's own bar
- * rather than four tiles, because they are context for the rows rather than
- * the point of the screen.
+ * above every board and every list on the company's task list, on every
+ * visit. They are an OVERVIEW, a question about the containers rather than
+ * about the work, so they are a page, and the totals are one sentence in this
+ * page's own bar rather than four tiles, because they are context for the
+ * rows rather than the point of the screen. It is Work's landing (`#/work`),
+ * All projects' first lens, and its bar ends with New project.
  *
  * # A row is a project, and a meter is how far along it is
  *
@@ -60,6 +61,8 @@ import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { NewProjectButton } from "~/components/NewProjectButton.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
 import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -151,11 +154,10 @@ function activeEmpty(archived: number, href: string) {
               in this product uses — the JSX ones spell it `&rsquo;` and a
               string has to carry the character itself. */}
           {archived === 1
-            ? "The company’s one project has been archived"
-            : `All ${archived} of the company’s projects have been archived`}
-          {" — "}
+            ? "The company’s one project has been archived. "
+            : `All ${archived} of the company’s projects have been archived. `}
           <a className="t-link" href={href}>
-            see them under Archived
+            See them under Archived
           </a>
           , where each keeps its work.
         </>
@@ -475,6 +477,10 @@ export function Projects() {
 
   return (
     <>
+      {/* THE LENS'S OWN ACTION ENDS THE BAR, as New task ends the Tasks lens. */}
+      <PageActions>
+        <NewProjectButton />
+      </PageActions>
       {/* NO INTRODUCTION: the table's own headings say what a row is, and a
           sentence above them spent a line on every visit saying it again.
           Where a project COMES FROM is the sentence somebody needs when there
@@ -663,8 +669,9 @@ function NoProjectsYet() {
   return (
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
-      title="No project has been created yet"
-      description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. One appears here the moment a unit in the company configuration declares its `project` key — the engine mints it, so there is nothing to create by hand."
+      title="No projects yet"
+      description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. A project appears when a team or a seat in the org gets a tracker project key, which New project starts."
+      action={<NewProjectButton />}
     />
   );
 }

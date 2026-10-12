@@ -18,7 +18,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Activity, dayKey } from "./Activity.tsx";
-import { setZone } from "~/lib/prefs.ts";
+import { pinZoneForTest } from "~/lib/prefs.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -230,7 +230,7 @@ test("the axis is asked for whole buckets, never for the clock's own millisecond
  * own day says the opposite of both.
  */
 test("a day heading splits on the reader's chosen zone, not the browser's", () => {
-  setZone("Pacific/Kiritimati");
+  pinZoneForTest("Pacific/Kiritimati");
   try {
     const before = dayKey("2026-09-14T09:00:00Z");
     const after = dayKey("2026-09-14T11:00:00Z");
@@ -240,7 +240,7 @@ test("a day heading splits on the reader's chosen zone, not the browser's", () =
     // Two Berlin days, one Kiritimati day: one heading.
     expect(after, "one Kiritimati day was split across two headings").toBe(nextMorning);
   } finally {
-    setZone("");
+    pinZoneForTest("");
   }
 });
 
@@ -251,13 +251,13 @@ test("a day heading splits on the reader's chosen zone, not the browser's", () =
 // this case fail the day somebody changes that default for reasons that have
 // nothing to do with grouping.
 test("the key a heading groups on is the string it draws", () => {
-  setZone("Pacific/Kiritimati");
+  pinZoneForTest("Pacific/Kiritimati");
   try {
     for (const ts of ["2026-09-14T09:00:00Z", "2026-09-14T11:00:00Z", "2026-09-15T05:00:00Z"]) {
       expect(dayKey(ts)).toBe(fmtDate(ts));
     }
   } finally {
-    setZone("");
+    pinZoneForTest("");
   }
 });
 

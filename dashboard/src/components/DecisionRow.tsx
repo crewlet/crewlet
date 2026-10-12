@@ -34,16 +34,16 @@
  */
 
 import { firstLine } from "~/lib/format.ts";
-import { useMemo, type ReactNode } from "react";
-import { EMPTY_VALUE } from "@crewlethq/ui";
+import { useMemo, useState, type ReactNode } from "react";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
 import { RaiseBudgetButton } from "./budgetWrite.tsx";
-import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from "./writes.tsx";
+import { CheckGlyph } from "@crewlethq/icons/glyphs";
+import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
 import type {
@@ -70,21 +70,13 @@ export type DecisionSubject =
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
- * The Inbox's Decisions chip — `#/inbox?reason=decisions`, where Home's
- * "Review" and "Open inbox" land.
- *
- * NOT ONE OF THE EIGHTEEN NOTICE REASONS: a decision is an open ask, a parked
- * run, a stopped seat or a condition a person decides, which the `decisions`
- * read and the engine's conditions answer, so the chip narrows the list to
- * those rows rather than filtering notices on a reason none carries — which
- * once drew an empty list under a Home figure that had just said one was
- * waiting.
+ * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
+ * opens with Needs you, every decision this one counted. There is no narrower
+ * view to land on: the Inbox has no filter bar, and a decision is never
+ * listed below an update.
  */
-export const DECISIONS_VIEW = "decisions";
-
-/** Where "Review" and "Open inbox" take a reader: the view above. */
 export function decisionsHref(): string {
-  return href(["inbox"], { reason: DECISIONS_VIEW });
+  return href(["inbox"]);
 }
 
 /**
@@ -154,7 +146,7 @@ export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindo
 
 /**
  * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first — the order Home's card and the Inbox's "Needs a decision" both draw.
+ * list, newest first: the order Home's card and the Inbox's "Needs you" both draw.
  */
 export function decisionSubjects(
   answer: DecisionsAnswer | null,
@@ -194,21 +186,17 @@ export interface Decider {
   name?: string;
 }
 
-export function DecisionRow({
-  subject,
-  decider,
-  now,
-}: {
-  subject: DecisionSubject;
-  /** Whose decisions these are: a line says so when the asker reports to them. */
-  decider: Decider;
-  now: number;
-}) {
+/** A decision that is not an ask: a parked run or a stopped seat, one row each. */
+export type RowSubject = Exclude<DecisionSubject, { kind: "ask" }>;
+
+/**
+ * One parked run or one stopped seat, as a row with the buttons that settle
+ * it. An ask is drawn by [DecisionList] instead, under the person who asked.
+ */
+export function DecisionRow({ subject, now }: { subject: RowSubject; now: number }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   switch (subject.kind) {
-    case "ask":
-      return <AskRow ask={subject.ask} index={index} decider={decider} now={now} />;
     case "run":
       return <RunRow run={subject.run} index={index} now={now} />;
     case "seat":
@@ -217,12 +205,11 @@ export function DecisionRow({
 }
 
 /**
- * The asks put to one person, each a [DecisionRow] answerable where it stands.
+ * The asks put to one person, answerable where they stand.
  *
  * THE LIST MY WORK'S "ASKED OF ME" AND A SEAT'S PAGE BOTH DRAW, newest first
  * as the engine answers them (`work_my_work.asked_of_me`). Nothing when there
- * are none: what an empty one says is the caller's — a section must say
- * something, a card stacked among others must not.
+ * are none: what an empty one says is the caller's.
  */
 export function AskList({
   rows,
@@ -233,42 +220,152 @@ export function AskList({
   decider: Decider;
   now: number;
 }) {
+  const subjects = useMemo(
+    () => rows.map((ask): DecisionSubject => ({ kind: "ask", at: ask.asked_at, ask })),
+    [rows],
+  );
   if (rows.length === 0) return null;
+  return <DecisionList subjects={subjects} decider={decider} now={now} />;
+}
+
+/** One block of a decision list: the asks one person put, or a single row. */
+type Block =
+  | { kind: "asks"; key: string; asker: string; asks: WorkAskRow[] }
+  | { kind: "row"; key: string; subject: RowSubject };
+
+/**
+ * Asks grouped under the person who put them, in the order the first of each
+ * person's asks came; a parked run or a stopped seat stays a row of its own.
+ */
+export function blocksOf(subjects: readonly DecisionSubject[]): Block[] {
+  const blocks: Block[] = [];
+  const byAsker = new Map<string, Block & { kind: "asks" }>();
+  for (const subject of subjects) {
+    if (subject.kind !== "ask") {
+      blocks.push({ kind: "row", key: subjectKey(subject), subject });
+      continue;
+    }
+    // THE AUTHOR IS THE SEAT: a person the identity directory binds to a seat
+    // writes AS it, so the asker is that seat, and a principal bound to none
+    // draws as its own login.
+    const asker = subject.ask.asked_by;
+    const group = byAsker.get(asker);
+    if (group) {
+      group.asks.push(subject.ask);
+      continue;
+    }
+    const created = { kind: "asks" as const, key: `asker:${asker}`, asker, asks: [subject.ask] };
+    byAsker.set(asker, created);
+    blocks.push(created);
+  }
+  return blocks;
+}
+
+/**
+ * The decisions a card or a section lists, each answerable in place.
+ *
+ * GROUPED BY WHO IS ASKING: who asked, the item and the role they are asked in
+ * are said once over that person's questions, rather than once on every row.
+ *
+ * ONE ASK OPEN AT A TIME: opening one ask's options closes whichever was open,
+ * so a card never holds two half-made answers.
+ *
+ * AN ANSWERED ASK STAYS, as the line saying what was answered. The engine
+ * closes it and the next read drops it, so the list keeps the answered ask
+ * itself until the list is drawn afresh; `limit` counts only what still
+ * waits, so answering one does not pull the next into its place mid-read.
+ */
+export function DecisionList({
+  subjects,
+  decider,
+  now,
+  limit,
+}: {
+  subjects: readonly DecisionSubject[];
+  decider: Decider;
+  now: number;
+  /** How many waiting decisions to draw; every one when absent. */
+  limit?: number;
+}) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const [openAsk, setOpenAsk] = useState<string | null>(null);
+  const [answered, setAnswered] = useState<
+    ReadonlyMap<string, { subject: DecisionSubject; answer: AskAnswer }>
+  >(new Map());
+  const shown = useMemo(() => {
+    const waiting = subjects.filter((s) => !answered.has(subjectKey(s))).slice(0, limit);
+    const kept = [...answered.values()].map((a) => a.subject);
+    return [...waiting, ...kept].sort(
+      (a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0),
+    );
+  }, [subjects, answered, limit]);
+  const answer = (subject: DecisionSubject, given: AskAnswer) =>
+    setAnswered((prev) => new Map(prev).set(subjectKey(subject), { subject, answer: given }));
   return (
     <ul className="decision-list">
-      {rows.map((ask) => (
-        <DecisionRow
-          key={ask.comment}
-          subject={{ kind: "ask", at: ask.asked_at, ask }}
-          decider={decider}
-          now={now}
-        />
-      ))}
+      {blocksOf(shown).map((block) =>
+        block.kind === "row" ? (
+          <DecisionRow key={block.key} subject={block.subject} now={now} />
+        ) : (
+          <AskGroup
+            key={block.key}
+            asks={block.asks}
+            asker={block.asker}
+            index={index}
+            decider={decider}
+            now={now}
+            openAsk={openAsk}
+            onOpenAsk={setOpenAsk}
+            answeredOf={(ask) => answered.get(`ask:${ask.comment}`)?.answer}
+            onAnswered={(ask, given) => {
+              setOpenAsk(null);
+              answer({ kind: "ask", at: ask.asked_at, ask }, given);
+            }}
+          />
+        ),
+      )}
     </ul>
   );
 }
 
+/**
+ * One decision: the seat it is about, what it is, and the buttons that make it.
+ *
+ * THE ROW'S STATE TWICE, in two forms: the glyph on the seat's badge, and the
+ * same state as the first words of the line under the title. An ask and a
+ * parked run wait on a person (`needs`); a seat refused by its budget has
+ * stopped. The glyph is what a reader scanning the column of badges sees, and
+ * the word is what one reading the row, or one who cannot tell the fills
+ * apart, is told.
+ */
 function Row({
   who,
-  ring,
+  status,
   title,
   sub,
   line,
   actions,
 }: {
   who: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
-  ring: "warning" | "danger";
+  status: "needs" | "stopped";
   title: ReactNode;
-  sub: ReactNode;
+  sub: ReactNode[];
   line?: ReactNode;
   actions: ReactNode;
 }) {
   return (
     <li className="decision-row">
-      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} ring={ring} size="md" />
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} status={status} size="md" />
       <div className="decision-body">
         <span className="decision-title">{title}</span>
-        <span className="decision-sub">{sub}</span>
+        <span className="decision-sub">
+          <span className="decision-state" data-state={status}>
+            {stateWord(status)}
+          </span>
+          {sub.length > 0 && " · "}
+          {sub}
+        </span>
         {line && <span className="decision-line">{line}</span>}
       </div>
       <div className="decision-actions">{actions}</div>
@@ -296,7 +393,7 @@ function Key({ item }: { item: ItemRef }) {
   );
 }
 
-function joined(parts: ReactNode[]): ReactNode {
+function joined(parts: ReactNode[]): ReactNode[] {
   const shown = parts.filter((p) => p !== null && p !== undefined && p !== "" && p !== false);
   return shown.map((part, i) => (
     <span key={i}>
@@ -306,84 +403,126 @@ function joined(parts: ReactNode[]): ReactNode {
   ));
 }
 
-function AskRow({
-  ask,
+/**
+ * The asks one person put, under one head: who asked, and the item and role
+ * every one of them shares; what differs between them is said on the ask.
+ */
+function AskGroup({
+  asks,
+  asker: askerHandle,
   index,
   decider,
   now,
+  openAsk,
+  onOpenAsk,
+  answeredOf,
+  onAnswered,
 }: {
-  ask: WorkAskRow;
+  asks: readonly WorkAskRow[];
+  asker: string;
   index: OrgIndex;
   decider: Decider;
   now: number;
+  openAsk: string | null;
+  onOpenAsk: (comment: string | null) => void;
+  answeredOf: (ask: WorkAskRow) => AskAnswer | undefined;
+  onAnswered: (ask: WorkAskRow, answer: AskAnswer) => void;
 }) {
-  // THE AUTHOR IS THE SEAT: a person the identity directory binds to a seat
-  // writes AS it, so the asker is that seat, and a principal bound to none
-  // draws as its own login.
-  const askerHandle = ask.asked_by;
   const asker = seatOf(index, askerHandle);
-  const decision = ask.decision;
-  const question = decision?.question || firstLine(ask.body) || ask.title;
-  const recommended = decision?.options.find((o) => o.id === decision.recommended);
   // WHO THE LINES ARE ABOUT: "you" on the reader's own decisions, the
   // decider's name on anybody else's — see [Decider].
   const them = decider.name;
-  // "REPORTS TO YOU" is DERIVED from the chart, never stated by the asker:
-  // it is the reason the question came to this person, where the ask's
-  // role says only what they are asked AS.
-  const reports = index.byHandle
-    .get(askerHandle)
-    ?.managers.some((m) => m.handle === decider.handle);
-  const sub = joined([
-    <Key key="k" item={ask} />,
-    decision ? `${them ? `${them} is` : "you are"} the ${decision.role}` : `asked ${them ?? "you"}`,
-    reports ? `${asker.name} reports to ${them ?? "you"}` : "",
-    recommended ? (
-      <span key="r">
-        recommends <strong>{recommended.label}</strong>
+  const roleOf = (ask: WorkAskRow) =>
+    ask.decision
+      ? `${them ? `${them} is` : "you are"} the ${ask.decision.role}`
+      : `asked ${them ?? "you"}`;
+  // WHAT EVERY ASK SHARES IS SAID ONCE, on the head; what differs, on the ask.
+  // ONE ITEM IS ONE ID: two tasks may show one key (`itemAddress`), and asks
+  // on both are two items, not one.
+  const sharedItem = asks.every((a) => a.id === asks[0]!.id) ? asks[0]! : null;
+  const sharedRole = asks.every((a) => roleOf(a) === roleOf(asks[0]!)) ? roleOf(asks[0]!) : "";
+  const newest = asks.reduce(
+    (at, a) => (Date.parse(a.asked_at) > Date.parse(at) ? a.asked_at : at),
+    asks[0]!.asked_at,
+  );
+  const head = joined([
+    sharedItem ? (
+      <span key="k">
+        on <Key item={sharedItem} />
       </span>
     ) : (
       ""
     ),
-    relTime(ask.asked_at, now),
+    sharedRole,
+    relTime(newest, now),
   ]);
-  // WHAT THE ANSWER SETS OFF, said beside the buttons that send it: a person
-  // choosing an option should know the asker is woken with it and — where the
-  // ask promised one — that it is posted to a channel people read.
-  const whose = them ? `${them}’s` : "your";
-  const line = decision
-    ? decision.inform
-      ? `${asker.name} is woken with ${whose} answer and posts it to #${decision.inform.channel}`
-      : `${asker.name} continues from ${whose} answer`
-    : undefined;
   return (
-    <Row
-      who={asker}
-      ring="warning"
-      title={`${asker.name} asks: ${question}`}
-      sub={sub}
-      line={line}
-      actions={
-        decision && decision.options.length > 0 ? (
-          <AnswerAskButtons
-            item={itemAddress(ask)}
-            comment={ask.comment}
-            options={decision.options}
-            recommended={decision.recommended}
-          />
+    <li className="decision-group">
+      <div className="decision-group-head">
+        <SeatAvatar
+          name={asker.name}
+          kind={asker.kind}
+          avatar={asker.avatar}
+          status="needs"
+          size="md"
+        />
+        <span className="decision-group-who">{asker.name}</span>
+        <span className="decision-sub">{head}</span>
+      </div>
+      <ul className="decision-questions">
+        {asks.map((ask) => {
+          const decision = ask.decision;
+          const question = decision?.question || firstLine(ask.body) || ask.title;
+          const given = answeredOf(ask);
+          const own = joined([
+            sharedItem ? "" : <Key key="k" item={ask} />,
+            sharedRole ? "" : roleOf(ask),
+            decision?.inform ? `answer posted to #${decision.inform.channel}` : "",
+          ]);
+          return (
+            <li key={ask.comment} className="decision-question">
+              <span className="decision-title">{question}</span>
+              {own.length > 0 && <span className="decision-sub">{own}</span>}
+              {given ? (
+                <AnsweredLine answer={given} />
+              ) : (
+                <AnswerAsk
+                  item={itemAddress(ask)}
+                  label={ask.key}
+                  comment={ask.comment}
+                  asker={asker.name}
+                  options={decision?.options ?? []}
+                  recommended={decision?.recommended}
+                  open={openAsk === ask.comment}
+                  onOpenChange={(open) => onOpenAsk(open ? ask.comment : null)}
+                  onAnswered={(answer) => onAnswered(ask, answer)}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </li>
+  );
+}
+
+/** What an ask was answered with, where its controls were. */
+function AnsweredLine({ answer }: { answer: AskAnswer }) {
+  return (
+    <span className="decision-answered" role="status">
+      <CheckGlyph size="sm" aria-hidden="true" />
+      <span>
+        Answered{" "}
+        {answer.kind === "reply" ? (
+          <strong>{`“${answer.text}”`}</strong>
         ) : (
-          // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS — here, like every
-          // other decision on this row: a link elsewhere sent the reader to
-          // a pane with nowhere to write.
-          <ReplyAskButton
-            item={itemAddress(ask)}
-            comment={ask.comment}
-            asker={asker.name}
-            question={question}
-          />
-        )
-      }
-    />
+          <>
+            <strong>{answer.label}</strong>
+            {answer.recommended && <span className="decision-answered-rec"> (Recommended)</span>}
+          </>
+        )}
+      </span>
+    </span>
   );
 }
 
@@ -400,7 +539,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   return (
     <Row
       who={who}
-      ring="warning"
+      status="needs"
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
       line={holdLine(run, now)}
@@ -456,9 +595,9 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   return (
     <Row
       who={who}
-      ring="danger"
-      title={`${who.name} stopped — ${period ? `${period} ` : ""}token budget exhausted`}
-      sub={sub || EMPTY_VALUE}
+      status="stopped"
+      title={`${who.name} stopped: ${period ? `${period} ` : ""}token budget exhausted`}
+      sub={sub}
       actions={
         <>
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
@@ -479,5 +618,12 @@ export function ReassignItem({ item }: { item: string }) {
   const read = useQuery("work_item", { id: item });
   const task = read.data?.task;
   if (!task) return null;
-  return <AssignButton item={item} version={task.version} assignee={task.assignee ?? ""} />;
+  return (
+    <AssignButton
+      item={item}
+      label={task.key}
+      version={task.version}
+      assignee={task.assignee ?? ""}
+    />
+  );
 }

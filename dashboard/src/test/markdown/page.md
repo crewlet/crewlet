@@ -23,7 +23,7 @@ its own connection. The *second* estate every Pulsar deployment ran is gone.
 | Pulsar | no | always |
 | NATS | yes | never |
 
-See [the deployment guide](https://docs.crewlet.ai/guides/deployment) and
+See [the deployment guide](https://docs.crewlet.ai/engine/latest/guides/deployment/) and
 [ENG-214](#/work/ENG-214). Contact <mailto:ops@example.com> if a node refuses
 to start.
 
