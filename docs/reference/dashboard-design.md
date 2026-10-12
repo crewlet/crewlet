@@ -6226,8 +6226,8 @@ objects a collection deleted because no file names them and the unfinished
 uploads it abandoned; the files an
 audit asked about and how many were missing or damaged. It reads
 the fleet's record rather than this node, so it says the same thing whichever
-node served the screen. **Files that cannot be read** are the one reading an
-operator opens it for: when the last audit to run to its end found any missing
+node served the screen. **Files that are missing or damaged** are the one
+reading an operator opens it for: when the last audit to run to its end found any missing
 or damaged, a danger callout above the passes names the first of them — each
 file, whether it is missing or damaged, and its object — to restore from a
 backup or upload again; an audit that failed after it is said in its row and

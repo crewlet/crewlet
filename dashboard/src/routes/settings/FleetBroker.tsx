@@ -128,7 +128,7 @@ export function voterState(voter?: MetaPeer): string {
 export function groupSummary(group: MetaGroup, from?: string): string {
   const view = from ? `as ${from} reports it` : "as a member reports it";
   if (!group.leader) {
-    return `Metadata group of ${group.cluster}, ${view}: no leader — it is electing one, or it has lost its quorum and can change nothing about itself`;
+    return `Metadata group of ${group.cluster}: no leader. Electing one, or quorum lost.`;
   }
   return `Metadata group of ${group.cluster}, ${view}: ${group.peers.length} voters, led by ${group.leader}`;
 }
@@ -170,7 +170,7 @@ export function BrokerMembership({
           size="compact"
           icon={<ServerGlyph size="xl" />}
           title="An external NATS cluster"
-          description="This fleet's broker is somebody else's cluster (stream.type: nats). Its membership belongs to whoever runs it, and nothing here lists or changes it."
+          description="Its membership is managed outside Crewlet."
         />
       </Card>
     );
@@ -200,16 +200,14 @@ export function BrokerMembership({
           <div className="col gap-2">
             {error && (
               <Callout variant="danger" role="alert">
-                <span>
-                  This poll failed ({error}). What is below is the last reading that succeeded.
-                </span>
+                <span>Refresh failed ({error}). Showing the last good reading.</span>
               </Callout>
             )}
             {!answer.group && (
               <Callout variant="warning" role="alert">
                 <span>
-                  The metadata group could not be read: {answer.group_error}. The rows below are
-                  only what the nodes advertise.
+                  Couldn’t read the metadata group: {answer.group_error}. Showing what nodes
+                  advertise.
                 </span>
               </Callout>
             )}
@@ -223,7 +221,7 @@ export function BrokerMembership({
                 <span className="row wrap gap-2 baseline">
                   <span>
                     <strong>{FINDING_TITLE[f.kind] ?? f.kind}</strong>{" "}
-                    <InlineCode>{voterLabel(f.node, f.peer)}</InlineCode> — {f.detail}.
+                    <InlineCode>{voterLabel(f.node, f.peer)}</InlineCode>: {f.detail}.
                   </span>
                   {f.kind === "dead_member" && (
                     <Button
@@ -351,7 +349,7 @@ async function remove(node: string, peer: string, force: boolean): Promise<Heard
         why:
           err.status === 0 || err.code === "unreadable_body"
             ? err.message
-            : `a ${err.status} came back with no engine error code in it — something in front of the node answered`,
+            : `a ${err.status} came back with no engine error code, so something in front of the node answered`,
       };
     }
     if (err instanceof RestError) return { kind: "refused", detail: err.message, hint: err.hint };
@@ -425,9 +423,8 @@ export function BrokerRemoveDialog({
       {!done && (
         <>
           <p className="t-body secondary" style={{ margin: 0 }}>
-            The metadata group stops counting <InlineCode>{voterLabel(node, peer)}</InlineCode> in
-            its elections and its creates — the gesture for a member that is gone for good. A member
-            that restarts under that name joins the group again as a new voter.
+            <InlineCode>{voterLabel(node, peer)}</InlineCode> stops counting in elections. Use this
+            for a member that is gone for good.
           </p>
           <label className="col" style={{ gap: 6 }}>
             <span className="t-caption">
@@ -450,14 +447,7 @@ export function BrokerRemoveDialog({
               disabled={busy}
               onCheckedChange={setForcing}
               label="Remove it although it is running"
-              description={
-                <>
-                  <InlineCode>{voterLabel(node, peer)}</InlineCode> still holds a live presence
-                  lease as a member, so it is running, and a running member removed from the group
-                  rejoins it at its next restart. Stop it first — force this only for a member
-                  wedged in a way that still renews its lease.
-                </>
-              }
+              description="It’s still running and will rejoin on restart. Stop it first, or force this only if it’s stuck."
             />
           )}
         </>
@@ -490,9 +480,7 @@ export function BrokerRemoveDialog({
       {heard?.kind === "unanswered" && (
         <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
           <span>
-            <strong>No answer.</strong> {heard.why}, so whether the removal was committed is
-            unknown. The panel behind this re-reads the group; sending it again for a member already
-            removed is refused as not a member.
+            <strong>No answer</strong> ({heard.why}). Check the panel before sending again.
           </span>
         </Callout>
       )}

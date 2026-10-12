@@ -431,7 +431,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
   test("an operator is given the screen", async () => {
     location.hash = "#/settings/nodes";
     mountAs(Promise.resolve({ operator_id: "ops", operator: true }));
-    expect(await screen.findByText(/Seat ownership is a lease/)).toBeDefined();
+    expect(await screen.findByText(/Log positions are under/)).toBeDefined();
     expect(screen.queryByText("Nodes needs an operator credential")).toBeNull();
   });
 
