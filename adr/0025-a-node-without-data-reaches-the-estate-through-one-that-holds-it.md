@@ -19,9 +19,10 @@ seam answered by a data node over the broker — the ESTATE SERVICE — so the t
 layer cannot tell which kind of node it is on.
 
 Four rules make that sound, and each is stated once, at `internal/estate`:
-the client picks the node and the failover is per operation (a read and a
-tracker write carrying an operation id move on, a page write that went
-unanswered is reported unknown and never repeated); every request carries the
+the client picks the node and the failover is per operation (a read, and a
+write carrying an operation id or its caller's key, move on; a write carrying
+neither that went unanswered is reported unknown and never repeated); every
+request carries the
 asking node's SESSION FLOOR, so whichever data node answers has applied the
 node's own writes; what a stateless node publishes is persisted on exactly one
 data node's event log (custody: published durably, taken by a fleet-wide group,
@@ -47,10 +48,11 @@ to pay.
 **A queue group in front of the data nodes** — let the broker hand each
 request to whichever member it likes — makes the broker choose, and then the
 asker cannot say which node an unanswered write went to. A retry on "whoever
-answers next" is safe only where the write itself says so, and the page writes
-say no: the store mints their operation id per call, so a repeat is a second
-comment or a create refused by its own first copy. A per-node subject keeps the
-choice, and therefore the retry rule, with the asker.
+answers next" is safe only where the write itself says so, and a page write
+whose caller holds no key says no: the store mints its operation id per call,
+so a repeat is a second comment or a create refused by its own first copy. A
+per-node subject keeps the choice, and therefore the retry rule, with the
+asker.
 
 **A non-voting replica on the stateless node** — a JetStream member that never
 leads — would keep a copy of every stream on the node that was meant to hold

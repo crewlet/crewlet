@@ -40,12 +40,14 @@
 // unanswered is asked again of the next data node, which is exactly the
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
-// may. A PAGE write has no id a caller holds: the store mints one per call, so
-// a repeat is a second write (a second comment) or a refusal of its own first
-// copy (a create whose title is now taken). An unanswered page write is
-// therefore NEVER repeated, and is reported as [ErrOutcomeUnknown] — which is
-// the honest answer, and the one a tool turns into "read the page before
-// writing again".
+// may. A PAGE write's operation is derived from the caller's key where the
+// call carries one ([pages.CallKey]), and a repeat under that key is the same
+// operation, asked again as a tracker write is. Where it carries none the store
+// mints an id per call, so a repeat is a second write (a second comment) or a
+// refusal of its own first copy (a create whose title is now taken): an
+// unanswered unkeyed page write is therefore NEVER repeated, and is reported as
+// [ErrOutcomeUnknown] — which is the honest answer, and the one a tool turns
+// into "read the page before writing again".
 //
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, or it could not reach the

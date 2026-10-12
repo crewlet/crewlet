@@ -134,11 +134,12 @@ flowchart TD
   copy is out of service (`out_of_service`), whose copy lags its logs (asked
   again last), or that is behind the caller's floor. What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write
-  moves on under the same operation id, a knowledge-base write that went
-  unanswered is reported as unknown and never sent twice, and a tracker write
-  one data node answered *unvouched* — its ledger cannot say whether the
-  operation landed — is asked of the next under the same id before the caller is
-  told the outcome is unknown.
+  moves on under the same operation id, and so does a knowledge-base write
+  that carries its caller's key — a seat's always does — while one that
+  carries none and went unanswered is reported as unknown and never sent twice;
+  and a write one data node answered *unvouched* — its ledger cannot say whether
+  the operation landed — is asked of the next under the same id before the
+  caller is told the outcome is unknown.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
   for. A write that any data node **never answered** is the other kind of
