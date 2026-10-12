@@ -34,6 +34,7 @@ const EVERY: Record<EngineState, EngineReading> = {
   unreachable: read({ connected: false, lostAt: 1, health: null }),
   connecting: read({ connected: false, lostAt: null, everConnected: false, health: null }),
   draining: read({ health: { ...healthy, shutting_down: true } }),
+  behind: read({ health: { ...healthy, stall_lag_seconds: 31 } }),
   starting: read({ health: { ...healthy, configured: false, posture: "wait" } }),
   unconfigured: read({ health: { ...healthy, configured: false, posture: "serve" } }),
   diverged: read({ health: { ...healthy, posture: "isolated" } }),
@@ -75,6 +76,30 @@ describe("which state the row says", () => {
       lead: "Not on the current configuration",
     });
     expect(read({ health: { ...healthy, posture: "wait" } }).title).toBe("Engine healthy");
+  });
+
+  // FALLING BEHIND IS THE PUSH'S OWN WORD: the engine sends
+  // `stall_lag_seconds` only once the watched duty has missed its beat, so
+  // its presence is the state and its value how far behind. It climbs towards
+  // the lease TTL, at which the node restarts itself, so it outranks every
+  // state that waits for a person, and only a drain, which is somebody's own
+  // stop, outranks it.
+  test("a node falling behind says how far, and outranks what waits for a person", () => {
+    const lag = { ...healthy, stall_lag_seconds: 31.4 };
+    expect(read({ health: lag })).toMatchObject({
+      state: "behind",
+      tone: "warning",
+      title: "Falling behind",
+      lead: "31s behind",
+    });
+    expect(read({ health: { ...lag, configured: false, posture: "wait" } }).state).toBe("behind");
+    expect(read({ health: { ...lag, configured: false, posture: "serve" } }).state).toBe("behind");
+    expect(read({ health: { ...lag, posture: "shed" } }).state).toBe("behind");
+    expect(read({ health: { ...lag, shutting_down: true } }).state).toBe("draining");
+    // A minute and more is said as one.
+    expect(read({ health: { ...healthy, stall_lag_seconds: 75 } }).lead).toBe("1m 15s behind");
+    // Absent is on its beat, which is the push of every healthy node.
+    expect(read({ health: { ...healthy, stall_lag_seconds: undefined } }).state).toBe("healthy");
   });
 
   // A TAB STILL CONNECTING IS NOT A TAB THAT LOST THE ENGINE: it has been
@@ -301,6 +326,14 @@ describe("the row", () => {
       Nodes: "Count unavailable",
       Alarms: "Not evaluated",
     });
+  });
+
+  test("a node falling behind says by how much under its head", () => {
+    panel(EVERY.behind);
+    fireEvent.click(screen.getByRole("button", { name: "Falling behind" }));
+    const dialog = screen.getByRole("dialog", { name: "Engine" });
+    expect(within(dialog).getByText("31s behind")).toBeDefined();
+    expect(within(dialog).getByRole("link", { name: "Open node" })).toBeDefined();
   });
 
   test("a node starting says it is applying its configuration", () => {

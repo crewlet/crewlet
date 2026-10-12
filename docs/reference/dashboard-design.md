@@ -779,8 +779,12 @@ It says the one state that decides what a reader should do, in precedence
 order: the token was refused (the row is then the button that asks for
 another, and opens nothing), the engine is unreachable, the tab is still
 connecting (a neutral dot: nothing has reported yet, which is neither healthy
-nor a fault), draining, starting (a neutral dot, while the node applies its
-first configuration and its posture says `wait`), no configuration, a posture
+nor a fault), draining, falling behind (amber, while the push carries
+`stall_lag_seconds`, which the engine sends only once the node's watched duty
+has missed its beat; the panel says how far behind, "31s behind", a figure
+that climbs towards the lease TTL at which the node restarts itself), starting
+(a neutral dot, while the node applies its first configuration and its posture
+says `wait`), no configuration, a posture
 that diverged from the fleet (`shed`, `stuck`, `isolated`), and serving. The
 dot is the POSTURE and nothing else: a serving node has a success dot whatever
 its alarms say. "Engine healthy" is said only when the alarm table was

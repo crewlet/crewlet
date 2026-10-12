@@ -25,12 +25,16 @@
  *   3. nothing has reported yet: the tab is still connecting, which is not
  *      "healthy" and not a fault either, so its dot is neutral;
  *   4. this node is draining: it is leaving and hands its seats on;
- *   5. no configuration is applied: STARTING while its first apply runs (the
+ *   5. this node is FALLING BEHIND: its watched duty has missed a beat, and
+ *      the push's `stall_lag_seconds` says for how long. The figure climbs
+ *      towards the lease TTL, at which the watchdog ends the process, so it
+ *      outranks every state below, each of which waits for a person;
+ *   6. no configuration is applied: STARTING while its first apply runs (the
  *      posture says `wait`, and the dot is neutral, since nothing needs a
  *      person), and no company otherwise;
- *   6. the node's posture diverged from the fleet (`shed`, `stuck`,
+ *   7. the node's posture diverged from the fleet (`shed`, `stuck`,
  *      `isolated`): it is running a configuration nobody else is;
- *   7. serving: "Engine healthy" ONLY when the alarm table was evaluated and
+ *   8. serving: "Engine healthy" ONLY when the alarm table was evaluated and
  *      nothing in it fires, and "Engine serving" otherwise.
  *
  * THE DOT IS THE POSTURE, AND ONLY THE POSTURE. A standing alarm is a second
@@ -77,7 +81,7 @@ import { KeyGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { alarmKindTitle, alarmsLink, namedAlarms } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtUptime, relTime, tsKey } from "~/lib/format.ts";
+import { fmtElapsed, fmtUptime, relTime, tsKey } from "~/lib/format.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { EngineHealth } from "~/contract/health.ts";
@@ -91,6 +95,7 @@ export type EngineState =
   | "unreachable"
   | "connecting"
   | "draining"
+  | "behind"
   | "starting"
   | "unconfigured"
   | "diverged"
@@ -153,6 +158,19 @@ export function engineReading(input: {
       tone: "warning",
       title: "Draining",
       lead: "Shutting down",
+    };
+  }
+  // PRESENT ONLY WHILE THE DUTY IS BEHIND: the engine sends the field once
+  // the watched duty has missed its beat, and then the whole time since that
+  // beat, so its presence is the state and its value the lead.
+  const behind = health.stall_lag_seconds;
+  if (behind != null && behind > 0) {
+    return {
+      ...reading,
+      state: "behind",
+      tone: "warning",
+      title: "Falling behind",
+      lead: `${fmtElapsed(behind * 1000)} behind`,
     };
   }
   if (health.configured === false) {
