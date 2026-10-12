@@ -175,6 +175,24 @@ func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	// AND FOR THE TRACKER'S AND THE KNOWLEDGE BASE'S OWN DRAIN, which is what
+	// "keep answering" is measured from. A copy answers as SERVING — drained
+	// since its applier started and within the snapshot slack of its log — or
+	// as level at that instant, and admitting a seat proves only the second:
+	// the drained latch is set on the fetch AFTER the last commit. A copy that
+	// has not learned it drained reads as not answering whenever a record is
+	// in flight on its log — a barrier a linearizable read appends — at the
+	// instant the verdict is judged afresh below, whatever the vectors copy
+	// does; under load that instant was caught one run in fifty.
+	s := e.native.Load().log
+	for _, name := range []string{trackerName, pagesName} {
+		running := s.Domain(name)
+		if running == nil {
+			t.Fatalf("the premise: the %s domain is not running", name)
+		}
+		waitUntil(t, 20*time.Second, "the "+name+" applier to drain its log",
+			running.runner.Drained)
+	}
 	wrongCopyOf(t, e, vectorsName)
 	for _, name := range []string{trackerName, pagesName, estate.SeatCopy} {
 		b, serves := e.local.For(t.Context(), name)
