@@ -159,7 +159,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db.Reader(), Log: authority, Committed: waiter.Committed,
+		Log: authority, Committed: waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
