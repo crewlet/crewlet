@@ -136,18 +136,23 @@ type Trace struct {
 	Total int
 }
 
-// TurnDetail is one turn from every node that ran part of it.
+// TurnDetail is one turn from every data node holding part of it.
 type TurnDetail struct {
 	Rows   []store.EventRecord
 	Total  int
 	Traces []string
 
-	// Nodes is every node whose OWN store holds part of this turn, sorted —
-	// which is where the turn RAN, since an event is written only to the
-	// store of the node that published it. More than one for a turn resumed
-	// on another node after a restart, or one whose seat moved while a
-	// coding run was out. A stored row carries no node of its own, so this
-	// is the only place the answer can say it.
+	// Nodes is every node that PUBLISHED any of this turn's events, sorted —
+	// where the turn RAN. More than one for a turn resumed on another node
+	// after a restart, or one whose seat moved while a coding run was out.
+	//
+	// READ OFF THE ROWS ([store.EventRecord.Node]), never off which node
+	// answered: a node without the `data` role keeps no event log, and the
+	// data node that keeps its events in custody (ADR-0025) holds a turn it
+	// never ran, so the nodes holding a turn name the custody keeper where
+	// an operator needs the agent host. Asked of every answering node's
+	// whole share rather than of the rows returned, so a node whose rows
+	// fell in a capped read's middle is still named.
 	Nodes []string
 
 	// At is the instant the turn was asked at, which every node floored
@@ -565,20 +570,18 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	}
 	rows, total, traces := MergeTurn(parts)
 	f.report(QuestionTurn, coverage, started)
-	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g), At: at},
+	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(g), At: at},
 		coverage, nil
 }
 
-// turnNodes is every node that answered with part of the turn.
-func turnNodes(self string, g gathered[turnPart]) []string {
-	var nodes []string
-	if g.mine.rows() > 0 || len(g.mine.Closing) > 0 {
-		nodes = append(nodes, self)
-	}
-	for _, p := range g.peers {
-		if p.part.rows() > 0 || len(p.part.Closing) > 0 {
-			nodes = append(nodes, p.node)
-		}
+// turnNodes is every node that published part of the turn, by every answering
+// node's own rows ([turnPart.Nodes]): the union, since a node resumed on
+// another host and a custody keeper's copy in flight both name origins
+// another answer names too.
+func turnNodes(g gathered[turnPart]) []string {
+	nodes := []string{}
+	for _, part := range g.parts() {
+		nodes = append(nodes, part.Nodes...)
 	}
 	slices.Sort(nodes)
 	return slices.Compact(nodes)

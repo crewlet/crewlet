@@ -1054,7 +1054,7 @@ The load-bearing tables:
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
 - **`agent_onboarding_markers`** — onboarding bookkeeping, one row per agent.
-- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it.
+- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it. Every row names the node that published it (`node`), which on a data node keeping a stateless node's events in [custody](#custody-the-rows-of-a-node-without-data) is not the node holding it.
 - **`crewlet_event_parties`** — which agents each event involves, one row per pair. It is an *index* of the table above rather than state of its own: the dashboard's per-seat activity filter matches on it, and it exists because the engine's planner does no OR-optimization, so the same predicate spread across five columns would scan the log instead of seeking. Swept on the same horizon as the events it points at.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
@@ -1134,8 +1134,15 @@ one** of them keeps each one:
    its copy the same way at its next boot.
 
 That last step is what keeps every figure derived from a node's own log
-honest: the `usage` domain sums each node's day, so a batch two data nodes
+honest: the `usage` domain sums each data node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice.
+
+**A kept row still says where it happened.** Every row of the event log names
+the node that *published* it, in its `node` column and as `node` on every
+event the API returns — the envelope's own origin, not the data node holding
+the row. So a turn's page names the agent host it ran on rather than the data
+node that happens to keep its events, and an operator reading that host's logs
+finds the turn there.
 
 Until the node that lost the claim has settled its copy — at once when its
 claim is answered, and otherwise at its next pass, a minute later or as soon
