@@ -88,6 +88,7 @@ units:
         mcp_env:
           slack:
             SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_ENGINEER}"   # same token, the Slack MCP
+            SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/engineer-channels.json"   # this seat's own
       - name: Designer
         integrations:
           slack:
@@ -96,9 +97,12 @@ units:
         mcp_env:
           slack:
             SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DESIGNER}"
+            SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/designer-channels.json"
 ```
 
 **The two `env` switches are what let an agent answer.** [slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) registers its write tools only when told to: without `SLACK_MCP_ADD_MESSAGE_TOOL` it never offers `conversations_add_message`, its one tool that posts, so a seat receives every message, reasons about a reply and has no tool to send it with, and the channel stays quiet while the server reports itself healthy. (The 1.1 releases that had the tool registered it and refused every call without the variable, which ends the same way.) `"true"` lets the agent post in every channel and DM its bot can reach; a comma-separated list of channel ids, or of `!`-prefixed ids to exclude, narrows that, as the server's own [settings](https://github.com/korotovsky/slack-mcp-server/blob/v1.3.0/README.md#environment-variables-quick-reference) describe — and anything else is read as such a list, so `"false"` registers the tool and lets it post only in a channel whose id is `false`, which is none. A narrowed list mutes the seat wherever it is addressed outside it, and a seat is addressed wherever its bot has been invited. `SLACK_MCP_REACTION_TOOL` is the same switch for `reactions_add` and `reactions_remove`, which the [`reactions:write`](#bot-scopes-and-events) scope is requested for. Neither is a credential, so both sit in the server entry's `env`, which every seat's instance starts with, rather than in each seat's `mcp_env`. And in `env` rather than in an `--enabled-tools` argument: the server registers a tool that argument names, but every call reads the environment alone, so a tool switched on only on the command line is offered and refuses each post. The release is pinned so a working run names the build it ran: `npm exec` with `@latest` runs whatever was published last, and a later release that changes what a tool is called, or what has to be set before it exists, would arrive unannounced.
+
+**Each seat names a channel cache of its own.** slack-mcp-server keeps the channels its bot can see in a file, and by default names that file after the workspace alone (`<team id>_channels_cache_v2.json`, in the user's cache directory) and serves it for 24 hours without asking Slack again. Every seat's server on one node runs as the same user against the same workspace, so without `SLACK_MCP_CHANNELS_CACHE` they share one file, and whichever wrote it last decides what `channels_list` tells the rest: the private channels and DMs that bot is in, named to seats that are not, and none of the reader's own. Give each seat a path no other seat uses. The directory has to exist for the list to outlive a restart; where it does not, the server keeps the list in memory and fetches it afresh at every start, which is still that seat's own.
 
 The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it. Both live on `role.integrations.slack`, in the file and through the API alike. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
