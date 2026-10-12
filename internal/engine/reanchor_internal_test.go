@@ -273,11 +273,21 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 	}
 	lost := readCursorRow(t, e, tracker.Domain{}.Name()).created
-	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it.
+	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it — and a
+	// checkpoint at all on every other log a barrier can be put on, so a
+	// reanchor that rewrote the rows it found has rows to rewrite: the
+	// company boots with no activation, so nothing else would write them.
 	untouched := map[string]cursorRow{}
 	for _, name := range e.native.Load().log.held().order {
 		if name == (tracker.Domain{}).Name() {
 			continue
+		}
+		other := e.native.Load().log.Domain(name)
+		if barrierEncoder(other.domain) != nil {
+			seq := barrierOn(t, other)
+			waitUntil(t, 10*time.Second, name+"'s applier to apply a barrier", func() bool {
+				return other.runner.Committed().Seq >= seq
+			})
 		}
 		untouched[name] = readCursorRow(t, e, name)
 	}
@@ -379,12 +389,11 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 			"record, and nothing else will ever deliver this one", n)
 	}
 
-	// NO OTHER DOMAIN MOVED.
+	// NO OTHER DOMAIN MOVED — judged by what a reanchor writes, since each
+	// of these logs goes on taking framework records of its own meanwhile
+	// ([notReanchored]).
 	for name, before := range untouched {
-		if got := readCursorRow(t, e2, name); got != before {
-			t.Errorf("%s's checkpoint moved from %+v to %+v during a reanchor of "+
-				"the tracker's log", name, before, got)
-		}
+		notReanchored(t, e2, name, before, "a reanchor of the tracker's log")
 		other := e2.native.Load().log.Domain(name).runner
 		if err := other.StreamIdentity(); err != nil {
 			t.Errorf("%s refuses after a reanchor of another log: %v", name, err)
@@ -402,13 +411,26 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	for _, name := range e3.native.Load().log.held().order {
 		runner := e3.native.Load().log.Domain(name).runner
 		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
-		// — and zero for a log nothing was ever written to, which is every
-		// log but the tracker's here: the company boots with no activation,
-		// so neither its chart nor its containers are written at boot, and
-		// no vector was ever computed.
-		want := readCursorRow(t, e3, name).at
+		// — the barrier the first boot put on each log that takes one,
+		// and whatever framework records followed it — and zero for a log
+		// nothing was ever written to, the vector and usage logs here: the
+		// company boots with no activation, so neither its chart nor its
+		// containers are written at boot, and no vector was ever computed.
+		//
+		// The row is READ AGAIN AT EVERY LOOK rather than once before the
+		// wait, because this node's own collector pins the tracker's and
+		// the code log at boot ([notReanchored] says why), and a barrier
+		// applied after a single read moved the runner past a row that was
+		// never read again: a wait that could no longer be met. Each look
+		// reads the runner first and its row second, and the row is
+		// committed before the runner moves, so the two agree only once
+		// nothing is mid-apply.
 		waitUntil(t, 10*time.Second, name+"'s applier to load its checkpoint", func() bool {
-			return runner.Stopped() != nil || runner.Committed() == want
+			if runner.Stopped() != nil {
+				return true
+			}
+			at := runner.Committed()
+			return at == readCursorRow(t, e3, name).at
 		})
 		if err := runner.Stopped(); err != nil {
 			t.Errorf("%s's applier stopped after the restart: %v", name, err)
@@ -863,9 +885,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	if n := countRows(t, e, `SELECT COUNT(*) FROM tracker_log_generations`); n != 0 {
 		t.Fatalf("a reanchor of the pages log wrote %d tracker audit row(s)", n)
 	}
-	if got := readCursorRow(t, e, tracker.Domain{}.Name()); got != trackerBefore {
-		t.Fatalf("the tracker's checkpoint moved from %+v to %+v", trackerBefore, got)
-	}
+	notReanchored(t, e, tracker.Domain{}.Name(), trackerBefore, "a reanchor of the pages log")
 	trackerRunner := s.Domain(tracker.Domain{}.Name()).runner
 	if err := trackerRunner.StreamIdentity(); err != nil {
 		t.Fatalf("the tracker refuses after a reanchor of the pages log: %v", err)
@@ -1067,6 +1087,47 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 		t.Fatalf("read %s's checkpoint: %v", domain, err)
 	}
 	return cursorRow{at: at, created: created}
+}
+
+// notReanchored fails the test where a domain's checkpoint moved the way only a
+// reanchor moves one: into another GENERATION, or keyed to a stream other than
+// the one it was keyed to before — or, where it was keyed to none, other than
+// the domain's own live log — or BACKWARDS.
+//
+// THE SEQUENCE IS NOT HELD EQUAL, because a running log's checkpoint advances
+// on records no test writes: the object collector's pin is a linearizable read,
+// which appends a barrier to every log a declared table names objects on (the
+// tracker's, and the code log since it declared code_packs), and the trim and
+// every other linearizable read append records of their own. A case that
+// captured a checkpoint and demanded it back exactly failed whenever one landed
+// in between — about one run in three once the collector pinned the code log.
+// What a reanchor writes is ONE checkpoint, a generation and the instant it is
+// keyed to ([statelog.Reanchor]), so those are held exactly, and a sequence
+// only ever moves forward within a generation.
+func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, during string) {
+	t.Helper()
+	got := readCursorRow(t, e, domain)
+	stats, err := e.native.Load().log.Domain(domain).log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read %s's log: %v", domain, err)
+	}
+	switch {
+	case got.at.Generation != before.at.Generation:
+		t.Errorf("%s's checkpoint moved from generation %d to %d during %s",
+			domain, before.at.Generation, got.at.Generation, during)
+	case got.at.Seq < before.at.Seq:
+		t.Errorf("%s's checkpoint went back from %s to %s during %s", domain,
+			before.at, got.at, during)
+	case !before.created.IsZero() &&
+		statelog.IdentityOf(before.created, got.created, true) != statelog.StreamSame:
+		t.Errorf("%s's checkpoint was keyed to the stream created at %s and is now "+
+			"keyed to %s, after %s", domain, before.created, got.created, during)
+	case !got.created.IsZero() &&
+		statelog.IdentityOf(got.created, stats.CreatedAt, true) != statelog.StreamSame:
+		t.Errorf("%s's checkpoint is keyed to the stream created at %s, and its own "+
+			"log was created at %s, after %s", domain, got.created,
+			stats.CreatedAt, during)
+	}
 }
 
 // testActivation is the configuration activation an internal test's direct
