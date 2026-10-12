@@ -5875,9 +5875,11 @@ table first; the width is the page column's, not the window's.
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their
   questions answered with `answer_knowledge`, and the background passes of a
   unit they lead) is a row of their own, keyed by their handle, and says in its
-  turns and per-turn cells that a person takes no turns. A row opens the seat in the peek; on a phone a seat is one
-  compact row — name, tokens and share, then turns · today · per turn, each
-  with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
+  turns and per-turn cells that a person takes no turns. A row opens the seat
+  in the peek; on a phone a seat is one compact row of two lines, at every
+  density: name, tokens and share, then turns · today · per turn, each with its
+  unit, and today as its percentage alone (the day's bar is for scanning the
+  column, which a compact row has none of). **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty
   days, and a caption beside the link says so): a company day holds no turn, so
   per-turn spend is the turn list's.

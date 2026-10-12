@@ -9195,11 +9195,15 @@ a.live-row:focus-visible {
 .spend-card {
   min-width: 0;
 }
+/* THE CAPTION GOES UNDER THE TITLE WHEN THE TWO DO NOT FIT ON ONE LINE: held
+   beside it, By agent's sentence stood a two-line column at the end of the
+   head on every phone. A caption that fits keeps its place at the end. */
 .spend-card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--spacing-3);
+  gap: var(--spacing-1) var(--spacing-3);
   padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
 }
 /* A padded card (a list) draws its head flush with its own padding. */
@@ -9413,15 +9417,15 @@ a.live-row:focus-visible {
   .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
     flex: none;
   }
-  /* THE CAPTION GOES UNDER THE TITLE on a phone: beside it, a sentence
-     wrapped into four lines in the width the title left. */
-  .spend-tasks .spend-card-head {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-1);
-  }
   .spend-agents .spend-share-track {
     flex: 0 0 3rem;
+  }
+  /* TODAY'S BAR IS FOR SCANNING ITS COLUMN, as a task's is, and a compact row
+     has none: the percentage and its unit say the same. With the bar, a capped
+     seat's second line did not fit and the seat stood three lines tall at
+     every density. */
+  .spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter {
+    display: none;
   }
   /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
      because it has a line of its own, and here a wrapped name stood a seat

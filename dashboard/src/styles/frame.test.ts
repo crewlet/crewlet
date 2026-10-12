@@ -1697,6 +1697,24 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
   });
 
+  // ON A PHONE A HEAD'S CAPTION GOES UNDER ITS TITLE. Held beside it, By
+  // agent's sentence stood a two-line column at the end of the head.
+  test("a card's caption wraps under its title when the two do not fit", () => {
+    expect(block(css, ".spend-card-head")).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  // A SEAT IS TWO LINES ON A PHONE, at every density. With today's bar on its
+  // second line a capped seat's figures did not fit, and it stood three tall.
+  test("a seat's compact phone row draws no day bar", () => {
+    const phone = mediaBodies(css)
+      .filter((m) => m.prelude === PHONE)
+      .map((m) => m.body)
+      .join("\n");
+    expect(
+      block(phone, '.spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter'),
+    ).toMatch(/display:\s*none/);
+  });
+
   test("a card without its partner takes the whole row", () => {
     expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });
