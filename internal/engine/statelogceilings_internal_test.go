@@ -38,9 +38,8 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 	const gateRoom = 1 << 20
 	peers := uint64(statelog.GateReserveFleet-1) * statelog.MaxAppendBytes
 	for name, floor := range map[string]int64{
-		"the division's MinDomainCeiling":             MinDomainCeiling,
-		"Tier A's stream.tracker_log_max_bytes floor": config.TrackerLogMaxBytesFloor,
-		"Tier A's stream.pages_log_max_bytes floor":   config.PagesLogMaxBytesFloor,
+		"the division's MinDomainCeiling":    MinDomainCeiling,
+		"Tier A's floor for every state log": config.LogMaxBytesFloor,
 	} {
 		reserve := statelog.GateReserve(uint64(floor))
 		if reserve < peers+gateRoom {

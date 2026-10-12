@@ -217,8 +217,8 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 		// AND NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a
 		// node could derive a ceiling its own validation refuses to be
 		// told.
-		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesFloor},
-			free: 4000 * gib, want: config.PagesLogMaxBytesFloor},
+		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.LogMaxBytesFloor},
+			free: 4000 * gib, want: config.LogMaxBytesFloor},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -291,9 +291,9 @@ func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 			t.Errorf("unset on %d free derives %d, under the %d the 16 GiB "+
 				"default asked for there", free, got, replaced)
 		}
-		if got < config.TrackerVectorsMaxBytesFloor || got > config.TrackerVectorsMaxBytesCeiling {
+		if got < config.LogMaxBytesFloor || got > config.TrackerVectorsMaxBytesCeiling {
 			t.Errorf("unset on %d free derives %d, outside the %d..%d Tier A "+
-				"accepts", free, got, config.TrackerVectorsMaxBytesFloor,
+				"accepts", free, got, config.LogMaxBytesFloor,
 				config.TrackerVectorsMaxBytesCeiling)
 		}
 	}
@@ -333,6 +333,10 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"chat below a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib - 1 }, false, "chat_log_max_bytes"},
+		"chat at a gibibyte":       {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib }, true, ""},
+		"chat at 256 GiB":          {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256 * gib }, true, ""},
+		"chat past 256 GiB":        {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256*gib + 1 }, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -401,12 +405,12 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// FIVE: four state logs at their one-gibibyte floor, and one for
-		// every stream that reserves nothing. Four was the floor with three.
-		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
-		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
-		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// SIX: five state logs at their one-gibibyte floor, and one for
+		// every stream that reserves nothing. Five was the floor with four.
+		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
+		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
+		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
 		// case whose document has a second problem passes on whichever
 		// of the two fires, which would leave this rule uncovered.
@@ -427,13 +431,18 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 		}, false, "store_max_bytes"},
-		// THE USAGE LOG IS IN THE SUM: three ceilings that fit exactly, and a
-		// fourth that tips them past the limit.
+		// THE USAGE AND CHAT LOGS ARE IN THE SUM: two ceilings that fit the
+		// limit exactly, and either log's gibibyte tips them past it.
 		"tipped past it by the usage log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 48 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.UsageLogMaxBytes = 1 * gib
 		}, false, "usage_log_max_bytes"},
+		"tipped past it by the chat log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ChatLogMaxBytes = 1 * gib
+		}, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()

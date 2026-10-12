@@ -840,7 +840,7 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   5 GiB..64 TiB — the four state logs'
+                                    #   6 GiB..64 TiB — the five state logs'
                                     #   1 GiB floors and one for every stream
                                     #   that reserves nothing — and it must not
                                     #   be smaller than the ceilings declared
@@ -1007,19 +1007,19 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL FOUR LOGS: the broker
+                                    #   BUDGET FOR ALL FIVE LOGS: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so the derived
-                                    #   ceilings of this field and the three below
+                                    #   ceilings of this field and the four below
                                     #   are scaled down together to fit half of
                                     #   what the broker can grant them, less the
-                                    #   ceiling any of the four that already
+                                    #   ceiling any of the five that already
                                     #   exists holds (never below 1 GiB each).
                                     #   A value you set is never scaled, and a
                                     #   boot that cannot reserve it fails
                                     #   naming the field, the
                                     #   bytes it needed and the bytes the broker
-                                    #   had. Every one of the four is the value
+                                    #   had. Every one of the five is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -1077,6 +1077,41 @@ stream:
                                     #   forty seats and twenty schedules.
                                     #   Crossing it refuses the append and the
                                     #   log_headroom alarm names `usage`
+  # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
+                                    #   native message, reaction and membership
+                                    #   change goes through (1..256 GiB). UNSET
+                                    #   ASKS FOR 8 GiB, capped at a sixteenth of
+                                    #   the volume's free space (a quarter of
+                                    #   what an unset mutation log derives, so
+                                    #   4 GiB on 64 GiB free and the full 8 GiB
+                                    #   from 128): a larger ask on a small volume
+                                    #   comes out of the vector changelog's room
+                                    #   and puts a model change under the
+                                    #   headroom alarm. It does NOT follow the
+                                    #   mutation log's ceiling as the knowledge
+                                    #   base's does: chat grows faster (~30 MB a
+                                    #   day against ~22), so following it would
+                                    #   make chat the largest ask in the one
+                                    #   budget, and on a 64 GiB volume the
+                                    #   vector changelog would be created under
+                                    #   a fifth-year model change. So if you size
+                                    #   tracker_log_max_bytes for a long blocked
+                                    #   trim, size this for the same horizon, or
+                                    #   chat refuses first. WHY 8 GiB:
+                                    #   at the declared census of 20 000 messages
+                                    #   a day and a mean record near 1.5 KiB the
+                                    #   log grows ~30 MB a day, so a healthy
+                                    #   fleet holds ~210 MB — one min_age window,
+                                    #   not a year. This ceiling is what a
+                                    #   COMPLETELY BLOCKED trim may spend first:
+                                    #   ~9 months at that census, ~4 at the
+                                    #   supported 50 000/day (on 64 GiB free,
+                                    #   capped: ~2½ and ~1). Crossing it refuses
+                                    #   the append, which for a transcript is the
+                                    #   only acceptable direction — old messages
+                                    #   go by a prune RECORD all data nodes apply
+                                    #   (chat.native.message_retention_days),
+                                    #   never by a stream bound
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

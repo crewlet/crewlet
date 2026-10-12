@@ -7,7 +7,7 @@ units:
   - name: Engineering
     type: division
     lead: VP Engineering
-    channel: "#engineering"
+    channel: engineering
     roles:
       - name: VP Engineering
     children:
@@ -19,7 +19,7 @@ units:
             roles:
               - name: Storage Developer
       - name: Infrastructure
-        channel: "#infra"
+        channel: infra
         lead: Site Reliability
         roles:
           - name: Site Reliability
