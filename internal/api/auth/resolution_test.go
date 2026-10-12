@@ -6,6 +6,8 @@ import (
 	"go/token"
 	"path/filepath"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // NO CALL SITE DISCARDS THE UNKNOWN ARM, asserted against the SOURCE because
@@ -40,13 +42,14 @@ func TestNoCallSiteDiscardsTheUnknownArm(t *testing.T) {
 	// covering a package somebody moved, and the point of this gate is
 	// that it cannot stop covering anything quietly.
 	roots := []string{
-		"..", "../auth", "../configapi", "../operator",
-		"../queries", "../secretsapi", "../setupapi", "../stream",
-		"../../e2e",
+		"internal/api", "internal/api/auth", "internal/api/configapi",
+		"internal/api/operator", "internal/api/queries", "internal/api/secretsapi",
+		"internal/api/setupapi", "internal/api/stream", "internal/e2e",
 	}
+	module := sourcetree.Root(t)
 	walked, found := 0, 0
 	for _, root := range roots {
-		files, err := filepath.Glob(filepath.Join(root, "*.go"))
+		files, err := filepath.Glob(filepath.Join(module, filepath.FromSlash(root), "*.go"))
 		if err != nil {
 			t.Fatalf("glob %s: %v", root, err)
 		}

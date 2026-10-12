@@ -620,7 +620,7 @@ func TestNothingButThrottledAnswersA429(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
 	checked := 0
-	err := sourcetree.Walk("..", func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(filepath.Join(sourcetree.Root(t), "internal", "api"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

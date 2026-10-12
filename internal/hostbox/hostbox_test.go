@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // resolvedTempDir is a fresh temp directory under its RESOLVED name.
@@ -419,7 +421,7 @@ func TestFileDigestOfAnUnreadableFileIsEmpty(t *testing.T) {
 // directions — a name added here and not there, or published and never passed.
 func TestThePublishedChildEnvironmentIsHostboxsOwn(t *testing.T) {
 	t.Parallel()
-	const page = "../../docs/guides/tools-and-mcp.md"
+	page := filepath.Join(sourcetree.Root(t), "docs", "guides", "tools-and-mcp.md")
 	raw, err := os.ReadFile(page)
 	if err != nil {
 		t.Fatalf("read %s: %v", page, err)
