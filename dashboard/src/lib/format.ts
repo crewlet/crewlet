@@ -324,6 +324,25 @@ export function fmtElapsed(ms: number | null | undefined): string {
   return `${h}h ${m % 60}m`;
 }
 
+/**
+ * How long a process has been up, said coarsely: seconds under a minute,
+ * minutes under an hour, hours and minutes under a day, and whole days after
+ * that ("2 days"). A panel that reads it reruns every second, and past the
+ * first minute a second ticking by is motion with nothing to say. Never below
+ * zero, for [fmtElapsed]'s reason: a start a moment in the future is two
+ * clocks disagreeing.
+ */
+export function fmtUptime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return EMPTY_VALUE;
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+  return plural(Math.floor(h / 24), "day");
+}
+
 /** Elapsed between two ISO stamps, or null when either is missing. */
 export function elapsedMs(from?: string | null, to?: string | null): number | null {
   const a = tsKey(from);
