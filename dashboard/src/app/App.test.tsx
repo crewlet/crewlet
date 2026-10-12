@@ -705,7 +705,7 @@ describe("a turn watched to its end", () => {
     store.applyEvent(phaseEnvelope("p1", "execute", "2026-01-01T00:00:05Z") as never);
     store.applyAgents([{ role: "CEO", activity: "idle", live_call: null }] as never);
     redraw();
-    expect(screen.queryByText(/finished while you were reading/)).toBeNull();
+    expect(screen.queryByText(/new turns?\. Show/)).toBeNull();
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
     // And the transcript the reader had open is still open: the card is
     // remounted when it crosses lists, so its latched state does not travel.

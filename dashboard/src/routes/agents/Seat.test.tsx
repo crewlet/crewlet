@@ -971,9 +971,7 @@ test("a seat with no budget of its own under a capped company says the company's
   // KPI row — and the whole sentence on its title.
   const sub = within(tile("Tokens · 7 days")).getByText(/company cap/);
   expect(sub.textContent).toBe("company cap 60M/day +1");
-  expect(sub.getAttribute("title")).toBe(
-    "No seat cap — the company's 60M/day and 900M/month apply",
-  );
+  expect(sub.getAttribute("title")).toBe("No seat cap; the company's 60M/day and 900M/month apply");
   expect(tile("Tokens · 7 days").textContent).not.toContain("no budget caps it");
 });
 
@@ -1095,7 +1093,9 @@ test("without the document the setup card says whose read it is, not that nothin
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
-  expect(setup.textContent).toContain("which an operator token reads");
+  expect(setup.textContent).toContain(
+    "Set an operator token to see its sandbox, placement and workers.",
+  );
   expect(setup.textContent).not.toContain("not offered");
 });
 
@@ -1109,7 +1109,7 @@ test("a colleague's day is withheld with the reason, and never asked for", async
   });
   await settle();
   expect(screen.getByText("Their day")).toBeTruthy();
-  expect(screen.getByText(/needs an operator credential/)).toBeTruthy();
+  expect(screen.getByText("Set an operator token to see their day.")).toBeTruthy();
   expect(askedFor("work_person")).toEqual([]);
 });
 
@@ -1871,9 +1871,9 @@ test("a seat no node holds says why its memory is empty", async () => {
       },
     },
   });
-  await waitFor(() =>
-    expect(screen.getAllByText(/No node holds this seat, so no copy/).length).toBe(2),
-  );
+  // The memory's own line, and the conversations' empty state.
+  await waitFor(() => expect(screen.getByText("No node is running this seat.")).toBeTruthy());
+  expect(screen.getAllByText(/No node holds this seat, so no copy/).length).toBe(1);
 });
 
 const THREAD = "slack:C0TEAM/1709280000.000100";
@@ -1937,9 +1937,7 @@ test("with no thread open the pane counts nothing and instructs only from its em
     header("Thread turns").querySelector(".crewlet-count"),
     "nothing was asked for, so a 0 here states a quantity about a thread nobody named",
   ).toBeNull();
-  expect(
-    screen.getByText(/Choose a thread to see the turns this seat recorded in it/),
-  ).toBeTruthy();
+  expect(screen.getByText("Choose a thread.")).toBeTruthy();
 });
 
 test("an open thread's turns are counted, and opening one names it on the question", async () => {
@@ -2151,7 +2149,7 @@ test("the budget rows say where the company's ceiling applies to an uncapped win
   await waitFor(() => expect(screen.getByText("Model and budget")).toBeTruthy());
   const card = screen.getByText("Model and budget").closest(".crewlet-card") as HTMLElement;
   await waitFor(() => expect(card.textContent).toContain("3M tokens"));
-  expect(card.textContent).toContain("the company’s 60M applies");
+  expect(card.textContent).toContain("company limit, 60M");
   // SWE's own week is its own; the month is capped by nobody.
   expect(card.textContent).toContain("3M tokens");
   expect(card.textContent).toContain("uncapped");

@@ -253,7 +253,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <EmptyState
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
-        description="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
+        description="It may have been renamed or removed."
         action={
           <Button variant="primary" onClick={() => nav.to(["agents", "roster"])}>
             All seats
@@ -480,7 +480,7 @@ function Notices({
             ) : undefined
           }
         >
-          <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
           {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
           {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
         </Callout>
@@ -492,9 +492,7 @@ function Notices({
         (agent.stopped_reason === "paused" && paused ? (
           <Callout variant={toneOf(state)}>
             <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
-            {paused.reason ? ` — “${sentence(paused.reason)}”` : "."} It starts no new turn; what is
-            sent to it waits on its inbox, in order, and its scheduled runs are skipped.
-            {paused.stop_running ? " The turn it was on was stopped." : ""}
+            {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
           </Callout>
         ) : (
           <Callout variant={toneOf(state)}>

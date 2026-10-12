@@ -51,7 +51,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title="No company configuration is active"
-        description="This seat's settings live in the company document, and none is active on this engine."
+        description="Import a company to see its settings."
       />
     );
   }
@@ -61,7 +61,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title={`The active configuration has no seat named ${seat.name}`}
-        description="The org chart and the configuration can disagree for a moment while a new revision is applied."
+        description="Try again in a moment."
       />
     );
   }
@@ -71,7 +71,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title={`More than one seat is named ${seat.name}`}
-        description="The active revision holds two seats with this name, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+        description="Rename one of them in Edit org."
       />
     );
   }

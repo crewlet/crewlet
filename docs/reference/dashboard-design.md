@@ -3778,15 +3778,15 @@ of which is what makes them worth having at all:
 - **The settled list does not splice rows in under a reader.** At the top of
   the scroller new rows merge straight in — that is somebody watching the
   feed, and holding rows back from them would look broken. Scrolled down,
-  they are counted and offered: *"3 new turns finished while you were
-  reading — show"*. Keyed on identity, never position, so a row that UPDATES
+  they are counted and offered: *"3 new turns. Show"*. Keyed on identity,
+  never position, so a row that UPDATES
   in place — a round landing, a phase completing — is never held back.
 
   **And identity reaches across the two lists.** A running turn lives in the
   live region; when it finishes it leaves that region and arrives in the
   settled list with a key that list has never admitted — so the row a reader
-  had been watching for four minutes was replaced by *"1 new turn finished
-  while you were reading"*. It was on their screen a moment earlier: it is not
+  had been watching for four minutes was replaced by *"1 new turn. Show"*. It
+  was on their screen a moment earlier: it is not
   new to them, whatever list it was in. Each screen passes the keys it is
   rendering live, and they are admitted without the scroll check.
 

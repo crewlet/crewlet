@@ -291,7 +291,7 @@ function Kpis({
             company ? (
               // ONE LINE, the whole sentence on hover: see
               // `companyCeilingShort`.
-              <span className="prof-tile-sub" title={`No seat cap — ${company}`}>
+              <span className="prof-tile-sub" title={`No seat cap; ${company}`}>
                 {companyShort}
               </span>
             ) : (
@@ -524,7 +524,7 @@ function AssignedWork({
           work.data && rows.length === 0
             ? {
                 title: "Nothing open is assigned to them",
-                hint: "Work reaches a seat by assignment; closed work is not counted here.",
+                hint: "Closed work isn’t counted.",
               }
             : undefined
         }
@@ -711,7 +711,7 @@ function About({ seat, onboardedAt }: { seat: Seat; onboardedAt?: string | undef
           <p className="t-caption">
             {human
               ? "No goal or responsibilities are written for this person."
-              : "No goal or responsibilities are written for this seat — both render straight into its prompt."}
+              : "No goal or responsibilities yet."}
           </p>
         )}
         {human && seat.availability && <p className="t-caption">Available {seat.availability}</p>}
@@ -807,10 +807,10 @@ function Setup({
             ? // A TOKENLESS READER IS NEVER ASKED (`useSeatSetup`): they stay
               // `unread`, and what they are missing is the credential, not a
               // read in flight.
-              "Its sandbox, placement and workers are in the company document, which an operator token reads."
+              "Set an operator token to see its sandbox, placement and workers."
             : reading.state === "absent"
-              ? "The active revision names no single seat by this name, so its sandbox, placement and workers cannot be read."
-              : "Reading its sandbox, placement and workers from the company document…"}
+              ? "Its setup can’t be read from the configuration."
+              : "Loading setup…"}
         </p>
       )}
     </Card>
@@ -872,8 +872,8 @@ function MemoryCard({
               ) : (
                 <p className="t-caption">
                   {data.held_by === "none"
-                    ? "No node holds this seat, so no copy of its memory is current."
-                    : "Nothing written yet — a seat keeps a note when a turn teaches it something."}
+                    ? "No node is running this seat."
+                    : "Nothing written yet."}
                 </p>
               )}
             </>
@@ -990,9 +990,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
                   </a>
                 </span>
               ) : (
-                <span className="t-caption">
-                  Read-only here: an inbox is moved on by the person whose it is.
-                </span>
+                <span className="t-caption">Read-only.</span>
               )}
             </div>
             <QueryState error={person.error} loading={person.loading && !person.data}>
@@ -1050,10 +1048,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
             <Card.Header divided={false}>
               <Card.Title as="h3">Their day</Card.Title>
             </Card.Header>
-            <p className="prof-note">
-              Their inbox, their priorities and their pinned views are theirs. Reading another
-              person&rsquo;s needs an operator credential.
-            </p>
+            <p className="prof-note">Set an operator token to see their day.</p>
           </Card>
         )}
         <AssignedWork seat={seat} work={work} now={now} />
