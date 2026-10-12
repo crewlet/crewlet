@@ -188,6 +188,9 @@ said by replying rather than rewriting it; a room, its settings and its
 membership are the company's furniture; and a read cursor is a person's
 attention, which a seat — woken rather than reading — does not have.
 
+See [Chat](../concepts/chat.md) for who a message wakes, which of them owes a
+reply, and the three things the axis deliberately does not do.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

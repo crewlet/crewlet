@@ -54,6 +54,7 @@ How the engine works, one subsystem per page:
 - **[The Tracker](concepts/task-engine.md)** — the two shapes a company's work can take: the engine's own tracker (`tracker.backend: native`, the default — every change a record on an ordered log the fleet shares, applied into identical SQL copies on every data node, with a board, seat tools and an MCP surface), or an external PM tool the engine deliberately mirrors none of
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
 - **[Knowledge System](concepts/knowledge-system.md)** — Shared knowledge behind the `knowledge.Searcher` seam — exactly one backend per company, either the engine's own pages (keyword, semantic or both fused) or a live Confluence search, who read each page and who links to it, edited from the dashboard as the signed-in person — plus the private `agent_diary`, and `crewlet search eval` for measuring the semantic half on your own vectors
+- **[Chat](concepts/chat.md)** — The third backend axis (`chat.backend: native | vendor | none`): the engine's own chat as the state log's fifth domain — channels, unit rooms the org chart creates and is the sole writer of, derived direct-message identity, one-level threads, edits, tombstoned deletes and reactions — who a message wakes and which of them owes a reply, what a person is in a room (the human seat their API token is bound to, and nobody without one), read state in coordination rather than on the log, its own keyword index with no semantic half, the message horizon, and the three things it deliberately does not do
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
 - **[Conversation Sessions](concepts/conversation-sessions.md)** — What a seat already said in one Slack thread / issue / pull request, carried into that conversation's next turn: the entry shape and its elision budgets, which turns are recorded, why the key is the conversation and the dedupe is the work key, and why this is a structured ledger rather than a transcript replay
 - **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop
@@ -61,10 +62,10 @@ How the engine works, one subsystem per page:
 
 ## Integrations
 
-Connecting the external surfaces agents work on. The tracker and the knowledge
-base are the two that are **optional**: the engine ships its own and runs them
-by default, so Jira and Confluence are the path you take when your *people*
-already live there.
+Connecting the external surfaces agents work on. The tracker, the knowledge
+base and chat are the three that are **optional**: the engine ships its own and
+runs them by default, so Jira, Confluence, Slack and Mattermost are the path
+you take when your *people* already live there.
 
 - **[Jira](integrations/jira.md)** — An alternative to the engine's own tracker. Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
 - **[Confluence](integrations/confluence.md)** — An alternative to the engine's own knowledge base, and the one that searches as the asking seat so Confluence's own page permissions are the boundary. Cloud or Data Center: live CQL search, page-change routing, tool-skill pages, and `crewlet confluence import`
@@ -93,7 +94,7 @@ already live there.
 ## Reference
 
 - **[CLI](reference/cli.md)** — Command reference
-- **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas, the WebSocket protocol (the socket reads and pushes; REST writes), the health envelope, the tracker and page surface over the native backends, `/operator/mcp` — the company's own tracker and knowledge base served to *your* AI assistant over MCP — and `/operator/act`, where the dashboard writes as the person its token is bound to, and how the dashboard's own files are served, cached and compressed
+- **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas, the WebSocket protocol (the socket reads and pushes; REST writes), the health envelope, the tracker and page surface over the native backends, `/operator/mcp` — the company's own tracker, knowledge base and chat served to *your* AI assistant over MCP — and `/operator/act`, where the dashboard writes as the person its token is bound to, and how the dashboard's own files are served, cached and compressed
 - **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's information architecture and its visual system: the one sidebar and the three nouns that keep it one (a sidebar row is a workspace or a kept object, a section is a path drawn as a tab, an object tab is a query on an object's page — and nothing is two of those), the route table and the gate that holds it against the router's own resolver, the frame every screen wears and its three breakpoints, why Home is the landing screen and what the wake reason on each Inbox row is, the one rule (colour carries state, never identity) and its three bounded exceptions, an agent's chosen profile icon among them, a palette whose every contrast and separation claim is recomputed from the shipped stylesheet in both themes, the four rules that keep a running turn's transcript from moving under the reader, ⌘K, acting as yourself (every write control is shown, and disabled with its reason when you cannot make it), honest empty states, the turn trace, how it is built (one REST transport, one write client, `src/contract/` and the gates that hold it), why the built bundle is committed, and the rules a change has to keep — tokens, never money, among them
 - **[Metrics](reference/metrics.md)** — Every instrument the engine exports, generated from the catalogue: what each one measures, its unit, its attributes, and the failure it makes visible. Plus the `OTEL_*` variables that switch the export on, and what is deliberately not exported
 - **[Alarms](reference/alarms.md)** — Every condition the engine raises about itself, generated from the alarm table: what each one means and what to do about it. One table, reaching you as a gauge and as a named log line on entry and exit

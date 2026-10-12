@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker, the knowledge base and chat ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
 - **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
@@ -62,13 +62,13 @@ flowchart TB
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · object collector · integration reconcile"]
-        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · object collector · chat prune · integration reconcile"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · chat hub · observability edge"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.HANDLE.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors, usage, chat")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -171,9 +171,9 @@ adr/                      # Architecture decision records — a decision that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, backup, retention, work, objects,
-                          #   fleet, seats, secrets, config, llm, search, and
-                          #   the six integration CLIs — gitlab/github/
-                          #   jira/slack
+                          #   fleet, seats, chat, secrets, config, llm,
+                          #   search, and the six integration CLIs —
+                          #   gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -206,12 +206,16 @@ internal/
 ├── usage/                # Each data node's day, replicated — statelog's
 │                         #   fourth domain: spend, turns and reads that
 │                         #   outlive the node that recorded them
+├── chat/                 # The engine's own chat — statelog's fifth domain:
+│                         #   rooms, messages, threads, reactions, the prune,
+│                         #   and who a message wakes
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
-│                         #   embedding domain and the fleet's bucket fan-out
+│                         #   embedding domain, the fleet's bucket fan-out and
+│                         #   chat's own keyword index
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by

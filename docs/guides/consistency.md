@@ -69,7 +69,7 @@ happened to omit the key. There are four:
 | Surface | Default | May the caller choose? |
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
-| The operator MCP, about the company's own content — the tracker and the knowledge base | `linearizable` | No |
+| The operator MCP, about the company's own content — the tracker, the knowledge base and chat | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
@@ -191,7 +191,7 @@ rather than downgraded. Each code names a different thing to do.
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
-| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on the tracker and pages logs a sixteenth below the broker's, the rest being [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
+| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on the tracker, pages and chat logs a sixteenth below the broker's, the rest being [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply. The node adopts a peer's snapshot on its own; ask another node meanwhile. See [Retention](retention.md#the-join-runbook). |
@@ -239,8 +239,8 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change to the engine's own tracker or knowledge base sees
-that change. That is guaranteed by the *wake* carrying the record's own
+An agent woken by a change to the engine's own tracker, knowledge base or chat
+sees that change. That is guaranteed by the *wake* carrying the record's own
 position — `trigger_position`, where on its log the change was committed (see
 [the event system](../concepts/event-system.md)) — and not by the level the
 turn's tools then read at:
@@ -248,22 +248,28 @@ turn's tools then read at:
 1. Before the turn's first read, the node hands that position to its
    **read-your-writes floors**: one table per node, the same one every write
    the node makes raises.
-2. Every tracker or knowledge-base read the turn makes carries the floor on its
-   own domain's log to whichever node answers it — a tracker read the tracker
-   log's, a page read the knowledge base's — this node's own copy included.
+2. Every tracker, knowledge-base or chat read the turn makes carries the floor
+   on its own domain's log to whichever node answers it — a tracker read the
+   tracker log's, a page read the knowledge base's, a room, a thread or a
+   mention list a chat read's — this node's own copy included.
 3. That holder waits up to two seconds to have applied it, or answers `behind`
    and the next holder is asked.
 
 The floor travels with the request rather than being waited for before the
 turn opens, because the node running the turn may hold no data at all and have
 no applier of its own to wait on. A floor on one domain's log never holds up a
-read of the other: a tracker read does not depend on the knowledge base's rows.
+read of another: a tracker read does not depend on the knowledge base's rows,
+nor a room on the tracker's.
 
 **What the floor does not reach.** The ranked searches — `search_knowledge`,
 `search_work_items` and the turn-start knowledge block — read an index each
 node builds behind its own rows, so no log position describes them and they
 carry no floor: a seat woken by a page created a moment ago may not find it by
-search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+search yet, and finds it by listing or by its id. `search_messages` is half of
+each: which rooms it may rank over is a chat read and carries the floor on the
+chat log, while the index it ranks them with is the node's own and carries
+none, so a seat woken by a message may not find that message by search yet and
+finds it by reading the room. A vendor's wake — a Slack
 message, a Jira issue — carries no position at all, because what changed is in
 another company's system.
 

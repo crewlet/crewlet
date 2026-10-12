@@ -3,6 +3,19 @@
 How the knowledge search is answered, what it costs, and what a fleet can do
 about it when the corpus outgrows one node's CPU.
 
+> **This page is about the KNOWLEDGE corpus** — pages and work items, behind
+> the `knowledge.Searcher` seam and the `search_knowledge` tool. The company's
+> **chat** is searched too, and none of what follows applies to it: it has an
+> index of its own, it has **no semantic half at all**, and no query fuses the
+> two. That is a decision with an arithmetic behind it rather than a gap — see
+> [Chat § Search](../concepts/chat.md#search) and `adr/0032`. Chat search is
+> also the only search on this page with a **viewer**: a private room's
+> contents are not a fact about the company the way a page is, so every chat
+> search is answered for its asker — the node that ranks it resolves the rooms
+> that person may read and ranks over those alone, the index refuses a query
+> that names no rooms rather than read it as every room, and an answer says
+> how many rooms it searched.
+
 Search is answered from **a data node's own tables**. Every data node holds the
 whole corpus — see [Scaling](../concepts/scaling.md) — so a data node answers
 with no lookup that has to leave the machine and no answer that depends on a
@@ -70,10 +83,13 @@ twice the one-second budget of the scan itself — so a slow provider costs a
 search its meaning half rather than holding the person who asked.
 
 **A query is at most 400 bytes**, on every surface that takes one: a seat's
-`search_knowledge`, `search_work_items` and `answer_knowledge`, the operator's
-tools, the API's `knowledge` and `work_search` (`bad_params`, naming the size
-and the limit) and the dashboard, which sends nothing past it and says why. A
-longer one is **refused, never cut** — a query is a question, and a search on
+`search_knowledge`, `search_work_items`, `search_messages` and
+`answer_knowledge`, the operator's tools, the API's `knowledge`, `work_search`
+and `GET /chat/search` (`bad_params`, naming the size and the limit) and the
+dashboard, which sends nothing past it and says why. Chat's search shares the
+bound and nothing else on this page — a pasted passage ranks on every
+incidental word in it there too. A longer one is **refused, never cut** — a
+query is a question, and a search on
 its first part answers another one; past four hundred bytes it is a pasted
 thread, which no ranker turns into a better search. This is the opposite of
 what the corpus does with a long page, and deliberately: a source is embedded

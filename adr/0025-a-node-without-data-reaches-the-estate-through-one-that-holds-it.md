@@ -88,7 +88,7 @@ consequences of routing on every node rather than on the nodes that hold none:
   is this record's decision, applied to the node itself. An estate no data node
   serves refuses the operation saying so, never an empty answer.
 - The OPERATOR'S surfaces go through the same router as the seats' tools: the
-  API's tracker and knowledge-base routes, a project's file rows and the
+  API's tracker, knowledge-base and chat routes, a project's file rows and the
   operator's own MCP. Read straight off the node's own copy, a data node whose
   copy was out of service answered its seats from a peer and its operator from
   the copy it had stopped serving. What still keeps `ingress` on a data node is

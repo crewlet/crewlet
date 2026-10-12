@@ -1,6 +1,6 @@
 # Replication
 
-Crewlet's own tracker and knowledge base are **replicated state machines**
+Crewlet's own tracker, knowledge base and chat are **replicated state machines**
 (the embeddings and each data node's usage history ride the same framework
 as [compacted domains](#two-compacted-domains-the-embeddings-and-each-data-nodes-day)).
 One ordered stream per domain is the write-ahead log; every data node applies it
@@ -80,7 +80,9 @@ operation id.
 What "under that id" means depends on who is asking. A **seat** derives its
 ids from its turn, the call's arguments and how many different calls to the
 same tool it made first, so it runs a gesture again by repeating the call with
-exactly the same arguments — before calling that tool with anything else. The
+exactly the same arguments — before calling that tool with anything else, or
+the tool that undoes it (`leave_channel` for `join_channel`), which counts
+with it. The
 **operator's MCP** has no turn, so every write's answer carries its `op_id` and
 a call that brings it back is that operation again
 ([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
@@ -465,15 +467,31 @@ apply by the transactions already queued ahead of it, at most one per other
 writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
-fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight (the usage
-domain's transactions are a node-day's handful of rows, and weigh nothing
-here outside a replay), the default
-five seconds is close to the three transactions a fourth writer can
-legitimately wait behind — so that log line on a node doing bulk work is the
-signal to raise it rather than a fault. Raise the knob before you widen
-anything else: a longer per-waiter bound lets one stuck holder block the line
-for longer, and this way the line still drains in order.
+fails retryably and rejoins the line once, logged as `store_tx_retry` naming
+the knob. Four domains apply transactions of that size — the tracker, the
+vectors, the knowledge base and chat, whose hourly prune record is about
+3 300 rows at the declared census (the usage domain's transactions are a
+node-day's handful of rows, and weigh nothing here outside a replay). So with
+all four busy a writer can legitimately wait behind four transactions, about
+eight seconds: past the default five, which it spends once, and inside the
+ten its one retry gives it, so it lands in order and logs the retry on the
+way. That log line on a node doing bulk work is therefore the signal to raise
+the knob rather than a fault. A company running chat near the supported
+50 000 messages a day should raise it before it sees the line: a prune record
+there is about 8 300 rows, four seconds on its own, and the same four-deep
+queue reaches about ten seconds — the whole of what two attempts of the
+default allow. Set `store.busy_timeout_seconds: 7` there. Two attempts of a
+timeout cover a queue twice its length, so 7 covers 14 seconds against that
+ten — more margin than the default's ten seconds leave over the eight-second
+queue at the census. What it costs is room under the dashboard's own
+ten-second query timeout, which is why the default is half of it: a write a
+screen is waiting on that spends its whole first wait now has three seconds
+rather than five to finish and report, and one that needs its retry outlasts
+the screen's wait. Never set it to ten or past — a wait as long as the
+timeout above it turns contention into a request that fails with nothing to
+show. Raise the knob before you widen anything else: a longer per-waiter
+bound lets one stuck holder block the line for longer, and this way the line
+still drains in order.
 
 **No apply transaction is ever aborted by a commit elsewhere in the database,
 and none is ever re-run because of one.** Every write transaction takes the
@@ -596,12 +614,12 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    measured once. **Divide it when more than one engine shares a filesystem**:
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
-   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` and
-   `stream.usage_log_max_bytes`, sized
+   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+   `stream.usage_log_max_bytes` and `stream.chat_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
-   [Retention](retention.md). On the tracker and pages logs ordinary writes
-   are refused a sixteenth short of it, the rest being
+   [Retention](retention.md). On the tracker, pages and chat logs — the ones
+   that claim identity — ordinary writes are refused a sixteenth short of it, the rest being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
@@ -656,14 +674,14 @@ past it would be reported as a capacity difference on every one of them.
 
 **A ceiling the broker would not report is counted as absent.** Before it
 sizes anything a node reads every existing log's ceiling from the broker — all
-four at once, each asked again every two seconds for up to thirty while nobody
+five at once, each asked again every two seconds for up to thirty while nobody
 answers. A read still unanswered after that, or one the broker refused, counts
 that log as one this boot would create. A log that does exist keeps the
 ceiling it holds, but every log this boot creates is sized without knowing
 what it holds, so it can come out larger or smaller than a boot that read it
 would make, and keeps that ceiling. The node logs `statelog_ceiling_unread`
 naming the stream; once it is up, `crewlet retention set-capacity` changes
-either log.
+any log's ceiling.
 
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming
@@ -708,7 +726,7 @@ replication:
 | `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
 | `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and it stops serving the estate — its seats read it from the other data nodes — until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
-| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker, the knowledge base or chat — every domain whose health judges the copy — the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
 | `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever. The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). A record more than one gate holds is logged under the first the applier asks — the framework's two, then the writer's eviction, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
 | `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |

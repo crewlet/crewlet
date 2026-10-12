@@ -368,7 +368,7 @@ share does not move.
 ## Information architecture
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
-reader can go — nine **workspaces** — and the few objects they keep coming back
+reader can go — ten **workspaces** — and the few objects they keep coming back
 to: the views they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
 (Settings draws its eight, and a cross-link to Budgets, as a grouped column;
@@ -391,7 +391,11 @@ list a section of Settings.
   ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer: `tabs` in the page header, `lenses` beside Work's scope in the
-  trail, or `column` for Settings.
+  trail, `column` for Settings, or `rail` for Chat, whose screen draws them
+  beside its rooms. Chat draws no tabs because the header draws them on a
+  section's own page and never on an object's, and a room is the object page a
+  chat reader spends their time on, so Mentions and Search sit at the head of
+  the rail, drawn from the same table, and the frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -616,8 +620,9 @@ and the code cannot disagree about which addresses exist.
 ### The sidebar
 
 The order is the product's story: you first — what needs you, what reached
-you, what is yours — then the company's work, its agents, what is running,
-what it knows and what it spent, and the machine last.
+you, what is yours — then the company's work, its agents, what they say to
+each other, what is running, what it knows and what it spent, and the machine
+last.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -626,6 +631,7 @@ what it knows and what it spent, and the machine last.
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | **Work** | `#/work` | — |
 | **Agents** | `#/agents` | — |
+| **Chat** | `#/chat` | — (the unread counts are per room, on the screen's own rail). A key mark when no operator credential is presented: every chat page is read as a person |
 | **Live** | `#/live` | the agents working now, beside the working mark — the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on Agents it sent a reader looking for a running turn to the org chart |
 | **Knowledge** | `#/knowledge` | — |
 | **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
@@ -754,6 +760,20 @@ screens draw no figure from a read that never succeeded. Edit org is
 the one guarded section that answers its own refusal, because its draft is
 forgotten on a token change only a mounted builder hears.
 
+**Chat is guarded whole, and keeps one refusal of its own.** Every chat page is
+read AS A PERSON — the engine resolves the seat from the credential, so there is
+no anonymous chat, not even of a public room — so the workspace's row and all
+three of its sections are guarded: the sidebar row carries the key, the
+palette says each chat destination needs a token, and a reader without one
+meets the frame's refusal on every chat page, a room included. What the frame
+cannot say is chat's own: a token that IS an operator's and is bound to no
+seat. The screen says that one, naming the field to set
+(`contact.crewlet_operator_id`). And it says one more thing no other workspace
+has to: a company whose chat is NOT the engine's own — `chat.backend: vendor`
+or `none` — is told so, with the vendor it runs on, rather than shown rooms it
+cannot have or offered a room it cannot hold. The row stays, as Knowledge's
+does with no backend.
+
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
 props: a **badge** is how many things are waiting on the reader, and a
@@ -843,10 +863,10 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
-single-modifier combination worth having is already the browser's. `g r` is
-the one `g` sequence that is not a workspace: it watches the running turn when
-exactly one seat is working, and opens Live › Now running — every running
+`g c`, `g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because
+every single-modifier combination worth having is already the browser's. `g r`
+is the one `g` sequence that is not a workspace: it watches the running turn
+when exactly one seat is working, and opens Live › Now running — every running
 turn — when several are, or none. Every key the dashboard answers is in [one
 table](#the-keys), and `?` shows it.
 
@@ -1723,7 +1743,7 @@ for the keys is the reader who does not know `?` yet.
 | On a page with tabs | `1`–`9` go to that tab |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
+| Writing a reply | `Mod+Enter` sends it — the Inbox's composer and a chat room's or thread's alike, one key for every composer; `Enter` alone is a new line |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
@@ -1756,13 +1776,13 @@ presses inside the builder and reads its keys from the table with
 the frame alone, so the suite mounts it and refuses an "Anywhere" row it did
 not bind — a key the legend offered and nothing answered.
 
-**`/` searches what you are looking at.** A screen with a search box of its
-own — the seat filter, the event log, the tools catalogue, the audit log's
-actor, work search and a list's key-or-title box, the knowledge base and its
-page finder — registers it with `useSearchTarget`, and `/` focuses it with its
-text selected to type over; on a screen with none, `/` opens the palette. It
-opened the palette everywhere, so on those screens the key a reader pressed to
-search the screen took them away from it.
+**`/` searches what you are looking at.** A screen with a search box of its own
+— the seat filter, the event log, the tools catalogue, the audit log's actor,
+work search and a list's key-or-title box, the knowledge base and its page
+finder, Search chat — registers it with `useSearchTarget`, and `/` focuses it
+with its text selected to type over; on a screen with none, `/` opens the
+palette. It opened the palette everywhere, so on those screens the key a reader
+pressed to search the screen took them away from it.
 
 **A key waits for the reader.** A bare key does nothing while they are typing
 in a field, a select or anything a screen made focusable and handles keys for;
@@ -2429,8 +2449,10 @@ which a keyboard and a screen reader could not reach as itself. **Open profile**
 rail's foot, pinned to its bottom edge; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox — there is no
-person-to-seat chat.
+work the seat owes an answer on and the answer lands in the Inbox. On a company
+whose chat is the engine's own, a person can also write to a seat directly, in
+a direct conversation opened from **Chat** (`#/chat`); Message is the gesture
+that leaves work the seat owes.
 
 **Roster** (`#/agents/roster`) is every seat as a card, grouped by state, by
 unit or flat, and always in NAME order —
@@ -2482,7 +2504,8 @@ for a reader who cannot make it:
 
 - **Message** opens the New task sheet with the seat as assignee and `ask` set:
   the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. There is no person-to-seat chat.
+  lands in the asker's Inbox. On native chat a person can also write to the
+  seat directly, from **Chat** (`#/chat`); Message files the ask as work.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -2813,8 +2836,10 @@ naming its size and the limit, where the answer would be: sent, all three
 would be refused, and a list that lost its tasks and pages with nothing saying
 why reads as nothing matching. The work search and the knowledge screen do the
 same with a phrase in their address, and so do the two pickers that find a
-task — handing one over and linking one — in place of their list. Every
-`work_search` and `knowledge` read is asked through one hook,
+task — handing one over and linking one — in place of their list, and the
+chat screen's search and its room finder, whose `chat_search` takes the same
+bound. Every `work_search`, `knowledge` and `chat_search` read is asked
+through one hook,
 `useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
 and holds no answer from a shorter phrase under one it never sent; a source
 test fails on a ranked search asked any other way, so a new picker cannot skip
@@ -3084,7 +3109,7 @@ route and is not a read, every argument is one the tool takes, every required
 one can be sent. It carries a row for each tool a control presses and no
 other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
 a tool arrives in it with the control that sends it. The controls
-(`components/writes.tsx`):
+(`components/writes.tsx`, and chat's in its own screen, `routes/chat`):
 
 | Control | Where | Tool |
 |---|---|---|
@@ -3111,6 +3136,17 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
+| Send (`Mod+Enter`) | A chat room's composer | `post_message{channel, body}` — under the request id the outbox keeps, so a retry after a lost answer is the same message |
+| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
+| Edit, then Save | A chat message of your own | `edit_message{channel, message, body}` — the author's alone, the operator's credential included, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty. The editor closes on an answer that took it and keeps your words on any other |
+| Delete (pressed twice) | Any chat message | `delete_message{channel, message}` — the author, or a person as the operator their token is: moderation, and the tombstone records who. Reaches past membership and past an archive; held only on a room this build cannot classify, and while another message's delete is out |
+| A reaction | A chat message's reaction chips | `react_to_message{channel, message, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
+| Join · Leave | A chat room's header; Join in **Find a room** | `join_channel{channel}` / `leave_channel{channel}` — refused on a unit's room and a direct conversation, so neither offers it |
+| Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
+| New room | The chat rail | `create_channel{name, kind, topic?, members?}` |
+| Message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
+| Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Its `archived` and `retention_days` are not offered anywhere in the dashboard, and the dialog says so: both decide what survives on every data node, and are made from your own assistant over `/operator/mcp` |
+| — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your read state as it left it, named by your `handle`, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company document** — a seat, a budget ceiling, an MCP
 server, a model — is not an act: it is a new configuration revision, and every
@@ -3162,7 +3198,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   answer's own `traffic_known`. The budgets answer says `durable: false` when
   the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration.
+  a company with no seats says roles come from the configuration; and Chat on
+  a company whose `chat.backend` is `vendor` or `none` says which — "This
+  company's chat is on Mattermost", naming the field — from the `viewer`
+  answer, before it asks a chat question the engine does not serve there and
+  draws the `unknown_query` it would get as a node fault.
 - **Everything in the window** vs **everything that arrived.** Where a screen
   narrows client-side it says so, naming the SOURCE rather than hedging the
   whole answer. **Audit** is the case that made this a rule: it composes four
@@ -5618,6 +5658,107 @@ it, so a link to one run landed on a board with the run below the fold.
   are still too narrow. The clamp every other fact takes split
   `turn.guard_breach` as "turn.guard_breac" over "h".
 
+## Chat: a rail, a room, and where you have read to
+
+The company's own chat (`chat.backend: native`), read AS A PERSON: the engine
+resolves every chat question's reader from the credential, so the workspace is
+guarded whole and a token bound to no seat is told which field binds it (see
+[The sidebar](#the-sidebar)). On a company whose chat is a vendor's or none,
+the screen says which — named from the `viewer` answer — and asks nothing.
+
+- **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
+  three gestures that start a conversation — **New room**, **Message** (a direct
+  conversation) and **Find a room**, the first two held as the change their
+  dialog makes is held (a person the engine opens no room for is told so on the
+  button) — then the row's other sections as links (Mentions, Search chat), then
+  the person's own **Rooms**, newest activity first: the room's name (`#` for a
+  room, the people for a direct conversation), the last thing said, how long
+  ago, `muted` and `following` where they hold, and the unread count. The count
+  is the ENGINE'S, against the person's own read cursor, and it stops at `99+`
+  only where the answer says it stopped counting; when the cursors could not be
+  read the badges are absent and a callout says so, because a zero would claim
+  the reader is caught up. A rail past its bound says so too: it is sorted by
+  activity, which cannot be paged.
+- **A room** (`#/chat/{id}`) is the transcript, paged back on request, who is
+  looking at it, typing in it or working on a reply in it, and the composer
+  (`Mod+Enter` sends; `Enter` is a new line). A room that takes no messages from
+  you — archived, a private room you are outside, a kind this build cannot
+  classify — closes the box and says why in it; a browser that cannot send
+  (offline, a person the engine posts nothing for) leaves the box open and holds
+  Send, with the sentence written beside it, as every composer does. Its header
+  holds Join or Leave, Mute and the settings dialog, whose opener is held where
+  the engine would refuse its Save — outside a private room, on a kind this
+  build cannot classify — and not on an archived room, which keeps its topic.
+  Each of a message's changes (Edit, Delete, a reaction) is held by its own
+  tool, because the engine makes each for a person on its own — and by that
+  tool's own rule in the room rather than the composer's: an archive closes a
+  room to new messages and to nothing else, a delete reaches past membership,
+  and every one of them is drawn and held with its sentence where the engine
+  would refuse it, never hidden. A room whose own read failed says so on every
+  control rather than reading for ever. A public room or a unit's room is
+  readable by every seat, joined or not, so arriving from a search outside a
+  room whose whole transcript is on screen is ordinary. A public room's header
+  then offers to join it; a unit's room offers neither Join nor Leave, because
+  its membership is the org chart's — a seat is in it by being in the unit — and
+  says so instead. A message is not drawn until the engine has it: what you sent
+  waits beneath the transcript until a read carries it — with **Ask again under
+  the same id** where nobody can say whether it landed (the engine derives the
+  message's id from the request's, so a fresh id would say it twice), **Try
+  again** where the node refused it, and **Take it off the screen**, which
+  unsays nothing. It waits there while you look at another room, and is there
+  when you come back.
+- **A thread** is `thread=` on its room, opened beside the transcript — one
+  level deep, so a reply offers no thread of its own.
+- **Mentions** (`#/chat/mentions`) is every message that named you, in every
+  room: the whole away story, because the engine sends no email, push or SMS.
+  Each row is the moment you were named and is dated by it. An edit that still
+  names you leaves the row where it was, with the new words and marked edited;
+  one that names you anew puts it at the top; a delete takes it away.
+- **Search chat** (`#/chat/search`, `q=` and `in=`) ranks what was said in every
+  room you may READ — wider than your rail — by keyword alone: chat is not in
+  the vector corpus (ADR-0032). A phrase past the engine's bound is not sent,
+  and the screen says why.
+- **Live, by evidence.** A chat frame carries no body: it says a room moved, and
+  the screen re-reads, a burst coalesced into one read. What a reader has paged
+  to is read again only where a frame names something on it: a room's newest
+  page on every frame in it, and then — once that page has caught up with the
+  frame on the log — the page that ends at an edited, deleted or reacted-to
+  message it does not reach, or every page held below it for an erase or a
+  prune; a thread's first page for its root, the page holding a changed reply,
+  and its last page for a new reply; Mentions' newest page on every frame, and
+  a page held below it for a change to a mention on it, an erase or prune in a
+  room it holds a mention from, or a membership change. A page read again is
+  put back only once it still meets the page after it: a room joined makes the
+  mentions said in it visible, so a page can come back holding the same number
+  over a shorter range, and the range it no longer reaches is read in before
+  anything moves rather than drawn as a hole. A tab that let a frame go unseen —
+  a bound, a credential change — reads everything it holds again, because what
+  it missed is unknown. Presence is pushed whole for the rooms the tab says it
+  has open. Your read state reaches every tab of yours as `chat_cursor_moved` —
+  the one that wrote it included, which also has the write's own answer — and
+  the rail asks again once when its revision moves, whichever of the two lands
+  first.
+- **Where you have read to** is written as you read — every `READ_FLUSH_MS`
+  (15 s), at once on leaving a room, hiding the tab or closing it — through
+  `mark_chat_read`, the same audited act every other change is. A badge
+  therefore clears when a flush lands, not on the scroll.
+- **A new credential is a new person.** A write goes out as whoever the token
+  names when it is sent, and every tab of the dashboard shares the stored
+  token, so when any of them saves a different one, what the last person read
+  and had not yet written is dropped rather than written as the next person — a
+  cursor only moves forward, so it would mark their shared rooms read for good —
+  and the whole screen is drawn again for the next person: the last one's unsent
+  messages with their Retry, their draft, an open thread and a half-filled
+  dialog go with them. The same token saved again is the same person and keeps
+  all of it.
+- **Offline**, chat is every other socket screen: it keeps what it last read,
+  the frame's banner says the live channel is down, and it reads again on
+  reconnect. Nothing is said while the socket is down; a message is never
+  queued for later.
+- **On a phone** the screen still takes the window's height — a transcript
+  inside a page that also scrolls is two scrollers under one wheel — and the
+  rail stacks above the room, each with its share.
+
 ## Knowledge: the spaces, a landing, and search with real modes
 
 Knowledge is the approved **Home** layout. No column of navigation stands
@@ -6328,31 +6469,42 @@ refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field. The request
 waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
-newest backup the trim counts, the `backup_floor` policy, how many were
-requested and failed (over the span the event log reads, named from the
-`event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), and the
+oldest backup any log's trim reads (each log reads the newest counted backup
+that covers it, so under `operator` there is one per log acknowledged, and the
+stalest is the one the backup-age alarm leads with), the `backup_floor` policy,
+how many were requested and failed (over the span the event log reads, named
+from the `event_history_seconds` the engine reports rather than written into
+the screen, or "in the newest N" when the history filled its page), and the
 backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
 nothing backed up and every node's history read, the figure says "none yet"
-and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
-the operator's acknowledgement, with its directory, size (none for an
-acknowledgement, never 0), reach, and whether the trim counts it: exactly one
-row reads **counted · newest**, the engine's choice rather than the latest
-date, so a newer copy nobody verified reads **not verified**. Then **Backup
-history**: every backup a person asked any node for over the event log's 30
-days, with the node that holds it, the person, the directory and whether its
-manifest was written. A failure is drawn as one. Neither table is derived from
-the other: the register keeps each owner's newest point only, which is why a
+and the two lists are not drawn. Otherwise come **Newest per owner**, each
+node's newest copy and the operator's newest acknowledgement of each log, one
+row per log, with its directory, size (none for an acknowledgement, never 0),
+reach, and whether the trim counts it: a row reads **counted · newest** where
+some log's trim reads it, the engine's choice rather than the latest date, so a
+newer copy nobody verified reads **not verified**. Then **Backup history**:
+every backup a person asked any node for over the event log's 30 days, with the
+node that holds it, the person, the directory and whether its manifest was
+written. A failure is drawn as one. Neither table is derived from the other:
+the register keeps each node's newest point and each log's newest
+acknowledgement only, which is why a
 failed night shows in the history alone.
 
 **Audit log** reads five sources over one window: the tracker's feed, the
 knowledge base's changes, the configuration history, the credential rows —
 and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
 every call a person made through a running node whatever became of it: each
-act tool call that is not a proven read, and every backup. A runtime row names
-the tool (or "backup" and its directory), the person the credential is bound
-to, and in its detail's title the node that served it; its arguments are
-never recorded and the cell says so. A refused or failed call is marked as a
+act tool call that is not a proven read, every backup, and every chat erase and
+prune. A runtime row names the tool (or "backup" and its directory, or "chat
+erase" / "chat prune" and the room, linked), the person the credential is
+bound to, and in its detail's title the node that served it; its arguments are
+never recorded and the cell says so — except an erase's reason, which its
+detail carries, since the messages it destroyed are gone from every data node.
+**Chat is not a source of its own**: the four are change records and a
+transcript is content — a private room's is not the operator's to read — while
+what a person *did* in chat is already here, every ordinary chat write being an
+act tool call (`operator_acted`) and the two destructions their own runtime
+rows. A refused or failed call is marked as a
 failure. The tracker's feed and the runtime audit are windowed by the engine,
 the other three are narrowed here, and a page that filled before it reached
 the window's start is named in a notice above the card — windowed or not. A
@@ -6518,18 +6670,64 @@ count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold
 all of it, so a red run says which side stopped.
 
-The capture ends with a **write**. The founder's seat binds a bearer token, and
-the test pins a project through `POST /operator/act/set_pins` — served by the
-node's own operator surface, the one `crewlet run` builds
-(`api.NewEngineOperator`), so the harness wires no second catalogue. The Go
-half holds the answer to the read it promises: its `position` is in the grammar
-a read accepts back, and `GET /work/people/{handle}` at
+The captured tab is a **person's**: the founder's seat binds a bearer token,
+and the socket is dialled with it on the URL, as `LiveSocket` dials one — the
+only kind of socket the company's own chat is pushed to, since every chat frame
+is decided per recipient. So the capture also carries the founder using
+**Chat** the way its screen does: a room made from the tab with a seat in it,
+looked at (the `chat_focus` frame), a message said and reacted to, and the seat
+asked in that message's thread. The seat's turn claims to have answered, is
+refused for having said nothing, replies in the thread — held on that round
+until the room's presence has shown it at work, which is true only while its
+turn runs — and submits citing the reply: three rounds, the captured company's
+cap, so the turn ends on its own `delivered` rather than on the engine's rescue,
+which the Go half reads off the turn's phase record. Then the first message is
+edited and deleted, the room read through the seat's answer with
+`mark_chat_read`, left, and pruned through the credential-scoped
+`POST /chat/channels/{channel_id}/prune`, as the CLI prunes one. Every other
+change is a press of the act transport. Every chat push kind is then on the
+capture, held against the engine's own list (`stream.ChatPushKinds`), so a kind
+the engine adds is a capture that stops passing until it is produced. The
+replay is handed an account of the room written beside the frames, never read
+from them — its id, the person and the seat, the highest `channel_seq` the
+engine minted, every record it took (its op, the message it names, its author
+and their kind, and a post's thread), where its last record sits and the cursor
+the founder flushed. What the engine minted is read from its answers: the
+room's id, each message's id from its post's receipt (the seat's from the
+room's transcript), the numbering, the prune's position. Each record is
+otherwise the gesture the capture made, written down as it made it — the
+founder as an operator acting as their seat, which is how both the act
+transport and the prune route write a person, and the seat as an agent in the
+thread it was asked in — so an author or a thread the write path recorded
+wrongly is a failure rather than part of the expectation. The replay holds the
+store to that account: the room filed with that high-water mark, a frame filed
+for every record naming exactly what the capture did and none naming anything
+else (the Go half holds the frames to the same account first, so a red run
+says which side stopped), its newest moment the prune's position,
+presence that at some frame showed the founder looking and the seat working,
+and the founder's read state with that cursor and a revision. Each record is
+held on its own because the room's messages taken together are named by its
+posts alone: an edit, a delete or a reaction filed under the wrong message is
+a screen re-reading the wrong range of a room, and only a comparison per frame
+sees it.
+
+The capture also carries two **writes** whose floors the replay holds. The
+founder pins a project through `POST /operator/act/set_pins` after the frames
+are taken, and the founder's first message in the room is
+`POST /operator/act/post_message` — both served by the node's own operator
+surface, the one `crewlet run` builds (`api.NewEngineOperator`), so the harness
+wires no second catalogue. The Go half holds each answer to the read it
+promises: its `position` is in the grammar a read accepts back, and
+`GET /work/people/{handle}` (for the pin) or
+`GET /chat/channels/{channel_id}/messages` (for the message) at
 `read_level=session&min_position=<position>` is served at `session` and already
-holds the pin. The replay hands the same answer, byte for byte, to the client's
-own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
-and a read of `work_person` or `work_items` must name it as its `min_position`.
-A floor the client could not parse raises nothing, and the screen that pressed
-the button would redraw from before the press with nothing to say so.
+holds the write. The replay hands the same answers, byte for byte, to the
+client's own `act` and one tab's `SessionFloors`: the `tracker` floor must be
+the pin's position and the `chat` floor the message's, and a read of
+`work_person` or `work_items` — or of `chat_messages` or `chat_channels` — must
+name its log's as its `min_position`. A floor the client could not parse raises
+nothing, and the screen that pressed the button would redraw from before the
+press with nothing to say so.
 
 The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and
 `src/test/environment.test.tsx` says so by what the zone produces — both

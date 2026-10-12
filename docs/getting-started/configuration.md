@@ -804,11 +804,12 @@ stream:
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
                                     #   and nothing published survives a
                                     #   restart. A company on the engine's own
-                                    #   tracker or knowledge base (the
-                                    #   defaults) keeps every item and every
-                                    #   page there, so the engine refuses to
-                                    #   boot it on an in-memory stream rather
-                                    #   than lose them at the first restart.
+                                    #   tracker, knowledge base or chat (the
+                                    #   defaults) keeps every item, page and
+                                    #   message there, so the engine refuses
+                                    #   to boot it on an in-memory stream
+                                    #   rather than lose them at the first
+                                    #   restart.
                                     #   And a MEMBER OF A FLEET's broker —
                                     #   embedded, no leaf urls, and naming a
                                     #   cluster, peers or a leaf listener —
@@ -1236,7 +1237,12 @@ store:
                                     #   in the engine's own FIFO queue for that
                                     #   lock. Raise it on a node doing bulk
                                     #   applies, where `store_tx_retry` in the
-                                    #   log names it; see guides/replication.md
+                                    #   log names it — to 7 for chat near the
+                                    #   supported 50 000 messages a day, whose
+                                    #   queue reaches the ten seconds two 5s
+                                    #   waits allow. Keep it under 10, the
+                                    #   dashboard's query timeout; see
+                                    #   guides/replication.md
   # objects:                        # where the company's FILES are kept — see
                                     #   concepts/object-store.md. EVERY node
                                     #   carries the same block, a node without
@@ -1503,6 +1509,16 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
+                                        #   by children that name none. It is an
+                                        #   ADDRESS: lowercase letters, digits, `-`
+                                        #   and `_`, up to 64 characters, and a name
+                                        #   rather than a rendering or an id —
+                                        #   `backend`, not `#backend` and not
+                                        #   `C_BACKEND`. On native chat the engine
+                                        #   opens this room and hands the name to
+                                        #   agents to type into their own tools; on
+                                        #   Slack and Mattermost the same grammar is
+                                        #   what both accept as a channel name
         project: "BACK"                 # optional — the unit's tracker "home": routing +
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
@@ -1777,7 +1793,55 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a-crewletyaml), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
-**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
+**A native tracker, knowledge base or chat needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Any one of the three starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way, and so is a company on Jira and Confluence that declares no Mattermost or Slack, because its chat is the engine's own by default. Only a company whose tracker, knowledge base and chat are all a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
+
+---
+
+## Chat
+
+```yaml
+chat:
+  backend: native                        # native (default) | vendor | none
+```
+
+Which **chat surface** this company talks on, the third axis and the same shape as the two above. Unset derives `vendor` when the company declares a vendor chat surface and `native` otherwise — and for chat "declares" means `integrations.mattermost`, `integrations.slack`, **or any seat's own `integrations.slack` app**, because Slack's credentials are per seat and a company with seven working Slack apps may never have written the org-level block at all. Naming `native` beside any of them is refused: conversations would live in two places, a person would reply in one of them, and nothing anywhere could say which thread was the real one. `none` is a company whose seats are woken by the tracker, the code host and schedules only.
+
+The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
+
+See [Chat](../concepts/chat.md) for what the native surface is, who a message wakes, and what it deliberately does not do.
+
+### The native chat's own policy
+
+```yaml
+chat:
+  backend: native
+  native:                                # ONLY on a native company — a retention
+                                         #   horizon on a company whose messages
+                                         #   live in Slack describes nothing, and
+                                         #   is refused
+    message_retention_days: 365          # how long a message lives (default 365,
+                                         #   30..3650). 0 KEEPS MESSAGES FOR EVER,
+                                         #   which is a different setting from
+                                         #   leaving the field out — chat is the
+                                         #   highest-volume thing the engine
+                                         #   stores, and every message sits in
+                                         #   every snapshot and every node join
+    default_channel_private: false       # create a channel private when the caller
+                                         #   names no visibility. Default false:
+                                         #   a company's rooms are readable by its
+                                         #   own seats
+    typing_status: always                # always (default) | addressed — the same
+                                         #   closed set, and the same meaning, as
+                                         #   integrations.slack.typing_status
+```
+
+`message_retention_days` is **three-valued**, and the difference matters: leaving it out takes a year, `0` keeps messages for ever, and a number between 30 and 3650 is that horizon. Note that `tracker.native.inbox_retention_days` reads `0` the other way — as "take the default" — because an inbox row is derived from history that answers for ever, while a message is the only copy of what somebody said.
+
+Everything else native chat could be told is either the operator's (how big the log may grow, how long its replay window is kept — Tier A, under `stream.`) or a decision the engine makes once for everybody. How much of a thread a woken seat is shown is one of those: the engine reads the thread at turn start for every chat surface alike and bounds it at one byte budget, keeping whole messages and condensing the middle of a long thread (see [the thread a turn was woken in](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
+
+**A channel two units both declare is refused on native chat.** The engine opens a unit's room for the one unit that names it — its members are that unit's subtree, and its lead answers what nobody else did — so a second unit naming the same channel would be left out of a room its seats are told is theirs. `crewlet validate` reports it beside each of the units: give each its own channel, or leave a child unit's empty so it inherits its parent's room. It is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a revision that carries the shape still runs, with one of the units in the room. Moving a channel from one unit to another, by contrast, is an ordinary edit: the room follows the channel at the next apply, with the new unit's people in it and what was said in it kept — and so does renaming a unit that has no `id` (see [unit rooms](../concepts/chat.md#what-a-company-gets)). On Mattermost or Slack the same shape is only a warning, because there it is one a real company writes on purpose: everything scoped to one unit lands in the other's room, and every seat in both is told that channel is its team's own.
+
+**A native-chat company where no unit declares a `channel` at all** is warned about at the first unit: the engine opens a room for each channel a unit names and keeps its members to the org chart, so without one no team has a room of its own until somebody opens one by hand and adds its seats. A child unit that names none and inherits its parent's is neither a warning nor a refusal — that is the field working as intended.
 
 ---
 

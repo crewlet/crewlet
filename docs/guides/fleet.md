@@ -173,8 +173,8 @@ members.**
 
 **A member of a fleet persists.** A member that names a cluster, lists peers or
 opens a leaf listener holds the fleet's streams for every node that reaches
-it — every seat's mailbox, every record the tracker and the knowledge base
-write, every coordination bucket — so Tier A requires `stream.store_dir` on it
+it — every seat's mailbox, every record the tracker, the knowledge base and
+chat write, every coordination bucket — so Tier A requires `stream.store_dir` on it
 whatever its roles: one kept in memory loses its copy of all of them at its
 next restart.
 
@@ -259,10 +259,10 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors and the usage days) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting a departed person's chat read state), the state-log trim, the embedding duty, the object store's collector, native chat's message horizon, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -288,16 +288,17 @@ is the shape for an agent host you want small and disposable, and
 What it can run is `seats` alone. `ingress` and `workers` read and write a
 node's own copy of the estate directly — the API's retention report, capacity,
 reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
-refuses either without `data`, naming the field and why. (The API's tracker and knowledge-base
-routes and the operator's MCP do not: they go through the same router a seat's
+refuses either without `data`, naming the field and why. (The API's tracker, knowledge-base and
+chat routes and the operator's MCP do not: they go through the same router a seat's
 tools do, so a data node whose copy is out of service answers its operator from
 a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node — any data node, since every one
   holds the whole estate — picked by the asking node, and move to the next if it does not answer or ran nothing — except a
-  knowledge-base write, which has no operation id a repeat could be collapsed
-  on and is reported as unknown rather than sent twice. A data node's own seats
+  knowledge-base or chat write made without its caller's key, which has no
+  operation id a repeat could be collapsed on and is reported as unknown rather
+  than sent twice. A seat's own writes always carry one. A data node's own seats
   go through the same router and are answered from its own copy
   ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 - **Its own writes are visible to its next read** on whichever data node
@@ -323,7 +324,7 @@ node's seats do, and each of those tools asks a data node over the broker:
 
 Seat admission on a stateless node asks a data node whether its copy is level
 with its logs, so a stateless node claims no seat until one is. While no data
-node answers, its seats' tracker and knowledge tools fail saying so, and
+node answers, its seats' tracker, knowledge and chat tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 
 The members that stateless nodes join open a leaf listener
@@ -633,7 +634,7 @@ posture change.
 ## How a node that fell behind catches up
 
 The replicated estate — the work tracker, the knowledge base, the embeddings
-that search them and every data node's usage days — is derived on every
+that search them, chat and every data node's usage days — is derived on every
 data node from ordered logs the fleet shares, one per domain. A node replays
 each log from wherever its own rows say it stopped — which works only while the
 log still **holds** those records. It does not hold them for ever: once every

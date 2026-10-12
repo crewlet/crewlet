@@ -141,7 +141,7 @@ units:
   - name: Backend
     type: team
     lead: Backend Lead
-    channel: C_BACKEND
+    channel: backend
     schedules:
       # target defaults to `each` → every direct member posts their own update
       - name: daily-standup

@@ -52,11 +52,12 @@ stream:
   store_dir: "./acme-data/stream"   # leave empty and the stream is
                           #   in-memory, and nothing published survives a
                           #   restart. This company is on the engine's own
-                          #   tracker and knowledge base — the defaults — so
-                          #   every item and every page lives there too, and
-                          #   the engine REFUSES to boot on an in-memory
-                          #   stream rather than lose them at the first
-                          #   restart. Name a directory
+                          #   tracker, knowledge base and chat — the
+                          #   defaults — so every item, every page and every
+                          #   message lives there too, and the engine
+                          #   REFUSES to boot on an in-memory stream rather
+                          #   than lose them at the first restart. Name a
+                          #   directory
 
 store:
   path: "./acme-data/acme.db"   # this node's own database, owned
@@ -126,10 +127,10 @@ roles:
     manages: [CEO]
     contact:
       # Your dashboard token (`api.auth.tokens[].id` in crewlet.yaml) — how
-      # the Inbox and My work know you: see "Bind your token to your seat"
-      # below. Add one identity per surface you connect later:
-      # `mattermost_user_id` for Mattermost, `slack_user_id` (a `U…`
-      # member ID) for Slack.
+      # the engine's own chat, the Inbox and My work know you: see "Bind
+      # your token to your seat" below. Add one identity per surface you
+      # connect later: `mattermost_user_id` for Mattermost, `slack_user_id`
+      # (a `U…` member ID) for Slack.
       crewlet_operator_id: founder
 
   - name: CEO
@@ -150,6 +151,10 @@ units:
     type: team
     lead: PM
     purpose: "Define what gets built and why"
+    # The team's room. Chat defaults to the engine's own too, so this opens
+    # a channel called `product` with this unit's seats in it — and it is an
+    # address, so it is `product` rather than `#product` or `Product Team`.
+    channel: product
     # A unit's identity on the tracker and the knowledge base. Both default
     # to the engine's own backends, so these two keys are all it takes to
     # give the team somewhere to file work and write things down — no site,
@@ -169,6 +174,7 @@ units:
     type: team
     lead: CTO
     purpose: "Build and ship the product"
+    channel: engineering
     project: ENG
     space: ENG
     goals:
@@ -384,9 +390,11 @@ question is a button — who is working now, and what the company has done. With
 no company activity yet each card says so, and a condition the engine itself
 raised takes over the sentence under the greeting.
 
-The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
-Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
-its page header. `g` then a letter jumps between them, and `?` lists every key.
+The sidebar is the product in ten rows — Home, Inbox, My work, Work, Agents,
+Chat, Live, Knowledge, Spend, Settings — and each workspace draws its own
+sections: tabs in the page header, Settings' column, Knowledge's tree, or
+Chat's rail beside its rooms. `g` then a letter jumps between them, and `?`
+lists every key.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
@@ -419,8 +427,9 @@ how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Bind your token to your seat** and the personal screens become yours: a
 human seat whose `contact.crewlet_operator_id` matches one of your
 `api.auth.tokens[].id` — the example's founder seat names `founder`, the token
-you exported above — makes **My work** and the **Inbox** answer for that
-person. My work is one tab per claim on somebody's attention — what they hold,
+you exported above — makes **My work**, the **Inbox** and **Chat** answer for
+that person. Chat only then, because every chat read is a person's: a token
+bound to no seat reads nothing there, not even a public room. My work is one tab per claim on somebody's attention — what they hold,
 the order somebody put it in, the questions waiting on them and the ones they
 are waiting on — with every count on the strip, and a band above it naming
 whose day is on screen. The **Queue** is the work list narrowed to that
@@ -472,8 +481,13 @@ the saved views, the catalogue write, a person's own queue and inbox, the
 trash, the board drag, answering a parked coding run, pausing and resuming a
 seat, steering a running turn and answering from the knowledge base. Its
 writes are attributed to the token's own name rather than to a seat — so an
-audit can tell your edit from an agent's. See
-[the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
+audit can tell your edit from an agent's. On the engine's own chat it also
+gets the room tools a seat holds and the gestures only a person makes —
+opening a room or a direct conversation, its settings and members, editing and
+deleting a message, and your read state — and there a message is written as
+the seat your token is bound to, because a room shows each speaker by seat; a
+token bound to no seat gets no chat at all. See [the operator
+surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 The same picture is available over the API:
 
@@ -620,7 +634,17 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
+- **You already have chat.** `chat.backend` defaults to the engine's own, so
+  the units you gave a `channel` above have rooms in the dashboard right now,
+  with their seats in them — read as the seat your token is bound to (see
+  above): post in one and the seats it names wake up. What
+  it does not do is reach you when you are not looking — the engine sends no
+  email, no push and no SMS, so a mention becomes an unread count and a
+  mention feed. See [Chat](../concepts/chat.md).
+- Connect a **vendor** chat instead if your people already live in one, or if
+  being notified while away matters. It is exclusive with the engine's own —
+  one live chat home, or a person answers in the place the agents are not
+  reading. If
   your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
