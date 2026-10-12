@@ -196,7 +196,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 // The trim counts nodes per log, so "evicted" on the node block is a claim
 // about all of them at once: a node evicted on the tracker's log and not yet on
 // the pages log is still counted on the pages log and still pins it. Rendered
-// from either log alone — which is what appending every log's rows did, the
+// from any one log alone — which is what appending every log's rows did, the
 // last one read winning — that node read as evicted, and the COUNTED column
 // said no while one log's applied term waited on it. Until the gesture has
 // reached every log the node is shown as it is on the log still counting it,
@@ -594,7 +594,9 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 	}
 	worst := -1.0
 	for _, running := range r.state.running() {
-		if barrierEncoder(running.domain) == nil {
+		// A RUNNING LOG'S ENCODER CANNOT REFUSE here: the same call built
+		// its reader at boot, and a domain it refuses never came up.
+		if encode, err := barrierEncoderFor(running.domain); err != nil || encode == nil {
 			// A LOG NO READ APPENDS TO has no census to drift from: its
 			// domain has no read index, so nothing it receives is a
 			// linearizable read.

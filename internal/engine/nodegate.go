@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -46,7 +47,7 @@ import (
 // below a trim floor it would be counted against ([statelog.PermitReadmission])
 // — is asked ONCE, before anything is appended. Judged per log, one gesture
 // could reach two answers about one node and leave it evicted on one log and
-// counted on the other. A refusal writes nothing anywhere.
+// counted on another. A refusal writes nothing anywhere.
 //
 // Then each identity-claiming log gets its gate record, and each answers with
 // its own three-valued outcome, reported in the register's order of domains.
@@ -65,7 +66,7 @@ import (
 // meanwhile: once the first record is about to be written the gesture runs
 // under its own budget ([GateLogBudget]) rather than the request's, because a
 // dropped connection is not a request to leave a node evicted on one log and
-// counted on the other.
+// counted on another.
 //
 // # And a retry finishes it, idempotently
 //
@@ -685,8 +686,8 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 // domain.
 //
 // Its OWN writers, rather than the surfaces' — the tracker's may not exist
-// (a company on an external tracker still runs every log in the register) and
-// the page store's may not either, and an eviction is a decision about a
+// (a company on an external tracker still runs every log in the register),
+// nor may the page store's or chat's, and an eviction is a decision about a
 // machine that has to reach every log whichever backends the company chose.
 //
 // BUILT ONCE, over the logs the node started: a data node runs every log in
@@ -763,12 +764,35 @@ func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.Rep
 
 			// THE OPERATOR AS THE PAGE STORE NAMES ONE, which is the
 			// credential's own id — the same spelling the tracker's
-			// record carries, so both logs name the same person.
+			// record carries, so every log names the same person.
 			actor := pages.Actor{Handle: by, Kind: pages.AuthorOperator, OperatorID: by}
 			if readmit {
 				return kb.ReadmitNode(ctx, actor, opID, node)
 			}
 			return kb.EvictNode(ctx, actor, opID, node)
+		}
+	case chat.Domain{}.Name():
+		// A GATE WRITER RATHER THAN THE ROOMS' STORE: an eviction resolves
+		// no recipient and reads no room, so it needs the chat log's
+		// write authority and nothing else — not the roster a store
+		// refuses to be built without, which a node whose company is on a
+		// vendor's chat has no reason to hold.
+		rooms, err := chat.NewGateWriter(chat.GateOptions{Publisher: publisher})
+		if err != nil {
+			return gateLog{}, fmt.Errorf("engine: the node gate's writer for %s: %w", name, err)
+		}
+		gl.write = func(ctx context.Context, by, opID, node string,
+			readmit bool) (statelog.Result, error) {
+
+			// THE OPERATOR AS CHAT NAMES ONE: chat requires a handle of
+			// every actor, so the credential's id is the handle as well
+			// as the operator id — the spelling the other identity
+			// logs' records carry, so every log names the same person.
+			actor := chat.Actor{Handle: by, Kind: chat.AuthorOperator, OperatorID: by}
+			if readmit {
+				return rooms.ReadmitNode(ctx, actor, opID, node)
+			}
+			return rooms.EvictNode(ctx, actor, opID, node)
 		}
 	default:
 		return gateLog{}, fmt.Errorf("engine: domain %q claims identity and the node "+

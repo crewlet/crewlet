@@ -56,8 +56,8 @@ import (
 // space of the stream it came from, and so it is keyed by that log as well as
 // by its owner ([BackupPointKey]). Keyed by the owner alone, as a node's copy
 // is, each acknowledgement REPLACED the last: an operator who acknowledged the
-// tracker's log, then the knowledge base's, was left with the knowledge base's
-// alone, the tracker's blocked again, and the alarm — aging that one row —
+// tracker's log, then the knowledge base's, then chat's, was left with chat's
+// alone, the other two blocked again, and the alarm — aging that one row —
 // green. No sequence of acknowledgements ever covered more than one log.
 // Merging them into one row instead would need a compare-and-set to keep two
 // acknowledgements from losing each other, and an instant per log to age

@@ -36,7 +36,8 @@ const (
 // broker's grant). Each figure is a product of [StreamBudgetShare],
 // [MinDomainCeiling], every registered domain's Tier A ask and the broker's
 // grant — and nothing tied the prose to any of them, which is how the
-// threshold once read 290 GiB where the arithmetic said about 387.
+// threshold once read 290 GiB where the arithmetic said about 387, and how a
+// fifth log would have left every figure four logs wide.
 //
 // So each is COMPUTED here from the code that sizes the ceilings and looked for
 // in the pages that state it, with the whitespace of a wrapped paragraph

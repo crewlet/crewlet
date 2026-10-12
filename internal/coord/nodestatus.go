@@ -69,9 +69,10 @@ type NodeStatus struct {
 	StartedAt time.Time
 
 	// ProjectionsReady and ProjectionsTotal are how many of this node's
-	// state-log appliers — one per domain it runs — are ready, out of how many
-	// it runs. Zero of zero is a node running no state log: a company on the
-	// vendor backends, or a node without `data`.
+	// state-log appliers — one per domain it runs, chat's included — are
+	// ready, out of how many it runs. Zero of zero is a node running no
+	// state log: a company on the vendor backends, or a node without
+	// `data`.
 	//
 	// THE NAME IS HISTORICAL, and so are the wire keys
 	// (`projections_ready` / `projections_total`): they counted the

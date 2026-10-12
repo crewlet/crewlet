@@ -18,7 +18,8 @@ import (
 // reduced coverage rather than an outage. What a writer stamps is the LOWEST
 // version that reads the record, computed by [Encode] from
 // [versionedFields]; internal/tracker's RecordVersion states why, and
-// the rule is one rule across both strict domains.
+// the rule is one rule across every strict domain — the tracker, the
+// knowledge base and chat.
 //
 // It moves ONLY with the table, and exactly to the table's highest version:
 // statelogtest's declaration case refuses a build that reads a version no

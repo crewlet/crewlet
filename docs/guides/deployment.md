@@ -57,32 +57,40 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index and usage history each
-keep a log on the stream, and each log's byte ceiling is **reserved** on the volume
-holding `stream.store_dir` when its stream is created: the embedded broker
-grants a ceiling in full, up front, or refuses to create the stream at all.
-Its limit is three quarters of that volume's free space.
+The engine's own tracker, knowledge base, vector index, usage history and chat
+each keep a log on the stream, and each log's byte ceiling is **reserved** on
+the volume holding `stream.store_dir` when its stream is created: the embedded
+broker grants a ceiling in full, up front, or refuses to create the stream at
+all. Its limit is three quarters of that volume's free space.
 
-The node sizes the four ceilings together to fit half of that limit, and
+The node sizes the five ceilings together to fit half of that limit, and
 never below 1 GiB each, so:
 
-- **A first boot needs at least 5⅓ GiB free on that volume.** Three quarters
-  of 5⅓ GiB is the four 1 GiB floors. Below it the node refuses to boot with an
+- **A first boot needs at least 6⅔ GiB free on that volume.** Three quarters
+  of 6⅔ GiB is the five 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
-  the knowledge base's log for a quarter of the mutation log's, and the usage
-  log for a fixed 1 GiB — its size is a count of node-days rather than a rate,
-  so more disk buys it nothing. They are scaled down together whenever they
-  ask for more than that half — half of three quarters, so three eighths of
-  the free space — which on a first boot is every volume with less than about
-  387 GiB free (at their clamps the four ask for 145 GiB, three eighths of
-  387); from there up each log gets what it asked for.
+  the knowledge base's log for a quarter of the mutation log's, the usage log
+  for a fixed 1 GiB — its size is a count of node-days rather than a rate, so
+  more disk buys it nothing — and the chat log for 8 GiB capped at a quarter
+  of the mutation log's share (a sixteenth of the free space, so the full
+  8 GiB from 128 GiB free), which on a small volume keeps the vector
+  changelog's room for a model change clear of the headroom alarm. Chat's does
+  not follow the mutation log's as the knowledge base's does, so if you set
+  `stream.tracker_log_max_bytes` for a long blocked trim, set
+  `stream.chat_log_max_bytes` for the same horizon (about 30 MB a day at the
+  declared census) or the chat log fills first. They are scaled down
+  together whenever they ask for more than that half — half of three
+  quarters, so three eighths of the free space — which on a first boot is
+  every volume with less than about 408 GiB free (at their clamps the five
+  ask for 153 GiB, three eighths of 408); from there up each log gets what it
+  asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
-  `stream.usage_log_max_bytes` later,
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+  `stream.usage_log_max_bytes` or `stream.chat_log_max_bytes` later,
   changes nothing about streams that already exist; `crewlet retention
   set-capacity` is what changes a running log's ceiling. A log created later —
   one a new version adds — is sized from what the existing logs' ceilings leave

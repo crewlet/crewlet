@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -364,10 +365,24 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // rule that took half the mutation log's ceiling asked for 8 GiB there and the
 // share scaled it to 6.9 GiB, under the peak — and beside an operator's 4 GiB
 // mutation log it asked for 2 GiB.
+//
+// AND HOLDS IT WITHOUT ALARMING. The re-embedding is an excursion this log is
+// designed for, so its created ceiling must leave the peak clear of the
+// `log_headroom` threshold, with every registered log — the chat log included —
+// in the budget: chat's unset ask came out of the changelog's room, and asked
+// for in full on this volume it created the changelog at 8.4 GiB, where the
+// peak leaves about 6 % headroom and the alarm fires on a designed operation.
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
 	const yearFivePeak = int64(8_460_000_000)
+	if !slices.ContainsFunc(registeredDomains(), func(d statelog.Domain) bool {
+		return d.Name() == chat.Domain{}.Name()
+	}) {
+		t.Fatal("the chat domain is not registered, so this sizes a budget it " +
+			"is not in")
+	}
+	quiet := int64(float64(yearFivePeak) / (1 - statelog.HeadroomAlarmFraction))
 	host := sizingHost{budget: jetstream.StorageBudget{Limit: free / 4 * 3,
 		Source: jetstream.BudgetServerStore}}
 	for name, stream := range map[string]config.Stream{
@@ -379,10 +394,11 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: sizeCeilings: %v", name, err)
 		}
-		if got := sized[search.Domain{}.Name()].Bytes; got < yearFivePeak {
-			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
-				"under the reference company's fifth-year model change (%d)",
-				name, got, free, yearFivePeak)
+		if got := sized[search.Domain{}.Name()].Bytes; got < quiet {
+			t.Errorf("%s: the vector changelog is created at %d bytes on %d free; "+
+				"the reference company's fifth-year model change (%d) needs %d "+
+				"to stay clear of the %v headroom alarm", name, got, free,
+				yearFivePeak, quiet, statelog.HeadroomAlarmFraction)
 		}
 	}
 }
@@ -616,8 +632,9 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all four fit — the usage
-// log at its 1 GiB default beside the three that failed.
+// Every log is sized inside one budget now, and all five fit — the usage
+// log at its 1 GiB default and the chat log scaled into the same pool beside
+// the three that failed.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 7.6 GiB, in tenths so the arithmetic stays in integers.
@@ -637,6 +654,30 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 	if reserved > brokerCap {
 		t.Errorf("the state logs reserved %d bytes of a %d-byte cap", reserved, brokerCap)
+	}
+}
+
+// THE BROKER'S STORE FLOOR HOLDS EVERY REGISTERED LOG AT ITS OWN FLOOR, AND THE
+// STREAMS THAT RESERVE NOTHING BESIDE THEM.
+//
+// config.StoreMaxBytesFloor is the smallest store_max_bytes Tier A admits, and
+// its own doc derives it: every state log at [MinDomainCeiling], plus a
+// gibibyte for the mailboxes, the event stream and the coordination buckets,
+// which reserve nothing and grow against the same limit. Config can only hold
+// the literal, and the literal is how it went wrong — it stayed at five
+// gibibytes when chat made the logs five, main's own literal check passed, and
+// a node set to the floor provisioned its way to a refusal on whichever stream
+// came last. Here the register is in reach, so a sixth domain fails this
+// before it fails a boot.
+func TestTheStoreFloorHoldsEveryRegisteredLogAtItsFloor(t *testing.T) {
+	t.Parallel()
+	const unreserved = gib
+	logs := int64(len(registeredDomains()))
+	if need := logs*MinDomainCeiling + unreserved; config.StoreMaxBytesFloor < need {
+		t.Errorf("config.StoreMaxBytesFloor is %d bytes, and %d registered logs at "+
+			"their %d-byte floor plus %d for the streams that reserve nothing need "+
+			"%d: raise the floor to %d", config.StoreMaxBytesFloor, logs,
+			MinDomainCeiling, unreserved, need, need)
 	}
 }
 
@@ -670,8 +711,8 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 // A BOOT THAT STILL CANNOT RESERVE ITS LOGS SAYS WHAT IT NEEDED, WHAT IT HAD
 // AND WHAT TO CHANGE.
 //
-// The broker's refusal names none of the three, and the operator who got it
-// went looking at a disk that had room for two of the three logs.
+// The broker's refusal names none of them, and the operator who got it went
+// looking at a disk that had room for two of the three logs there then were.
 //
 // And WHAT TO CHANGE is only what this node can reach. Shrinking a log that
 // already exists is `crewlet retention set-capacity`, which needs a node whose
@@ -686,10 +727,12 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 		says     []string
 		never    []string
 	}{
-		// Every derived ceiling is at its floor and three floors do not
+		// Every derived ceiling is at its floor and the floors do not
 		// fit: the tracker and vector logs take two gibibytes, and the
-		// pages log's one is refused with half a gibibyte left. A ceiling
-		// at the floor goes no lower, so room is the only remedy.
+		// pages log's one is refused with half a gibibyte left — before
+		// the usage and chat logs, which the register reaches after it,
+		// are asked for. A ceiling at the floor goes no lower, so room is
+		// the only remedy.
 		"a derived ceiling at its floor": {
 			headroom: 5 * gib / 2,
 			needed:   gib,
@@ -944,5 +987,63 @@ func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
 					unsized.Name(), unsized.Stream().Name, host.ensured)
 			}
 		})
+	}
+}
+
+// THE CHAT LOG'S UNSET ASK IS THE DOMAIN'S OWN DECLARED NUMBER, capped by the
+// disk, and a set one is the operator's.
+//
+// This is the one ceiling in the switch whose default does not live in
+// internal/config, because it is sized against a census
+// ([chat.ChatMessagesPerDay]) that only the domain declares — and config cannot
+// import the domain. So the number could drift into two spellings exactly as
+// `internal/textcut`'s cut rule and `internal/whsec`'s secret format each did,
+// with a doc comment on each side claiming they matched. The assertion is
+// against [chat.ChatLogMaxBytes] itself rather than against a literal, which
+// is what makes it a tie rather than a second copy.
+func TestTheChatLogAsksForWhatItsDomainDeclares(t *testing.T) {
+	t.Parallel()
+	// ROOM TO SPARE, so what is measured is the ask rather than the cap:
+	// a quarter of this is well past the declared default.
+	const roomy = 200 * gib
+	asked, derived := chatMaxBytes(config.Stream{}, roomy)
+	if !derived || asked != chat.ChatLogMaxBytes {
+		t.Errorf("unset asked for %d (derived %v), want the domain's own %d — "+
+			"a second spelling of this number is one that stops matching the "+
+			"census it was sized against", asked, derived, chat.ChatLogMaxBytes)
+	}
+
+	// AND CAPPED BY THE DISK, at a quarter of the share the mutation log
+	// derives: the declared number is chosen for a blocked trim rather than
+	// for this machine, a broker refuses a reservation it cannot back, and
+	// on the volume most deployments have the full ask comes out of the
+	// vector changelog's room for a model change. 64 GiB is that volume,
+	// and its cap of 4 GiB is above the floor, so the quarter is what is
+	// measured rather than the floor.
+	const small = 64 * gib
+	capped, derived := chatMaxBytes(config.Stream{}, small)
+	if want := config.DerivedLogMaxBytes(small) / config.DerivedChatLogDivisor; !derived ||
+		capped != want || want <= config.LogMaxBytesFloor {
+		t.Errorf("on a %d-byte volume it asked for %d (derived %v), want %d — "+
+			"a quarter of what the mutation log derives there", small, capped,
+			derived, want)
+	}
+	if capped >= chat.ChatLogMaxBytes {
+		t.Errorf("the cap did not bite at %d free: asked %d against a declared "+
+			"%d, so this case is measuring nothing", small, capped, chat.ChatLogMaxBytes)
+	}
+	// AND THE CAP NEVER TAKES IT UNDER THE FLOOR every state log shares.
+	if tiny, _ := chatMaxBytes(config.Stream{}, 8*gib); tiny != config.LogMaxBytesFloor {
+		t.Errorf("on 8 GiB free it asked for %d, want the shared floor %d",
+			tiny, config.LogMaxBytesFloor)
+	}
+
+	// AND AN OPERATOR'S OWN VALUE IS NEVER SCALED HERE. They named a
+	// ceiling for a broker they can see; lowering it silently would be the
+	// engine deciding a limit an emergency grant had just raised.
+	set, derived := chatMaxBytes(config.Stream{ChatLogMaxBytes: 3 * gib}, small)
+	if derived || set != 3*gib {
+		t.Errorf("a set ceiling came back as %d (derived %v), want 3 GiB "+
+			"explicit", set, derived)
 	}
 }

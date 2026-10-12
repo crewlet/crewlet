@@ -54,7 +54,7 @@ func kinds(alarms []statelog.Alarm) []statelog.Kind {
 func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) {
 	t.Parallel()
 	since := reportAt.Add(-46 * time.Hour)
-	logs := []string{"tracker", "vectors", "pages", "usage"}
+	logs := []string{"tracker", "vectors", "pages", "usage", "chat"}
 	var domains []statelog.DomainInputs
 	for _, name := range logs {
 		domains = append(domains, heldDomain(name, noBackup(), since))

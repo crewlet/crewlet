@@ -466,13 +466,16 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 // barrierOn puts one record on a domain's log that no gate drops and no
 // build refuses to decode, and answers its sequence.
 //
-// IN THE DOMAIN'S OWN ENCODING, through the engine's own [barrierEncoder]: a
+// IN THE DOMAIN'S OWN ENCODING, through the engine's own [barrierEncoderFor]: a
 // tracker-shaped barrier on the knowledge base's log is a record that log's
 // envelope decoder need not accept, and a case would be measuring that
 // instead.
 func barrierOn(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
-	encode := barrierEncoder(running.domain)
+	encode, err := barrierEncoderFor(running.domain)
+	if err != nil {
+		t.Fatalf("%s's barrier encoder: %v", running.domain.Name(), err)
+	}
 	if encode == nil {
 		t.Fatalf("%s has no barrier encoding to put a record on its log with",
 			running.domain.Name())

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -43,7 +44,17 @@ type domainFeed struct {
 	envel  func(payload []byte) (statelog.Envelope, error)
 }
 
-// Consume implements [tracker.DomainConsumer] and [pages.DomainConsumer].
+// One adapter serves every domain that declares a wake feed, so each
+// domain's own consumer seam is asserted here rather than left to whichever
+// literal in [Engine.feedFor] happens to hand it over.
+var (
+	_ tracker.DomainConsumer = domainFeed{}
+	_ pages.DomainConsumer   = domainFeed{}
+	_ chat.DomainConsumer    = domainFeed{}
+)
+
+// Consume implements each feed-declaring domain's DomainConsumer —
+// [tracker.DomainConsumer], [pages.DomainConsumer] and [chat.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {
@@ -155,6 +166,12 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 		translator, opener = tracker.NewTranslator(), tracker.FeedSource{Log: records}
 	case pages.Domain{}.Name():
 		translator, opener = pages.NewTranslator(e.skillsContainer), pages.FeedSource{Log: records}
+	case chat.Domain{}.Name():
+		// NO SKILLS ARGUMENT, and the asymmetry is the domain rather
+		// than an omission: the reserved container quiets PAGES whose
+		// edits are machinery, and chat has no equivalent — every
+		// message in a company's own rooms is somebody talking.
+		translator, opener = chat.NewTranslator(), chat.FeedSource{Log: records}
 	}
 	declared := running.domain.FeedGroup()
 	switch {

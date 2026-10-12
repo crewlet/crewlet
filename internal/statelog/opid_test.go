@@ -182,14 +182,14 @@ func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
 func TestAnOperationIDIsNamedForExactlyOneCall(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
-	const name = "work-purge-task-1-0123456789abcdef"
+	const name = "chat-erase-room-1-0123456789abcdef"
 	minted := statelog.NewOpID(at, name)
 	for id, want := range map[string]bool{
 		minted: true,
 		statelog.DeriveOpID(at, name, "identity"): true,
-		statelog.StepOpID(minted, "evict"):        false,
+		statelog.StepOpID(minted, "chat"):         false,
 		statelog.NewOpID(at, name+"0"):            false,
-		statelog.NewOpID(at, "work-purge-task-1"): false,
+		statelog.NewOpID(at, "chat-erase-room-1"): false,
 		statelog.NewOpID(at, "x"+name[1:]):        false,
 		statelog.NewOpID(at, ""):                  false,
 		minted[:36] + "-" + name:                  false,

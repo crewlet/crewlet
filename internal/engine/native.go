@@ -752,10 +752,13 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 // [registeredDomains] declares.
 //
 // EXPOSED SO A CALLER DOES NOT WRITE THE LIST AGAIN. A second copy is what
-// makes a fourth domain silently absent from whatever walks it — the shape
-// that keeps a fleet comparison, an operator listing or a report certifying
-// two domains after somebody added a third.
-func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
+// makes a new domain silently absent from whatever walks it — the shape that
+// keeps a fleet comparison, an operator listing, a report or a fake of a
+// node's gate answer certifying two domains after somebody added a third. A
+// function of the build rather than a method of an engine, because it is: a
+// fake that stands in for a node has no engine to ask, and is exactly the
+// caller that wrote the list again.
+func Domains() []statelog.Domain { return registeredDomains() }
 
 // Tracker is this node's OWN copy's tracker read side, or nil — what this
 // node's router answers from while its copy serves, and what a test

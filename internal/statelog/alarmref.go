@@ -43,8 +43,9 @@ var alarmMeaning = map[Kind]string{
 	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
-		"rather than dropping records; on the tracker and pages logs an " +
-		"eviction still lands in the gate reserve above that ceiling.",
+		"rather than dropping records; on the logs that claim identity (the " +
+		"tracker's, the pages log and chat's) an eviction still lands in the " +
+		"gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
 		"does not advance that log either way. One alarm names every such " +
@@ -94,7 +95,8 @@ var alarmMeaning = map[Kind]string{
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its census allows (125 a day per agent seat, at least one seat, " +
 		"plus what the object store's collector reads on its own schedule), " +
-		"so every sizing decision under it is stale.",
+		"so whatever was derived from that rate no longer describes the " +
+		"company.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
 		"and some were not there, or were there at the wrong size or under the " +

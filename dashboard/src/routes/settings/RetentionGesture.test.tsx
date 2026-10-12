@@ -60,10 +60,27 @@ const logRow = (domain: string, over: Partial<RetentionDomain> = {}): RetentionD
   ...over,
 });
 
-/** The two logs every gate gesture writes, both read. */
-const bothLogs = (): RetentionDomain[] => [logRow("tracker"), logRow("pages")];
+/**
+ * Every log a gate gesture writes, and where the golden's applied gesture put
+ * its record on each.
+ *
+ * READ OFF THE ENGINE'S OWN ANSWER rather than listed here. A literal pair
+ * went stale the day the gate began writing a third log: a serving node built
+ * from it never applied that log's record, which is exactly the node a held
+ * gesture must NOT be let go of on — so the cases asserting a release would
+ * have been describing a shape the engine no longer produces. Derived, a log
+ * the gate starts writing is covered by every case below the day the golden
+ * carries it.
+ */
+const gateLogs = golden.answers["applied"]!.domains.map(({ domain, position }) => {
+  if (!position) throw new Error(`the golden's applied gesture has no position on ${domain}`);
+  return { domain, seq: position.seq };
+});
 
-function report(nodes: RetentionNode[], domains: RetentionDomain[] = bothLogs()): RetentionReport {
+/** Every log a gate gesture writes, each read. */
+const everyLog = (): RetentionDomain[] => gateLogs.map(({ domain }) => logRow(domain));
+
+function report(nodes: RetentionNode[], domains: RetentionDomain[] = everyLog()): RetentionReport {
   return {
     v: 1,
     node_id: "node-1",
@@ -82,7 +99,7 @@ function held(
   gestures: Parameters<typeof heldGestures>[0],
   nodes: RetentionNode[],
   servedBy?: string,
-  domains: RetentionDomain[] = bothLogs(),
+  domains: RetentionDomain[] = everyLog(),
 ) {
   return heldGestures(gestures, { nodes, domains, node_id: servedBy ?? "" });
 }
@@ -171,23 +188,51 @@ test("a held gesture is let go of exactly when the report shows it", () => {
   expect(Object.keys(held(readmitted, [node({ evicted })]))).toEqual(["node-4:readmit"]);
 });
 
-/** The serving node's own row, applied through `seq` on both logs. */
-const servingNode = (seq: { tracker: number; pages: number }, generation = 1): RetentionNode =>
+/**
+ * The serving node's own row, applied through `seq(log, record)` on every log
+ * the gate writes — `record` being where the golden's gesture put its record
+ * on that log.
+ */
+const servingNode = (seq: (log: string, record: number) => number, generation = 1): RetentionNode =>
   node({
     node_id: "node-1",
     live: true,
     domains: Object.fromEntries(
-      (["tracker", "pages"] as const).map((domain) => [
+      gateLogs.map(({ domain, seq: record }) => [
         domain,
         {
           generation,
-          seq: seq[domain],
-          applied_through: seq[domain],
+          seq: seq(domain, record),
+          applied_through: seq(domain, record),
           generation_state: "current",
         },
       ]),
     ) as RetentionNode["domains"],
   });
+
+/** Applied past every record the golden's gesture wrote. */
+const pastEvery = (generation = 1) => servingNode((_, record) => record + 10, generation);
+
+/** Applied through none of them. */
+const behindEvery = () => servingNode(() => 1);
+
+/**
+ * Every way a report can fail to prove a node's gate state, one log at a time:
+ * that log's evictions unread, or no row for it at all.
+ */
+const unprovenLogs = (): [string, RetentionDomain[]][] =>
+  gateLogs.flatMap(({ domain }): [string, RetentionDomain[]][] => [
+    [
+      `the ${domain} log unread`,
+      gateLogs.map((l) =>
+        logRow(l.domain, l.domain === domain ? { evictions_unreadable: true } : {}),
+      ),
+    ],
+    [
+      `no row for the ${domain} log the gesture wrote`,
+      gateLogs.filter((l) => l.domain !== domain).map((l) => logRow(l.domain)),
+    ],
+  ]);
 
 // A COMPLETE GESTURE A LATER CHANGE OVERTOOK IS LET GO OF. The operator evicts
 // node-4 here and, before the refetch lands, somebody readmits it from the
@@ -198,23 +243,24 @@ const servingNode = (seq: { tracker: number; pages: number }, generation = 1): R
 test("a complete eviction somebody else undid is let go of once the report includes it", () => {
   const complete = { opId: "op", force: false, answer: golden.answers["applied"] };
   const gestures = { "node-4:evict": complete };
-  // THE GOLDEN'S RECORDS: the tracker's at 918280002, the pages log's at 4410.
-  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  // PAST THE GOLDEN'S RECORD ON EVERY LOG IT WROTE.
+  const past = pastEvery();
   expect(held(gestures, [node(), past], "node-1")).toEqual({});
-  // NOT WHILE THE SERVING NODE IS BEHIND EITHER RECORD — a `pending` record
+  // NOT WHILE THE SERVING NODE IS BEHIND ANY ONE RECORD — a `pending` record
   // it has not applied is exactly why a report disagrees — nor on another
   // generation's number space, nor when it cannot say where it is.
-  for (const [why, nodes, servedBy] of [
-    [
-      "behind the pages record",
-      [node(), servingNode({ tracker: 918280010, pages: 4409 })],
+  const cases: [string, RetentionNode[], string | undefined][] = [
+    ...gateLogs.map(({ domain }): [string, RetentionNode[], string] => [
+      `behind the ${domain} record`,
+      [node(), servingNode((log, record) => (log === domain ? record - 1 : record + 10))],
       "node-1",
-    ],
-    ["another generation", [node(), servingNode({ tracker: 918280010, pages: 4420 }, 2)], "node-1"],
+    ]),
+    ["another generation", [node(), pastEvery(2)], "node-1"],
     ["no row of its own", [node()], "node-1"],
     ["no serving node named", [node(), past], undefined],
-  ] as const) {
-    expect(Object.keys(held(gestures, [...nodes], servedBy)), why).toEqual(["node-4:evict"]);
+  ];
+  for (const [why, nodes, servedBy] of cases) {
+    expect(Object.keys(held(gestures, nodes, servedBy)), why).toEqual(["node-4:evict"]);
   }
   // AND AN UNFINISHED GESTURE IS NEVER LET GO OF THIS WAY: a request can
   // still finish it.
@@ -233,17 +279,10 @@ test("a complete eviction is held while the serving node could not read the evic
   const gestures = {
     "node-4:evict": { opId: "op", force: false, answer: golden.answers["applied"] },
   };
-  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  const past = pastEvery();
   expect(held(gestures, [node(), past], "node-1")).toEqual({});
-  for (const [why, domains] of [
-    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
-    [
-      "the tracker log unread",
-      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
-    ],
-    ["no row for a log the gesture wrote", [logRow("tracker")]],
-  ] as const) {
-    expect(Object.keys(held(gestures, [node(), past], "node-1", [...domains])), why).toEqual([
+  for (const [why, domains] of unprovenLogs()) {
+    expect(Object.keys(held(gestures, [node(), past], "node-1", domains)), why).toEqual([
       "node-4:evict",
     ]);
   }
@@ -262,42 +301,39 @@ test("a complete readmission is held while the serving node could not read the e
       answer: { ...golden.answers["pending"]!, evicted: false },
     },
   };
-  // BEHIND BOTH RECORDS, so only the node's own row could release it.
-  const behind = servingNode({ tracker: 1, pages: 1 });
+  // BEHIND EVERY RECORD, so only the node's own row could release it.
+  const behind = behindEvery();
   expect(held(gestures, [node(), behind], "node-1")).toEqual({});
-  for (const [why, domains] of [
-    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
-    [
-      "the tracker log unread",
-      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
-    ],
-    ["no row for a log the gesture wrote", [logRow("tracker")]],
-  ] as const) {
-    expect(Object.keys(held(gestures, [node(), behind], "node-1", [...domains])), why).toEqual([
+  for (const [why, domains] of unprovenLogs()) {
+    expect(Object.keys(held(gestures, [node(), behind], "node-1", domains)), why).toEqual([
       "node-4:readmit",
     ]);
   }
 });
 
 test("a log whose evictions could not be read says so above the node block", () => {
+  // ONE log unread, beside every other read: the notice names one.
   query.data = report(
     [node()],
-    [logRow("tracker"), logRow("pages", { evictions_unreadable: true })],
+    gateLogs.map(({ domain }, i) =>
+      logRow(domain, i === gateLogs.length - 1 ? { evictions_unreadable: true } : {}),
+    ),
   );
   render(
     <Router>
       <Panels />
     </Router>,
   );
+  const unread = gateLogs[gateLogs.length - 1]!.domain;
   expect(screen.getByText(/evicted nodes may not show/).textContent).toBe(
-    "Couldn’t read pages’s evictions, so evicted nodes may not show.",
+    `Couldn’t read ${unread}’s evictions, so evicted nodes may not show.`,
   );
   expect(screen.getAllByText(/evicted nodes may not show/).length).toBe(1);
 });
 
 test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {
   query.refetch = vi.fn();
-  query.data = report([node(), servingNode({ tracker: 1, pages: 1 })]);
+  query.data = report([node(), behindEvery()]);
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -323,9 +359,9 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   expect(screen.getByRole("button", { name: "Eviction sent…" })).toBeTruthy();
 
   // READMITTED FROM THE COMMAND LINE, and the serving node has applied past
-  // both of this gesture's records: node-4 reads counted, and the row is
+  // every one of this gesture's records: node-4 reads counted, and the row is
   // the node's own state again.
-  query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420 })]);
+  query.data = report([node(), pastEvery()]);
   rerender(
     <Router>
       <Panels />

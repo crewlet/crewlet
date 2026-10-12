@@ -25,9 +25,15 @@ import (
 //
 // Two shapes, because an `unknown` answer is two different facts and the retry
 // has to be right for both: the pages record never landed, or it landed and the
-// answer was lost. In both, the tracker's log — which applied the first time —
-// answers the retry from its own rows at the position it already holds, and
-// gains no record.
+// answer was lost. In both, every other identity log — each applied the first
+// time, the tracker's among them — answers the retry from its own rows at the
+// position it already holds, and gains no record.
+//
+// EVERY IDENTITY LOG IS HELD TO THAT, read off the running set rather than
+// named: a log that re-appended its gate record on the retry still shows one
+// eviction row, because the row is keyed by node, so the append count and the
+// log's end are the only witnesses — and a log this case did not count would
+// write the duplicate unseen.
 //
 // # And it is the rows answering, not the broker
 //
@@ -56,7 +62,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 			// resolve.
 			flaky, logs, recs := recordingGate(t, e, back)
 			faulted := false
-			trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
+			pagesName := pages.Domain{}.Name()
 			for i := range logs {
 				if logs[i].domain != pagesName {
 					continue
@@ -88,18 +94,22 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 					"itself complete: %+v", first)
 			}
 			got := byDomain(first)
-			if got[trackerName].Outcome != statelog.OutcomeApplied ||
-				got[pagesName].Outcome != statelog.OutcomeUnknown {
-				t.Fatalf("the partial gesture answered %+v, want the tracker applied "+
-					"and the pages log unknown", first.Domains)
+			for _, running := range identity {
+				name, want := running.domain.Name(), statelog.OutcomeApplied
+				if name == pagesName {
+					want = statelog.OutcomeUnknown
+				}
+				if got[name].Outcome != want {
+					t.Fatalf("the partial gesture answered %s on %s's log, want %s: %+v",
+						got[name].Outcome, name, want, first.Domains)
+				}
+				if got[name].OpID != domainOpID(req.OpID, false, name, away) {
+					t.Fatalf("%s's operation is %q, want it derived from %q",
+						name, got[name].OpID, req.OpID)
+				}
 			}
 			if !got[pagesName].Retry() {
 				t.Fatalf("an unknown outcome is not advised a retry: %+v", got[pagesName])
-			}
-			if got[trackerName].OpID != domainOpID(req.OpID, false, trackerName, away) ||
-				got[pagesName].OpID != domainOpID(req.OpID, false, pagesName, away) {
-				t.Fatalf("the logs' operations are %q and %q, want each derived from "+
-					"%q", got[trackerName].OpID, got[pagesName].OpID, req.OpID)
 			}
 			for _, running := range identity {
 				waitApplied(t, running)
@@ -111,25 +121,31 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 				t.Fatalf("the retry: %v (%+v)", err, second)
 			}
 			again := byDomain(second)
-			if again[trackerName].Position != got[trackerName].Position {
-				t.Fatalf("the tracker answered the retry at %s, want the %s it "+
-					"already held — a retry is the same operation",
-					again[trackerName].Position, got[trackerName].Position)
-			}
-			wantAppends := map[string]int{trackerName: 0, pagesName: 1}
-			if landed {
-				wantAppends[pagesName] = 0
-			}
-			for domain, want := range wantAppends {
-				if got := appends(recs)[domain] - appended[domain]; got != want {
+			// ONE APPEND ON THE FAULTED LOG WHERE ITS RECORD NEVER LANDED, and
+			// none anywhere else: every other log's rows hold the operation.
+			after := logEnds(t, identity)
+			for _, running := range identity {
+				name, want := running.domain.Name(), 0
+				if name == pagesName && !landed {
+					want = 1
+				}
+				if got := appends(recs)[name] - appended[name]; got != want {
 					t.Fatalf("the retry put %d record(s) on %s's log, want %d — a "+
 						"log whose rows already hold the operation answers from "+
-						"them, and only a missing one is written", got, domain, want)
+						"them, and only a missing one is written", got, name, want)
 				}
-			}
-			if after := logEnds(t, identity); after[trackerName] != before[trackerName] {
-				t.Fatalf("the retry wrote the tracker's log again (%d → %d), which "+
-					"already held the gesture", before[trackerName], after[trackerName])
+				if name == pagesName {
+					continue
+				}
+				if again[name].Position != got[name].Position {
+					t.Fatalf("%s answered the retry at %s, want the %s it already "+
+						"held — a retry is the same operation",
+						name, again[name].Position, got[name].Position)
+				}
+				if after[name] != before[name] {
+					t.Fatalf("the retry wrote %s's log again (%d → %d), which "+
+						"already held the gesture", name, before[name], after[name])
+				}
 			}
 			for _, running := range identity {
 				waitApplied(t, running)

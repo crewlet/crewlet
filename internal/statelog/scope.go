@@ -22,9 +22,9 @@ const ScopeSeparator = "/"
 // ScopePath builds a scope path from its segments, skipping empty ones so a
 // missing id can never produce a path with a hole in it.
 //
-// ONE SPELLING FOR EVERY DOMAIN. The tracker and the wiki each wrote this
-// function, identically; a third copy that kept a blank segment would build
-// `project//task/7` where the others build `project/task/7`, and
+// ONE SPELLING FOR EVERY DOMAIN. The tracker, the wiki and chat each wrote
+// this function, identically; a fourth copy that kept a blank segment would
+// build `project//task/7` where the others build `project/task/7`, and
 // [Ancestors] and the deferral probe would then read two paths for one object
 // — a write that steps over a record deferred on its container.
 func ScopePath(segments ...string) string {

@@ -1530,13 +1530,19 @@ Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 23 % at the 10.2 GiB it is created with
-   once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of about 387 GiB or more gets. The alarm threshold is
-   10 %, clear of each. The corpus is the company's whole history — about
-   17 MB per agent seat per year — so a larger or older company sets
-   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
-   per year of history.
+   64 GiB volume asks for, and at about 88 % at the 64 GiB a volume of about
+   408 GiB or more gets. A log is created at its share of the one budget
+   rather than at its ask, though, and on that 64 GiB volume the five logs'
+   asks scale the vector log to about 9.2 GiB, where the same re-embedding
+   bottoms at about 14 % — clear of the alarm threshold of 10 %. That margin
+   is why an unset chat log asks for a sixteenth of the free space rather
+   than its whole 8 GiB on a small volume: asked for in full, it scaled the
+   vector log to 8.4 GiB and the re-embedding under the alarm. A first boot
+   needs about 62 GiB free for the ceiling it creates to clear the alarm; on
+   less, set `stream.tracker_vectors_max_bytes`. The corpus is the company's
+   whole history — about 17 MB per agent seat per year — so a larger or older
+   company sets that field at about twice it: 34 MB per agent seat per year
+   of history.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 

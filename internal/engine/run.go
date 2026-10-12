@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -80,6 +81,10 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+
+	// chatLive is [Options.ChatLive], held so startStateLog can hand it to
+	// the chat applier. Nil is a documented no-op.
+	chatLive ChatLive
 
 	// searching is how many knowledge scans this node is running right
 	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
@@ -731,6 +736,30 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 
+	// ChatLive is the engine's own chat's live half: where a committed
+	// chat record is announced, and the poster a native seat's working
+	// indicator is raised on. It is an OPTION rather than a setter because
+	// of WHEN the applier is built.
+	//
+	// Whichever of [New] and [Engine.startNativeFor] — a node handed its
+	// first company by an apply — first starts the native runtime brings
+	// the state log up (startNative -> startStateLog), and the applier
+	// takes its observer at construction — so by the time a caller holds an
+	// *Engine to call a setter on, the thing that would have to be told may
+	// already exist and be running. Every other late seam here
+	// (SetPosture, the config writer) is installed after New precisely
+	// because nothing reads it during one.
+	//
+	// The process builds and starts the hub FIRST and hands it here, which
+	// is what [api.EngineChatLive] documents and why every seam that hub
+	// reads through is a function: none of them has to exist yet, this one
+	// included.
+	//
+	// Nil is legal and is what a company off native chat has: the applier
+	// still writes every row, and the push and the indicator are what is
+	// absent.
+	ChatLive ChatLive
+
 	// Environment is what a company's `${VAR}` references fall back to
 	// behind the secret store, and what the per-run endpoints' settings are
 	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
@@ -768,6 +797,21 @@ type Options struct {
 	// rather than to a deployment, and the knob exists only so a case can
 	// watch a retry bring a child up without waiting fifteen seconds for it.
 	seatRetryBase time.Duration
+}
+
+// ChatLive is what the process hands the engine for its own chat's live half.
+//
+// ONE VALUE FOR BOTH HALVES, because both are one hub: the room a person is
+// watching is where a committed message is pushed AND where "is thinking…"
+// appears. Two options could be handed two objects, and then one of them is a
+// poster no socket is attached to — an indicator raised where nobody can see
+// it, with nothing anywhere to say so.
+//
+// DECLARED HERE, by the consumer, and kept to what the engine calls: the
+// applier's observer and the indicator's poster. The api's hub implements both.
+type ChatLive interface {
+	chat.Observer
+	notify.StatusPoster
 }
 
 // New assembles an engine.
@@ -937,6 +981,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
+		chatLive:            opts.ChatLive,
 		mode:                mode,
 		incarnation:         incarnation,
 		id:                  nodeID,

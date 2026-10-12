@@ -201,7 +201,7 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 //
 // Under `backup_floor: operator` every log is acknowledged on its own, so the
 // logs' backups have one age each. The reading used to carry ONE age, the
-// newest point's, and an operator who had just acknowledged one log read a
+// newest point's, and an operator who had just acknowledged chat's log read a
 // green alarm beside a tracker log whose acknowledgement was days old and a
 // pages log that had none — both trims blocked, neither said.
 func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
@@ -210,7 +210,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 	fresh.BackupAt = reportAt.Add(-time.Hour)
 	stale := healthyDomain("pages", true)
 	stale.BackupAt = reportAt.Add(-30 * time.Hour)
-	uncovered := healthyDomain("usage", false)
+	uncovered := healthyDomain("chat", true)
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:       "node-1",
 		At:           reportAt,
@@ -231,7 +231,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 		// THE LOG NOTHING COVERS LEADS, ahead of one whose copy is merely
 		// old: it is the one whose trim cannot advance at all.
 		if !strings.Contains(a.Detail, "no verified backup of this log") {
-			t.Errorf("the backup alarm leads with %q, want usage's missing backup", a.Detail)
+			t.Errorf("the backup alarm leads with %q, want chat's missing backup", a.Detail)
 		}
 	}
 	if _, wrong := fired["tracker"]; wrong {
@@ -241,8 +241,8 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 		t.Errorf("pages fired %q, want its own backup's 30h age — not the "+
 			"tracker's hour", got)
 	}
-	if got := fired["usage"]; !strings.Contains(got, "no verified backup of this log") {
-		t.Errorf("usage fired %q, want the absence of a backup covering it", got)
+	if got := fired["chat"]; !strings.Contains(got, "no verified backup of this log") {
+		t.Errorf("chat fired %q, want the absence of a backup covering it", got)
 	}
 
 	// AND THE INSTANT IS ON THE ROW, absent where nothing covers the log —
@@ -259,7 +259,7 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 	}
 	for _, d := range wire.Domains {
 		_, has := d["backup_at"]
-		if want := d["domain"] != "usage"; has != want {
+		if want := d["domain"] != "chat"; has != want {
 			t.Errorf("%v carries backup_at = %v, want present %v", d["domain"], has, want)
 		}
 	}

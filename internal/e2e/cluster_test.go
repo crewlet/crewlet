@@ -890,7 +890,14 @@ func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	//
+	// OVER THE ENGINE'S OWN REGISTER, never over a list written here. It
+	// WAS a list here — "tracker", "vectors", "pages", "usage" — and a
+	// fifth domain added to the register would have left this case
+	// asserting four of five while reporting a pass, which is the exact
+	// shape of the failure it exists to catch.
+	for _, domain := range engine.Domains() {
+		want := domain.Name()
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
@@ -1406,7 +1413,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 // had not yet applied a record on a log the case never wrote — a node's usage
 // day, published at boot and whenever a fingerprint moves; an embedding the
 // duty filed — would differ from its peers for a reason that is timing rather
-// than divergence. The domain list is the engine's ([engine.Engine.Domains]),
+// than divergence. The domain list is the engine's ([engine.Domains]),
 // for the reason [replicatedDigest] reads it there.
 //
 // AT ONE END, which is what makes the comparison a property of the rows: a
@@ -1449,7 +1456,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 		t.Fatalf("a JetStream client on member 0: %v", err)
 	}
 	var out []statelog.Position
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		name := domain.Stream().Name
 		stream, err := js.Stream(t.Context(), name)
 		if err != nil {
@@ -1484,7 +1491,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		for table, class := range domain.Tables() {
 			if class != statelog.Replicated {
 				continue

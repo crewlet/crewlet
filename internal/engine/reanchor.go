@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -189,11 +190,11 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 // generationEncoder is the domain's own record of a reanchor, or its
 // declaration that it keeps none.
 //
-// A SWITCH, like [barrierEncoder] and [stateLog.publisherFor], because what a
-// record on a domain's log looks like is the domain's, and the register is the
-// one place every domain this build runs is named. A registered domain with no
-// case here could never be re-anchored, which is refused by name rather than
-// discovered by an operator mid-incident.
+// A SWITCH, like [barrierEncoderFor] and [stateLog.publisherFor], because what
+// a record on a domain's log looks like is the domain's, and the register is
+// the one place every domain this build runs is named. A registered domain with
+// no case here could never be re-anchored, which is refused by name rather
+// than discovered by an operator mid-incident.
 func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
@@ -204,6 +205,8 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 		return search.GenerationRecord{}, nil
 	case usage.Domain{}.Name():
 		return usage.GenerationRecord{}, nil
+	case chat.Domain{}.Name():
+		return chat.GenerationRecord{}, nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no "+
 		"generation record, so a recreated log of it could never be re-anchored",

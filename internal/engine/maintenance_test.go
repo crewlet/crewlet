@@ -53,6 +53,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// THE CHAT DOMAIN'S OPERATION LEDGER — see `pages_ops` below
+		// for why every `<domain>_ops` table is on this list, and why
+		// each is a per-node job.
+		"chat_ops",
 		"conversation_sessions",
 		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
 		// ages keeps the marker every removal leaves for the life of
@@ -78,8 +82,8 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// singleton they would be tidied on one node and grow for ever
 		// on the others.
 		"pages_ops",
-		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
-		// their entries is the point. The knowledge base had three —
+		// NO NATIVE BACKEND SWEEPS HERE, and the absence of their
+		// entries is the point. The knowledge base had three —
 		// a change retention, a revision prune and an orphan collector
 		// — and adopting the log removed all three: the prune RIDES
 		// EACH COMMIT as the record's own list of retired versions, the

@@ -192,7 +192,7 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 // EVERY LOG'S ACKNOWLEDGEMENT STANDS BESIDE THE OTHERS.
 //
 // Under `backup_floor: operator` the procedure is one acknowledgement per
-// log, in turn. The route writes each one to the fleet's register, and
+// ordered log, in turn. The route writes each one to the fleet's register, and
 // the register kept ONE operator row: each acknowledgement replaced the last,
 // so following the procedure left exactly one log covered — whichever was
 // acknowledged last — and the trim blocked on the others. Here the route writes
@@ -202,9 +202,9 @@ func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
 	t.Parallel()
 	fleet := coordmemory.NewFleet()
 	node := &fakeStateLog{generations: map[string]uint32{
-		"CREWLET_TRACKER_LOG":     3,
-		"CREWLET_PAGES_LOG":       7,
-		"CREWLET_TRACKER_VECTORS": 1,
+		"CREWLET_TRACKER_LOG": 3,
+		"CREWLET_PAGES_LOG":   7,
+		"CREWLET_CHAT_LOG":    1,
 	}}
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b, Retention: fleet, Capacity: node})
@@ -215,7 +215,7 @@ func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
 	}{
 		{"CREWLET_TRACKER_LOG", 918100000, 3},
 		{"CREWLET_PAGES_LOG", 40400, 7},
-		{"CREWLET_TRACKER_VECTORS", 77000, 1},
+		{"CREWLET_CHAT_LOG", 77000, 1},
 	}
 	for _, ack := range acks {
 		code, body := postAck(t, a, fmt.Sprintf("/work/retention/ack?stream=%s&position=%d",
@@ -301,14 +301,28 @@ func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.Gat
 		out.Node, out.OpID = req.Node, req.OpID
 		return out, nil
 	}
-	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: []engine.DomainGate{
-		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: req.OpID + ".evict.tracker",
+	return engine.GateResult{Node: req.Node, OpID: req.OpID,
+		Domains: everyIdentityLogApplied(req.OpID)}, nil
+}
+
+// everyIdentityLogApplied is a gate answer landing on every log a real node
+// writes a gate record to — every registered domain that claims identity,
+// read from the engine's register rather than written here, so a log added
+// there is in this fake's answer without anybody remembering it.
+func everyIdentityLogApplied(opID string) []engine.DomainGate {
+	var out []engine.DomainGate
+	for i, d := range engine.Domains() {
+		if !d.ClaimsIdentity() {
+			continue
+		}
+		stream := d.Stream().Name
+		out = append(out, engine.DomainGate{
+			Domain: d.Name(), Stream: stream, OpID: opID + ".evict." + d.Name(),
 			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 12}},
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: req.OpID + ".evict.pages",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 7}},
-	}}, nil
+			Position: statelog.Position{Stream: stream, Seq: uint64(7 + i)},
+		})
+	}
+	return out
 }
 
 func (f *fakeNodeGate) Evict(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {

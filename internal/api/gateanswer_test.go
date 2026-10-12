@@ -23,7 +23,12 @@ import (
 const gateAnswerGolden = "testdata/gate_answer.json"
 
 // gateAnswerScenarios is one gesture per shape a log's answer can take, each
-// over the two identity-claiming logs a real node runs.
+// over every identity-claiming log a real node runs — the tracker's, the pages
+// log and chat's, in the order the engine registers them. The pages log carries
+// the shape under test and the other two land, which is what shows one log's
+// answer beside its neighbours'; three rather than two because the dashboard's
+// suite reads the log set off this file, and a fixture with fewer logs than a
+// node writes is one a screen that assumed two would still pass.
 //
 // The ids are the engine's own grammar and DERIVED, so the file is stable: a
 // dashboard fixture carrying `op-7` is an id no node sends and the route
@@ -43,9 +48,13 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		return d
 	}
 	at := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 4410}
+	chat := engine.DomainGate{Domain: "chat", Stream: "CREWLET_CHAT_LOG",
+		OpID: step("chat"), Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "CREWLET_CHAT_LOG", Generation: 1,
+			Seq: 2203117}}
 	result := func(pagesAnswer engine.DomainGate) engine.GateResult {
 		return engine.GateResult{Node: "node-4", OpID: gesture,
-			Domains: []engine.DomainGate{tracker, pages(pagesAnswer)}}
+			Domains: []engine.DomainGate{tracker, pages(pagesAnswer), chat}}
 	}
 	return map[string]engine.GateResult{
 		"applied": result(engine.DomainGate{

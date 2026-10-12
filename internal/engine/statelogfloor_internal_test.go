@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -559,8 +560,8 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 
 // A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the node gate the
 // readmission route calls, judged against the register, the published floors
-// and the logs as the engine wires them, with nothing written to either log on
-// a refusal.
+// and the logs as the engine wires them, with nothing written to any log on a
+// refusal.
 //
 // The documentation promised this refusal; the writer wrote the inverse record
 // for any node, so an operator readmitting a machine that was still offline
@@ -579,9 +580,19 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		t.Fatal("the node runs no node gate")
 	}
 	wiki := s.Domain(pages.Domain{}.Name())
+	rooms := s.Domain(chat.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
-	if wiki == nil || vectors == nil {
-		t.Fatal("the pages or the vector domain is not running")
+	if wiki == nil || rooms == nil || vectors == nil {
+		t.Fatal("the pages, chat or vector domain is not running")
+	}
+	// EVERY LOG THAT CLAIMS IDENTITY, off the running set: a readmission is
+	// judged and written on each of them, so each is one a refusal must leave
+	// untouched and one the readmission must land on.
+	var identity []*runningLog
+	for _, r := range s.running() {
+		if r.domain.ClaimsIdentity() {
+			identity = append(identity, r)
+		}
 	}
 
 	const away = "node-away"
@@ -602,7 +613,8 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			Domains: map[string]coord.DomainPosition{
 				running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
 					AppliedThrough: trackerSeq},
-				wiki.domain.Name(): {Generation: wiki.runner.Committed().Generation},
+				wiki.domain.Name():  {Generation: wiki.runner.Committed().Generation},
+				rooms.domain.Name(): {Generation: rooms.runner.Committed().Generation},
 				vectors.domain.Name(): {
 					Generation: vectors.runner.Committed().Generation},
 			},
@@ -619,16 +631,16 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
 		}
 	}
-	// BOTH LOGS' ENDS, because a refusal writes nothing to EITHER.
-	end := func() [2]uint64 {
+	// EVERY IDENTITY LOG'S END, because a refusal writes nothing to ANY.
+	end := func() []uint64 {
 		t.Helper()
-		var out [2]uint64
-		for i, r := range []*runningLog{running, wiki} {
+		var out []uint64
+		for _, r := range identity {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
 			}
-			out[i] = last
+			out = append(out, last)
 		}
 		return out
 	}
@@ -648,7 +660,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 				"against %d / %d", refusal.Domain, refusal.Seq, refusal.Bound.Floor,
 				refusal.Bound.First, domain, seq, floorWant, firstWant)
 		}
-		if last := end(); last != before {
+		if last := end(); !slices.Equal(last, before) {
 			t.Fatalf("the logs moved from %v to %v on a refused readmission", before, last)
 		}
 	}
@@ -676,24 +688,39 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	floor(wiki, 5)
 	refusedIn(wiki.domain.Name(), 0, 5, logFirstOf(t, wiki))
 
-	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
+	// CAUGHT UP ON THE TRACKER AND THE PAGES, BEHIND ON CHAT.
 	floor(wiki, 0)
+	floor(rooms, 5)
+	refusedIn(rooms.domain.Name(), 0, 5, logFirstOf(t, rooms))
+
+	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
+	floor(rooms, 0)
 	res, err := gate.Readmit(t.Context(), readmit)
 	if err != nil {
 		t.Fatalf("a node one record short of every floor was refused: %v", err)
+	}
+	if len(res.Domains) != len(identity) {
+		t.Fatalf("the readmission answered on %d logs, want every one of the %d that "+
+			"claim identity: %+v", len(res.Domains), len(identity), res.Domains)
 	}
 	for _, d := range res.Domains {
 		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
 		}
 	}
-	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
+	for _, r := range identity {
+		waitApplied(t, r)
+		lister, lists := r.domain.(evictionLister)
+		if !lists {
+			t.Fatalf("%s claims identity and lists no evictions", r.domain.Name())
+		}
 		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
-			t.Fatalf("read the evictions: %v", err)
+			t.Fatalf("read %s's evictions: %v", r.domain.Name(), err)
 		}
 		if len(rows) != 1 || rows[0].NodeID != away || !rows[0].Back {
-			t.Fatalf("evictions = %+v, want %s readmitted on every log", rows, away)
+			t.Fatalf("%s's evictions = %+v, want %s readmitted on every log",
+				r.domain.Name(), rows, away)
 		}
 	}
 }
@@ -751,7 +778,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 }
 
 // THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
-// ALONE, in both identity-claiming domains, while the log still holds
+// ALONE, in every identity-claiming domain, while the log still holds
 // everything.
 //
 // The fence takes the higher of two witnesses, and every other case here that
