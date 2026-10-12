@@ -85,10 +85,15 @@ import (
 // refusal, then the write at the marker's revision); and a marker swept
 // between that read and that write takes three. Every round past those needs
 // ANOTHER writer to remove the key again inside this one's read-to-write
-// window, which nothing in this estate does repeatedly. Eight is that twice
-// over with room, and exhausting it is reported as UNKNOWN through
-// [contended] — never as the key being held, since losing says nothing about
-// who holds it.
+// window, which nothing in this estate does repeatedly — or, on a replicated
+// bucket, a peer's create of the same key still IN FLIGHT: the broker refuses
+// a write to a subject that has one in flight, and the leader reads nothing
+// there until it lands, so the next round writes at zero again. That one is
+// over as soon as the peer's create commits: measured at three replicas, in
+// two hundred bursts of sixteen creates of one key at once, one call wrote
+// twice and none three times. Eight is all of that twice over with room, and
+// exhausting it is reported as UNKNOWN through [contended] — never as the key
+// being held, since losing says nothing about who holds it.
 const createRounds = 8
 
 // createKey writes value under key only when the key holds no live value,
