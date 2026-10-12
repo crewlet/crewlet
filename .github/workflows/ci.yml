@@ -589,10 +589,10 @@ jobs:
       # pinning rule exists to avoid — and it would hold new checks out of
       # CI until somebody remembered. The cost is that a lint
       # result is not reproducible across time: the linter must also be built
-      # with a Go at least as new as go.mod's `go` line, or it refuses the
-      # module outright, so an older local build reports nothing rather than
-      # disagreeing. Run the gate through `make lint` and match CI by taking
-      # the newest release.
+      # with a Go whose language version (major.minor) is at least go.mod's
+      # `go` line's, or it refuses the module outright, so an older local build
+      # reports nothing rather than disagreeing. Run the gate through
+      # `make lint` and match CI by taking the newest release.
       #
       # The action keeps its own analysis cache (~/.cache/golangci-lint); the
       # build cache above is the go command's, which loading the packages
