@@ -524,6 +524,49 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	}
 }
 
+// A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
+//
+// Every holder was asked under the same operation, and none answered — so each
+// of them may have run it. "No data node serves the estate" is the claim that
+// nothing ran, and a caller told that writes again, under a FRESH id where it
+// minted none, which is a second write: a purge appended twice, a task filed
+// twice. A READ nobody answered is still unserved, since a read ran nothing
+// that matters; and a write every node REFUSED is unserved too, since a node
+// that answered "I did not run it" did not.
+func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	for _, node := range f.nodes {
+		node.set(func(n *fakeNode) { n.silent = true })
+	}
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-9",
+		tracker.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+		t.Fatalf("a write no node answered = %v, want ErrOutcomeUnknown and not "+
+			"ErrUnserved", err)
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the unknown write %q does not name %s, which it was sent to", err, name)
+		}
+	}
+
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read no node answered = %v, want ErrUnserved", err)
+	}
+
+	refusing := newFleet(t, "data-a", "data-b")
+	for _, node := range refusing.nodes {
+		node.set(func(n *fakeNode) { n.outOfService = true })
+	}
+	_, err = refusing.client.WriterAs(swe).CreateTask(t.Context(), "op-10",
+		tracker.Task{Project: "ENG"}, nil)
+	if !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
+	}
+}
+
 // A WRITE'S POSITION IS THE NEXT REQUEST'S FLOOR, on whichever node answers
 // it — on the log of the operation's own domain, and on no other: a floor on
 // another domain's log, or on a stream no domain logs to, is never waited for.

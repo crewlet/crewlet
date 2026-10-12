@@ -289,12 +289,17 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 
 // ErrUnserved is an operation no data node ran: every node the asker's view
 // named — this node among them where it holds the estate — answered that its
-// copy is out of service, could not run it, was behind, or did not answer at
-// all.
+// copy is out of service, could not run it, or was behind, or (for a READ) did
+// not answer at all.
 //
 // NEVER A FALSE "NOT FOUND". An operation nobody answered for is refused
 // saying so, because a read reported as empty would say the company has none
 // of what it asked about.
+//
+// AND NEVER A WRITE SOMEBODY MAY HAVE RUN. A write sent to a node that did not
+// answer may have landed there, so a walk that sent one and found no answer is
+// [ErrOutcomeUnknown] instead, whatever the other nodes said: this error is
+// the claim that nothing ran, and a caller acts on it by writing again.
 type ErrUnserved struct {
 	// Detail is who was asked and what each said, in order.
 	Detail string
@@ -326,10 +331,36 @@ type walk struct {
 	// laggingHere whether this node's own copy did.
 	lagging     []string
 	laggingHere bool
+
+	// unanswered is every node a WRITE was sent to that never answered —
+	// one that may have run it. See [walk.unserved].
+	unanswered []string
 }
 
 func (w *walk) note(format string, args ...any) {
 	w.reasons = append(w.reasons, fmt.Sprintf(format, args...))
+}
+
+// unserved is the answer to a walk that found no node to answer: the estate
+// unserved, or — where a write was sent to a node that never answered —
+// unknown.
+//
+// THE DIFFERENCE IS WHETHER ANYBODY MAY HAVE RUN IT. A node that answered "I
+// did not run it" ran nothing, and a walk of nodes that all said so is a
+// refusal the caller may act on by writing again. A node that did not answer
+// at all may have committed the write and lost only its acknowledgement —
+// which is exactly the case an [opIdempotentWrite]'s operation id exists for —
+// so reporting that walk as unserved told the caller nothing had happened: a
+// purge was answered "no data node serves the estate" while its record sat on
+// the log, a seat was told its change was NOT made, and the retry each of them
+// was then entitled to make under a FRESH id was a second write. Unknown is
+// the honest answer, and the same operation id is the safe retry.
+func (w *walk) unserved(spec *opSpec) error {
+	if len(w.unanswered) > 0 {
+		return fmt.Errorf("%w (%s, asked of %s: %s)", ErrOutcomeUnknown, spec.name,
+			strings.Join(w.unanswered, ", "), strings.Join(w.reasons, "; "))
+	}
+	return &ErrUnserved{Detail: strings.Join(w.reasons, "; ")}
 }
 
 // route runs one operation — this node first where its copy serves, then the
@@ -403,7 +434,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if w.fallback != nil {
 		return w.fallback.value, w.fallback.err
 	}
-	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; ")}
+	return nil, w.unserved(spec)
 }
 
 // lastResort asks the copies the walk passed over for lagging their logs —
@@ -493,14 +524,27 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 // silent is what a node that did not answer costs the walk: nothing more for
 // a class that may be repeated, the request itself for a once-write — which
 // that node may have run — and the caller's own ending.
+//
+// A REPEATABLE WRITE IS REPEATED, AND REMEMBERED: the next node is asked under
+// the same operation id, and should none answer, the walk ends unknown rather
+// than unserved ([walk.unserved]) — this node may have run it. So does a write
+// whose caller's context ended while it waited: the request was sent, and the
+// caller stopping listening says nothing about whether it ran.
 func (r *Router) silent(ctx context.Context, spec *opSpec, node string, w *walk) error {
 	if spec.class == opOnceWrite {
 		return fmt.Errorf("%w (%s, asked of %s)", ErrOutcomeUnknown, spec.name, node)
 	}
 	if ctx.Err() != nil {
+		if spec.class == opIdempotentWrite {
+			return fmt.Errorf("%w (%s, asked of %s): %w", ErrOutcomeUnknown,
+				spec.name, node, ctx.Err())
+		}
 		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
 	}
 	w.note("%s: no answer", node)
+	if spec.class == opIdempotentWrite {
+		w.unanswered = append(w.unanswered, node)
+	}
 	return nil
 }
 

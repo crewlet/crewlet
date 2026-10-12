@@ -119,6 +119,7 @@ flowchart TD
     last -- ran it --> done
     lagging -- no --> unserved[Refused: no data node served it]
     last -- nobody ran it --> unserved
+    unserved -. a write some node never answered .-> unknown[Unknown:<br/>retry under the same operation id]
 ```
 
 - **This node first, where it is a data node.** A data node answers its own
@@ -140,7 +141,11 @@ flowchart TD
   told the outcome is unknown.
 - **Nobody answering is an answer that says so**, with what each data node said
   — never an empty list, which would say the company has none of what was asked
-  for. A knowledge search nobody answered is the one exception that does not
+  for. A write that any data node **never answered** is the other kind of
+  answer: that node may have run it, so the caller is told the outcome is
+  unknown — and the same operation id is the retry — rather than that no data
+  node served it, which is the claim that nothing ran and invites a second
+  write under a fresh id. A knowledge search nobody answered is the one exception that does not
   fail, because a search is best effort: it answers no hits, serves no mode
   and covers none of the corpus, which every surface renders as "could not be
   searched" rather than "nothing matched".

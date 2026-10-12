@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -186,10 +187,64 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		{fmt.Errorf("x: %w", pages.ErrNotFound), tools.RefusalNotFound},
 		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalUnavailable},
 	} {
-		if got := pageWriteFailure("save_page", c.err); !got.Failed || got.Refusal != c.want {
+		if got := pageWriteFailure("save_page", c.err, ""); !got.Failed || got.Refusal != c.want {
 			t.Errorf("pageWriteFailure(%v) = failed %v class %q, want %q",
 				c.err, got.Failed, got.Refusal, c.want)
 		}
+	}
+}
+
+// A WRITE NOBODY ANSWERED IS UNKNOWN, NEVER "NOT MADE".
+//
+// The router sends a write carrying no key of its caller's to one data node
+// and no further, because a repeat would be a second write — so one that node
+// never answered may have landed. Falling through to each mapper's remainder,
+// it was told "the change was NOT made" / "nothing was written": a caller that
+// believed it wrote the comment a second time.
+//
+// AND NOTHING THAT WRAPS A MAPPER'S ANSWER MAY TURN IT BACK. save_page's rename
+// arm rebuilt every rename refusal as "the edit was saved and the rename was
+// not", which dropped the unknown mark, so the mapper's unknown reached the
+// caller as a refusal saying the opposite. It is held through the tool in
+// TestASaveWhoseRenameNobodyAnsweredIsUnknown.
+//
+// A TRACKER WRITE IS ASKED OF EVERY DATA NODE under its operation, and when
+// none of them answered, the router says so as the same unknown — each one
+// that stayed silent may have run it. Its mapper fell through to "the change
+// was NOT made" as well, which a seat acts on by doing it again by other
+// means.
+func TestAnUnansweredWriteIsAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w (pages.comment, asked of data-1)", estate.ErrOutcomeUnknown)
+	tracked := fmt.Errorf("%w (tracker.update_task, asked of data-1, data-2: "+
+		"data-1: no answer; data-2: no answer)", estate.ErrOutcomeUnknown)
+	for name, got := range map[string]tools.Result{
+		"a page write":    pageWriteFailure("comment_on_page", err, ""),
+		"a tracker write": writeFailure(Actor{}, UpdateWorkItemTool, tracked),
+	} {
+		if !got.Failed || !got.Unknown || got.Refusal != tools.RefusalUnavailable {
+			t.Errorf("%s nobody answered: failed %v unknown %v class %q, want an "+
+				"unavailable refusal marked unknown", name, got.Failed, got.Unknown, got.Refusal)
+		}
+		for _, never := range []string{"NOT made", "nothing was written"} {
+			if strings.Contains(got.Output, never) {
+				t.Errorf("%s nobody answered says %q, which nobody can know: %s",
+					name, never, got.Output)
+			}
+		}
+		if !strings.Contains(got.Output, "unknown") {
+			t.Errorf("%s nobody answered does not say its outcome is unknown: %s",
+				name, got.Output)
+		}
+	}
+	// AND A TRACKER WRITE SAYS HOW THIS CALLER SETTLES IT: the same
+	// operation again, which the ledger answers with what landed — for an
+	// operator, the op_id it brings back.
+	operator := writeFailure(Actor{Operation: "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b.update_work_item.00"},
+		UpdateWorkItemTool, tracked)
+	if !strings.Contains(operator.Output, "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b.update_work_item.00") {
+		t.Errorf("an operator's unanswered tracker write does not name the op_id that "+
+			"settles it: %s", operator.Output)
 	}
 }
 

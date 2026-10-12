@@ -52,7 +52,10 @@
 // caller's floor in time — did not execute anything, so every class moves on
 // from it. When no data node runs the operation, it is refused as [ErrUnserved],
 // naming who was asked and what each said — never an empty answer, which would
-// say the company has none of what was asked for.
+// say the company has none of what was asked for. A WRITE that some node never
+// answered is the exception: that node may have run it, so the walk ends in
+// [ErrOutcomeUnknown] and the same operation id is the retry, since
+// "nobody ran it" is the claim a caller acts on by writing again.
 //
 // # A copy that is WRONG is out of service; one that LAGS is a worse node
 //

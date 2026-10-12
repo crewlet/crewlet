@@ -63,7 +63,8 @@ const (
 	// is one a node answered `unvouched` ([statelog.Result.Unvouched]):
 	// that node's ledger cannot say whether the operation landed, and
 	// another node's may, so the answer is not final until every node has
-	// been asked.
+	// been asked. One that NO node answered is [ErrOutcomeUnknown], never
+	// [ErrUnserved]: a node that did not answer may have run it.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.

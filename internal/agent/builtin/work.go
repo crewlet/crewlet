@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -3574,6 +3575,27 @@ func writeFailure(actor Actor, name string, err error) tools.Result {
 		// and is what empties the lists this refusal is about.
 		return refused(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
 			"%v.", name, err))
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		// SENT, AND NO DATA NODE ANSWERED. The router asked every one under
+		// this call's operation and each that stayed silent may have run
+		// it — so the remainder below ("the change was NOT made") is the
+		// one sentence nobody can say. The same OPERATION again is what
+		// settles it, since the ledger answers a repeat with what landed;
+		// what that is depends on the caller ([sameCall]), and a caller
+		// with none reads the item before writing again.
+		again := sameCall(actor, name)
+		if again == "" {
+			return unknownOutcome(fmt.Sprintf("%s: whether this landed is unknown "+
+				"(%v). It may have landed and it may not — do not report it as "+
+				"done, and do not report it as failed. Calling %s again is a new "+
+				"operation here: read the item with get_work_item before writing "+
+				"it again.", name, err, name))
+		}
+		return unknownOutcome(fmt.Sprintf("%s: whether this landed is unknown (%v). "+
+			"It may have landed and it may not — do not report it as done, and "+
+			"do not report it as failed. %s — if the first one landed, the retry "+
+			"answers what it wrote rather than writing it again.", name, err,
+			capitalize(again)))
 	case errors.Is(err, tracker.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the

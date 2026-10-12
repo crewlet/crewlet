@@ -66,7 +66,10 @@ Every write answers with its `outcome` — `applied`, `pending` or `unknown`, th
 the `position` it is durable at. A write whose outcome is **unknown** is never
 answered with the id, key, version or revision of something that may not
 exist, on any write tool on either surface: the call fails, saying that the
-write may have landed and may not, under which operation, and what to do. That
+write may have landed and may not, under which operation, and what to do. A
+write sent to the data nodes that **none of them answered** is one of these
+too, never a refusal: each node that stayed silent may have run it, so it is
+not "not made", and the same operation again is what settles it. That
 includes `create_work_item`, whose unknown answer names the key this attempt
 minted, if it minted one, as the key the item has *if* it was filed — never as
 a receipt — and a comment, whose id, mentions and ask are not reported beside
