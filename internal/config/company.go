@@ -247,16 +247,16 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names, duplicate unit names and a
-// unit reference on a seat declared inside another unit (see
+// Today they are the org's duplicate seat names, duplicate unit names, a unit
+// reference on a seat declared inside another unit and a schedule whose
+// five-field cron the grammar refuses (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // cli-agent entry's credential configured where its CLI never reads it
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
-// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a
-// seat whose code work hands a
-// cli-agent entry to another CLI's coding agent
+// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a seat
+// whose code work hands a cli-agent entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
