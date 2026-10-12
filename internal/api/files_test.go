@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,9 +96,11 @@ func (l *paceLog) all() []string {
 
 // pacedWriter is a recorder that can carry a read and a write deadline, which
 // is what http.NewResponseController looks for, and logs each one it is set.
+// Each write takes the client take on the pace clock.
 type pacedWriter struct {
 	*httptest.ResponseRecorder
-	log *paceLog
+	log  *paceLog
+	take time.Duration
 }
 
 func (w *pacedWriter) SetReadDeadline(t time.Time) error {
@@ -111,6 +115,7 @@ func (w *pacedWriter) SetWriteDeadline(t time.Time) error {
 
 func (w *pacedWriter) Write(p []byte) (int, error) {
 	w.log.add(fmt.Sprintf("write %d", len(p)))
+	w.log.clock.advance(w.take)
 	return w.ResponseRecorder.Write(p)
 }
 
@@ -125,8 +130,9 @@ type fakeFiles struct {
 
 	// work is the store's own time between two reads of an upload's body
 	// — a broker's acknowledgements, a bucket's part — which no client
-	// may be charged for.
-	work time.Duration
+	// may be charged for; and readWork its time to hand a download each
+	// piece of a file, which no client may be charged for either.
+	work, readWork time.Duration
 
 	mu        sync.Mutex
 	file      *tracker.File
@@ -181,7 +187,14 @@ func (f *fakeFiles) AcceptsFiles(_ context.Context, _ string, fresh statelog.Fre
 }
 
 func (f *fakeFiles) Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
-	return f.store.Open(ctx, o)
+	rc, err := f.store.Open(ctx, o)
+	if err != nil || f.readWork == 0 {
+		return rc, err
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{working{r: rc, work: f.readWork, clock: f.clock}, rc}, nil
 }
 
 func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
@@ -206,9 +219,10 @@ func (f *fakeFiles) RemoveFileAs(context.Context, string, string, string, string
 	return tracker.WriteResult{}, errors.New("not in this suite")
 }
 
-// working is the store's side of an upload: it does its own work before it
-// asks the body for more — on the pace clock, which the work moves by its
-// length.
+// working is the store at work between two reads: on an upload's side it
+// does its own work before it asks the body for more, on a download's before
+// it hands over the next piece of the file — on the pace clock, which the
+// work moves by its length.
 type working struct {
 	r     io.Reader
 	work  time.Duration
@@ -474,20 +488,27 @@ func TestADownloadOfALiveFileNamingNoObjectIsAFault(t *testing.T) {
 	}
 }
 
-// A DOWNLOAD'S EVERY MEBIBYTE HAS ITS OWN WINDOW, opened once its bytes are in
-// hand. The route once copied with no write deadline, so a client that opened
-// a download and never read it held the handler and its connection; and a
-// deadline set before the bytes were read from the store would have spent the
-// client's window on the store.
+// A DOWNLOAD'S EVERY MEBIBYTE HAS ITS OWN WINDOW, spent only while the client
+// is taking its bytes. The route once copied with no write deadline, so a
+// client that opened a download and never read it held the handler and its
+// connection; and a deadline set before the bytes were read from the store,
+// or a window charged for the store's own time, would have spent the
+// client's pace on the store. Here the store takes ten seconds to hand over
+// each piece — far more than a mebibyte's pace in all — and the client a
+// second to take each write: every deadline is the window its mebibyte has
+// left after the client's seconds and none of the store's, it directly
+// precedes its write, and the response ends through the Writer, under what
+// the last mebibyte had left.
 func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
+	fake.readWork = 10 * time.Second
 	log := fake.paceLog()
 	data := content(2*objstore.MiB + 100)
 	fake.holding(t, data)
 	a := filesApp(t, fake)
 
-	w := &pacedWriter{ResponseRecorder: httptest.NewRecorder(), log: log}
+	w := &pacedWriter{ResponseRecorder: httptest.NewRecorder(), log: log, take: time.Second}
 	if aborted := download(t, a, w); aborted != nil {
 		t.Fatal(aborted)
 	}
@@ -495,28 +516,41 @@ func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 		t.Fatalf("download answered %d with %d bytes, want 200 with %d", w.Code, w.Body.Len(), len(data))
 	}
 
-	// EVERY WRITE DIRECTLY FOLLOWS ITS OWN DEADLINE.
+	// EVERY WRITE DIRECTLY FOLLOWS ITS OWN DEADLINE, so nothing the store
+	// does lands between a deadline and the write it bounds; and what the
+	// window has left at each is the pace less a second for every write
+	// before it in its mebibyte.
 	events := log.all()
-	deadlines := 0
-	for i, e := range events {
-		if e == "write-deadline" {
-			deadlines++
-			if i+1 >= len(events) || !strings.HasPrefix(events[i+1], "write ") {
-				t.Errorf("deadline %d is not followed by its write: %v", deadlines, events)
-			}
-		}
-		if strings.HasPrefix(e, "write ") && (i == 0 || events[i-1] != "write-deadline") {
-			t.Errorf("a write at %d follows %q rather than its deadline: %v", i, events[max(i-1, 0)], events)
-		}
-	}
-	if deadlines != 3 {
-		t.Errorf("%d write deadlines for two mebibytes and a hundred bytes: %v", deadlines, events)
-	}
 	log.mu.Lock()
-	defer log.mu.Unlock()
-	for i, d := range log.out {
-		if d != objstore.MiBPace {
-			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
+	out := append([]time.Duration(nil), log.out...)
+	log.mu.Unlock()
+	var want []time.Duration
+	written, inMebibyte := 0, 0
+	for i, e := range events {
+		size, isWrite := strings.CutPrefix(e, "write ")
+		if !isWrite {
+			continue
 		}
+		if i == 0 || events[i-1] != "write-deadline" {
+			t.Fatalf("a write at %d follows %q rather than its deadline: %v", i, events[max(i-1, 0)], events)
+		}
+		n, err := strconv.Atoi(size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if written%objstore.MiB == 0 {
+			inMebibyte = 0
+		}
+		want = append(want, objstore.MiBPace-time.Duration(inMebibyte)*w.take)
+		written += n
+		inMebibyte++
+	}
+	if events[len(events)-1] != "write-deadline" {
+		t.Errorf("the download's last event is %q, want the deadline it ended under", events[len(events)-1])
+	}
+	want = append(want, objstore.MiBPace-time.Duration(inMebibyte)*w.take)
+	if !slices.Equal(out, want) {
+		t.Errorf("write deadlines set %v out, want %v: each mebibyte's whole pace less "+
+			"the client's second at each write before it, none of the store's ten", out, want)
 	}
 }

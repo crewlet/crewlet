@@ -26,7 +26,8 @@
 // -export`, and 10.7 s to type-check one package from source. This reads only
 // the declarations a judged expression reaches, on demand, and a package
 // once: the stream-identity gate reads 18 packages, NATS's three among them,
-// to judge every non-test file of internal/ and cmd/ in 0.35–0.39 s, with the
+// to judge every non-test file of internal/ and cmd/ in 0.35–0.39 s, and the
+// pacing gate 16, net/http and net among them, in 0.21–0.22 s — each with the
 // `go list` that locates what it reads outside the module, on four vCPUs.
 //
 // # What it reads
@@ -73,7 +74,8 @@
 // "cannot tell" for "not there" would certify nothing about exactly the
 // values it skipped, and whether a value an unread package produced can be
 // what a gate looks for is a fact about that gate's subject, not about
-// typing — the stream-identity gate reports one.
+// typing — the stream-identity gate reports one, and the pacing gate, which
+// reads net/http, passes one.
 //
 // # Coverage boundary
 //

@@ -268,18 +268,18 @@ type Options struct {
 	// clock of the projection a nil [Options.State] builds.
 	Now func() time.Time
 
-	// PaceClock is the clock a file upload's and download's pace is
-	// measured on, and every read and write deadline it sets is taken
-	// from ([filePace]). Nil takes time.Now.
+	// PaceClock is the clock a file upload's and download's pace — a
+	// mebibyte every paced.Pace — is measured on, and every read and write
+	// deadline it sets is taken from. Nil takes time.Now.
 	//
 	// NOT [Options.Now], which stamps answers and which a test pins to one
-	// instant: the pace is a DURATION, the time spent inside a body's
-	// reads, and a clock that never moves would measure every read as
-	// taking none — the pace charged nothing, whatever it was meant to
-	// charge. Injectable so a suite can move it by exactly the time a fake
-	// client or store took, rather than sleep that long. And time.Now
-	// itself rather than one converted to UTC, since a converted time
-	// drops the monotonic reading, and a pace on the wall reading alone
+	// instant: the pace is a DURATION, the time spent inside an upload's
+	// reads and a download's writes, and a clock that never moves would
+	// measure every one as taking none — the pace charged nothing, whatever
+	// it was meant to charge. Injectable so a suite can move it by exactly
+	// the time a fake client or store took, rather than sleep that long. And
+	// time.Now itself rather than one converted to UTC, since a converted
+	// time drops the monotonic reading, and a pace on the wall reading alone
 	// moves with every step the system clock takes.
 	PaceClock func() time.Time
 

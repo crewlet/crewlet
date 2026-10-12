@@ -281,10 +281,12 @@ internal/
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/, operator/ (the
-│                         #   operator catalogue over /operator/mcp and the
-│                         #   dashboard's /operator/act), and pagepolicy/:
-│                         #   the security headers every response carries
+│                         #   auth/, httpjson/, paced/ (the per-mebibyte pace
+│                         #   a client's connection is held to, both ways),
+│                         #   mcpbridge/, operator/ (the operator catalogue
+│                         #   over /operator/mcp and the dashboard's
+│                         #   /operator/act), and pagepolicy/: the security
+│                         #   headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
