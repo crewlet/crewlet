@@ -644,11 +644,9 @@
    top (`--sticky-top`), less the phase body's own inset below it
    (`--spacing-3`), so the box's bottom border clears the view's edge by the
    same margin the card gives it. THE BOX ALONE: its caption above it
-   ("Rounds · what the model thought, said and called, in order") is not
-   counted, because it is an uppercase label in a column a sidebar and a peek
-   narrow, and it wraps — a bound that subtracted one line of it promised a
-   fit that held only while the caption did. Scrolled until the box's top
-   meets the band, the box fits whatever the caption does. The FLOOR is for a
+   ("Rounds") is not counted, because the caption is no part of the box.
+   Scrolled until the box's top meets the band, the box fits whatever the
+   caption does. The FLOOR is for a
    window too short for that to leave a transcript at all: four rows
    (`--size-row-md` each) — a round's line of speech and three tool rows — is
    the least that reads as a transcript rather than as a slot; below it the

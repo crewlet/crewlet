@@ -96,16 +96,10 @@ export interface TimedRound {
  * `contract/stops.ts` is what makes the union the engine's.
  */
 const STOP_NOTES: Record<Exclude<StopReason, "end" | "tool_use">, string> = {
-  max_tokens:
-    "The response was cut off at the model's output cap, so the phase ended here — " +
-    "any tool call it was writing was not run.",
-  refusal:
-    "The model declined this request, so the phase ended here. A refusal is not " +
-    "asked again, and the turn's trigger is not redelivered.",
-  context_exceeded: "The conversation filled the model's context window, so the phase ended here.",
-  paused:
-    "The provider paused this turn for the engine to continue, which it never asks " +
-    "for, so the phase ended here.",
+  max_tokens: "Cut off at the model’s output limit. The phase ended here.",
+  refusal: "The model declined. The phase ended here.",
+  context_exceeded: "Out of context window. The phase ended here.",
+  paused: "The provider paused the turn. The phase ended here.",
 };
 
 /** The sentence for a round that stopped without finishing, or null for a
@@ -1210,10 +1204,10 @@ type Meaning = { label: string; tone: Tone };
 const DECISIONS: Record<string, Record<string, Meaning>> = {
   execute: {
     delivered: { label: "delivered the work", tone: "positive" },
-    no_action: { label: "nothing to do — ended silently", tone: "neutral" },
+    no_action: { label: "nothing to do", tone: "neutral" },
     blocked: { label: "blocked, and said why", tone: "caution" },
     incomplete: {
-      label: "never said what it did — the engine marked it incomplete",
+      label: "incomplete, no report",
       // CAUTION, NOT CRITICAL. The reviewer still judges the turn after this;
       // what is critical is the reviewer deciding against it.
       tone: "caution",
@@ -1222,7 +1216,7 @@ const DECISIONS: Record<string, Record<string, Meaning>> = {
   review: {
     done: { label: "accepted the work", tone: "positive" },
     self_iterate: { label: "sent the turn back for another round", tone: "caution" },
-    failed: { label: "failed — the turn will not retry", tone: "critical" },
+    failed: { label: "failed, no retry", tone: "critical" },
   },
   onboarding: {
     done: { label: "read its team's pages and marked itself onboarded", tone: "positive" },
@@ -1242,7 +1236,7 @@ const DECISIONS: Record<string, Record<string, Meaning>> = {
 const RESCUED: Record<string, Record<string, Meaning>> = {
   review: {
     self_iterate: {
-      label: "never decided — the engine sent the turn back for another round",
+      label: "undecided, sent back",
       tone: "caution",
     },
   },

@@ -216,9 +216,7 @@ export function PromptRecord({
           ]}
         />
         <span className="t-caption muted">
-          {view === "read"
-            ? "one section at a time, from its outline"
-            : "the record as the model received it, byte for byte"}
+          {view === "read" ? "one section at a time, from its outline" : "as the model received it"}
         </span>
       </div>
       {view === "read" ? (

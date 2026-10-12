@@ -3323,7 +3323,7 @@ rules fix it, and each one names a specific mechanism:
    `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
    can still get words and no call, and the commonest form is the model
    printing its own submission as a fenced JSON block. Without a word about it
-   the reader saw that block, then "never said what it did" and "rescued" on
+   the reader saw that block, then "incomplete, no report" and "rescued" on
    the header, and nothing connecting the two. The engine flags such a round
    (`round_narration[].declined`), and the round says beneath its words what
    happened next, which the ledger already knows: a later round means the
@@ -3338,9 +3338,9 @@ rules fix it, and each one names a specific mechanism:
    the engine wrote the decision in its place — `incomplete` for an executor,
    `self_iterate` for a reviewer. Its title used to say the phase "was
    re-asked", which nothing does to a phase as a whole. And a rescued review's
-   decision reads "never decided — the engine sent the turn back", because
-   `self_iterate` is also the word a reviewer chooses on purpose, and "sent the
-   turn back" claimed a judgement nobody made.
+   decision reads "undecided, sent back", because `self_iterate` is also the
+   word a reviewer chooses on purpose, and "sent the turn back" claimed a
+   judgement nobody made.
 
    **A round that did not finish says why, and a refusal is named as one.**
    The engine ends a phase on a round its output cap cut off, one that filled
@@ -3355,11 +3355,10 @@ rules fix it, and each one names a specific mechanism:
    sentence. Such a round keeps its place on the rail even when it said
    nothing and ran nothing: a refusal with no text is exactly that round, and
    it is the one that explains why the phase ended. The header names a refused
-   phase **"declined by model"** rather than its `error_kind` — `refusal` reads
-   as the engine refusing — and the error banner says what the vendor said
-   (`refusal.category`, `refusal.explanation`) and what the engine did about
-   it: nothing rescued, nothing re-asked, the trigger not redelivered. Still
-   danger, because the phase and its turn ended there.
+   phase **"declined by model"** rather than its `error_kind` (`refusal` reads
+   as the engine refusing), and the error banner says what the vendor said
+   (`refusal.category`, `refusal.explanation`) and that the phase ended there.
+   Still danger, because the phase and its turn ended there.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
    Reasoning and speech get a proportional face, real leading and a bounded
    measure, and are rendered as the markdown they are, read by a model's

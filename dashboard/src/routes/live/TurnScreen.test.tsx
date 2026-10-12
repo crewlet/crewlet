@@ -387,7 +387,7 @@ test("a ledger cell that can be cut carries its whole text in a title", async ()
     },
     "context",
   );
-  const note = await screen.findByText(/but not the newest/);
+  const note = await screen.findByText(/not the newest\. The thread was too long\./);
   expect(note.className).toContain("truncate");
   expect(note.getAttribute("title")).toBe(note.textContent);
   const label = screen.getByText("The thread so far");
@@ -1372,8 +1372,6 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  expect(
-    await screen.findByText("never decided — the engine sent the turn back for another round"),
-  ).toBeTruthy();
+  expect(await screen.findByText("undecided, sent back")).toBeTruthy();
   expect(screen.queryByText("sent the turn back for another round")).toBeNull();
 });
