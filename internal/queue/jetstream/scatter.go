@@ -111,11 +111,18 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	// FLUSHED BEFORE RETURNING, and it is a correctness requirement rather
 	// than tidiness. A core NATS subscription is registered when the
 	// interest reaches the SERVER, not when Subscribe returns — so an
-	// asker that scattered immediately after this call could publish
-	// before this answerer existed, and would count a running node as one
-	// that did not answer. Measured: the conformance suite's peer arm
-	// failed exactly that way under load, intermittently, which is the
-	// worst shape a missing flush has.
+	// asker on this same server that scattered immediately after this call
+	// could publish before this answerer existed, and would count a running
+	// node as one that did not answer. Measured: the conformance suite's
+	// peer arm failed exactly that way under load, intermittently, which is
+	// the worst shape a missing flush has.
+	//
+	// THE FLUSH REACHES THIS CONNECTION'S OWN SERVER AND NO FURTHER. On a
+	// cluster the other servers hear of the interest over their routes
+	// afterwards, so an asker connected elsewhere can still miss this
+	// answerer for that moment — which [queue.EventQueue] states, and
+	// which no flush from this side could close: the client holds no route
+	// and cannot see when a peer server has heard.
 	if err := q.flush(ctx); err != nil {
 		retire()
 		_ = sub.Unsubscribe()

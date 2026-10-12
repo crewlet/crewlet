@@ -13,6 +13,7 @@ package eventfantest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -391,7 +392,41 @@ func fleet(t *testing.T, factory Factory) []*member {
 		t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 		out = append(out, m)
 	}
+	reachable(t, out)
 	return out
+}
+
+// reachable waits until a scatter from the asker reaches every member.
+//
+// SERVE RETURNS ONCE ITS OWN SERVER HOLDS THE SUBSCRIPTION ([queue.EventQueue]),
+// and on a cluster the other servers learn of it over their routes a moment
+// later. A case that asked at once could publish on the asker's server before
+// a peer's interest had arrived there, and would read a running node as one
+// that did not answer — which is what a fleet read reports, honestly, about a
+// node that has only just started, and is not what any case here is about.
+// Measured: "an event is found on whichever node holds it" failed exactly that
+// way under the full suite's load, with the third member named unanswered.
+//
+// THE PROBE IS A LOOKUP NO NODE CAN ANSWER POSITIVELY, so it writes nothing,
+// finds nothing, and still scatters to every member and says who answered.
+func reachable(t *testing.T, nodes []*member) {
+	t.Helper()
+	fan := asker(nodes)
+	fan.Budget = time.Second
+	deadline := time.Now().Add(Budget)
+	for {
+		_, coverage, err := fan.ByID(t.Context(), "eventfantest-reachability-probe")
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("probe the fleet's reach: %v", err)
+		}
+		if coverage.Complete && len(coverage.Missing()) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a scatter from %s still reaches only part of the fleet after %v: %+v",
+				nodes[0].id, Budget, coverage)
+		}
+	}
 }
 
 // asker is the fleet as the first member sees it.

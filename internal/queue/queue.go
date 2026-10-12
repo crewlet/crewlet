@@ -599,6 +599,14 @@ type EventQueue interface {
 	// WAITS for the answers in flight, bounded by the context it is given
 	// — so a caller that withdraws and then closes what the answerer
 	// reads never closes it under an answer still reading.
+	//
+	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
+	// and on a clustered broker no more than that: the other servers learn
+	// of it over their routes a moment later, so an asker on another server
+	// that scatters in that moment does not reach this answerer and counts
+	// it as one that did not answer — the same honest fact a scatter reports
+	// about a node that has not started. Nothing that needs every answerer
+	// may assume it from Serve's return; it asks, and reads who answered.
 	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
 
 	// Start connects the backend and begins consuming.
