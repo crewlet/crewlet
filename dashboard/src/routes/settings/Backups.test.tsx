@@ -430,6 +430,68 @@ test("with nothing backed up, the command that takes one is code", async () => {
   expect(screen.getByText("crewlet backup -dir").tagName).toBe("CODE");
 });
 
+// NOTHING BACKED UP IS SAID ONCE, BY THE FIGURE. The two lists each drew an
+// empty state of their own as well, three ways of saying it beside the alarm
+// that already does; with nothing at all to list they are not drawn.
+test("with nothing at all backed up, the figure says so and the lists are not drawn", async () => {
+  mount({ points: [], history: [] });
+  await settle();
+  expect(screen.getByText("none yet")).toBeTruthy();
+  expect(screen.queryByText("Nothing has been backed up")).toBeNull();
+  expect(screen.queryByText("Backup history")).toBeNull();
+});
+
+// A HISTORY A NODE COULD NOT READ IS NOT AN EMPTY ONE: the lists are drawn so
+// the note naming the missing node is.
+test("an empty history some node could not answer still draws its lists", async () => {
+  mount({
+    points: [],
+    history: [],
+    coverage: {
+      nodes: [
+        { id: "node-a", answered: true, error: "" },
+        { id: "node-b", answered: false, error: "no answer within the read budget" },
+      ],
+      complete: false,
+    },
+  });
+  await settle();
+  expect(screen.getByText("Backup history")).toBeTruthy();
+  expect(screen.getByText(/node-b/)).toBeTruthy();
+});
+
+// WHAT IS WRONG LEADS THE PAGE: the alarms come before the record of backups
+// and the panels, and the backup alarm offers the backup it asks for.
+test("the alarms lead the page, and the backup alarm offers the backup", async () => {
+  const report = {
+    v: 1,
+    node_id: "node-a",
+    at: hoursAgo(0),
+    domains: [],
+    nodes: [],
+    register_readable: true,
+    snapshots: [],
+    replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
+    backup_owner: "platform-oncall",
+    alarms: [
+      {
+        kind: "backup_age",
+        detail: "no verified backup has been recorded",
+        remedy: "Run `crewlet backup` against any node.",
+      },
+    ],
+  } as RetentionReport;
+  mount({}, { retention: report });
+  await settle();
+  const alarms = document.getElementById("retention-alarms") as HTMLElement;
+  const record = screen.getByText("Newest counted backup");
+  expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // THE OWNER IS A FIGURE OF THE RECORD, named once.
+  expect(screen.getByText("platform-oncall")).toBeTruthy();
+  fireEvent.click(within(alarms).getByRole("button", { name: "Take a backup" }));
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+});
+
 // "OPEN ALARMS" LANDS ON THE ALARMS. The engine panel's way to them is
 // `at=alarms`, and their list sits below the backups and the banners, so the
 // screen brings it into view once the report has drawn it, and only then.
@@ -480,8 +542,10 @@ describe("arriving for the alarms", () => {
     mount({}, { retention: report });
     await settle();
     expect(scrolled.map((el) => el.id)).toEqual(["retention-alarms"]);
-    // Its rows say the kind and what was measured, joined without a dash.
-    expect(screen.getByText(/no verified backup has been recorded/).textContent).not.toMatch(
+    // Its rows say the kind in words and what was measured as a sentence,
+    // with no dash between them.
+    expect(screen.getByText("Backup age")).toBeTruthy();
+    expect(screen.getByText(/No verified backup has been recorded\./).textContent).not.toMatch(
       /\u2014/,
     );
   });
@@ -490,7 +554,7 @@ describe("arriving for the alarms", () => {
     location.hash = "#/settings/backups";
     mount({}, { retention: report });
     await settle();
-    expect(screen.getByText(/no verified backup has been recorded/)).toBeTruthy();
+    expect(screen.getByText(/No verified backup has been recorded\./)).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
 });

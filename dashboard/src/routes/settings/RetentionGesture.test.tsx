@@ -16,7 +16,12 @@ import type {
   RetentionReport,
 } from "~/protocol/index.ts";
 import { Router } from "~/app/router.tsx";
-import { heldGestures, RetentionPanels } from "./Retention.tsx";
+import { heldGestures, RetentionPanels, useRetentionReport } from "./Retention.tsx";
+
+/** The panels as the page draws them: handed the one report it asked for. */
+function Panels() {
+  return <RetentionPanels retention={useRetentionReport(true)} />;
+}
 
 const query = vi.hoisted(() => ({
   data: null as unknown,
@@ -113,7 +118,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   );
   const { rerender } = render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
 
@@ -139,7 +144,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   query.data = report([node({ evicted })]);
   rerender(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   await waitFor(() => expect(screen.getByRole("button", { name: "Readmit…" })).toBeTruthy());
@@ -281,7 +286,7 @@ test("a log whose evictions could not be read says so above the node block", () 
   );
   render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   expect(screen.getByText(/evicted nodes may not show/).textContent).toBe(
@@ -305,7 +310,7 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   );
   const { rerender } = render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   fireEvent.click(rowButton("node-4", "Evict…"));
@@ -323,7 +328,7 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420 })]);
   rerender(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   await waitFor(() => expect(screen.queryByRole("button", { name: "Eviction sent…" })).toBeNull());

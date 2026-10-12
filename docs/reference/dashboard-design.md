@@ -807,8 +807,9 @@ document Backups & retention lists them from, asked for when the panel opens
 and again when the count moves, because the push is public and names only the
 one that has stood longest. A reader without an operator credential is told
 that one and how many more stand. A name is the alarm's kind read as words,
-its initialisms kept whole, with the domain an alarm was raised on after a
-colon ("Backup age", "Trim blocked: tracker"); `lib/alarms.ts` holds the rule.
+its initialisms kept whole ("Backup age", "Trim blocked"), and names one alarm:
+the engine raises each kind once, with the logs it stands on in it.
+`lib/alarms.ts` holds the rule.
 A table the engine has not evaluated is "Not evaluated", never "None". The
 push counts the nodes holding a presence lease and does not know how many a
 fleet should have, so a node that is down is a smaller count and nothing
@@ -1058,9 +1059,10 @@ link to.
 ### Every list is one grid
 
 `DataGrid` draws all of them. There is no `<table>` left in the product except
-the retention screen's per-domain terms — a block that already titled itself,
-with no header row and nothing to sort, which is a table in the sense the
-element means rather than a list of objects.
+a project's Files listing: a block inside a card that already titles it, with
+nothing to sort, which is a table in the sense the element means rather than a
+list of objects. (The retention screen's per-domain terms were the other one;
+they are a description list now.)
 
 **Including the tracker's own list and table, which are one grid with two
 column sets.** They were two components over one answer, and the cost was
@@ -6032,7 +6034,7 @@ screen shares rather than at an inset of its own.
 | Integrations | a **pill in the warning tone** — the tools the engine's roll-up says need a person (`tools[].state = attention`), the one figure here that is waiting on the reader. It is a *state*, so it wears the warning pair the artboard draws it in, never the accent the inbox's unread badge fills with | `integrations` |
 | Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node has applied an older epoch than the fleet activated (the Nodes screen's own "Behind on config" count) | the health push, and `fleet` |
 | Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
-| Backups & retention | how many state-log domains have a trim something is holding, drawn only when one is | `retention` |
+| Backups & retention | how many alarms stand, the count the engine panel shows, drawn only when one does | `retention` |
 
 `fleet`, `retention` and `integrations` are operator answers with no push
 behind them, so those figures are a poll — and **they are asked only while the
@@ -6285,7 +6287,24 @@ metadata group counts it — with every disagreement named and the removal of a
 dead member behind a typed confirmation. See [the object
 store](../concepts/object-store.md) and [the fleet guide](../guides/fleet.md).
 
-**Backups & retention** reads `backups` beside the retention panels. **Take a
+**Backups & retention** says each problem once, and says it first. It reads one
+retention report for the whole page and hands it to every panel, so the alarms
+and the panels under them describe the same report. **Alarms** lead: each kind
+once, named in words, with the engine's measurement as a sentence, the logs it
+stands on (logs one term holds are one line, "Trim held by the backup on
+tracker, vectors, pages and usage, for 46h", each log a link to its page; a
+single log whose measurement is the alarm's is folded into it), and the
+engine's remedy. The backup alarm offers **Take a backup**. Then the record of
+backups, then **Replication**, then **Log retention**: a row per log with its
+facts and what holds its trim in words ("held by the backup"), and its six
+checks behind a disclosure, each in words beside the term's own name, with the
+remedy printed only for the check that decides the trim. **Snapshots and
+joining** ends the page; a single node, which takes no snapshots by design,
+reads as one sentence rather than a table of `sole_node`. The page said a
+missing backup about twenty times before this: three empty panels, a banner and
+an alarm per log, and the same remedy under every log.
+
+The record reads `backups`. **Take a
 backup** asks the node serving the page for a copy (`POST /backup`) in a
 directory on **that node's host** — the dialog names the host first, since
 nothing is downloaded — and offers a fresh directory beside that node's last
@@ -6294,16 +6313,19 @@ to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field. The request
 waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
-stop the copy: the outcome arrives as a notice either way. Three tiles (the
-newest backup the trim counts, the `backup_floor` policy, and how many were
-requested and failed — over the span the event log reads, named from the
+stop the copy: the outcome arrives as a notice either way. Its figures are the
+newest backup the trim counts, the `backup_floor` policy, how many were
+requested and failed (over the span the event log reads, named from the
 `event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), then **Newest per owner** — each node's newest copy and
+screen, or "in the newest N" when the history filled its page), and the
+backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
+nothing backed up and every node's history read, the figure says "none yet"
+and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
 the operator's acknowledgement, with its directory, size (none for an
 acknowledgement, never 0), reach, and whether the trim counts it: exactly one
 row reads **counted · newest**, the engine's choice rather than the latest
-date, so a newer copy nobody verified reads **not verified** — and **Backup
-history**, every backup a person asked any node for over the event log's 30
+date, so a newer copy nobody verified reads **not verified**. Then **Backup
+history**: every backup a person asked any node for over the event log's 30
 days, with the node that holds it, the person, the directory and whether its
 manifest was written. A failure is drawn as one. Neither table is derived from
 the other: the register keeps each owner's newest point only, which is why a

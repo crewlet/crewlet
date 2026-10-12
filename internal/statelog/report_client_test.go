@@ -24,6 +24,7 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 		{"RetentionTrimFloorState", stringsOf(statelog.TrimFloorStates())},
 		{"RetentionGenerationState", stringsOf(statelog.GenerationStates())},
 		{"RetentionIdentityCause", stringsOf(statelog.IdentityCauses())},
+		{"RetentionTermName", stringsOf(statelog.TermNames)},
 	} {
 		client, err := clientsource.Union(clientsource.Tree(t), gate.declaration)
 		if err != nil {

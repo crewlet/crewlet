@@ -219,14 +219,39 @@ const fiveAlarms = {
   alarms: { count: 5, worst: "backup_age" },
 };
 
+const twoAlarms = {
+  ...healthy,
+  alarms: { count: 2, worst: "backup_age" },
+};
+
+// ONE ALARM PER KIND, with the logs it stands on: three logs the missing
+// backup holds are the backup alarm's, and a log a slow node holds is the
+// trim alarm's.
+const held = (domain: string, term: string) => ({
+  domain,
+  detail: "the trim has not advanced for 3h",
+  term,
+  since: "2031-04-02T00:00:00Z",
+});
 const report = {
   domains: ["tracker", "pages", "vectors", "usage"].map((domain) => ({ domain })),
   alarms: [
-    { kind: "trim_blocked", detail: "tracker: the trim has not advanced for 3 days", remedy: "" },
-    { kind: "trim_blocked", detail: "pages: the trim has not advanced for 3 days", remedy: "" },
-    { kind: "trim_blocked", detail: "vectors: the trim has not advanced for 3 days", remedy: "" },
-    { kind: "trim_blocked", detail: "usage: the trim has not advanced for 3 days", remedy: "" },
-    { kind: "backup_age", detail: "no verified backup has been recorded", remedy: "" },
+    {
+      kind: "backup_age",
+      detail: "no verified backup has been recorded",
+      remedy: "",
+      domains: [
+        held("tracker", "backup_floor"),
+        held("vectors", "backup_floor"),
+        held("usage", "backup_floor"),
+      ],
+    },
+    {
+      kind: "trim_blocked",
+      detail: "the trim has not advanced for 3h",
+      remedy: "",
+      domains: [held("pages", "applied")],
+    },
   ],
 } as unknown as RetentionReport;
 
@@ -264,11 +289,11 @@ describe("the row", () => {
   });
 
   test("lists the alarms by name, longest-standing first, and goes to where the console lists them", async () => {
-    const { asked } = panel(read({ health: fiveAlarms }), {
+    const { asked } = panel(read({ health: twoAlarms }), {
       operator: true,
       answers: { retention: report },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Engine serving, 5 alarms" }));
+    fireEvent.click(screen.getByRole("button", { name: "Engine serving, 2 alarms" }));
     await settle();
     expect(asked).toContain("retention");
     const dialog = screen.getByRole("dialog", { name: "Engine" });
@@ -277,13 +302,7 @@ describe("the row", () => {
       within(alarms)
         .getAllByRole("listitem")
         .map((item) => item.textContent),
-    ).toEqual([
-      "Backup age",
-      "Trim blocked: tracker",
-      "Trim blocked: pages",
-      "Trim blocked: vectors",
-      "Trim blocked: usage",
-    ]);
+    ).toEqual(["Backup age", "Trim blocked"]);
     expect(within(dialog).getByRole("link", { name: "Open alarms" }).getAttribute("href")).toBe(
       "#/settings/backups?at=alarms",
     );

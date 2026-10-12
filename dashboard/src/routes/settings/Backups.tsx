@@ -38,9 +38,10 @@ import {
   RotateCcwGlyph,
   PlusGlyph,
   ShieldGlyph,
+  UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, SeatLabel, StatusCell } from "~/app/frame/cells.tsx";
@@ -58,7 +59,7 @@ import {
 } from "~/lib/backups.ts";
 import { apiToken } from "~/protocol/index.ts";
 import type { BackupPointRow, BackupRunRow, BackupsAnswer } from "~/contract/backups.ts";
-import { RetentionPanels } from "./Retention.tsx";
+import { RetentionPanels, RetentionStatus, useRetentionReport } from "./Retention.tsx";
 import { DomainScreen } from "./Domain.tsx";
 import { TakeBackupDialog } from "./TakeBackupDialog.tsx";
 
@@ -73,10 +74,9 @@ export function Backups({ domain }: { domain?: string }) {
   // reader with no token, and a page of its own that drew nothing would be a
   // blank screen under a heading that promises backups.
   const operator = apiToken() !== "";
-  const backups = useQuery("backups", undefined, {
-    pollMs: BACKUPS_POLL_MS,
-    enabled: operator && domain === undefined,
-  });
+  const page = operator && domain === undefined;
+  const backups = useQuery("backups", undefined, { pollMs: BACKUPS_POLL_MS, enabled: page });
+  const retention = useRetentionReport(page);
   if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
   const node = health?.node;
   return (
@@ -94,14 +94,20 @@ export function Backups({ domain }: { domain?: string }) {
         </Button>
       </PageActions>
       <QueryState error={operator ? null : "unauthorized"} loading={false}>
+        {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it
+            stands on, and the backup they ask for one press away. */}
+        <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
         <QueryState error={backups.error} loading={backups.loading && !backups.data}>
           {backups.data ? (
-            <BackupRecord answer={backups.data} />
+            <BackupRecord
+              answer={backups.data}
+              owner={retention.data ? (retention.data.backup_owner ?? "") : undefined}
+            />
           ) : (
             <Skeleton variant="text" rows={4} label="Loading the backups" />
           )}
         </QueryState>
-        <RetentionPanels thisNode={node} />
+        <RetentionPanels thisNode={node} retention={retention} />
       </QueryState>
       {taking && (
         <TakeBackupDialog
@@ -120,8 +126,26 @@ export function Backups({ domain }: { domain?: string }) {
   );
 }
 
-/** The register's points and the history, with the three figures above them. */
-export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
+/**
+ * The register's points and the history, with the figures above them.
+ *
+ * NOTHING BACKED UP IS SAID ONCE, by the figure. The two lists under it each
+ * drew an empty state of their own when there was nothing at all, three ways
+ * of saying "no backup" beside the alarm that already says it; they are drawn
+ * once there is something to list, or when a node's history could not be
+ * read, which is a gap the empty figure cannot speak for.
+ */
+export function BackupRecord({
+  answer,
+  owner,
+}: {
+  answer: BackupsAnswer;
+  /**
+   * Whose job the backups are (`retention.backup_owner`), empty where nobody
+   * is named, and undefined until the retention report has answered.
+   */
+  owner?: string;
+}) {
   const now = useNow();
   const org = useOrg();
   // HOW FAR BACK THE HISTORY READS, as the engine reported it: the history is
@@ -132,11 +156,17 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
   const newest = answer.points.find((p) => p.newest);
   const failed = answer.history.filter((r) => r.outcome === "failed").length;
   const requested = `${answer.history.length}${answer.more ? "+" : ""}`;
+  const unread = missingFrom([answer.coverage]);
+  const nothingYet =
+    answer.points.length === 0 &&
+    answer.history.length === 0 &&
+    unread.nodes.length === 0 &&
+    !unread.incomplete;
 
   return (
     <>
       <Card padding="none">
-        <StatGroup columns={3}>
+        <StatGroup columns={owner === undefined ? 3 : 4}>
           <StatCard
             icon={<ClockGlyph size="xs" />}
             label="Newest counted backup"
@@ -169,201 +199,215 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
               answer.more ? `in the newest ${answer.history.length}` : `in ${span}`
             }`}
           />
+          {owner !== undefined && (
+            <StatCard
+              icon={<UserGlyph size="xs" />}
+              label="Backup owner"
+              value={owner || "Not set"}
+              // THE FIELD THAT NAMES THEM, which is what an operator types to
+              // change it, and what the backup term's remedy points at.
+              sub={owner ? "retention.backup_owner" : "set retention.backup_owner"}
+            />
+          )}
         </StatGroup>
       </Card>
 
-      <Card padding="none">
-        <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
-          Newest per owner
-        </Card.Header>
-        <DataGrid<BackupPointRow>
-          name="points"
-          rows={answer.points}
-          rowKey={(p) => p.owner}
-          defaultSort="-taken"
-          empty={{
-            title: "Nothing has been backed up",
-            // A COMMAND IS CODE, as it is everywhere else on these screens;
-            // in prose `crewlet backup -dir` read as four words of the hint.
-            hint: (
-              <>
-                Take one from this page, or run <InlineCode>crewlet backup -dir</InlineCode>.
-              </>
-            ),
-            icon: "database",
-          }}
-          columns={[
-            {
-              key: "owner",
-              header: "Owner",
-              phoneLead: true,
-              sortValue: (p) => p.owner,
-              cell: (p) =>
-                p.kind === "node" ? (
-                  <KeyCell value={p.owner} path={["settings", "nodes", p.owner]} />
-                ) : (
-                  <span className="muted">{OWNER_KIND_WORDS.operator}</span>
+      {!nothingYet && (
+        <>
+          <Card padding="none">
+            <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
+              Newest per owner
+            </Card.Header>
+            <DataGrid<BackupPointRow>
+              name="points"
+              rows={answer.points}
+              rowKey={(p) => p.owner}
+              defaultSort="-taken"
+              empty={{
+                title: "Nothing has been backed up",
+                // A COMMAND IS CODE, as it is everywhere else on these screens;
+                // in prose `crewlet backup -dir` read as four words of the hint.
+                hint: (
+                  <>
+                    Take one from this page, or run <InlineCode>crewlet backup -dir</InlineCode>.
+                  </>
                 ),
-            },
-            {
-              key: "taken",
-              header: "Taken",
-              shrink: true,
-              sortValue: (p) => p.taken_at,
-              cell: (p) => <DateCell at={p.taken_at} now={now} />,
-            },
-            {
-              key: "dir",
-              header: "Directory",
-              sortValue: (p) => p.dir ?? "",
-              cell: (p) =>
-                p.dir ? (
-                  <span className="mono truncate" title={p.dir}>
-                    {p.dir}
-                  </span>
-                ) : (
-                  <EmptyValue label="An acknowledgement names no directory" />
-                ),
-            },
-            {
-              key: "size",
-              header: "Size",
-              align: "right",
-              shrink: true,
-              // ABSENT RATHER THAN ZERO: an acknowledgement asserts a copy the
-              // engine never saw, and a 0 would read as an empty one.
-              sortValue: (p) => p.bytes ?? null,
-              cell: (p) =>
-                p.bytes == null ? (
-                  <EmptyValue label="The engine never saw this copy" />
-                ) : (
-                  <span className="t-num t-caption">{fmtBytes(p.bytes)}</span>
-                ),
-            },
-            {
-              key: "covers",
-              header: "Covers",
-              optional: true,
-              sortValue: (p) => p.covers.length,
-              cell: (p) => (
-                <span className="t-caption" title={p.covers.map(coverWords).join("\n")}>
-                  {plural(p.covers.length, "log")}
-                </span>
-              ),
-            },
-            {
-              key: "trim",
-              header: "Trim",
-              shrink: true,
-              sortValue: (p) => (p.newest ? 2 : p.counted ? 1 : 0),
-              cell: (p) => <TrimCell point={p} />,
-            },
-          ]}
-        />
-      </Card>
+                icon: "database",
+              }}
+              columns={[
+                {
+                  key: "owner",
+                  header: "Owner",
+                  phoneLead: true,
+                  sortValue: (p) => p.owner,
+                  cell: (p) =>
+                    p.kind === "node" ? (
+                      <KeyCell value={p.owner} path={["settings", "nodes", p.owner]} />
+                    ) : (
+                      <span className="muted">{OWNER_KIND_WORDS.operator}</span>
+                    ),
+                },
+                {
+                  key: "taken",
+                  header: "Taken",
+                  shrink: true,
+                  sortValue: (p) => p.taken_at,
+                  cell: (p) => <DateCell at={p.taken_at} now={now} />,
+                },
+                {
+                  key: "dir",
+                  header: "Directory",
+                  sortValue: (p) => p.dir ?? "",
+                  cell: (p) =>
+                    p.dir ? (
+                      <span className="mono truncate" title={p.dir}>
+                        {p.dir}
+                      </span>
+                    ) : (
+                      <EmptyValue label="An acknowledgement names no directory" />
+                    ),
+                },
+                {
+                  key: "size",
+                  header: "Size",
+                  align: "right",
+                  shrink: true,
+                  // ABSENT RATHER THAN ZERO: an acknowledgement asserts a copy the
+                  // engine never saw, and a 0 would read as an empty one.
+                  sortValue: (p) => p.bytes ?? null,
+                  cell: (p) =>
+                    p.bytes == null ? (
+                      <EmptyValue label="The engine never saw this copy" />
+                    ) : (
+                      <span className="t-num t-caption">{fmtBytes(p.bytes)}</span>
+                    ),
+                },
+                {
+                  key: "covers",
+                  header: "Covers",
+                  optional: true,
+                  sortValue: (p) => p.covers.length,
+                  cell: (p) => (
+                    <span className="t-caption" title={p.covers.map(coverWords).join("\n")}>
+                      {plural(p.covers.length, "log")}
+                    </span>
+                  ),
+                },
+                {
+                  key: "trim",
+                  header: "Trim",
+                  shrink: true,
+                  sortValue: (p) => (p.newest ? 2 : p.counted ? 1 : 0),
+                  cell: (p) => <TrimCell point={p} />,
+                },
+              ]}
+            />
+          </Card>
 
-      <Card padding="none">
-        <Card.Header
-          icon={<RotateCcwGlyph size="sm" />}
-          count={answer.history.length}
-          subtitle="Newest first"
-        >
-          Backup history
-        </Card.Header>
-        <CoverageNote
-          coverage={[answer.coverage]}
-          what="this history"
-          lost={{
-            one: "The backups it took are not here",
-            many: "The backups they took are not here",
-          }}
-        />
-        <DataGrid<BackupRunRow>
-          name="history"
-          rows={answer.history}
-          rowKey={(r) => r.id}
-          defaultSort="-at"
-          isFailed={(r) => r.outcome === "failed"}
-          loadedNote={
-            answer.more
-              ? `Newest ${answer.history.length}. Older ones are in the event log.`
-              : undefined
-          }
-          empty={{
-            title: `No backup was asked for in ${span}`,
-            hint: "Older backups still count above.",
-            icon: "rotate-ccw",
-          }}
-          columns={[
-            {
-              key: "at",
-              header: "When",
-              shrink: true,
-              sortValue: (r) => r.at,
-              cell: (r) => <DateCell at={r.at} now={now} />,
-            },
-            {
-              key: "node",
-              header: "Node",
-              shrink: true,
-              sortValue: (r) => r.node ?? "",
-              cell: (r) =>
-                r.node ? (
-                  <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
-                ) : (
-                  <EmptyValue label="The node was not recorded" />
-                ),
-            },
-            {
-              key: "who",
-              header: "Who",
-              sortValue: (r) => r.actor_seat || r.operator,
-              cell: (r) => {
-                if (!r.actor_seat) return <SeatLabel name={r.operator} kind="human" />;
-                const seat = who(r.actor_seat);
-                return (
-                  <SeatCell
-                    handle={r.actor_seat}
-                    name={seat.name}
-                    kind={seat.kind ?? "human"}
-                    avatar={seat.avatar}
-                    title={`${seat.name}, through the operator token ${r.operator}`}
-                  />
-                );
-              },
-            },
-            {
-              key: "dir",
-              header: "Directory",
-              sortValue: (r) => r.dir,
-              cell: (r) => (
-                <span className="mono truncate" title={r.dir}>
-                  {r.dir}
-                </span>
-              ),
-            },
-            {
-              key: "outcome",
-              header: "Outcome",
-              shrink: true,
-              phoneLead: true,
-              sortValue: (r) => r.outcome,
-              cell: (r) => (
-                <StatusCell
-                  glyph={r.outcome === "applied" ? "●" : "✕"}
-                  label={OUTCOME_WORDS[r.outcome]}
-                  tone={r.outcome === "applied" ? "positive" : "critical"}
-                  title={
-                    r.outcome === "applied"
-                      ? `Manifest written ${fmtDateTime(r.at)}`
-                      : "Incomplete, not a usable backup"
-                  }
-                />
-              ),
-            },
-          ]}
-        />
-      </Card>
+          <Card padding="none">
+            <Card.Header
+              icon={<RotateCcwGlyph size="sm" />}
+              count={answer.history.length}
+              subtitle="Newest first"
+            >
+              Backup history
+            </Card.Header>
+            <CoverageNote
+              coverage={[answer.coverage]}
+              what="this history"
+              lost={{
+                one: "The backups it took are not here",
+                many: "The backups they took are not here",
+              }}
+            />
+            <DataGrid<BackupRunRow>
+              name="history"
+              rows={answer.history}
+              rowKey={(r) => r.id}
+              defaultSort="-at"
+              isFailed={(r) => r.outcome === "failed"}
+              loadedNote={
+                answer.more
+                  ? `Newest ${answer.history.length}. Older ones are in the event log.`
+                  : undefined
+              }
+              empty={{
+                title: `No backup was asked for in ${span}`,
+                hint: "Older backups still count above.",
+                icon: "rotate-ccw",
+              }}
+              columns={[
+                {
+                  key: "at",
+                  header: "When",
+                  shrink: true,
+                  sortValue: (r) => r.at,
+                  cell: (r) => <DateCell at={r.at} now={now} />,
+                },
+                {
+                  key: "node",
+                  header: "Node",
+                  shrink: true,
+                  sortValue: (r) => r.node ?? "",
+                  cell: (r) =>
+                    r.node ? (
+                      <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
+                    ) : (
+                      <EmptyValue label="The node was not recorded" />
+                    ),
+                },
+                {
+                  key: "who",
+                  header: "Who",
+                  sortValue: (r) => r.actor_seat || r.operator,
+                  cell: (r) => {
+                    if (!r.actor_seat) return <SeatLabel name={r.operator} kind="human" />;
+                    const seat = who(r.actor_seat);
+                    return (
+                      <SeatCell
+                        handle={r.actor_seat}
+                        name={seat.name}
+                        kind={seat.kind ?? "human"}
+                        avatar={seat.avatar}
+                        title={`${seat.name}, through the operator token ${r.operator}`}
+                      />
+                    );
+                  },
+                },
+                {
+                  key: "dir",
+                  header: "Directory",
+                  sortValue: (r) => r.dir,
+                  cell: (r) => (
+                    <span className="mono truncate" title={r.dir}>
+                      {r.dir}
+                    </span>
+                  ),
+                },
+                {
+                  key: "outcome",
+                  header: "Outcome",
+                  shrink: true,
+                  phoneLead: true,
+                  sortValue: (r) => r.outcome,
+                  cell: (r) => (
+                    <StatusCell
+                      glyph={r.outcome === "applied" ? "●" : "✕"}
+                      label={OUTCOME_WORDS[r.outcome]}
+                      tone={r.outcome === "applied" ? "positive" : "critical"}
+                      title={
+                        r.outcome === "applied"
+                          ? `Manifest written ${fmtDateTime(r.at)}`
+                          : "Incomplete, not a usable backup"
+                      }
+                    />
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        </>
+      )}
     </>
   );
 }

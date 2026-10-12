@@ -1,13 +1,12 @@
 /**
- * An alarm in words: the kind read as words, its initialisms kept whole, and
- * the domain an alarm was raised on named after a colon.
+ * An alarm in words: the kind read as words with its initialisms kept whole,
+ * one name per kind, and the logs an alarm stands on as the lines a screen
+ * draws.
  */
 
 import { describe, expect, test } from "vitest";
 
-import { alarmDomain, alarmKindTitle, alarmTitle, namedAlarms } from "./alarms.ts";
-
-const DOMAINS = ["tracker", "pages", "vectors", "usage"];
+import { alarmKindTitle, alarmLogLines, namedAlarms } from "./alarms.ts";
 
 describe("an alarm kind is read as words", () => {
   // EVERY KIND THE ENGINE'S TABLE RAISES TODAY (`statelog.Kinds`), so the rule
@@ -47,60 +46,84 @@ describe("an alarm kind is read as words", () => {
   });
 });
 
-describe("an alarm raised per domain names its domain", () => {
-  test("the report's per-domain detail names the domain after the kind", () => {
-    const alarm = {
-      kind: "trim_blocked",
-      detail: "tracker: the trim has not advanced for 3 days: backup_max_age",
-    };
-    expect(alarmTitle(alarm, DOMAINS)).toBe("Trim blocked: tracker");
-    expect(
-      alarmTitle({ kind: "log_headroom", detail: "pages: 4% of the ceiling left" }, DOMAINS),
-    ).toBe("Log headroom: pages");
-  });
-
-  // RECOGNISED AGAINST THE REPORT'S OWN DOMAINS, never by the shape of the
-  // text: a node-wide alarm's detail can start with a word and a colon too.
-  test("a word before a colon is not a domain unless the report lists it", () => {
-    expect(alarmDomain("/var/lib/crewlet: 3 GiB free of 40 GiB", DOMAINS)).toBeUndefined();
-    expect(
-      alarmTitle({ kind: "volume_low", detail: "/var/lib/crewlet: 3 GiB free" }, DOMAINS),
-    ).toBe("Volume low");
-    expect(alarmTitle({ kind: "trim_blocked", detail: "tracker: held" }, [])).toBe("Trim blocked");
-    // A domain only matches whole, up to its colon.
-    expect(alarmDomain("trackers: held", DOMAINS)).toBeUndefined();
-    expect(alarmTitle({ kind: "backup_age" })).toBe("Backup age");
-  });
-});
-
 describe("a list of alarms", () => {
-  const report = [
-    { kind: "trim_blocked", detail: "tracker: the trim has not advanced" },
-    { kind: "trim_blocked", detail: "pages: the trim has not advanced" },
-    { kind: "backup_age", detail: "no verified backup has been recorded" },
-    { kind: "volume_low", detail: "/data: 1 GiB free" },
-  ];
+  const report = [{ kind: "trim_blocked" }, { kind: "backup_age" }, { kind: "volume_low" }];
 
   test("leads with the one that has stood longest, and keeps the report's order after it", () => {
-    expect(namedAlarms(report, DOMAINS, "backup_age").map((a) => a.title)).toEqual([
+    expect(namedAlarms(report, "backup_age").map((a) => a.title)).toEqual([
       "Backup age",
-      "Trim blocked: tracker",
-      "Trim blocked: pages",
+      "Trim blocked",
       "Volume low",
     ]);
     // With nothing named as the longest-standing, the report's order stands.
-    expect(namedAlarms(report, DOMAINS, undefined).map((a) => a.title)).toEqual([
-      "Trim blocked: tracker",
-      "Trim blocked: pages",
+    expect(namedAlarms(report, undefined).map((a) => a.title)).toEqual([
+      "Trim blocked",
       "Backup age",
       "Volume low",
     ]);
   });
 
-  // ONE KIND, TWO ALARMS: the kind alone is not an identity, so a list keyed
-  // on it would draw one of the two.
-  test("tells two alarms of one kind apart", () => {
-    const keys = namedAlarms(report, DOMAINS, "trim_blocked").map((a) => a.key);
-    expect(new Set(keys).size).toBe(report.length);
+  // THE KIND IS THE IDENTITY: the engine raises each one once, with its logs
+  // in it, so a list keyed on it draws every alarm it was given.
+  test("keys each alarm by its kind", () => {
+    expect(namedAlarms(report, undefined).map((a) => a.key)).toEqual([
+      "trim_blocked",
+      "backup_age",
+      "volume_low",
+    ]);
+  });
+});
+
+describe("the logs an alarm stands on", () => {
+  // LOGS ONE TERM HOLDS ARE ONE LINE: four logs waiting on one backup are one
+  // fact with four names in it, dated by the one held longest.
+  test("logs held by one term are one line, from the earliest hold", () => {
+    const lines = alarmLogLines({
+      domains: [
+        { domain: "tracker", detail: "", term: "backup_floor", since: "2031-04-02T01:00:00Z" },
+        { domain: "vectors", detail: "", term: "backup_floor", since: "2031-04-01T22:00:00Z" },
+        { domain: "pages", detail: "", term: "backup_floor", since: "2031-04-02T02:00:00Z" },
+      ],
+    });
+    expect(lines).toEqual([
+      {
+        term: "backup_floor",
+        domains: ["tracker", "vectors", "pages"],
+        since: "2031-04-01T22:00:00Z",
+      },
+    ]);
+  });
+
+  // DIFFERENT TERMS ARE DIFFERENT FACTS, each with its own line.
+  test("logs held by different terms keep a line each, in the report's order", () => {
+    const lines = alarmLogLines({
+      domains: [
+        { domain: "tracker", detail: "", term: "applied", since: "2031-04-02T01:00:00Z" },
+        { domain: "pages", detail: "", term: "feed_ack_floor", since: "2031-04-02T03:00:00Z" },
+        { domain: "usage", detail: "", term: "applied", since: "2031-04-02T00:00:00Z" },
+      ],
+    });
+    expect(lines.map((l) => [l.term, l.domains])).toEqual([
+      ["applied", ["tracker", "usage"]],
+      ["feed_ack_floor", ["pages"]],
+    ]);
+  });
+
+  // A LOG WITH A MEASUREMENT OF ITS OWN AND NO TERM (a log nearing its
+  // ceiling) is its own line, carrying that measurement.
+  test("a log with its own measurement is a line of its own", () => {
+    expect(
+      alarmLogLines({
+        domains: [
+          { domain: "vectors", detail: "3% of the log's byte ceiling is left" },
+          { domain: "usage", detail: "8% of the log's byte ceiling is left" },
+        ],
+      }),
+    ).toEqual([
+      { domains: ["vectors"], detail: "3% of the log's byte ceiling is left" },
+      { domains: ["usage"], detail: "8% of the log's byte ceiling is left" },
+    ]);
+    // A node-wide alarm stands on no log at all.
+    expect(alarmLogLines({})).toEqual([]);
   });
 });

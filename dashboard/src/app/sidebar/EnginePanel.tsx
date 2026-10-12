@@ -397,13 +397,7 @@ function AlarmNames({
     seen.current = count;
     refetch();
   }, [count, refetch]);
-  const named = report.data
-    ? namedAlarms(
-        report.data.alarms ?? [],
-        (report.data.domains ?? []).map((d) => d.domain),
-        worst,
-      )
-    : [];
+  const named = report.data ? namedAlarms(report.data.alarms ?? [], worst) : [];
   if (named.length > 0) {
     return (
       <Stack as="ul" gap={1}>
