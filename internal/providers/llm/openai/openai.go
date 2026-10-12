@@ -354,7 +354,18 @@ func (p *Provider) streamOnce(
 	for stream.Next() {
 		events++
 		chunk := stream.Current()
-		acc.AddChunk(chunk)
+		if !acc.AddChunk(chunk) {
+			// THE ANSWER CANNOT HOLD THIS CHUNK. The accumulator refuses
+			// one naming another completion id than the stream's first,
+			// or an index outside its bounds, and leaves the answer
+			// without it — so reading on hands the loop an answer short
+			// of what the live view showed, or a round whose usage never
+			// reached the budget, as though it were whole. The host's
+			// failure, retried like a stream cut short; and nothing of
+			// the chunk is forwarded or kept, so the reasoning record
+			// never holds what the answer does not.
+			return nil, nil, false, errStreamUnassembled
+		}
 		for _, choice := range chunk.Choices {
 			if choice.FinishReason != "" {
 				finished = true
@@ -413,6 +424,11 @@ var errNoStream = errors.New("endpoint did not stream")
 // errStreamCut reports a stream whose body ended before its terminal event:
 // no choice carried a finish_reason and no `[DONE]` arrived.
 var errStreamCut = errors.New("stream ended before its terminal event (no finish_reason and no [DONE])")
+
+// errStreamUnassembled reports a stream that sent a chunk its answer cannot
+// hold (see [sdk.ChatCompletionAccumulator.AddChunk]).
+var errStreamUnassembled = errors.New("stream sent a chunk its answer cannot hold " +
+	"(another completion id than its first, or an index out of bounds)")
 
 // doneWatch notes whether a streamed body carried the `[DONE]` sentinel.
 //
@@ -485,9 +501,10 @@ func (p *Provider) classify(err error) *llm.Error {
 		classified.Detail = Detail(apiErr)
 		return classified
 	}
-	if errors.Is(err, errStreamCut) {
-		// The response opened with 200 and stopped short: the server's
-		// failure, retried and handed down the chain like one.
+	if errors.Is(err, errStreamCut) || errors.Is(err, errStreamUnassembled) {
+		// The response opened with 200 and stopped short, or sent what
+		// no answer can be assembled from: the server's failure, retried
+		// and handed down the chain like one.
 		return &llm.Error{Kind: llm.KindServer, Provider: p.name, Model: p.model, Err: err}
 	}
 	var streamErr *ssestream.StreamError

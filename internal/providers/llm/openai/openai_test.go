@@ -1567,6 +1567,63 @@ func TestAStreamThatEndsBeforeItsTerminalEventFails(t *testing.T) {
 	}
 }
 
+// A CHUNK THE ANSWER CANNOT HOLD FAILS THE STREAM. The SDK's accumulator
+// refuses a chunk it cannot assemble — one naming another completion id than
+// the stream's first, or a choice or tool-call index outside its bounds — and
+// leaves the answer without it. Read on regardless, a refused fragment of the
+// answer was a shorter answer handed on as the whole one (the live view had
+// shown the missing text), and a refused usage chunk a round the budget
+// metered as free; it is the server's failure, retried like a stream cut
+// short.
+func TestAStreamChunkTheAnswerCannotHoldFails(t *testing.T) {
+	t.Parallel()
+	chunk := func(id, choices, usage string) string {
+		return `data: {"id":"` + id + `","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+			`"choices":[` + choices + `]` + usage + `}` + "\n\n"
+	}
+	const usage = `,"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`
+	for _, tc := range []struct {
+		name   string
+		writes []string
+	}{
+		{"a fragment of the answer under another id", []string{
+			chunk("1", `{"index":0,"delta":{"role":"assistant","content":"Hel"}}`, ""),
+			chunk("2", `{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}`, ""),
+		}},
+		{"the usage under another id", []string{
+			chunk("1", `{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}`, ""),
+			chunk("2", ``, usage),
+		}},
+		{"a choice index past the API's bound", []string{
+			chunk("1", `{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}`, ""),
+			chunk("1", `{"index":128,"delta":{"content":"!"}}`, ""),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, part := range tc.writes {
+					_, _ = io.WriteString(w, part)
+				}
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			})
+			p := newProvider(t, url, nil)
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if out != nil {
+				t.Fatalf("a stream the SDK could not assemble answered %q with %d input tokens",
+					out.Content, out.InputTokens)
+			}
+			if llm.KindOf(err) != llm.KindServer {
+				t.Fatalf("err = %v (kind %s), want a server failure the chain retries", err, llm.KindOf(err))
+			}
+		})
+	}
+}
+
 // THE SENTINEL IS SEEN WHEREVER A READ SPLITS IT — one byte at a time is the
 // worst split there is — and only at the start of a line.
 func TestTheDoneSentinelIsSeenAcrossReads(t *testing.T) {
