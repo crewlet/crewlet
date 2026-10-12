@@ -1278,9 +1278,9 @@ still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
-vectors — has its own stream and its own generation, and a reanchor moves only
-the one you named: that domain's checkpoint goes to the next generation, where
-its case puts it, keyed to the live instant. Every other domain keeps its
+vectors and the usage days — has its own stream and its own generation, and a
+reanchor moves only the one you named: that domain's checkpoint goes to the next
+generation, where its case puts it, keyed to the live instant. Every other domain keeps its
 checkpoint, its generation and its stream exactly as they were. If more than
 one log was rebuilt, re-anchor each of them.
 
@@ -1293,7 +1293,8 @@ In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (the tracker's and the
 knowledge base's each keep one, applied as `tracker_log_generations` and
-`pages_log_generations`; the vectors keep none); reads the stream's instant
+`pages_log_generations`; the vectors and the usage days keep none, because they
+claim no identity a second opening could violate); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
 so a reanchor that failed part-way is finished by running it again: it derives

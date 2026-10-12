@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // REANCHORING: the one recovery for a stream that was genuinely recreated.
@@ -201,6 +202,8 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 		return pages.GenerationRecord{}, nil
 	case search.Domain{}.Name():
 		return search.GenerationRecord{}, nil
+	case usage.Domain{}.Name():
+		return usage.GenerationRecord{}, nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no "+
 		"generation record, so a recreated log of it could never be re-anchored",
