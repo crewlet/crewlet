@@ -13,6 +13,7 @@ func everyLogPrefix() []string {
 		topics.TrackerVectorsPrefix,
 		topics.PagesLogPrefix,
 		topics.UsageLogPrefix,
+		topics.ChatLogPrefix,
 	}
 }
 
@@ -78,6 +79,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.PagesLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the pages log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.ChatLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.ChatLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the chat log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 	}
 }
 
@@ -141,6 +146,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_PAGES_LOG", "crewlet.pages.log"},
 		{"usage", topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard,
 			"CREWLET_USAGE_LOG", "crewlet.usage.log"},
+		{"chat", topics.ChatLogStream, topics.ChatLogPrefix, topics.ChatLogWildcard,
+			"CREWLET_CHAT_LOG", "crewlet.chat.log"},
 	} {
 		if tc.stream != tc.wantStream || tc.prefix != tc.wantPrefix ||
 			tc.wildcard != tc.wantPrefix+".>" {

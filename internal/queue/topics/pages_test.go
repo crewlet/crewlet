@@ -52,7 +52,7 @@ func TestAPagesSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 }
 
 // THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with
-// four domains on one broker, that now includes the other three's subjects.
+// five domains on one broker, that now includes the other four's subjects.
 func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
 	for _, subject := range []string{
@@ -64,6 +64,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
+		topics.ChatLogPrefix + ".message.1",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
@@ -72,7 +73,8 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE FOUR DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// THE FIVE DOMAINS' SUBJECT SPACES ARE DISJOINT, and so is chat's ephemeral
+// presence space, which shares chat's own `crewlet.chat.` root.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -80,10 +82,13 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
-		"tracker": topics.TrackerLogPrefix + ".",
-		"vectors": topics.TrackerVectorsPrefix + ".",
-		"pages":   topics.PagesLogPrefix + ".",
-		"usage":   topics.UsageLogPrefix + ".",
+		"tracker":  topics.TrackerLogPrefix + ".",
+		"vectors":  topics.TrackerVectorsPrefix + ".",
+		"pages":    topics.PagesLogPrefix + ".",
+		"usage":    topics.UsageLogPrefix + ".",
+		"chat":     topics.ChatLogPrefix + ".",
+		"presence": topics.ChatPresence + ".",
+		"person":   topics.ChatPerson + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {
