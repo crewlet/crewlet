@@ -6013,8 +6013,8 @@ name, and one this engine's environment does not set is a warning chip saying
 so) and whether they **act here** as themselves: *Acts as themself*, *Not
 bound*, *Variable unset* or *No such token*, each with the binding as written
 beside it, because each failure has its own remedy. **API tokens** is every
-label the guard accepts, the person it acts as (or *Nobody — writes under its
-own label*), its scope (*Person* or *Operator*) and **yours** on the one this
+label the guard accepts, the person it acts as (or *Nobody, writes as
+itself*), its scope (*Person* or *Operator*) and **yours** on the one this
 browser presents. A tile counts the **broken bindings** — a seat naming a token
 that binds nobody, which otherwise looks bound until that person presses a
 button and is refused. Tokens are declared in Tier A (`api.auth.tokens`) and
