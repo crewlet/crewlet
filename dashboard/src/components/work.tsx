@@ -322,7 +322,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
       <CalendarGlyph size="xs" />
       {fmtDateCompact(due, now)}
-      {overdue && <span className="sr-only">— overdue</span>}
+      {overdue && <span className="sr-only">, overdue</span>}
     </span>
   );
 }

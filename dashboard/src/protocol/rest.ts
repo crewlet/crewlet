@@ -381,7 +381,7 @@ async function request(
           error: "unreadable_body",
           detail: response.ok
             ? "the answer was cut short, or is not the engine's JSON"
-            : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
+            : `a ${response.status} came back without the engine's JSON, so something in front of it answered`,
         },
         response.ok ? null : response.headers.get("Retry-After"),
       );

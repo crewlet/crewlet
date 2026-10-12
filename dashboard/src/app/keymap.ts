@@ -345,7 +345,7 @@ const BY_ID = new Map(KEYMAP.map((row) => [row.id, row]));
 /** A row by its id, or a thrown error naming the id nobody declared. */
 export function keyRow(id: string): KeyRow {
   const row = BY_ID.get(id);
-  if (!row) throw new Error(`keymap: no row "${id}" — declare it in app/keymap.ts`);
+  if (!row) throw new Error(`keymap: no row "${id}"; declare it in app/keymap.ts`);
   return row;
 }
 
