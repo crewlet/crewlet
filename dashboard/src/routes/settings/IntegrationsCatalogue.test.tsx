@@ -232,7 +232,8 @@ test("without an operator token every form action is disabled with its reason", 
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
-  expect(document.body.textContent).toContain("Setting an integration up needs an operator token.");
+  expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
+  expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
@@ -254,7 +255,7 @@ test("a managed document holds Connect and keeps Rotate token", async () => {
   });
   // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
   expect(
-    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+    (await screen.findAllByText(/Managed by gitops\. Change it there\./)).some(
       (el) => el.closest(".crewlet-callout") !== null,
     ),
   ).toBe(true);

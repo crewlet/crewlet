@@ -128,17 +128,14 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
         {header}
         {objects.state === "unavailable" ? (
           <Callout variant="warning" role="alert">
-            <span>
-              The collector's record could not be read from the coordination store. Files are where
-              they were; this screen cannot say what the collector last found.
-            </span>
+            <span>Couldn’t read the collector’s last report. Files are unaffected.</span>
           </Callout>
         ) : (
           <EmptyState
             size="compact"
             icon={<DatabaseGlyph size="xl" />}
             title="No collection yet"
-            description="One data node collects the store hourly and audits it daily. Its first pass runs within a minute of a data node starting."
+            description="The first pass runs within a minute of a data node starting."
           />
         )}
       </Card>
@@ -156,11 +153,9 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
           <Callout variant="danger" role="alert">
             <div className="col gap-2">
               <span>
-                {plural(lost, "file")} cannot be read: the store does not hold{" "}
-                {lost === 1 ? "its" : "their"} bytes, or holds them wrong, after acknowledging them.
-                Check its health, and restore{" "}
-                {shown.length < lost ? `these first ${shown.length}` : "these"} from a backup or
-                upload {lost === 1 ? "it" : "them"} again.
+                {plural(lost, "file")} {lost === 1 ? "is" : "are"} missing or damaged. Restore{" "}
+                {lost === 1 ? "it" : "them"} from a backup or upload {lost === 1 ? "it" : "them"}{" "}
+                again.
               </span>
               <ul className="col gap-1">
                 {shown.map((m) => (
@@ -180,9 +175,8 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
         <Card.Body padding="md">
           <Callout variant="warning" role="status">
             <span>
-              Uploads that never finished could not be swept, so the store keeps them — and a bucket
-              bills for them — until a sweep can: {reported.collect.sweep_error}. On S3 the identity
-              needs <InlineCode>s3:ListBucketMultipartUploads</InlineCode> and{" "}
+              Unfinished uploads couldn’t be cleared: {reported.collect.sweep_error}. On S3, grant{" "}
+              <InlineCode>s3:ListBucketMultipartUploads</InlineCode> and{" "}
               <InlineCode>s3:AbortMultipartUpload</InlineCode>.
             </span>
           </Callout>

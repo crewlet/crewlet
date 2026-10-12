@@ -105,7 +105,7 @@ test("an unreadable lag renders as unknown rather than as caught up", () => {
       })}
     />,
   );
-  expect(screen.getByText("lag —")).toBeTruthy();
+  expect(screen.getByText("lag unknown")).toBeTruthy();
 });
 
 const term = (over: Partial<RetentionTerm> = {}): RetentionTerm => ({
@@ -217,8 +217,8 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
       now={Date.now()}
     />,
   );
-  expect(screen.getByText(/waiting on its operator/)).toBeTruthy();
-  expect(screen.queryByText(/Waiting on/)).toBeNull();
+  expect(screen.getByText("Waiting on its operator.")).toBeTruthy();
+  expect(screen.queryByText(/^Waiting on (?!its operator\.$)/)).toBeNull();
 });
 
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
@@ -229,10 +229,12 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
 // unreachable, or coordination was. Without the banner the two render
 // identically: the same figures, read as fresh, in exactly the incident that
 // made them unmeasurable.
-test("a replication answer that cannot claim an age renders the reason", () => {
+test("a replication answer that cannot claim an age says so", () => {
   render(<ServedLevelBanner level="consistent_prefix" />);
-  expect(screen.getByText(/no statement about age/)).toBeTruthy();
-  expect(screen.getByText("consistent_prefix")).toBeTruthy();
+  expect(
+    screen.getByText("How current these figures are can’t be measured right now."),
+  ).toBeTruthy();
+  expect(screen.queryByText("consistent_prefix")).toBeNull();
 });
 
 // THE CONTROL, and it is the half that fails when somebody turns this into a
@@ -273,7 +275,7 @@ test("a blocked trim's banner states its headline exactly once", () => {
   // No sentence from the server: the banner composes one, naming the term.
   cleanup();
   const bare = render(<BlockedBanner domain={blocked({})} now={Date.now()} />).container;
-  expect(bare.textContent).toMatch(/Nothing is being trimmed on tracker: the backup_max_age term/);
+  expect(bare.textContent).toMatch(/Nothing is trimmed on tracker: held by backup_max_age/);
 });
 
 // A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.
@@ -329,7 +331,7 @@ test("a reanchored domain with no conclusion renders its state, never advancing"
       })}
     />,
   );
-  expect(screen.getByText(/concluded nothing about generation 1 yet/)).toBeTruthy();
+  expect(screen.getByText("No trim result for generation 1 yet.")).toBeTruthy();
   expect(screen.getByText("no conclusion yet")).toBeTruthy();
   expect(screen.getByText("no floor yet")).toBeTruthy();
   expect(screen.queryByText("advancing")).toBeNull();
@@ -425,7 +427,7 @@ test("a node on a generation the log left is labelled rather than caught up", ()
   expect(screen.getByText("left gen 0")).toBeTruthy();
   expect(screen.getByText("gen 0")).toBeTruthy();
   expect(screen.getByText("log diverged")).toBeTruthy();
-  expect(screen.queryByText("lag —")).toBeNull();
+  expect(screen.queryByText("lag unknown")).toBeNull();
   expect(screen.queryByText(/behind/)).toBeNull();
 });
 

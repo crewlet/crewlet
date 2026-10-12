@@ -64,7 +64,7 @@ export function Projects() {
           read.data && rows.length === 0
             ? {
                 title: "No projects yet",
-                hint: "Add one with New project, in Work, to file work into it.",
+                hint: "Add one with New project in Work.",
               }
             : undefined
         }

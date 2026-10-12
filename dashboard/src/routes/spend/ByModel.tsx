@@ -15,12 +15,11 @@
  * names, so cutting the names to the column never cuts the count.
  */
 
-import { BarList, Card, Skeleton } from "@crewlethq/ui";
+import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
 import { usedByParts, usedByWords } from "./model.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { Rollup } from "~/protocol/types.ts";
-import { DATA_COLORS } from "@crewlethq/ui";
 
 export function ByModel({
   rollup,
@@ -43,7 +42,7 @@ export function ByModel({
         <Skeleton height="4.5rem" />
       ) : (
         <BarList
-          className="spend-models"
+          className="spend-bars"
           layout="beside"
           limit={6}
           moreLabel={(n) => `${n} more ${n === 1 ? "entry" : "entries"}`}

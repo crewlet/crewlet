@@ -29,7 +29,7 @@ token:
 |---|---|
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
-| `404 no_active_revision`, while the organization names a company | "This node has not caught up with the fleet's configuration yet." Try again once the node has applied the fleet's revision, or use another node |
+| `404 no_active_revision`, while the organization names a company | "This node is still catching up". Try again once the node has applied the fleet's revision, or use another node |
 | `401` or `403` | a request for a token, with **Set token** |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
@@ -634,12 +634,13 @@ land is recognized as yours rather than replayed on top of itself.
 The same holds when you leave the builder, or the tab reloads, before the
 answer arrives. The kept draft is marked with the save's write id before the
 save is sent, so the next time the builder opens in this tab it settles that
-save first: if it landed, the builder says "The last save from this tab was
-stored" and does not offer the draft again (replaying it onto its own revision
-would apply every change twice); if it did not, the draft comes back as any
-kept draft does. While the engine still cannot say, editing stays paused, with
-**Check again**. Coming back to the builder while that save is still on its
-way, the builder waits for the save's own answer before it settles anything.
+save first: if it landed, the builder says "Your last save was stored and is
+being applied" and does not offer the draft again (replaying it onto its own
+revision would apply every change twice); if it did not, the draft comes back
+as any kept draft does. While the engine still cannot say, editing stays
+paused, with **Check again**. Coming back to the builder while that save is
+still on its way, the builder waits for the save's own answer before it
+settles anything.
 
 ### After saving
 
@@ -756,9 +757,8 @@ differently is a conflict for you to decide.
 
 If this node still serves the older revision (it has not applied the newer one
 yet, or a load balancer sent the read to a node that has not), the update
-waits: "This node has not caught up with the newer revision yet." Try again in
-a moment. If the configuration the draft edits is no longer active at all, the
-banner offers **Discard and reload**.
+waits: "Still catching up. Try again shortly." If the configuration the draft
+edits is no longer active at all, the banner offers **Discard and reload**.
 
 ## Undo, redo and the keyboard
 

@@ -770,12 +770,12 @@ export function WorkGrid({
         removals
           ? {
               title: "The trash is empty",
-              hint: "Nothing in this container has been removed. A removal is reversible at any age, so what lands here stays until somebody restores or purges it.",
+              hint: "Removed items appear here until restored or purged.",
               icon: "trash",
             }
           : {
               title: "Nothing matches",
-              hint: "No item on this node's copy of the tracker matches these filters.",
+              hint: "Remove a filter, or clear them all.",
             }
       }
       footer={foot}
@@ -814,9 +814,9 @@ function bandFoot({
   // count.
   if (group.subgroups?.length) {
     if (!group.subgroups_dropped) return undefined;
-    return `${group.subgroups_dropped} more band${
+    return `${group.subgroups_dropped} more group${
       group.subgroups_dropped === 1 ? "" : "s"
-    } did not fit. Narrow the list to bring them into range.`;
+    } hidden. Narrow the list to see them.`;
   }
   if (group.count <= group.rows.length) return undefined;
   return (

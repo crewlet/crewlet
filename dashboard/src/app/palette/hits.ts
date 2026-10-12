@@ -227,7 +227,7 @@ export function idHits(term: string, nav: Navigator): Hit[] {
       id: `trace-${id}`,
       icon: "split",
       label: id,
-      hint: "as a trace — every event that carries it",
+      hint: "as a trace",
       // THE TRACE PAGE, which is the only screen that assembles one. This
       // pointed at the event log with `?trace=` once, a parameter that screen
       // did not read, and the reader landed on the whole log.

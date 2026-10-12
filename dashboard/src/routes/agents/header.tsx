@@ -46,8 +46,7 @@ import { unitPath } from "~/lib/orgchart.ts";
 const FIND_LIMIT = 8;
 
 /** The reason Add seat cannot be pressed by somebody who may not change the org. */
-export const ADD_SEAT_REASON =
-  "Changing the org needs an operator token — the company configuration is guarded";
+export const ADD_SEAT_REASON = "Needs an operator token";
 
 /**
  * The seats a finder term matches, best first: a name or handle that STARTS

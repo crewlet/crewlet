@@ -288,7 +288,9 @@ test("a node that could not read the fleet's ledger says its cooldowns are its o
     answer: { ...pool(), fleet: false, fleet_error: "the coordination store did not answer" },
   });
   await settle();
-  expect(screen.getByText(/own cooldowns only/)).toBeDefined();
+  expect(screen.getByText(/cooldowns only/).textContent).toBe(
+    "Showing node-a’s cooldowns only. Other nodes’ may differ.",
+  );
   expect(screen.getByText("the coordination store did not answer")).toBeDefined();
 });
 
@@ -317,9 +319,9 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {
   const { view } = mount(undefined, { refuse: true });
   await settle();
-  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
-  expect(screen.queryByText(/configures no model/)).toBeNull();
+  expect(screen.queryByText(/No model configured/)).toBeNull();
 });
 
 // --- editing one ------------------------------------------------------------ //
@@ -386,9 +388,7 @@ test("an edit sends back the entity it read, with only what was edited replaced"
   });
   const dialog = await openEdit();
   // THE INLINE KEY IS LOCKED, and the mask is never drawn.
-  expect(
-    within(dialog).getByText(/Key 2 is written inline — its value is never sent here/),
-  ).toBeDefined();
+  expect(within(dialog).getByText("Key 2 is inline.")).toBeDefined();
   expect(dialog.innerHTML).not.toContain("__redacted__");
 
   fireEvent.change(within(dialog).getByLabelText(/^Model/), { target: { value: "claude-opus-5" } });
@@ -450,7 +450,9 @@ test("an inline key keeps its place: no gesture moves it, and it is replaced whe
     el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled");
   const add = () => within(dialog).getByRole("button", { name: "Add key" });
   expect(unavailable(add())).toBe(true);
-  expect(add().getAttribute("title")).toMatch(/Key 2 is written inline/);
+  expect(add().getAttribute("title")).toMatch(
+    /Key 2 is inline\. Replace it with a secret before adding or removing keys\./,
+  );
   // Removing key 1 would move the inline key to index 0: unavailable.
   expect(unavailable(within(dialog).getByRole("button", { name: "Remove key 1" }))).toBe(true);
   // Removing the inline key itself leaves no mask to restore: available.
@@ -517,7 +519,7 @@ test("a subscription cli-agent entry offers no key, and says how it signs in", a
   );
   const dialog = await openCLIEdit();
   expect(within(dialog).queryByText("Tokens")).toBeNull();
-  expect(within(dialog).getByText(/signs in through its CLI's login/)).toBeDefined();
+  expect(within(dialog).getByText(/None\. Signs in through its CLI\./)).toBeDefined();
   expect(within(dialog).queryByRole("button", { name: "Add key" })).toBeNull();
 });
 
@@ -531,7 +533,7 @@ test("an api-key cli-agent entry holds exactly one key", async () => {
   expect(within(dialog).getByText("API key")).toBeDefined();
   const add = within(dialog).getByRole("button", { name: "Add key" });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
-  expect(add.getAttribute("title")).toMatch(/holds one key and rotates nothing/);
+  expect(add.getAttribute("title")).toMatch(/Holds one key\. Add more as separate entries\./);
 });
 
 test("a key on a cli-agent entry that reads none is a fault to remove before saving", async () => {
@@ -546,7 +548,7 @@ test("a key on a cli-agent entry that reads none is a fault to remove before sav
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   });
   await settle();
-  expect(within(dialog).getByText(/read only under cli.auth.mode api-key/)).toBeDefined();
+  expect(within(dialog).getByText(/Keys only work in api-key mode\. Remove it\./)).toBeDefined();
   expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
 
   await act(async () => {

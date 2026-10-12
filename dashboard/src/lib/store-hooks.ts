@@ -141,11 +141,15 @@ export function useOrgBudget() {
  *
  * Three states, not two, because the repair differs and a reader cannot guess
  * which one they are looking at: connected, unreachable (comes back on its
- * own), and refused (never does).
+ * own), and refused (never does). Unreachable carries when the engine was
+ * lost (`lostAt`), which is also what tells it from a first dial still out,
+ * and whether it ever answered this tab (`everConnected`).
  */
 export function useConnection() {
   return useSlice(["health"], (s) => ({
     connected: s.connected,
+    lostAt: s.lostAt,
+    everConnected: s.everConnected,
     authRejected: s.authRejected,
     health: s.health,
   }));

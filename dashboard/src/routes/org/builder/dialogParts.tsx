@@ -221,8 +221,8 @@ export function ReadOnlyFact({
  * names a unit, so it is no reason for a unit's name to be unique.
  */
 export const UNIQUE_NAME_HELP = {
-  seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
-  unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+  seat: "Seat names must be unique.",
+  unit: "Unit names must be unique.",
 } as const;
 
 /**
@@ -240,9 +240,8 @@ export const UNIQUE_NAME_HELP = {
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
-    "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
-  handle_change:
-    "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
+    "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
+  handle_change: "Its memory, inbox and onboarding start over.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };
@@ -552,11 +551,7 @@ export function Refusal({ message }: { message: string | null }) {
  * their answers is what is in the way.
  */
 export function ReadOnlyNote() {
-  return (
-    <Callout variant="neutral">
-      The organization cannot be changed right now, so this change cannot be applied.
-    </Callout>
-  );
+  return <Callout variant="neutral">The org can’t be changed right now.</Callout>;
 }
 
 /** A read-only list of names or sentences, and nothing at all when there are none. */

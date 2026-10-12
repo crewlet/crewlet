@@ -153,11 +153,11 @@ describe("the fleet, refused before any reading", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+    expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
     expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
     expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
     expect(screen.queryByText("No nodes are reporting")).toBeNull();
-    expect(screen.queryByText(/last reading that succeeded/)).toBeNull();
+    expect(screen.queryByText(/last good reading/)).toBeNull();
   });
 });
 

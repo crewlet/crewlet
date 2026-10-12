@@ -144,7 +144,7 @@ describe("a chunk that never arrives", () => {
     expect(await screen.findByText("The Spend screens could not be loaded")).toBeDefined();
     // NOT the render failure's sentence: a reload fixes this, a report does not.
     expect(screen.queryByText("This screen could not be drawn")).toBeNull();
-    expect(screen.getByText(/from another engine version/)).toBeDefined();
+    expect(screen.getByText(/The engine was updated/)).toBeDefined();
     expect(screen.getByRole("button", { name: "Reload" })).toBeDefined();
     fail = false;
     await act(async () => {
@@ -235,7 +235,7 @@ describe("a layer's boundary", () => {
       </LayerBoundary>,
     );
     const dialog = screen.getByRole("dialog", { name: "New task could not be drawn" });
-    expect(dialog.textContent).toContain("reload it to get the current one");
+    expect(dialog.textContent).toContain("Reload to continue");
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
   });
 });

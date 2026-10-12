@@ -9,15 +9,7 @@
  */
 
 import type { ReactNode } from "react";
-import {
-  Button,
-  Callout,
-  EmptyState,
-  InlineCode,
-  Section as UiSection,
-  Tag,
-  cx,
-} from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
@@ -357,58 +349,38 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
         </Button>
       }
     >
-      This answer is auth-gated. It needs an API token matching one of your{" "}
-      <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
+      This needs an API token.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
   // variant's own mark, and for neutral that is the info glyph and for danger
   // the error glyph — which is exactly what these passed by hand. An icon prop
   // repeating the variant is a second place for the two to disagree.
-  unknown_query: (
-    <Callout variant="neutral">
-      The engine does not serve this answer — the subsystem behind it is not running on this node.
-    </Callout>
-  ),
-  bad_params: (
-    <Callout variant="warning">
-      The engine refused this request: something it needs was missing or not a value it accepts.
-      Retrying sends the same request — this is the screen&rsquo;s bug to fix, not a fault on the
-      node.
-    </Callout>
-  ),
+  unknown_query: <Callout variant="neutral">Not available on this node.</Callout>,
+  bad_params: <Callout variant="warning">The engine refused this request.</Callout>,
   unavailable: (
     <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-      This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
-      it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
-      again on its own.
-      <strong> This is not an empty company.</strong>
+      Still catching up. This screen retries on its own.
     </Callout>
   ),
-  not_found: (
-    <Callout variant="neutral">
-      There is no such record. The link may point at something that was removed.
-    </Callout>
-  ),
+  not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
-      The engine did not answer within 10 seconds. It may be under load.
+      The engine didn’t answer in time.
     </Callout>
   ),
   // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
   // this query", which is wrong about each of them in a different way.
   query_failed: (
     <Callout variant="danger">
-      The engine tried to answer and failed. This is a fault on the node rather than a refusal — its
-      log says what went wrong.
+      The engine failed to answer. You can check logs for the details.
     </Callout>
   ),
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
     <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-      The connection went away before this answered. Nothing refused it; the screen reads again once
-      the socket is back.
+      Connection lost. The screen reloads when it’s back.
     </Callout>
   ),
 };

@@ -167,8 +167,8 @@ export function UpdateDraftDialog({
     >
       <p>
         {update.restoring
-          ? "The configuration changed since this draft was kept. Each change in it is replayed onto the configuration as it is now."
-          : "Another revision was saved since you started editing. Each of your changes is replayed onto it."}
+          ? "The configuration changed. Your changes will be reapplied on top."
+          : "Someone saved a newer revision. Your changes will be reapplied on top."}
       </p>
       <p className="t-caption">
         {applies.length === entries.length

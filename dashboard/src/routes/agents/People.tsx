@@ -97,11 +97,11 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
           : needle
             ? {
                 title: "Nobody matching holds any work",
-                hint: "Find a seat matches a person's name, handle or unit.",
+                hint: "Search by name, handle or team.",
               }
             : {
                 title: "Nobody holds any work",
-                hint: "No open task on this node's copy of the tracker is assigned to anybody.",
+                hint: "Assigned open tasks appear here.",
               }
       }
     >
@@ -119,12 +119,7 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
           ))}
         </div>
       </Card>
-      {answer.data?.truncated && (
-        <PageNote>
-          More people hold work than this answer names. It stops at a cap rather than scanning a
-          company without one.
-        </PageNote>
-      )}
+      {answer.data?.truncated && <PageNote>Only part of the list is shown.</PageNote>}
     </QueryState>
   );
 }
@@ -285,9 +280,7 @@ export function People() {
     if (group === "unit") {
       const byUnit = new Map<string, typeof rows>();
       for (const row of rows) {
-        const key = row.seat
-          ? (row.seat.unit?.name ?? "No unit — org-wide")
-          : "Removed from the company";
+        const key = row.seat ? (row.seat.unit?.name ?? "No team") : "Removed from the company";
         byUnit.set(key, [...(byUnit.get(key) ?? []), row]);
       }
       return [...byUnit.entries()]
@@ -413,11 +406,7 @@ export function People() {
         <EmptyState
           icon={<UsersGlyph size={32} />}
           title={q ? `No seat matches “${q}”` : "This company has no seats"}
-          description={
-            q
-              ? "Find a seat matches a seat's name, handle, goal or unit."
-              : "Roles are defined in the company configuration. Import one to spawn seats."
-          }
+          description={q ? "Search by name, handle, goal or team." : "Add seats in Edit org."}
         />
       )}
 

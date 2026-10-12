@@ -155,7 +155,6 @@ export function AddMcpServerDialog({
       toast.show({
         variant: "success",
         title: `Added ${name}`,
-        message: "Each node starts it once it has applied the new configuration.",
       });
       onAdded(name);
       return;
@@ -237,7 +236,7 @@ export function AddMcpServerDialog({
       open
       size="md"
       title="Add an MCP server"
-      subtitle="Give agents any tool that speaks MCP — shared by the company, or one per seat with its own credentials."
+      subtitle="Shared, or one per seat with its own credentials."
       icon={<PlugGlyph />}
       onClose={onClose}
       onSubmit={press}
@@ -271,14 +270,9 @@ export function AddMcpServerDialog({
           disabled={busy}
           error={errorOf("name")}
           help={
-            nodeOnly.has(form.name.trim()) ? (
-              <>
-                A node still runs a server called <span className="mono">{form.name.trim()}</span>{" "}
-                from an earlier revision. The configuration carries none, so the name is free.
-              </>
-            ) : (
-              "The key a seat declares credentials under, and how the server's tools are labelled in every prompt. It cannot be renamed here later."
-            )
+            nodeOnly.has(form.name.trim())
+              ? "Free to use. An old server by this name is still running."
+              : "Can’t be renamed later."
           }
         />
         <div className="mcp-add-pair">
@@ -316,7 +310,7 @@ export function AddMcpServerDialog({
               {
                 value: "per_seat",
                 label: "One per seat",
-                hint: "Launched only for a seat that declares credentials for it under mcp_env — add those in Edit org.",
+                hint: "Runs for seats with credentials for it. Add them in Edit org.",
               },
             ]}
           />
@@ -331,7 +325,7 @@ export function AddMcpServerDialog({
               placeholder="uvx"
               disabled={busy}
               error={errorOf("command")}
-              help="The executable each node launches. It has to be on the engine host's PATH."
+              help="Must be on the engine host’s PATH."
             />
             <ConfigField
               label="Arguments"
@@ -388,7 +382,7 @@ export function AddMcpServerDialog({
             onChange={(toolPrefix) => edit({ toolPrefix })}
             disabled={busy}
             error={errorOf("toolPrefix")}
-            help="Put before each of its tool names, for a server whose tools would collide with another's."
+            help="Avoids name clashes with other servers."
           />
         </Disclosure>
         <AddStatus state={state} />
@@ -458,8 +452,7 @@ function PairsEditor({
       <legend className="t-label">{label}</legend>
       {pairs.length === 0 && (
         <p className="t-caption">
-          None. Credentials go here as <span className="mono">{"${NAME}"}</span> — typing{" "}
-          <span className="mono">$</span> offers the company&apos;s sealed secrets.
+          None. Type <span className="mono">$</span> to insert a secret.
         </p>
       )}
       {pairs.map((pair, i) => (

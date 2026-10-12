@@ -96,7 +96,9 @@ test("a trace missing a node names it", async () => {
       complete: false,
     },
   });
-  expect(screen.getByText(/This trace is missing one node/)).toBeTruthy();
+  expect(
+    screen.getByText(/This trace is missing 1 node\. What it published is not here:/),
+  ).toBeTruthy();
   expect(screen.getByText("node-b")).toBeTruthy();
 });
 

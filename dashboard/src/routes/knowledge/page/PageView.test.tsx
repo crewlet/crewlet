@@ -369,7 +369,7 @@ test("a node still building its index says so rather than that nothing links her
   });
   await settle();
   const links = region("Linked from");
-  expect(within(links).getByText(/still building its search index/)).toBeTruthy();
+  expect(within(links).getByText("Still indexing. Look again in a few minutes.")).toBeTruthy();
   expect(within(links).queryByText(/No page or task links here/)).toBeNull();
   cleanup();
 
@@ -378,7 +378,9 @@ test("a node still building its index says so rather than that nothing links her
     page_reads: reads(),
   });
   await settle();
-  expect(within(region("Linked from")).getByText(/could not read what links here/)).toBeTruthy();
+  expect(
+    within(region("Linked from")).getByText("Couldn’t load links. Reload to try again."),
+  ).toBeTruthy();
   cleanup();
 
   mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
@@ -389,7 +391,7 @@ test("a node still building its index says so rather than that nothing links her
 test("dropped reads are named as possibly missing, never as this page's", async () => {
   mount(<PageView id={ID} />, { page: detail(), page_reads: reads({ elided: 4 }) });
   await settle();
-  expect(within(region("Read by agents")).getByText(/this list may be missing some/)).toBeTruthy();
+  expect(within(region("Read by agents")).getByText("Some reads may be missing.")).toBeTruthy();
 });
 
 test("the outline lists the sections, and a body's first line that repeats the title is not drawn", async () => {
@@ -439,10 +441,22 @@ test("History reads the newest revision, lists the others, and shows the page's 
         {
           id: "c-1",
           page_id: ID,
+          title: "Provisioner runbook",
           kind: "saved",
           actor: "founder",
           actor_seat: "jane",
+          excerpt: "Adds the drain step",
           at: "2026-09-24T22:00:00Z",
+        },
+        // A NEW PAGE'S EXCERPT IS ITS FIRST LINE, here the title's heading.
+        {
+          id: "c-0",
+          page_id: ID,
+          title: "Provisioner runbook",
+          kind: "created",
+          actor: "swe",
+          excerpt: "Provisioner runbook",
+          at: "2026-09-20T09:00:00Z",
         },
       ],
     },
@@ -461,6 +475,10 @@ test("History reads the newest revision, lists the others, and shows the page's 
   const changes = region(/^Changes/);
   expect(within(changes).getByText("Jane Founder")).toBeTruthy();
   expect(changes.textContent).toContain("saved it");
+  // A SAVE'S NOTE IS DRAWN; a new page's first line that only repeats the
+  // title is not, since the title heads the page this list is on.
+  const notes = [...changes.querySelectorAll(".knowledge-change-note")].map((n) => n.textContent);
+  expect(notes).toEqual(["Adds the drain step"]);
 });
 
 // THE WATCH IS THE PERSON'S OWN, as a save of nothing but the watch.
@@ -575,7 +593,7 @@ test("keeping on top of somebody else's save keeps their change in the draft", a
   expect(box().value).toBe(
     "## Steps\n\nmine\n\n## Escalation\n\npage the CTO\n\nMaya added this line.",
   );
-  expect(screen.getByText(/Revision 15.s change is in your draft/).getAttribute("role")).toBe(
+  expect(screen.getByText("Revision 15 is merged into your draft.").getAttribute("role")).toBe(
     "status",
   );
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

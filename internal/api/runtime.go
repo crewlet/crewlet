@@ -55,10 +55,11 @@ type RuntimeState struct {
 	// AppliedEpoch is the config revision this node is running.
 	AppliedEpoch int64
 
-	// StallLag is how far behind the node's watched duty is, and the
-	// early warning before the watchdog ends the process at the lease TTL.
-	// Zero is "nothing to report" rather than "measured as zero", which is
-	// the same answer a health surface wants for both.
+	// StallLag is how far behind the node's watched duty is: the time
+	// since its last beat, once it has missed one, and the early warning
+	// before the watchdog ends the process at the lease TTL. Zero is
+	// "nothing to report" (the duty is on its beat) rather than "measured
+	// as zero", which is the same answer a health surface wants for both.
 	StallLag time.Duration
 
 	// StartedAt is when the engine started, which is this node's start:

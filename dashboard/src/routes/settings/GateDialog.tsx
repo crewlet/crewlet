@@ -125,7 +125,7 @@ function remedies(result: RetentionGateResult): string[][] {
  */
 function unansweredWhy(err: RestError): string {
   if (err.status === 0 || err.code === "unreadable_body") return err.message;
-  return `a ${err.status} came back with no engine error code in it — something in front of the node answered`;
+  return `a ${err.status} came back with no engine error code, so something in front of the node answered`;
 }
 
 /** A refusal the engine answered before anything was written. */
@@ -369,33 +369,20 @@ export function GateDialog({
           <p className="t-body secondary" style={{ margin: 0 }}>
             {evict ? (
               <>
-                The trim stops waiting for <InlineCode>{node}</InlineCode>, so the log may advance
-                past records that node never applied. It stays COUNTED for one fence window first —
-                about a minute — so a node that is still running is certain to have noticed before
-                its position stops holding the floor. A node that still holds a live presence lease
-                is refused, with nothing written: it is still reaching the fleet, and forcing it is
-                a separate decision.
+                The trim stops waiting for <InlineCode>{node}</InlineCode>, so records it never
+                applied may be deleted. A node that is still running is refused.
               </>
             ) : (
               <>
-                <InlineCode>{node}</InlineCode> is counted again and the trim waits for it once
-                more. This is refused, with nothing written, until the node has applied every record
-                up to the one just before the higher of each log&apos;s published floor and its
-                first surviving sequence, in the tracker&apos;s log and the pages log: counting a
-                node the floor has passed would put back the pin the eviction lifted. A refused node
-                catches up on its own — replaying what the log still holds, adopting a snapshot
-                where it does not — and can be readmitted once it has.
+                The trim waits for <InlineCode>{node}</InlineCode> again. Until it has caught up
+                this is refused; it catches up on its own.
               </>
             )}
           </p>
 
           {evict && (
             <Callout variant="warning" role="alert">
-              <span>
-                Records this node never applied become deletable. Its disk still holds every row it
-                did apply — an eviction is about what the FLEET waits for, not about that
-                machine&apos;s data.
-              </span>
+              <span>Records it never applied become deletable. Its own data is untouched.</span>
             </Callout>
           )}
 
@@ -422,9 +409,7 @@ export function GateDialog({
           <details>
             <summary className="t-caption">Finish a gesture started elsewhere</summary>
             <label className="col" style={{ gap: 6, marginTop: 8 }}>
-              <span className="t-caption">
-                Its operation id, exactly as it was answered — a fresh one would be a second gesture
-              </span>
+              <span className="t-caption">Operation id, as answered</span>
               <Input
                 value={earlier}
                 onChange={(e) => setEarlier(e.target.value)}
@@ -441,11 +426,8 @@ export function GateDialog({
         <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
           <span className="col" style={{ gap: 6 }}>
             <span>
-              <strong>No answer.</strong> {gesture.unanswered}, so what the{" "}
-              {evict ? "eviction" : "readmission"} did is unknown — it may have reached every log:
-              the node finishes a gesture whatever happens to the connection. Finish it under the
-              same operation id to read every log&apos;s answer; a log that already holds the record
-              answers from its own rows and is not written twice.
+              <strong>No answer</strong> ({gesture.unanswered}). Finish it with the same operation
+              id to see the result.
             </span>
             <span className="t-caption">
               Operation <InlineCode>{gesture.opId}</InlineCode>
@@ -497,14 +479,7 @@ export function GateDialog({
             disabled={busy}
             onCheckedChange={setForcing}
             label="Force the eviction"
-            description={
-              <>
-                Evict <InlineCode>{node}</InlineCode> past the presence-lease judgement — for a node
-                wedged in a way that still renews its lease, or one this node cannot see because
-                coordination is unreachable. Only when you know it is gone: its records stop
-                applying everywhere and its copy of the estate stops serving.
-              </>
-            }
+            description="Only if you know it’s gone. Its records stop applying everywhere."
           />
           {forcing && (
             <label className="col" style={{ gap: 6 }}>
@@ -556,14 +531,10 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
       <Callout variant="warning" role="status" icon={<ClockGlyph size="md" />}>
         <span className="col" style={{ gap: 6 }}>
           <span>
-            <strong>Durable on every log, not yet applied here</strong> on{" "}
-            {pending.map((d) => d.domain).join(" and ")}. Nothing about it needs retrying — this
-            node has simply not caught up to the record. The panel behind this dialog clears it when
-            it has.
+            <strong>Recorded on every log, still applying here</strong> on{" "}
+            {pending.map((d) => d.domain).join(" and ")}.
           </span>
-          <span className="t-caption">
-            Do not retry: a fresh gesture appends a second record for one that already landed.
-          </span>
+          <span className="t-caption">Don’t retry.</span>
         </span>
       </Callout>
     );
@@ -571,9 +542,8 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
     summary = (
       <Callout variant="danger" role="alert">
         <span>
-          <strong>Not finished</strong> — {result.domains.length - unfinished.length} of{" "}
-          {result.domains.length} logs hold the record. Finish it under the same operation id: a log
-          that already holds the record answers from its own rows and is not written twice.
+          <strong>Not finished</strong>: {result.domains.length - unfinished.length} of{" "}
+          {result.domains.length} logs have it. Finish it with the same operation id.
         </span>
       </Callout>
     );
@@ -581,9 +551,8 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
     summary = (
       <Callout variant="warning" role="alert">
         <span>
-          <strong>Not finished, and sending it again now cannot finish it.</strong> Do what each log
-          below names first, then finish this gesture under the same operation id — a fresh gesture
-          would write the logs that already hold the record again.
+          <strong>Not finished.</strong> Fix what each log below names, then finish with the same
+          operation id.
         </span>
       </Callout>
     );
@@ -591,8 +560,7 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
     summary = (
       <Callout variant="warning" role="alert">
         <span>
-          <strong>Not finished, and this operation cannot be.</strong> Each log below says what
-          needs a different remedy.
+          <strong>This operation can’t finish.</strong> See each log below.
         </span>
       </Callout>
     );
@@ -639,22 +607,21 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
   if (d.error) {
     return (
       <span className="t-caption">
-        not written{d.reason && <> ({d.reason})</>} — {d.error}
+        not written{d.reason && <> ({d.reason})</>}: {d.error}
       </span>
     );
   }
   if (d.outcome === "unknown" && d.unvouched) {
     return (
       <span className="t-caption">
-        <Tag variant="danger">unknown</Tag> this node cannot tell whether the record is on the log
+        <Tag variant="danger">unknown</Tag> whether it’s recorded
       </span>
     );
   }
   if (d.outcome === "unknown" || !d.position) {
     return (
       <span className="t-caption">
-        <Tag variant="danger">{d.outcome ?? "no outcome"}</Tag> the record may or may not be on the
-        log
+        <Tag variant="danger">{d.outcome ?? "no outcome"}</Tag> may not be recorded
       </span>
     );
   }
@@ -689,7 +656,7 @@ function actionWords(
       // A REFUSAL WROTE NOTHING, so "the same gesture" is the dialog's own
       // button rather than a Finish: there is no answer yet to finish.
       return refused
-        ? "Send it again once what stopped it has cleared — nothing was written."
+        ? "Nothing was written. Send it again once the cause has cleared."
         : "Finish this gesture sends it again under the same operation id.";
     case "new_gesture":
       return "This operation cannot be finished: start a new gesture if the node should still change.";
@@ -700,9 +667,9 @@ function actionWords(
         opId ? ` (${opId})` : ""
       }.`;
     case "reanchor":
-      return `Re-anchor ${stream} with \`crewlet retention reanchor -stream ${stream}\` — there is no control for it here — then finish this gesture.`;
+      return `Run \`crewlet retention reanchor -stream ${stream}\`, then finish this.`;
     case "set_capacity":
-      return `Raise ${stream}'s ceiling with \`crewlet retention set-capacity\` — there is no control for it here — then finish this gesture.`;
+      return `Run \`crewlet retention set-capacity\` for ${stream}, then finish this.`;
     case "restore":
       return "Restore the store and the stream from one backup.";
     case "wait":
@@ -712,13 +679,11 @@ function actionWords(
       // a lease nor a position says anything about.
       switch (code) {
         case "eviction_refused":
-          return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
+          return "Wait until it stops showing live, then evict again.";
         case "readmission_refused":
-          return "Wait for it to catch up — its position on this screen says when — then readmit it again.";
+          return "Wait for it to catch up, then readmit it.";
         case "not_publishing":
-          return `Wait until the fleet is back in normal mode — the retention screen's banner says while its capacity window is open — then ${
-            evict ? "evict" : "readmit"
-          } it again.`;
+          return `Wait for normal mode, then ${evict ? "evict" : "readmit"} it again.`;
       }
       // A REFUSAL THIS BUILD HAS NO WORDS FOR: the engine's hint above says
       // what it waits on, and a guess here would contradict it.

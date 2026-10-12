@@ -246,8 +246,7 @@ export async function settleUnknownWrite(
   }
   return {
     kind: "unknown",
-    detail:
-      "The configuration has moved on by more revisions than the builder reads back. Check the revision history for this save before saving again.",
+    detail: "Check the revision history before saving again.",
   };
 }
 

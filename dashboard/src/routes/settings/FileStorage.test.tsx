@@ -81,7 +81,7 @@ describe("file storage", () => {
     const r = reported("missing");
     renderCard(r);
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("2 files cannot be read");
+    expect(alert.textContent).toContain("2 files are missing or damaged");
     const files = r.audit?.found?.missing_files ?? [];
     expect(files.length).toBe(2);
     for (const m of files) {
@@ -97,7 +97,7 @@ describe("file storage", () => {
 
   test("an audit that failed keeps what the last whole one found, and says it failed", () => {
     renderCard(block("failed"));
-    expect(screen.getByRole("alert").textContent).toContain("2 files cannot be read");
+    expect(screen.getByRole("alert").textContent).toContain("2 files are missing or damaged");
     expect(
       screen.getByText(
         /^1,828 named, 1 missing, 1 damaged \(a later audit stopped: .*did not answer\)$/,
@@ -112,6 +112,9 @@ describe("file storage", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
+    expect(screen.getByRole("status").textContent).toContain(
+      "Unfinished uploads couldn’t be cleared",
+    );
     expect(screen.getByRole("status").textContent).toContain("s3:ListBucketMultipartUploads");
     // No audit has ended: the row says so rather than drawing a zero.
     expect(screen.getByText("Not run yet")).toBeTruthy();
@@ -119,7 +122,9 @@ describe("file storage", () => {
 
   test("a record the store would not give up is not a fleet with no collection", () => {
     renderCard(block("unavailable"));
-    expect(screen.getByRole("alert").textContent).toContain("could not be read");
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn’t read the collector’s last report. Files are unaffected.",
+    );
     cleanup();
     renderCard(block("not_yet"));
     expect(screen.queryByRole("alert")).toBeNull();

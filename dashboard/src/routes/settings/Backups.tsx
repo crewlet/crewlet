@@ -41,21 +41,13 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, SeatLabel, StatusCell } from "~/app/frame/cells.tsx";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
-import {
-  eventHistoryLabel,
-  eventHistorySpan,
-  fmtBytes,
-  fmtDateTime,
-  plural,
-  relTime,
-} from "~/lib/format.ts";
+import { eventHistorySpan, fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import {
   coverWords,
@@ -101,10 +93,6 @@ export function Backups({ domain }: { domain?: string }) {
           Take a backup
         </Button>
       </PageActions>
-      <PageNote>
-        What this fleet has backed up, and each state-log domain&rsquo;s trim — which waits for the
-        slowest node and for the newest backup that covers it.
-      </PageNote>
       <QueryState error={operator ? null : "unauthorized"} loading={false}>
         <QueryState error={backups.error} loading={backups.loading && !backups.data}>
           {backups.data ? (
@@ -158,7 +146,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
                 ? `${newest.kind === "operator" ? "acknowledged by an operator" : newest.owner}${
                     newest.bytes != null ? ` · ${fmtBytes(newest.bytes)}` : ""
                   }`
-                : "none — the trim waits for one"
+                : "none yet"
             }
           />
           <StatCard
@@ -185,11 +173,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
       </Card>
 
       <Card padding="none">
-        <Card.Header
-          icon={<DatabaseGlyph size="sm" />}
-          count={answer.points.length}
-          subtitle="Each owner's newest copy, as it announced it to the fleet."
-        >
+        <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
           Newest per owner
         </Card.Header>
         <DataGrid<BackupPointRow>
@@ -203,8 +187,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
             // in prose `crewlet backup -dir` read as four words of the hint.
             hint: (
               <>
-                Until a backup covers them, no state-log domain can be trimmed. Take one from this
-                page, or run <InlineCode>crewlet backup -dir</InlineCode>.
+                Take one from this page, or run <InlineCode>crewlet backup -dir</InlineCode>.
               </>
             ),
             icon: "database",
@@ -283,14 +266,17 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
         <Card.Header
           icon={<RotateCcwGlyph size="sm" />}
           count={answer.history.length}
-          subtitle="Every backup a person asked a node for, newest first, from the runtime audit."
+          subtitle="Newest first"
         >
           Backup history
         </Card.Header>
         <CoverageNote
           coverage={[answer.coverage]}
           what="this history"
-          lost="the backups each of them took are not here"
+          lost={{
+            one: "The backups it took are not here",
+            many: "The backups they took are not here",
+          }}
         />
         <DataGrid<BackupRunRow>
           name="history"
@@ -300,12 +286,12 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
           isFailed={(r) => r.outcome === "failed"}
           loadedNote={
             answer.more
-              ? `The newest ${answer.history.length} — older backups are in the event log`
+              ? `Newest ${answer.history.length}. Older ones are in the event log.`
               : undefined
           }
           empty={{
             title: `No backup was asked for in ${span}`,
-            hint: `This history reads the event log, and ${eventHistoryLabel(historySeconds)}; a backup older than that is still counted above if it is an owner's newest.`,
+            hint: "Older backups still count above.",
             icon: "rotate-ccw",
           }}
           columns={[
@@ -370,7 +356,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
                   title={
                     r.outcome === "applied"
                       ? `Manifest written ${fmtDateTime(r.at)}`
-                      : "No manifest was written: the directory holds debris, not a backup"
+                      : "Incomplete, not a usable backup"
                   }
                 />
               ),
@@ -387,20 +373,20 @@ function TrimCell({ point: p }: { point: BackupPointRow }) {
   if (p.newest) return <Tag variant="success">counted · newest</Tag>;
   if (!p.verified) {
     return (
-      <Tag variant="warning" title="The taker never checked this copy, so no policy counts it">
+      <Tag variant="warning" title="Unverified, so it doesn’t count">
         not verified
       </Tag>
     );
   }
   if (p.counted) {
     return (
-      <Tag appearance="outline" title="A newer counted backup is the one the trim reads">
+      <Tag appearance="outline" title="A newer backup is the one in use">
         counted
       </Tag>
     );
   }
   return (
-    <Tag appearance="outline" title="The backup policy does not take this owner's word">
+    <Tag appearance="outline" title="Doesn’t count under the backup policy">
       not counted
     </Tag>
   );

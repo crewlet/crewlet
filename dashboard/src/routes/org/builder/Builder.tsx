@@ -294,8 +294,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: bo
     if (!isRecord(answer.body) || revision === null) {
       return {
         kind: "failed",
-        detail:
-          "The engine answered without naming its active revision, so a save could not be conditional on it.",
+        detail: "Can’t save: the engine didn’t report its active revision.",
       };
     }
     return { kind: "edit", document: answer.body, revision };
@@ -1110,9 +1109,7 @@ function BuilderScreen({
           setUpdateNote({
             busy: false,
             message:
-              ready.kind === "behind"
-                ? "This node has not caught up with the newer revision yet. Try again in a moment."
-                : ready.detail,
+              ready.kind === "behind" ? "Still catching up. Try again shortly." : ready.detail,
           });
         }
       } catch {
@@ -1228,7 +1225,7 @@ function BuilderScreen({
       // well had a screen reader read it twice.
       toast.ok(
         landed.resumed
-          ? "The last save from this tab was stored. The engine is applying it."
+          ? "Your last save was stored and is being applied."
           : "Saved. The engine is applying it.",
       );
       load(!landed.resumed);
@@ -1599,14 +1596,13 @@ function BuilderScreen({
             }
           >
             {tokenStored
-              ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
-              : "Editing the organization needs an operator token. Your draft is kept on this page."}
+              ? "Token refused. Your draft is kept; set another token to keep editing."
+              : "Set an operator token to edit. Your draft is kept."}
           </Callout>
         )}
         {posture.kind === "unreachable" && (
           <Callout variant="warning" icon={<PlugGlyph />}>
-            The engine could not be reached to read the configuration again. Your draft is kept on
-            this page.
+            Can’t reach the engine. Your draft is kept.
           </Callout>
         )}
         {(posture.kind === "failed" ||
@@ -1620,8 +1616,7 @@ function BuilderScreen({
               </Button>
             }
           >
-            The configuration could not be read again, so this draft stands on the revision it was
-            started from.
+            Couldn’t refresh the configuration. Editing the version you started from.
           </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
@@ -1637,8 +1632,7 @@ function BuilderScreen({
               </Button>
             }
           >
-            A company was created on this engine while this draft was being written, so this draft
-            cannot be saved.
+            A company was created meanwhile, so this draft can’t be saved.
           </Callout>
         )}
         {conflict && conflict.reason === "no_active_revision" && (
@@ -1658,8 +1652,7 @@ function BuilderScreen({
               </Button>
             }
           >
-            The configuration this draft edits is no longer active on this engine, so the draft
-            cannot be saved.
+            This draft’s configuration is no longer active, so it can’t be saved.
           </Callout>
         )}
         {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
@@ -1702,8 +1695,7 @@ function BuilderScreen({
         )}
         {loaded && !isBaseKeyed(state) && status === "unreachable" && (
           <Callout variant="warning" icon={<PlugGlyph />}>
-            The engine could not be reached to describe this company. Editing starts once it
-            answers.
+            Waiting for the engine. Editing starts once it answers.
           </Callout>
         )}
         {keeping.offer && (
@@ -1721,9 +1713,8 @@ function BuilderScreen({
               </span>
             }
           >
-            This tab kept a draft with {plural(keeping.offer.ops.length, "change")}, last changed{" "}
-            {fmtDateTime(new Date(keeping.offer.savedAt).toISOString())}. Keep it to go on editing,
-            or discard it to start from the saved configuration.
+            This tab kept a draft with {plural(keeping.offer.ops.length, "change")} from{" "}
+            {fmtDateTime(new Date(keeping.offer.savedAt).toISOString())}.
           </Callout>
         )}
         {keeping.notice && (
@@ -1740,10 +1731,8 @@ function BuilderScreen({
         )}
         {noProvider && (
           <Callout variant="warning" icon={<CpuGlyph />}>
-            No model provider is configured, so no agent seat takes a turn: work sent to a seat
-            waits on its inbox until one is added. The dashboard does not write providers: add one
-            with <InlineCode>crewlet config import</InlineCode> or{" "}
-            <InlineCode>PATCH /config</InlineCode>.
+            No model provider is set, so agents can’t work. Add one with{" "}
+            <InlineCode>crewlet config import</InlineCode>.
           </Callout>
         )}
         {refusal && (
@@ -1780,8 +1769,7 @@ function BuilderScreen({
               </span>
             }
           >
-            The engine did not confirm whether the last save was stored. Editing is paused until it
-            does.
+            Checking whether the last save was stored.
           </Callout>
         )}
 
@@ -1873,10 +1861,7 @@ function BuilderScreen({
               </>
             }
           >
-            <p>
-              This browser cannot keep the draft, so leaving the builder discards every change in
-              it. Save it first, or leave without it.
-            </p>
+            <p>Leaving discards your changes. Save first, or leave without them.</p>
           </Modal>
         )}
 
@@ -1898,11 +1883,7 @@ function BuilderScreen({
               </>
             }
           >
-            <p>
-              A company was created on this engine while this draft was being written. A draft that
-              starts a company cannot be applied to one that exists, and it is never replayed onto
-              it: open the company and make the changes there.
-            </p>
+            <p>Open it and make your changes there.</p>
           </Modal>
         )}
 
@@ -2040,7 +2021,7 @@ function DialogHost({
           open
           destructive
           title="Discard changes?"
-          message="Every change in this draft is discarded. The saved configuration is not touched."
+          message="The saved configuration stays as it is."
           cancelLabel="Keep editing"
           confirmLabel="Discard changes"
           onClose={onClose}
@@ -2136,8 +2117,8 @@ function PostureScreen({
       return (
         <EmptyState
           icon={<RotateCwGlyph />}
-          title="This node has not caught up with the fleet's configuration yet."
-          description="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
+          title="This node is still catching up"
+          description="Try again shortly, or open the console on another node."
           action={retry}
         />
       );
@@ -2163,7 +2144,7 @@ function PostureScreen({
         <EmptyState
           icon={<ServerGlyph />}
           title="This process does not serve the configuration"
-          description="The builder reads and writes the company through the node that runs it. Open the dashboard on a node running the engine."
+          description="Open the console on a node running the engine."
         />
       );
     case "unreachable":

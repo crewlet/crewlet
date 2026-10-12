@@ -408,7 +408,7 @@ export function CommandPalette({
   const doAssign = async (item: string, seat: Seat) => {
     const version = itemRead.data?.task.version;
     if (version === undefined) {
-      setNotice({ refused: false, text: `Still reading ${item} — a moment, then pick again.` });
+      setNotice({ refused: false, text: `Loading ${item}. Pick again in a moment.` });
       return;
     }
     const result = await assign.run(
@@ -457,7 +457,7 @@ export function CommandPalette({
     // why THAT one is answered without the row growing a clause.
     return (
       <span
-        title={why ? `${key} — ${why}` : undefined}
+        title={why ? `${key}: ${why}` : undefined}
       >{`in ${key}${name ? ` · ${name}` : ""}`}</span>
     );
   };
@@ -481,7 +481,7 @@ export function CommandPalette({
         hint: why
           ? why
           : suggested
-            ? `suggested: ${suggested.seat.name} — ${suggested.why}`
+            ? `suggested: ${suggested.seat.name}, ${suggested.why}`
             : "choose who",
         meta: <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />,
         onSelect: why
@@ -500,11 +500,11 @@ export function CommandPalette({
       const why = !create.access.can
         ? create.access.reason
         : noProjects
-          ? "This company has no project yet. Add one with New project, in Work, to file work."
+          ? "No projects yet. Add one in Work."
           : "";
       const body = answeredMd ? answerBody(answeredMd) : "";
       const choose = hitProject
-        ? `choose a project — ${hitProject.key} is suggested`
+        ? `choose a project, ${hitProject.key} suggested`
         : "choose a project";
       rows.push({
         id: "act-ask",
@@ -953,11 +953,11 @@ export function CommandPalette({
 
   // ---- what the list says when it has no rows ------------------------------
   const emptyMessage = (): string => {
-    if (themeStep) return "No theme matches. Try a name, or a group such as “purple”.";
+    if (themeStep) return "No theme matches.";
     if (pick?.kind === "project") {
       if (projects === null) {
         return projectsRead.error
-          ? "The company’s projects could not be read — close this and try again."
+          ? "Couldn’t load projects. Try again."
           : "Reading the company’s projects…";
       }
       return pickTerm ? `No project matches “${pickTerm}”.` : "This company has no projects.";
@@ -965,21 +965,19 @@ export function CommandPalette({
     if (picking)
       return pickTerm ? `No agent matches “${pickTerm}”.` : "This company has no agents.";
     if (scope === "tasks") {
-      if (term.length < SEARCH_MIN)
-        return "Type at least two characters to search the company’s work.";
+      if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
-      if (taskAnswer.error) return "Task search did not run — the note above says why.";
+      if (taskAnswer.error) return "Task search did not run.";
       if (!taskAnswer.data) return "Searching…";
       if (taskAnswer.data.available === false) {
-        return "The search index is still building on this node — the work exists, it is not findable from here yet.";
+        return "Still indexing. Try again shortly.";
       }
       return `No task matches “${term}”.`;
     }
     if (scope === "pages") {
-      if (term.length < SEARCH_MIN)
-        return "Type at least two characters to search the knowledge base.";
+      if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
-      if (pageAnswer.error) return "Knowledge search did not run — the note above says why.";
+      if (pageAnswer.error) return "Knowledge search did not run.";
       if (!pageAnswer.data) return "Searching…";
       if (pageAnswer.data.available === false)
         return pageAnswer.data.note || "Knowledge search did not run.";
@@ -1296,7 +1294,7 @@ function AnswerLead({
     case "unknown":
       return (
         <p className="palette-answer-note">
-          <BookOpenGlyph size="sm" /> No answer came back — {state.reason}
+          <BookOpenGlyph size="sm" /> No answer: {state.reason}
         </p>
       );
     case "answered": {
@@ -1342,7 +1340,7 @@ function AnswerLead({
           {/* TOKENS, NEVER MONEY — the unit the company's budget counts. */}
           <p className="palette-answer-foot">
             {answer.cached
-              ? "Answered before — no tokens spent"
+              ? "Cached answer, no tokens spent"
               : `${fmtCount(spent)} tokens, charged to the company`}
             {answer.model ? ` · ${answer.model}` : ""}
           </p>
@@ -1397,17 +1395,12 @@ function PickLead({
         </p>
       ) : pick.kind === "ask" ? (
         <p>
-          “{pick.question}”{" "}
-          <span className="muted">
-            · the agent you choose owes the answer, and it lands in your inbox
-          </span>
+          “{pick.question}” <span className="muted">· the answer lands in your inbox</span>
         </p>
       ) : pick.filing.kind === "ask" ? (
         <p>
           “{pick.filing.question}”{" "}
-          <span className="muted">
-            · asked of {pick.filing.seat.name} — choose the project the ask is filed in
-          </span>
+          <span className="muted">· asked of {pick.filing.seat.name}. Choose a project.</span>
         </p>
       ) : (
         <p>

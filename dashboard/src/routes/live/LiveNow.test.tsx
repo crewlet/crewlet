@@ -297,7 +297,7 @@ test("a finished phase is held back under a reader, unless it was running above"
   await waitFor(() =>
     expect(card.querySelectorAll("[data-row-index]").length).toBe(rowsBefore + 1),
   );
-  expect(within(card).getByRole("button", { name: /1 new phase finished/ })).toBeTruthy();
+  expect(within(card).getByRole("button", { name: "1 new phase. Show" })).toBeTruthy();
 });
 
 // ONE SEAT'S PHASES ARE ASKED FOR BY ITS HANDLE, and the ones finishing on
@@ -377,7 +377,7 @@ test("the Activity card names a node missing from the seat's events", async () =
     },
   });
   const card = cardOf("Activity");
-  const note = await within(card).findByText(/is missing one node/);
+  const note = await within(card).findByText(/is missing 1 node\./);
   expect(note.closest(".coverage-note")?.textContent).toContain("node-b");
 });
 
@@ -399,7 +399,7 @@ test("Load older asks phases again with the cursor the page carried", async () =
   const card = cardOf("Recent phases");
   const more = await within(card).findByRole("button", { name: `Load ${PHASE_PAGE} older` });
   act(() => more.click());
-  await within(card).findByText("That is the beginning of the retained record.");
+  await within(card).findByText("Start of the record.");
   const pages = asked.filter((q) => q.kind === "phases");
   expect(pages.at(-1)?.params).toMatchObject({
     before_time: "2026-09-28T10:00:00Z",
@@ -424,9 +424,7 @@ test("Event log links to the log, with the seat when one is chosen", async () =>
 test("an empty In a box says where a finished run's record is", async () => {
   mount();
   const card = cardOf("In a box");
-  expect(card.textContent).toContain(
-    "No coding run is in flight. A finished run's record is its turn's trace.",
-  );
+  expect(card.textContent).toContain("Finished runs are on their turn’s trace.");
   expect(card.textContent).not.toMatch(/still in the record/);
 });
 

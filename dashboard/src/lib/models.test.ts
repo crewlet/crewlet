@@ -99,7 +99,9 @@ describe("the edit", () => {
     const c = { id: "c", value: "${C}" };
     const swapped = { ...read, keys: [inline, c] };
     expect(keysKeepInlinePlaces(read.keys, swapped.keys)).toBe(false);
-    expect(formErrors(swapped, read).keys).toMatch(/Key 1 is written inline/);
+    expect(formErrors(swapped, read).keys).toMatch(
+      /Key 1 is inline\. Replace it with a secret before adding or removing keys\./,
+    );
     // Grown or shrunk while the mask stands: refused.
     expect(keysKeepInlinePlaces(read.keys, [a, inline, c])).toBe(false);
     expect(keysKeepInlinePlaces(read.keys, [inline])).toBe(false);
@@ -244,19 +246,20 @@ describe("the keys a cli-agent entry may hold", () => {
     const read = formOf({ ...cli({ mode: "api-key" }), api_keys: ["${A}"] });
     expect(formErrors(read, read, slots).keys).toBeUndefined();
     const two = { ...read, keys: [...read.keys, { id: "b", value: "${B}" }] };
-    expect(formErrors(two, read, slots).keys).toMatch(/holds one key and rotates nothing/);
+    expect(formErrors(two, read, slots).keys).toMatch(
+      /Holds one key\. Add more as separate entries\./,
+    );
   });
 
-  test("any other mode holds none, naming the mode, and a held key is a fault", () => {
-    for (const [auth, mode] of [
-      [undefined, "subscription"],
-      [{ mode: "inherit-env" }, "inherit-env"],
-    ] as const) {
+  test("any other mode holds none, and a held key is a fault", () => {
+    for (const auth of [undefined, { mode: "inherit-env" }] as const) {
       const slots = keySlots(cli(auth));
       expect(slots.max).toBe(0);
-      expect(slots.empty).toContain(`this entry's is ${mode}`);
+      expect(slots.empty).toBe("None. Signs in through its CLI.");
       const read = formOf({ ...cli(auth), api_keys: ["${A}"] });
-      expect(formErrors(read, read, slots).keys).toMatch(/read only under cli.auth.mode api-key/);
+      expect(formErrors(read, read, slots).keys).toMatch(
+        /Keys only work in api-key mode\. Remove it\./,
+      );
       expect(formErrors({ ...read, keys: [] }, read, slots).keys).toBeUndefined();
     }
   });

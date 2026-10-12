@@ -154,7 +154,7 @@ test("a 401 renders the auth-gated banner, with the button that fixes it", async
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
   render(<Secrets />);
 
-  expect(await screen.findByText(/auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
@@ -170,7 +170,7 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
   );
   render(<Secrets />);
 
-  expect(await screen.findByText(/tried to answer and failed/)).toBeDefined();
+  expect(await screen.findByText(/The engine failed to answer\./)).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
@@ -245,8 +245,10 @@ test("a removal names every config field that points at the secret", async () =>
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
+  expect(screen.getByText("2 fields use it and will stop working:")).toBeDefined();
   expect(screen.getByText("integrations.github.token")).toBeDefined();
   expect(screen.getByText("roles[0].mcp_env.github.GITHUB_TOKEN")).toBeDefined();
+  expect(screen.getByText("Repoint them first.")).toBeDefined();
   // AND IT IS GATED. A referenced credential does not go on one click.
   const remove = screen.getByRole("button", { name: "Remove" });
   expect((remove as HTMLButtonElement).disabled).toBe(true);
@@ -288,8 +290,8 @@ test("a reference check that failed is never shown as nothing pointing at it", a
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
-  expect(screen.getByText(/could not be read/)).toBeDefined();
-  expect(screen.queryByText(/No field in the active configuration names this/)).toBeNull();
+  expect(screen.getByText("Couldn’t check whether anything uses it.")).toBeDefined();
+  expect(screen.queryByText("Nothing uses it.")).toBeNull();
   // And it is gated exactly as a referenced row is: an unknown answer is not
   // a safe one.
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
@@ -310,7 +312,7 @@ test("no active configuration reads as nothing pointing at it, not as a failure"
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
-  expect(screen.getByText(/No field in the active configuration names this/)).toBeDefined();
+  expect(screen.getByText("Nothing uses it.")).toBeDefined();
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(
     false,
   );
@@ -408,9 +410,8 @@ test("a read that answers after a newer one began does not overwrite it", async 
   expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
 });
 
-// A COMMAND IS CODE. The info card above the list sets `crewlet secrets get`
-// in the code face, and the empty state under it wrote `crewlet secrets set`
-// as three words of its sentence — the one a reader is being told to type.
+// A COMMAND IS CODE. The empty state once wrote `crewlet secrets set` as three
+// words of its sentence, and it is the one a reader is being told to type.
 test("an empty store names the command that fills it as code", async () => {
   stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
   render(<Secrets />);
@@ -465,7 +466,7 @@ test("a credential's provenance is said as the path that wrote it", async () => 
   stubLoaded();
   render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
   expect(await screen.findByText("written by an integration's setup")).toBeDefined();
-  expect(provenance("api")).toBe("stored over the API — this page or PUT /secrets");
+  expect(provenance("api")).toBe("stored from the console or API");
   expect(provenance("cli")).toBe("set with crewlet secrets set");
   expect(provenance("migrated")).toBe("moved onto the fleet from a node's own table");
   expect(provenance("gitlab-provision")).toBe("its writer named itself “gitlab-provision”");

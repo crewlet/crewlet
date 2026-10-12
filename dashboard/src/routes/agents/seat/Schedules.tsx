@@ -25,7 +25,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
         size="compact"
         icon={<CalendarGlyph size={28} />}
         title="Nothing recurring reaches them"
-        description="A schedule wakes a seat on a cron, scoped to a role or to a unit. This seat declares none and is named by none."
+        description="No schedule includes this seat."
       />
     );
   }
@@ -34,7 +34,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
       <Card.Header
         icon={<CalendarGlyph size="sm" />}
         count={rows.length}
-        subtitle="Their own, and every unit schedule a fire actually reaches them through."
+        subtitle="Their own and their team’s"
       >
         <Card.Title as="h3">Recurring work</Card.Title>
       </Card.Header>

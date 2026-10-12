@@ -208,9 +208,7 @@ function Band({
         </div>
       )}
       {line.days === 0 ? (
-        <div className="tl-none">
-          Nothing here carries a start or a due date, so there is no axis to draw it against.
-        </div>
+        <div className="tl-none">Nothing here has a start or due date.</div>
       ) : (
         <div className="tl-scroll">
           <div className="tl-inner" style={{ ["--tl-days" as string]: line.days }}>
@@ -242,7 +240,7 @@ function Band({
                   data-tone={barTone(bar)}
                   data-kind={bar.kind}
                   href={hrefOf(bar.row)}
-                  title={`${bar.row.key} · ${bar.row.title} — ${barTitle(bar)}`}
+                  title={`${bar.row.key} · ${bar.row.title} · ${barTitle(bar)}`}
                   style={barBox(bar, i)}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -311,8 +309,7 @@ function Band({
             <div className="tl-unscheduled">
               <Tag appearance="outline">Unscheduled</Tag>
               <span className="tl-aside-note">
-                {plural(line.unscheduled.length, "item")} with neither a start nor a due date. They
-                have no bar because placing them would invent a schedule nobody set.
+                {plural(line.unscheduled.length, "item")} with no start or due date.
               </span>
               <div className="tl-chips">
                 {line.unscheduled.map((row) => (
@@ -337,8 +334,7 @@ function Band({
           )}
           {line.edgesOffAxis > 0 && (
             <div className="tl-aside-note">
-              {plural(line.edgesOffAxis, "dependency", "dependencies")} not drawn: the blocker is
-              off this page, or carries no dates of its own.
+              {plural(line.edgesOffAxis, "dependency", "dependencies")} not drawn.
             </div>
           )}
         </div>
@@ -387,7 +383,7 @@ export function TimelineView({
       <EmptyState
         icon={<ChartNoAxesGanttGlyph size={32} />}
         title="Nothing to lay out"
-        description="No item on this node's copy of the tracker matches these filters."
+        description="Remove a filter, or clear them all."
       />
     );
   }

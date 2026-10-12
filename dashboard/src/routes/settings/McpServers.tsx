@@ -86,7 +86,7 @@ export function McpServers({
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title="No MCP servers yet"
-        description="Add one to give agents a tool the engine does not ship: a tracker, a database, a vendor's API."
+        description="Add one to give agents more tools."
       />
     );
   }
@@ -186,15 +186,14 @@ export function McpServers({
 function SilentNodes({ nodes }: { nodes: McpStatusNode[] }) {
   return (
     <p className="t-caption">
-      {nodes.length === 1 ? "Node " : "Nodes "}
+      No report from{" "}
       {nodes.map((n, i) => (
         <span key={n.id}>
           {i > 0 ? ", " : ""}
           <span className="mono">{n.id}</span>
         </span>
-      ))}{" "}
-      did not publish {nodes.length === 1 ? "its" : "their"} MCP report on the last heartbeat, so
-      whether the servers started there is unknown.
+      ))}
+      , so {nodes.length === 1 ? "its" : "their"} status is unknown.
     </p>
   );
 }
@@ -301,14 +300,13 @@ export function ServerHeader({
             the refusal itself is drawn by the servers section below. */}
         {unavailable ? (
           <p className="t-body muted">
-            <span className="mono">{name}</span>&apos;s status could not be read here, so whether it
-            is configured or running is not known. The servers section below says why.
+            Couldn’t read <span className="mono">{name}</span>’s status. See the servers section
+            below.
           </p>
         ) : (
           !loading && (
             <p className="t-body muted">
-              No configuration this engine can see carries a server called{" "}
-              <span className="mono">{name}</span>, and no live node reports one.
+              No server called <span className="mono">{name}</span>.
             </p>
           )
         )}

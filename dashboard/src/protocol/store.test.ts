@@ -258,6 +258,43 @@ describe("connection state", () => {
     expect(store.state.health).toBeNull();
   });
 
+  // A TAB STILL CONNECTING IS NOT A TAB THAT LOST THE ENGINE. Both are
+  // disconnected, and only the second has been answered, by a close or by a
+  // failed dial; the engine panel draws an amber dot for that one alone, and
+  // says how long it has been gone rather than when it was last retried.
+  test("the engine is lost from the first close, and a connection clears it", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new Store();
+      expect(store.state.lostAt).toBeNull();
+      expect(store.state.everConnected).toBe(false);
+      store.setConnected(false); // the first dial failed
+      expect(store.state.lostAt).toBe(1_000);
+      vi.setSystemTime(5_000);
+      store.setConnected(false); // and a retry failed again
+      expect(store.state.lostAt).toBe(1_000);
+      expect(store.state.everConnected).toBe(false);
+      store.setConnected(true);
+      expect(store.state.lostAt).toBeNull();
+      expect(store.state.everConnected).toBe(true);
+      vi.setSystemTime(9_000);
+      store.setConnected(false);
+      expect(store.state.lostAt).toBe(9_000);
+      expect(store.state.everConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a health frame answers the loss as the socket's own open does", () => {
+    const store = new Store();
+    store.setConnected(false);
+    store.applyHealth(healthFrame());
+    expect(store.state.lostAt).toBeNull();
+    expect(store.state.everConnected).toBe(true);
+  });
+
   test("refused and unreachable are different facts", () => {
     // The repair differs and the reader cannot guess which they are looking
     // at: a stopped engine comes back on its own, a rejected token never does.

@@ -373,7 +373,7 @@ describe("the prefetch", () => {
       }),
     );
     expect(blocks.find((b) => b.label === "The thread so far")!.note).toBe(
-      "30 messages handed over, but not the newest — the thread was too long to read",
+      "30 messages handed over, not the newest. The thread was too long.",
     );
   });
 

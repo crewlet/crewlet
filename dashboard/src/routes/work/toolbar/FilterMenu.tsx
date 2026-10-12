@@ -306,7 +306,7 @@ function placeholderFor(type: string): string {
       return "2026-03-01, or gte:today, or range:sow..eom";
     case "people":
     case "relationship":
-      return "a handle, or any:a,b — or not_null";
+      return "a handle, any:a,b or not_null";
     case "textarea":
       return "text it contains";
     default:

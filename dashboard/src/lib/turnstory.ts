@@ -390,7 +390,7 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   const p = event?.payload as Record<string, unknown> | undefined;
   if (!p) return [];
   const gated = p.trigger_requires_recon === true;
-  const thin = gated ? "the trigger was a bare pointer — this filter never ran" : "";
+  const thin = gated ? "skipped for this trigger" : "";
   const picks = Number(p.relevant_knowledge_selection_count ?? 0);
   return [
     // NOT GATED, and that is the point of it: this block is what makes a thin
@@ -439,7 +439,7 @@ function threadNote(p: Record<string, unknown>): string {
   if (posts === 0) return "read, and there was nothing earlier";
   const handed = `${posts} message${posts === 1 ? "" : "s"} handed over`;
   return p.thread_context_stopped_short === true
-    ? `${handed}, but not the newest — the thread was too long to read`
+    ? `${handed}, not the newest. The thread was too long.`
     : handed;
 }
 

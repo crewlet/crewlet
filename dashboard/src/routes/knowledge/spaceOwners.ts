@@ -63,7 +63,7 @@ export function ownerSentence(owners: SpaceOwners): string {
     case "loading":
       return "Who files here is still being read";
     case "refused":
-      return "Who files here could not be read with this token";
+      return "Owner unknown with this token";
     case "read": {
       if (owners.units.length === 0) return "No unit names this space in its space:";
       return owners.units

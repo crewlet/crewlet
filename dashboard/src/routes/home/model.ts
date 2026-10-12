@@ -252,15 +252,13 @@ export function statusSentence(input: {
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
-  if (authRejected)
-    return sole("The engine refused this browser's token — set one to read the company.");
-  if (!connected)
-    return sole("Not connected to the engine. What is shown is the last state it sent.");
+  if (authRejected) return sole("The engine refused this browser’s token. Set another one.");
+  if (!connected) return sole("Not connected. Showing the last state received.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
   if (posture && ["shed", "stuck", "isolated"].includes(posture)) {
     return sole(
       posture === "shed"
-        ? "This node has released its seats: it cannot reach the configuration it should run."
+        ? "This node released its seats. It can’t reach its configuration."
         : "This node cannot converge on the fleet's active configuration.",
     );
   }

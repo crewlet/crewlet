@@ -103,7 +103,7 @@ export interface PageContext {
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
   setFleet: (fleet: PublishedFleet | null) => void;
-  /** The screen carries the page's star in its own menu ([useOwnStar]). */
+  /** The screen's design keeps the star in its own menu, not the bar ([useOwnStar]). */
   setOwnStar: (own: boolean) => void;
 }
 
@@ -296,7 +296,10 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
  * Say that this screen's own menu carries the page's star, so the frame draws
  * none: one control per action on screen, and a screen whose design keeps the
  * star with its other page actions (Knowledge's page) would otherwise show it
- * twice. Cleared when the screen goes, for the reason [usePageLabels] gives.
+ * twice. Knowledge's landing says the same, because its design keeps the star
+ * in each page's own menu and none in its bar, where the frame's would offer
+ * the workspace the sidebar already lists. Cleared when the screen goes, for
+ * the reason [usePageLabels] gives.
  */
 export function useOwnStar(): void {
   const { setOwnStar } = usePageContext();

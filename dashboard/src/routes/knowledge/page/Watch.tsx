@@ -44,9 +44,7 @@ export function WatchControl({ page }: { page: Page }) {
     const result = await save.run(
       { page: page.id, base_version: page.version, watch: !watching },
       {
-        done: watching
-          ? `You stopped watching “${page.title}”. A direct mention still reaches you.`
-          : `You are watching “${page.title}”. You are told when it changes.`,
+        done: watching ? `You stopped watching “${page.title}”.` : `Watching “${page.title}”.`,
       },
     );
     // A REFUSAL IS SAID WHERE IT CAN BE SEEN: the bar has no room for a note
@@ -109,8 +107,8 @@ export function WatchControl({ page }: { page: Page }) {
             {!save.access.can
               ? save.access.reason
               : watching
-                ? "Press the eye to stop watching. A direct mention still reaches you."
-                : "Press the eye to watch. You are told when it changes."}
+                ? "Press the eye to stop watching."
+                : "Press the eye to watch."}
           </p>
         </div>
       </Popover>

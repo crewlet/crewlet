@@ -53,13 +53,12 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
   const window = isRange(w) ? (clamp ? "30d" : w) : windowParam(w);
   return {
     path: href(["live", "turns"], { sort: "-tokens", window }),
-    clamped: clamp ? "the last 30 days — the turn list keeps no older" : null,
+    clamped: clamp ? "the last 30 days" : null,
   };
 }
 
 /** What a person's row says where a seat's counts its turns. */
-export const PERSON_TAKES_NO_TURNS =
-  "A person takes no turns — this is what the auxiliary model spent for them";
+export const PERSON_TAKES_NO_TURNS = "Auxiliary model spend for this person";
 
 export function ByAgent({
   lines,
@@ -121,7 +120,7 @@ export function ByAgent({
             ? { title: "This window did not answer", hint: "The refusal above says why." }
             : {
                 title: "No agent spent tokens in this window",
-                hint: "A seat appears here once one of its turns makes a model call.",
+                hint: "Agents appear once they spend tokens.",
               }
         }
         columns={[

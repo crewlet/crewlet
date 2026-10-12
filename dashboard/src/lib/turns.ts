@@ -38,14 +38,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * row, where 43 unbreakable characters took the whole cell on a phone and
  * left the summary beside it one letter wide.
  */
-export function workItemLabel(ref: WorkItemRef): { text: string; title: string } {
+export function workItemLabel(ref: WorkItemRef): { text: string; title?: string } {
   const identity = `${ref.backend}:${ref.id}`;
-  if (ref.key) return { text: ref.key, title: `${ref.key} — the work item this turn was about` };
+  if (ref.key) return { text: ref.key };
   const kind = ref.backend === "native" ? "task" : ref.backend;
   const head = UUID.test(ref.id) ? ref.id.slice(0, 8) : ref.id;
   return {
     text: `${kind} ${head}`,
-    title: `${identity} — the work item this turn was about; the turn recorded no key for it`,
+    title: `${identity}: no key recorded`,
   };
 }
 
@@ -72,7 +72,7 @@ export function runningNow(
   if (!seat) return null;
   const parked = seat.turn?.stage === "parked";
   return {
-    words: `${parked ? "parked" : "running"} — ${doingWords(seat)}`,
+    words: `${parked ? "parked" : "running"} · ${doingWords(seat)}`,
     item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
   };
 }
@@ -199,8 +199,7 @@ export function seatOnTurn(agents: readonly AgentRow[], turnId: string): AgentRo
  */
 export const UNSETTLED = {
   word: "not settled",
-  title:
-    "no seat is running this turn and it published no closing record — it stopped before it ended",
+  title: "Stopped before it ended",
 } as const;
 
 /**

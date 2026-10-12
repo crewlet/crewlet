@@ -120,8 +120,9 @@ const DEFAULT_SORT = "-todo";
  * with no projects or a company that has archived every one of them, and the
  * page used to be unable to tell — so it hedged, naming both ways it happens
  * in one sentence and sending the reader to look. A hedge is what a screen
- * writes when it is missing a number; this one now has the number, so it says
- * how many are archived and offers the segment that holds them.
+ * writes when it is missing a number; this one now has the number, so it knows
+ * the projects were archived and offers the segment that holds them, whose
+ * option carries the count.
  *
  * `all` is absent because it is unreachable: an empty answer on ANY segment
  * with a zero census is a company with no projects, which [NoProjectsYet]
@@ -131,7 +132,7 @@ const EMPTY = {
   archived: {
     icon: "columns-3" as const,
     title: "No project is archived",
-    hint: "An archived project keeps its work and stops taking new items.",
+    hint: "Archived projects appear here.",
   },
 };
 
@@ -139,10 +140,10 @@ const EMPTY = {
  * The Active segment's empty state, which needs the census to write.
  *
  * A FUNCTION RATHER THAN A CONSTANT because the sentence turns on a number the
- * engine sent. With archived work to point at it points at it, by count and
- * with a link; with none, the company has projects that are neither active nor
- * archived, which cannot happen — so the only remaining case is the one the
- * grid is not drawing, and the honest line is the plain one.
+ * engine sent. With archived work to point at it points at it, with a link;
+ * with none, the company has projects that are neither active nor archived,
+ * which cannot happen, so the only remaining case is the one the grid is not
+ * drawing, and the honest line is the plain one.
  */
 function activeEmpty(archived: number, href: string) {
   if (archived > 0) {
@@ -151,16 +152,10 @@ function activeEmpty(archived: number, href: string) {
       title: "No project is active",
       hint: (
         <>
-          {/* THE TYPOGRAPHIC APOSTROPHE, which is what every other sentence
-              in this product uses — the JSX ones spell it `&rsquo;` and a
-              string has to carry the character itself. */}
-          {archived === 1
-            ? "The company’s one project has been archived. "
-            : `All ${archived} of the company’s projects have been archived. `}
           <a className="t-link" href={href}>
             See them under Archived
           </a>
-          , where each keeps its work.
+          .
         </>
       ),
     };
@@ -168,7 +163,7 @@ function activeEmpty(archived: number, href: string) {
   return {
     icon: "columns-3" as const,
     title: "No project is active",
-    hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
+    hint: "Create one with New project.",
   };
 }
 
@@ -497,8 +492,7 @@ export function Projects() {
         </span>
         {short && (
           <span className="t-caption">
-            The engine answered {listed} of {answerTotal}, in the order asked for, so these counts
-            cover only the projects listed.
+            Counts cover the {listed} listed of {answerTotal}.
           </span>
         )}
         <span className="spacer" />
@@ -671,7 +665,7 @@ function NoProjectsYet() {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title="No projects yet"
-      description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. A project appears when a team or a seat in the org gets a tracker project key, which New project starts."
+      description="Create one with New project."
       action={<NewProjectButton />}
     />
   );

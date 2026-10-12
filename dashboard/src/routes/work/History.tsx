@@ -360,16 +360,7 @@ export function HistoryView({
       </div>
 
       <Card>
-        <Card.Header
-          icon={<ChartNoAxesGanttGlyph size="sm" />}
-          // NOTHING TO DESCRIBE IS NOT A DESCRIPTION OF NOTHING. Drawn
-          // unconditionally this promised bars over an empty card, which is the
-          // rule `Activity`'s own card follows by leaving its subtitle
-          // `undefined` until a series lands.
-          subtitle={
-            records.length > 0 ? `One bar per ${range.bucket}, over the changes loaded.` : undefined
-          }
-        >
+        <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />}>
           <Card.Title>When</Card.Title>
         </Card.Header>
         {/* NO `onPick`. The event log's bars narrow the window because its own
@@ -409,7 +400,7 @@ export function HistoryView({
             ? undefined
             : {
                 title: "Nothing changed in this window",
-                hint: "Widen the window, or take off a filter. A change is written when a seat or an operator writes to the tracker, so a company whose agents are idle has none.",
+                hint: "Widen the window, or remove a filter.",
               }
         }
       >
@@ -449,12 +440,7 @@ export function HistoryView({
               <span className="spacer" />
               {/* SAID ONLY ONCE THE HEAD IS HELD, because until then it is not
                   true: the first page is re-asked on every poll. */}
-              {head && (
-                <span>
-                  Held still while you page back — change the window or a filter to pick up new
-                  changes.
-                </span>
-              )}
+              {head && <span>Paused while you page back.</span>}
             </>
           )}
         </footer>

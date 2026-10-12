@@ -49,6 +49,7 @@ export function ByUnit({
           <Skeleton height="4.5rem" />
         ) : (
           <BarList
+            className="spend-bars"
             layout="beside"
             limit={8}
             moreLabel={(n) => plural(n, "more team")}

@@ -68,7 +68,7 @@ export function Work({
           work.data && rows.length === 0
             ? {
                 title: "Nothing open is assigned to them",
-                hint: "Work reaches a seat by assignment, and closed work is not counted here.",
+                hint: "Closed work isn’t counted.",
               }
             : undefined
         }
@@ -113,11 +113,7 @@ export function Work({
                 <Card.Title as="h3">Waiting on their answer</Card.Title>
               </Card.Header>
               <HoldWrites
-                reason={
-                  viewer.handle === handle
-                    ? null
-                    : `Asked of ${seat.name} — only they can answer it.`
-                }
+                reason={viewer.handle === handle ? null : `Only ${seat.name} can answer.`}
               >
                 <AskList
                   rows={mine.data?.asked_of_me ?? []}
@@ -154,11 +150,7 @@ export function Work({
           />
         </>
       ) : (
-        <p className="t-caption">
-          Their own queue — what they mean to do first, the questions put to them and their
-          checklist items on other seats&apos; tasks — is theirs to read. An operator credential, or
-          their own, shows it here.
-        </p>
+        <p className="t-caption">Set an operator token to see their queue.</p>
       )}
     </div>
   );

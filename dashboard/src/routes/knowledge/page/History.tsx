@@ -23,10 +23,10 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
-import { plainText, renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageRevision } from "~/protocol/index.ts";
-import { Face, changeWords, drawnBy, type Who } from "../parts.tsx";
+import { Face, changeNote, changeWords, drawnBy, type Who } from "../parts.tsx";
 
 /**
  * A line diff, rendered as the document it is.
@@ -95,7 +95,7 @@ export function BodyDiff({
         size="compact"
         icon={<CheckGlyph size="xl" />}
         title="The body did not change"
-        description="A page's title, its labels and its place in the tree are saved beside its body. The prose is the same as before."
+        description="Only the title, labels or position changed."
       />
     );
   }
@@ -213,7 +213,7 @@ export function VersionView({
               size="compact"
               icon={<ClockGlyph size="xl" />}
               title="This node no longer holds that revision"
-              description="A page keeps a bounded number of revisions. The entry in its history is the record that it existed."
+              description="Only recent revisions are kept."
             />
           )
         )}
@@ -249,13 +249,14 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
             ? undefined
             : {
                 title: "Nothing has happened to this page",
-                hint: "Every change writes an entry: a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
+                hint: "Saves, comments, renames and moves appear here.",
               }
         }
       >
         <ol className="knowledge-change-list">
           {changes.map((change) => {
             const by = drawnBy(change.actor, change.actor_seat);
+            const note = changeNote(change);
             return (
               <li key={change.id} className="knowledge-change">
                 {by ? (
@@ -271,9 +272,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
                       (quiet)
                     </span>
                   )}
-                  {change.excerpt && (
-                    <span className="knowledge-change-note">{plainText(change.excerpt)}</span>
-                  )}
+                  {note && <span className="knowledge-change-note">{note}</span>}
                 </span>
                 {change.turn_id && (
                   <a

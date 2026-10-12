@@ -210,7 +210,7 @@ function PickDialog({
       <FormField
         label="Comes back at"
         htmlFor="inbox-snooze-at"
-        helper="In your own time zone, as your preferences set it."
+        helper="In your time zone."
         error={problem && at !== null ? problem : undefined}
       >
         <Input

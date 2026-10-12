@@ -64,7 +64,7 @@ export function TokensByTeam({
           data && bands.length === 0
             ? {
                 title: "No tokens spent in this window",
-                hint: "A team's bar appears once one of its seats makes a model call.",
+                hint: "Teams appear once their agents spend tokens.",
               }
             : undefined
         }

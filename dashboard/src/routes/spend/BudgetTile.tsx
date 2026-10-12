@@ -86,9 +86,7 @@ export function BudgetTile({
         hint={`${fmtCount(month.used)} of ${fmtCount(month.limit)} · resets ${resets}`}
       />
       {month.state === "refusing" && (
-        <span className="spend-caption spend-refusing">
-          Refusing charges — turns wait until {resets}, or until the ceiling is raised.
-        </span>
+        <span className="spend-caption spend-refusing">Full until {resets}.</span>
       )}
     </div>
   );

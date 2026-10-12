@@ -95,10 +95,7 @@ func (h *Host) ticksPerPass() int {
 // itself. Invisible at the shipped values (45 s vs 1 s) and lethal to anyone
 // who lowers the TTL, so it is enforced rather than documented.
 func (h *Host) beatInterval() time.Duration {
-	d := WatchdogBeatInterval
-	if scaled := h.ttl / WatchdogBeatsPerThreshold; scaled < d {
-		d = scaled
-	}
+	d := beatCeiling(h.ttl)
 	// Never slower than the pass itself: a beat that lags the work it is
 	// meant to prove would report a stall the node has not had.
 	if h.heartbeat < d {

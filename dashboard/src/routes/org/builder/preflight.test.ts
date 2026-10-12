@@ -84,7 +84,7 @@ describe("stranded schedules", () => {
       { unit: "unit:Ops", unitName: "Ops", schedule: "sweep", reason: "members" },
     ]);
     expect(strandedSentence(newlyStranded(before, after)[0]!)).toBe(
-      "Schedule sweep on Ops would have no runner: it runs on the unit's direct agent members, and the unit would have none. The engine refuses the save until it is disabled or has a runner.",
+      "Schedule sweep on Ops would have nobody to run it. Disable it or give it a runner.",
     );
   });
 
@@ -122,7 +122,7 @@ describe("stranded schedules", () => {
       { unit: "unit:Team", unitName: "Team", schedule: "standup", reason: "lead" },
     ]);
     expect(strandedSentence(newlyStranded(before, after)[0]!)).toBe(
-      "Schedule standup on Team would have no runner: it runs as the unit's lead, and the lead would be a human seat. The engine refuses the save until it is disabled or has a runner.",
+      "Schedule standup on Team would have nobody to run it. Disable it or give it a runner.",
     );
   });
 

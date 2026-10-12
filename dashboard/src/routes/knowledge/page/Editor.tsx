@@ -123,8 +123,7 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
           variant="warning"
           title={`Somebody saved revision ${page.version} while you edited.`}
         >
-          Your edit started from revision {base.version}, so saving now is refused rather than
-          overwriting theirs. Bring their change into your draft first.
+          Someone saved revision {page.version} since you started. Bring their change in first.
           <span className="knowledge-callout-actions">
             <Button size="small" variant="secondary" onClick={() => setTheirs(!theirs)}>
               {theirs ? "Hide their change" : "View their change"}
@@ -171,7 +170,7 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
       )}
       {merged !== null && !moved && !merging && (
         <p className="knowledge-note" role="status">
-          Revision {merged}&rsquo;s change is in your draft. Read it through before you save.
+          Revision {merged} is merged into your draft.
         </p>
       )}
 
@@ -233,7 +232,7 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
           open
           destructive
           title="Discard your edit?"
-          message="What you wrote here is not saved anywhere. The page stays as it is."
+          message="The page stays as it is."
           cancelLabel="Keep editing"
           confirmLabel="Discard"
           onClose={() => setDiscard(false)}
@@ -283,10 +282,7 @@ function ResolveConflicts({
           ? `You and revision ${version} changed the same lines`
           : `You and revision ${version} changed the same lines in ${clashes.length} places`}
       </h2>
-      <p className="knowledge-note">
-        Everything else from their change is already merged. For each place, keep their lines,
-        yours, or both. Your draft is held until you apply.
-      </p>
+      <p className="knowledge-note">For each conflict, keep their lines, yours or both.</p>
       <ol className="knowledge-resolve-list">
         {clashes.map((clash, i) => (
           <li key={i} className="knowledge-resolve-item">

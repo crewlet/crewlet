@@ -260,12 +260,12 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
   if (!q && total === 0) {
     message = {
       title: "No projects yet",
-      body: "A project appears when a team or a seat in the org gets a tracker project key.",
+      body: "Create one with New project.",
     };
   } else if (!q && census && census.active === 0) {
     message = {
       title: "No active projects",
-      body: "Every project is archived. They are listed under Projects.",
+      body: "Archived projects are under Projects.",
     };
   } else if (q && rows.length === 0 && !pending) {
     message = {
@@ -285,7 +285,7 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
 
   const note =
     answer.truncated && !q && census
-      ? `${answer.projects.length} of ${census.active} listed. Type to search all of them.`
+      ? `${answer.projects.length} of ${census.active}. Type to search.`
       : undefined;
 
   const announcement = !q

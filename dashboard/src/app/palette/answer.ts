@@ -100,7 +100,7 @@ function explains(access: WriteAccess): string | null {
   // themselves, and an engine that does not answer questions at all has
   // nothing for them to do — a line about it on every question is noise.
   if (access.block === "anonymous" || access.block === "unbound") {
-    return "Set a token bound to your seat to get an answer from your company’s knowledge.";
+    return "Set a token bound to your seat to ask.";
   }
   return null;
 }

@@ -103,8 +103,8 @@ export function OutcomeTag({ outcome }: { outcome: string }) {
  *  to the ledger's own vocabulary by the type so a new skip cannot arrive
  *  unexplained. */
 const OUTCOME_WHY: Record<string, string> = {
-  skipped_catchup: "the tick was missed and fell outside the catchup window",
-  skipped_paused: "the seat was paused when the fire came due, so it was recorded and not sent",
+  skipped_catchup: "Missed, outside the catchup window",
+  skipped_paused: "The seat was paused",
 } satisfies Record<Exclude<LedgerOutcome, "fired">, string>;
 
 /** Every outcome the ledger can record. */
@@ -122,7 +122,7 @@ type LedgerOutcome = Exclude<ScheduleRunRow["outcome"], "">;
  * is overlapped by cut every monogram's second letter away.
  */
 export function Wakes({ runners, who }: { runners: string[]; who: Who }) {
-  if (runners.length === 0) return <EmptyValue label="Nobody — this schedule wakes no seat" />;
+  if (runners.length === 0) return <EmptyValue label="Nobody" />;
   if (runners.length === 1) return <SeatChip handle={runners[0]!} {...who(runners[0]!)} />;
   const names = runners.map((h) => who(h).name);
   return (
@@ -231,9 +231,7 @@ export function scheduleFacts(row: ScheduleRow, now: number, who: Who): Fact[] {
           {row.problem}
         </Tag>
       ) : (
-        <span className="muted">
-          {row.enabled ? "never — the calendar does not reach it" : "disabled"}
-        </span>
+        <span className="muted">{row.enabled ? "never" : "disabled"}</span>
       ),
     },
     {
@@ -399,9 +397,7 @@ export function ScheduleDefinition({ row, who }: { row: ScheduleRow; who: Who })
               },
               {
                 label: "Catchup",
-                value: row.catchup
-                  ? "a tick missed while the node was down fires late"
-                  : "a missed tick is dropped",
+                value: row.catchup ? "runs late if missed" : "a missed tick is dropped",
               },
               {
                 label: "Cap",
@@ -409,7 +405,7 @@ export function ScheduleDefinition({ row, who }: { row: ScheduleRow; who: Who })
                 // declared runs to the engine's own default rather than for
                 // no time at all.
                 value: row.timeout_seconds > 0 ? fmtDuration(row.timeout_seconds * 1000) : "",
-                title: "wall clock one fire may take before the engine stops it",
+                title: "Longest a run may take",
               },
             ],
           },
@@ -480,7 +476,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
     <Card>
       <Card.Header
         icon={<CalendarGlyph size="sm" />}
-        subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone}`}
+        subtitle={`next ${upcoming.length} runs, in ${row.timezone}`}
       >
         <Card.Title>And after that</Card.Title>
       </Card.Header>
@@ -504,8 +500,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
         // which beats a reader working out why `0 9 * * *` in Asia/Tokyo is
         // listed at midnight.
         <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
-          This schedule is evaluated in <code className="inline">{row.timezone}</code>; the instants
-          above are the same fires shown in your own timezone.
+          Runs on <code className="inline">{row.timezone}</code> time. Shown in your time zone.
         </p>
       )}
     </Card>
@@ -513,12 +508,10 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
 }
 
 /** What an address that names no schedule and no fire means. */
-const NO_SCHEDULE_HINT =
-  "A schedule is addressed by all three of its segments — scope type, scope, name. A company revision may have removed this one, and the retention sweep may have taken its fires.";
+const NO_SCHEDULE_HINT = "It may have been removed.";
 
 /** And what the ledger outliving the configuration means, wherever it shows. */
-const UNDECLARED_HINT =
-  "The company configuration no longer declares this schedule. Its history is kept until the retention sweep takes it.";
+const UNDECLARED_HINT = "This schedule was removed. Its history is kept for now.";
 
 export function Schedules({ scope = [] }: { scope?: string[] }) {
   const now = useNow();
@@ -685,7 +678,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             ? undefined
             : {
                 title: "No recurring work is defined",
-                hint: "Add a schedules block to a role or a unit in the company configuration — a standup, a nightly audit, a weekly report.",
+                hint: "Add a schedule to a role or team in the configuration.",
               }
         }
       >
@@ -827,7 +820,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             defaultSort="-fired"
             empty={{
               title: "No runs recorded",
-              hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
+              hint: "Runs appear here once a schedule fires.",
             }}
             columns={[
               {
@@ -892,7 +885,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   r.outcome ? (
                     <OutcomeTag outcome={r.outcome} />
                   ) : (
-                    <EmptyValue label="The ledger recorded no outcome for this fire" />
+                    <EmptyValue label="No outcome recorded" />
                   ),
               },
               {
@@ -916,7 +909,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       {fmtDateTime(r.scheduled_at)}
                     </span>
                   ) : (
-                    <EmptyValue label="The ledger recorded no tick for this fire" />
+                    <EmptyValue label="No time recorded" />
                   ),
               },
             ]}
@@ -1002,9 +995,7 @@ function OneSchedule({
         status={known ? scheduleStatus(row) : undefined}
         facts={row ? scheduleFacts(row, now, who) : undefined}
       />
-      <PageNote>
-        {row ? row.task : known ? UNDECLARED_HINT : "One schedule, and every fire it has left."}
-      </PageNote>
+      {(row || known) && <PageNote>{row ? row.task : UNDECLARED_HINT}</PageNote>}
 
       {row && <ScheduleDefinition row={row} who={who} />}
       {row && <NextFires row={row} now={now} count={UPCOMING_FIRES} />}
@@ -1017,7 +1008,7 @@ function OneSchedule({
             ? undefined
             : {
                 title: "This schedule has not fired",
-                hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
+                hint: "Runs appear here when it fires.",
               }
         }
       >
@@ -1027,9 +1018,7 @@ function OneSchedule({
             count={runs.length}
             // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
             // schedule that has fired exactly that many times.
-            subtitle={
-              truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
-            }
+            subtitle={truncated ? `newest ${runs.length}` : undefined}
           >
             <Card.Title>Fires</Card.Title>
           </Card.Header>
@@ -1066,7 +1055,7 @@ function OneSchedule({
                   r.outcome ? (
                     <OutcomeTag outcome={r.outcome} />
                   ) : (
-                    <EmptyValue label="The ledger recorded no outcome for this fire" />
+                    <EmptyValue label="No outcome recorded" />
                   ),
               },
               {
@@ -1084,7 +1073,7 @@ function OneSchedule({
                       {fmtDateTime(r.scheduled_at)}
                     </span>
                   ) : (
-                    <EmptyValue label="The ledger recorded no tick for this fire" />
+                    <EmptyValue label="No time recorded" />
                   ),
               },
             ]}
@@ -1201,7 +1190,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           {r.outcome ? (
                             <OutcomeTag outcome={r.outcome} />
                           ) : (
-                            <EmptyValue label="The ledger recorded no outcome for this fire" />
+                            <EmptyValue label="No outcome recorded" />
                           )}
                           <span className="spacer" />
                           <span className="t-caption" title={fmtDateTime(r.fired_at)}>
@@ -1226,7 +1215,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                     size="compact"
                     icon={<ClockGlyph size={32} />}
                     title="This schedule has not fired"
-                    description="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
+                    description="Runs appear here when it fires."
                   />
                 )}
               </Card>

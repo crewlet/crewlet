@@ -355,7 +355,7 @@ describe("DownloadButton", () => {
     expect(screen.getByRole("button").textContent).toContain("Downloading");
     // And the announcement NAMES the file, since "Downloaded" tells a reader
     // who cannot see the download shelf nothing about what to go and open.
-    expect(screen.getByRole("status").textContent).toBe("download started — turn-t-1.json");
+    expect(screen.getByRole("status").textContent).toBe("download started: turn-t-1.json");
     // The scratch anchor is not left behind for the next reader to tab into.
     expect(document.querySelector("a")).toBeNull();
   });
@@ -456,7 +456,7 @@ describe("DownloadButton", () => {
     await click("download");
 
     expect(seen.clicked[0]!.download).toBe("etc-pa-ss-wd");
-    expect(screen.getByRole("status").textContent).toBe("download started — etc-pa-ss-wd");
+    expect(screen.getByRole("status").textContent).toBe("download started: etc-pa-ss-wd");
   });
 
   test("keeps a name whose letters are not Latin, extension and all", async () => {

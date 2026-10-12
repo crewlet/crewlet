@@ -164,7 +164,7 @@ export function WorkSearch() {
             aria-label="Search the company’s work"
             ref={searchBox}
             leading={<SearchGlyph size="sm" />}
-            placeholder="A phrase — the words somebody would have written"
+            placeholder="Describe the task"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
           />
@@ -190,7 +190,7 @@ export function WorkSearch() {
         <EmptyState
           icon={<SearchGlyph size="xl" />}
           title="Type what you half remember"
-          description="Finds the tasks most about a phrase — by its words, by what it means, or both — across titles, descriptions and comments. The board's filters answer which tasks are in a state; this answers which are about something."
+          description="Searches titles, descriptions and comments."
         />
       ) : tooLong ? (
         <Callout variant="warning">{tooLong}</Callout>
@@ -200,10 +200,7 @@ export function WorkSearch() {
         <EmptyState
           icon={<ClockGlyph size="xl" />}
           title="This node is still indexing"
-          description={
-            hits.data.note ||
-            "It joined recently, so the company's work is not all findable from here yet. The board's own filters answer in the meantime."
-          }
+          description={hits.data.note || "Try again shortly, or use the board’s filters."}
         />
       ) : (
         <QueryState
@@ -215,7 +212,7 @@ export function WorkSearch() {
               ? undefined
               : {
                   title: "Nothing matched",
-                  hint: "The index is over the words in an item, so a key or a status belongs in the board's filters instead.",
+                  hint: "For a key or status, use the board’s filters.",
                 }
           }
         >

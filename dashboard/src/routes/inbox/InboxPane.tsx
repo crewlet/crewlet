@@ -112,7 +112,7 @@ export function InboxPane(props: PaneProps) {
         <EmptyState
           icon={<CircleCheckGlyph size={28} />}
           title="All clear"
-          description="Nothing waits on you, and every update is read. What reaches you next opens here."
+          description="New updates open here."
         />
       </div>
     );
@@ -547,9 +547,9 @@ function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
       <ReadingPaneLead>
         <p>
           {w
-            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens are spent in ${w.window}, so charges are refused until ${fmtDateTime(w.resets_at)}.`
+            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens spent. Resets ${fmtDateTime(w.resets_at)}.`
             : "The engine refuses this seat's charges until its budget window resets."}{" "}
-          Raise its ceiling, or hand the work to somebody with room.
+          Raise the limit or reassign the work.
         </p>
       </ReadingPaneLead>
       <Stack gap={2} align="center" wrap>
@@ -585,8 +585,7 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
         </Stack>
       )}
       <Text as="p" variant="caption">
-        Computed from the live state, so nothing here is stored or marked. It leaves your inbox when
-        the condition clears.
+        Clears on its own when the condition ends.
       </Text>
     </ReadingPane>
   );

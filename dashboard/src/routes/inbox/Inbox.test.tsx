@@ -717,10 +717,10 @@ describe("who is looking", () => {
     [
       "an anonymous reader",
       { ...NOBODY, anonymous: true },
-      "No API token is presented",
+      "Set a token bound to your seat to see your updates",
       WRITE_REASONS.anonymous,
     ],
-    ["an unbound token", UNBOUND, "no seat claims it", WRITE_REASONS.unbound],
+    ["an unbound token", UNBOUND, "No seat uses token", WRITE_REASONS.unbound],
   ])("%s is told what would make this their inbox", async (_who, viewer, sentence, reason) => {
     mount({ viewer, answers: { viewer } });
     await settle();

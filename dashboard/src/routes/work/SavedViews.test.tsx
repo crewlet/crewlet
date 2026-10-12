@@ -88,7 +88,7 @@ test("an owner outside the chart is named by their handle", async () => {
 test("a shared view says what shared means", async () => {
   serving({ work_saved_views: { views: [view()], complete: true } });
   const { container } = mount("v-1");
-  await waitFor(() => expect(screen.getByText(/everybody in this company/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Shared with everyone.")).toBeTruthy());
   expect(container.textContent).not.toContain("A personal view owned by");
 });
 
@@ -180,6 +180,6 @@ test("a mark says what it means wherever it is drawn", async () => {
   expect(onTheGrid).toEqual([
     "the container's landing tab",
     "only its owner may change it",
-    "pinned by you — pins are per reader",
+    "Pinned by you",
   ]);
 });

@@ -52,7 +52,7 @@ export const ACT_ERRORS = {
   invalid_token: "The engine refused your API token. Set it again to make changes.",
   unbound: "This token is not bound to a person, so there is nobody to record the change under.",
   unknown_tool:
-    "This engine does not make that change. It may be running a different version from this page — reload.",
+    "This engine does not support that change. It may be running a different version. Reload the page.",
   read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
   unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
   invalid_request_id: "The dashboard sent the change without a usable request id.",

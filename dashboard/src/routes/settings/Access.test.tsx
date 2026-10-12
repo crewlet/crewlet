@@ -117,7 +117,7 @@ test("a token acts as the person who binds it, and a token nobody binds acts as 
   const founder = (await screen.findByText("yours")).closest(".grid-row") as HTMLElement;
   expect(within(founder).getByText("Ana Diaz")).toBeDefined();
   expect(within(founder).getByText("Person")).toBeDefined();
-  const ci = screen.getByText(/Nobody — writes under its own label/).closest(".grid-row");
+  const ci = screen.getByText("Nobody, writes as itself").closest(".grid-row");
   expect(within(ci as HTMLElement).getByText("Operator")).toBeDefined();
 });
 
@@ -130,7 +130,9 @@ test("each binding failure reads as its own state, with the binding as written",
   expect(screen.getByText("${CY_OPERATOR}")).toBeDefined();
   // An unset contact variable is drawn as a warning, and says why.
   const gitlab = screen.getByText("${BO_GITLAB}").closest("[title]");
-  expect(gitlab?.getAttribute("title")).toMatch(/not set in the engine's environment/);
+  expect(gitlab?.getAttribute("title")).toBe(
+    "${BO_GITLAB} isn’t set, so agents can’t reach them here",
+  );
   // Two failed bindings, counted.
   const tile = screen.getByText("Broken bindings").closest(".crewlet-statcard") as HTMLElement;
   expect(within(tile).getByText("2")).toBeDefined();
@@ -140,7 +142,9 @@ test("a disabled guard is said out loud", async () => {
   mount(async (what) =>
     what === "access" ? { ...answer, auth: { ...answer.auth, disabled: true }, tokens: [] } : null,
   );
-  expect((await screen.findByRole("alert")).textContent).toMatch(/api\.auth\.disabled/);
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "api.auth.disabled is on: no token is needed and nobody can act as a person. For local development only.",
+  );
   expect(screen.getByText(/accepts no token at all/)).toBeDefined();
 });
 
@@ -153,23 +157,21 @@ test("a managed document names its writers beside the tokens", async () => {
       ? { ...answer, auth: { ...answer.auth, company_writers: ["gitops", "ci"] } }
       : null,
   );
-  const line = (await screen.findByText(/The company document is managed/)).closest("span");
-  expect(line?.textContent).toMatch(
-    /only the tokens gitops, ci may change it \(api\.auth\.company_writers\)/,
-  );
+  const line = (await screen.findByText(/can change the company document/)).closest("span");
+  expect(line?.textContent).toBe("Only gitops, ci can change the company document.");
   cleanup();
 
   mount(async (what) => (what === "access" ? answer : null));
   await screen.findAllByText("Ana Diaz");
-  expect(screen.queryByText(/The company document is managed/)).toBeNull();
+  expect(screen.queryByText(/can change the company document/)).toBeNull();
 });
 
 test("a refused reader sees the refusal alone — no tiles, no empty lists", async () => {
   const view = mount((what) =>
     what === "access" ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(null),
   );
-  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText("People", { selector: "*" })).toBeNull();
-  expect(screen.queryByText(/No token is configured/)).toBeNull();
+  expect(screen.queryByText(/No tokens configured/)).toBeNull();
 });

@@ -664,7 +664,7 @@ test("a refused poll says so even when children were listed before", async () =>
     />,
   );
   await settle();
-  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
 
@@ -776,7 +776,7 @@ test("a change reads as a sentence, a checklist move included", () => {
   );
   expect(
     said({ checklists: { from: "Acceptance: 0 of 4 done", to: "Acceptance: 1 of 4 done" } }),
-  ).toBe("ticked 1 on Acceptance — 1 of 4 done");
+  ).toBe("ticked 1 on Acceptance, 1 of 4 done");
   expect(
     said({
       checklists: {
@@ -926,8 +926,8 @@ test("a failed turn marks the phase it broke in", async () => {
   expect(phases.map((p) => p.hasAttribute("data-failed"))).toEqual([false, true]);
   expect(phases[1]!.textContent).toContain("(failed)");
   expect(within(card).getByText("failed in review")).toBeTruthy();
-  // No account recorded: one quiet line, the reason on hover.
-  expect(within(card).getByText("No summary recorded — see the trace")).toBeTruthy();
+  // No account recorded: one quiet line.
+  expect(within(card).getByText("No summary. See the trace.")).toBeTruthy();
   // The meta line is its own row, after the tool chips.
   const meta = card.querySelector(".task-turn-meta")!;
   expect(meta.previousElementSibling?.classList.contains("task-turn-tools")).toBe(true);
@@ -1134,6 +1134,34 @@ test("the Woke answers keep their four empty sentences", async () => {
     mount(<Routing answer={answer} chrome={{}} />);
     await settle();
     expect(screen.getByText(title)).toBeTruthy();
+  }
+});
+
+// THE RETENTION WINDOW IS SAID AS A LENGTH. The answer carries the instant the
+// horizon falls on, which the engine sets to its own clock less
+// `inbox_retention_days`, so the whole days between it and now are the setting.
+// An answer that names no horizon falls back to the inbox horizon by name.
+test("a swept answer says how long recipients are kept", async () => {
+  const swept = (retained_from?: string): WorkRoutingAnswer => ({
+    record_id: "r-1",
+    held: true,
+    notified: true,
+    delivery: "swept",
+    ...(retained_from ? { retained_from } : {}),
+    addressed: 0,
+    fallback: 0,
+    recipients: [],
+  });
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+  for (const [answer, sentence] of [
+    [swept(daysAgo(30)), "Recipients are kept for 30 days. The change is still in history."],
+    [swept(daysAgo(1)), "Recipients are kept for 1 day. The change is still in history."],
+    [swept(), "Recipients are kept for the inbox horizon. The change is still in history."],
+  ] as const) {
+    cleanup();
+    mount(<Routing answer={answer} chrome={{}} />);
+    await settle();
+    expect(screen.getByText(sentence)).toBeTruthy();
   }
 });
 
@@ -1617,10 +1645,12 @@ test("a removed task is marked, and a live one carries no such mark", () => {
   expect(live.container.textContent ?? "").not.toContain("In the trash");
 });
 
-test("the removal note names its author and says it is reversible", () => {
-  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
+test("the removal note names its author and when", () => {
+  const { container } = render(
+    <RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />,
+  );
   expect(screen.getByText(/ada/)).toBeTruthy();
-  expect(screen.getByText(/reversible at any age/)).toBeTruthy();
+  expect(container.textContent).toMatch(/^In the trash\. Removed by ada \(human\) \S.*\.$/);
 });
 
 test("a task removed alongside its parent names the parent", () => {

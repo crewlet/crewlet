@@ -159,10 +159,11 @@ test("a holder that did not answer is named, and its agent draws no zeros", asyn
     },
   });
   await settle();
-  const callout = screen.getByText(/is missing one node/).closest(".coverage-note") as HTMLElement;
+  const callout = screen
+    .getByText(/Diaries is missing 1 node\. Its agents are listed without counts:/)
+    .closest(".coverage-note") as HTMLElement;
   expect(within(callout).getByText("node-c")).toBeTruthy();
-  expect(callout.textContent).toContain("listed without their counts");
-  expect(callout.textContent).toContain("2s read budget");
+  expect(callout.textContent).toContain("node-c: no answer within the 2s read budget");
   const silent = rowOf("Agent 01");
   expect(within(silent).getByText("Its holder did not answer")).toBeTruthy();
   expect(within(silent).queryByText("0")).toBeNull();
@@ -214,12 +215,14 @@ test("one agent's diary is its holder's answer, and names that node", async () =
   await settle();
   expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "agent-3" });
   expect(screen.getByText("the release window moved to Thursday")).toBeTruthy();
-  expect(screen.getByText(/Read from node-b, the node holding this seat/)).toBeTruthy();
+  expect(screen.getByText(/From node-b\./)).toBeTruthy();
   // THE HEADER IS THE TOTAL, with the page it drew said beside it.
   expect(screen.getByText(/Latest 1 of 60/)).toBeTruthy();
-  expect(screen.getByRole("link", { name: /Agent 03.s whole memory/ }).getAttribute("href")).toBe(
-    "#/agents/seats/agent-3?tab=memory",
-  );
+  expect(
+    screen
+      .getByRole("link", { name: "2 learned skills and 5 colleagues remembered" })
+      .getAttribute("href"),
+  ).toBe("#/agents/seats/agent-3?tab=memory");
 });
 
 test("one agent no node holds says why its diary is not shown", async () => {

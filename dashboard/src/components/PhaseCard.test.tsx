@@ -145,7 +145,7 @@ describe("a settled phase's zero is a number", () => {
     expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
   });
 
-  // THE DASH SURVIVES WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
+  // AN ELLIPSIS MARKS WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
   // running has not reported its usage yet, which is not the same as having
   // spent nothing.
   test("a live phase's zero is still an absence", () => {
@@ -155,10 +155,10 @@ describe("a settled phase's zero is a number", () => {
     expect(container.querySelector('[title="total tokens"]')).toBeNull();
     expect(
       container.querySelector('[title="this phase has not reported its usage yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
     expect(
       container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
   });
 });
 
@@ -323,7 +323,7 @@ describe("the decision chip is drawn in the state it names", () => {
       <PhaseCard record={phase({ phase: "review", decision: "failed" })} />,
     );
     expect(container.querySelector(".crewlet-tag--danger")).not.toBeNull();
-    expect(screen.getByText("failed — the turn will not retry")).not.toBeNull();
+    expect(screen.getByText("failed, no retry")).not.toBeNull();
   });
 
   // AND AN UNEVENTFUL TURN KEEPS THE QUIET PILL, or four status hues are spent
@@ -340,7 +340,7 @@ describe("the decision chip is drawn in the state it names", () => {
 // `roundNum` held the engine's ZERO-BASED `round_num` on a live record and
 // `rounds_used` on a settled one — one name, two quantities — so a live phase
 // whose rounds narrated nothing counted one short, and the opening frame's `-1`
-// never matched the `=== 0` guard the dash above is for, which rendered "0r".
+// never matched the `=== 0` guard the ellipsis above is for, which rendered "0r".
 describe("the tool-round count", () => {
   test("a live phase counts the rounds the engine reported, not the ones that narrated", () => {
     const { container } = render(
@@ -355,7 +355,7 @@ describe("the tool-round count", () => {
     );
     expect(
       container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
   });
 });
 
@@ -483,7 +483,7 @@ describe("a tool call's arguments", () => {
     // put its result into the round's text — so the click is the test's own
     // reader opening it.
     fireEvent.click(screen.getByRole("button", { name: /^read_file/ }));
-    return screen.getByRole("region", { name: "read_file — arguments" }).textContent ?? "";
+    return screen.getByRole("region", { name: "read_file · arguments" }).textContent ?? "";
   }
 
   test("are indented, one key to a line", () => {
@@ -642,7 +642,9 @@ describe("a round that answered in prose", () => {
       />,
     );
     const [first, second] = [...container.querySelectorAll(".round")];
-    expect(first!.querySelector(".round-note")?.textContent).toMatch(/asked it again/);
+    expect(first!.querySelector(".round-note")?.textContent).toBe(
+      "It answered in prose and called no tool. It didn’t submit, so it was asked again.",
+    );
     // Neutral: the loop working is not a caution.
     expect(first!.querySelector(".round-note.caution")).toBeNull();
     // THE CONTROL: a round that called its tool carries no note.
@@ -654,7 +656,7 @@ describe("a round that answered in prose", () => {
     expect(second!.classList.contains("declined")).toBe(false);
   });
 
-  test("as the last round of a settled phase, says the phase ended without its submission", () => {
+  test("as the last round of a settled phase, says the engine filled in the outcome", () => {
     const { container } = render(
       <PhaseCard
         record={phase({
@@ -671,9 +673,9 @@ describe("a round that answered in prose", () => {
       />,
     );
     const note = container.querySelectorAll(".round")[1]!.querySelector(".round-note.caution");
-    expect(note?.textContent).toMatch(/last round/);
-    expect(note?.textContent).toMatch(/without its submission/);
-    expect(note?.textContent).toMatch(/rescued/);
+    expect(note?.textContent?.trim()).toBe(
+      "It answered in prose and called no tool. Last round, so the engine filled in the outcome.",
+    );
   });
 
   test("as the newest round of a running phase, claims neither outcome", () => {
@@ -688,15 +690,15 @@ describe("a round that answered in prose", () => {
       />,
     );
     const note = container.querySelector(".round-note")?.textContent ?? "";
-    expect(note).toMatch(/finishes only by calling a tool/);
-    expect(note).not.toMatch(/asked it again|last round/);
+    expect(note).toBe("It answered in prose and called no tool. It didn’t submit.");
+    expect(note).not.toMatch(/asked again|Last round/);
   });
 
-  test("the rescue chip says the phase ended without its submission, not that it was re-asked", () => {
+  test("the rescue chip says the engine filled in the outcome, not that it was re-asked", () => {
     render(<PhaseCard record={phase({ rescueFired: true, decision: "incomplete" })} />);
     const title = screen.getByText("rescued").closest("[title]")?.getAttribute("title") ?? "";
-    expect(title).toMatch(/ended without its submission/);
-    expect(title).not.toMatch(/re-asked/);
+    expect(title).toBe("No submission, so the engine filled in the outcome");
+    expect(title).not.toMatch(/re-asked|asked again/);
   });
 });
 
@@ -934,7 +936,7 @@ describe("a phase a round did not finish", () => {
       />,
     );
     const [first, second] = [...container.querySelectorAll(".round")];
-    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output cap/);
+    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output limit/);
     expect(second!.classList.contains("errored")).toBe(true);
     // THE CONTROL: a round that finished carries no note and no mark.
     expect(first!.querySelector(".round-note")).toBeNull();
@@ -965,7 +967,7 @@ describe("a phase a round did not finish", () => {
     expect(body).toMatch(/declined this request/);
     expect(body).toMatch(/cyber/);
     expect(body).toMatch(/exploit development/);
-    expect(body).toMatch(/not ask it again|does not ask it again/);
+    expect(body).toMatch(/The phase ended here\./);
     // The refused round said nothing and ran nothing, and it still has its
     // place on the rail — it is the round that explains why the phase ended.
     const rounds = container.querySelectorAll(".round");

@@ -96,9 +96,7 @@ test("a person and a unit are offered no look and added without one", () => {
 
 test("a taken name offers the next free one, with the rule that makes names unique", () => {
   open(keyedState(fixtureCompany()), null);
-  expect(
-    screen.getByText("Seat names are unique: a lead or a manages entry names exactly one seat."),
-  ).toBeDefined();
+  expect(screen.getByText("Seat names must be unique.")).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Dev" } });
   expect(screen.getByText(/A seat named Dev already exists/)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Use Dev 2" }));
@@ -109,11 +107,7 @@ test("a taken name offers the next free one, with the rule that makes names uniq
 test("a unit is added with its type at the company root; its names are checked against units", () => {
   const view = open(keyedState(fixtureCompany()), null, "unit");
   // A lead names a seat, never a unit, so it is no reason a unit's name is unique.
-  expect(
-    screen.getByText(
-      "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText("Unit names must be unique.")).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Sales" } });
   expect(screen.getByRole("button", { name: "Use Sales 2" })).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Legal" } });
@@ -209,9 +203,5 @@ test("a read-only builder adds nothing, and says why the button is unavailable",
   expect(
     (screen.getByRole("button", { name: "Add agent seat" }) as HTMLButtonElement).disabled,
   ).toBe(true);
-  expect(
-    screen.getByText(
-      "The organization cannot be changed right now, so this change cannot be applied.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
 });

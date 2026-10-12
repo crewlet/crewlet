@@ -392,8 +392,8 @@ test("overdue and finished chips are marked differently and both are drawn", () 
 test("the calendar names both of the sets its window leaves out", () => {
   const { container } = calendar([row("a", { due: new Date(2031, 3, 16, 9, 0, 0).toISOString() })]);
   const note = container.querySelector(".work-cal-note")!;
-  expect(note.textContent).toContain("no due date");
-  expect(note.textContent).toContain("outside");
+  expect(note.textContent).toContain("Only work due in this window.");
+  expect(note.textContent).toContain("Undated work is on the list.");
 });
 
 // TWO CELLS, ONE NUMERAL. April 2031 opens on 31 March and closes on 4 May, so
@@ -617,7 +617,9 @@ test("a refused project list is said to be a refusal, not an empty company", asy
     { work_projects: "unavailable" },
   );
   mountWork();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
@@ -745,11 +747,11 @@ test("a company whose every project is archived is not told it has none", async 
   // reader has retired.
   await waitFor(() => expect(screen.getByText("Every project is archived")).toBeTruthy());
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
-  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
   // AND IT GOES TO THEM. The reader's next move is the projects rather than
-  // the scope switch, so the sentence carries the way there.
-  const link = screen.getByRole("link", { name: /See them under Archived/ });
+  // the scope switch, so the sentence is the way there.
+  const link = screen.getByRole("link", { name: "See them under Archived" });
   expect(link.getAttribute("href")).toBe("#/work?shown=archived");
+  expect(link.parentElement?.textContent).toBe("See them under Archived.");
 });
 
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
@@ -1751,7 +1753,7 @@ test("an unfiltered list with nothing open names the scope switch, not the filte
   // MATCHED, so how much finished work sits behind the other segment is not in
   // this answer at all. It names the switch and says nothing about what is
   // behind it, where a project's own counted sentence can say exactly.
-  expect(screen.queryByText(/\d+ items? under Closed/)).toBeNull();
+  expect(screen.queryByText(/\d+ finished items? (is|are) under Closed/)).toBeNull();
   expect(screen.getByText(/Finished work is under Closed/)).toBeTruthy();
 });
 

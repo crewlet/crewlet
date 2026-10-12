@@ -4,12 +4,15 @@
  * # Home
  *
  * The approved Knowledge layout leads with the spaces in one row at the top
- * (`SpacesRow`), then what is worth returning to: the pages a person starred
- * (Pinned), the ones they read last (Continue reading), the ones they follow
- * (Watching), and every save, comment and new page across the company
- * (Recently written). The search sits in the page bar of every Knowledge
- * screen (`KnowledgeSearchBar`); with a phrase in the address this screen is
- * the RANKED ANSWER instead, grouped by space beside a preview of the chosen
+ * (`SpacesRow`), then TILES SIZED BY WHAT EACH IS WORTH, on one screen: the
+ * newest change across the company in the big tile, open to read (the page,
+ * what each save said, the lines the newest save changed and the page's
+ * opening); every other save, comment and new page down the right (Recently
+ * written); and four small tiles, for the pages a person read last (Continue
+ * reading), starred (Pinned) and follows (Watching), and the agents' own two
+ * places. The search sits in the page bar of every Knowledge screen
+ * (`KnowledgeSearchBar`); with a phrase in the address this screen is the
+ * RANKED ANSWER instead, grouped by space beside a preview of the chosen
  * result.
  *
  * # What a search here reads, the native truth
@@ -30,9 +33,10 @@
  * is a fact about every one of them.
  */
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   Document,
@@ -50,34 +54,47 @@ import {
 import {
   ArrowUpRightGlyph,
   BookOpenGlyph,
+  BotGlyph,
   BrainGlyph,
   ClockGlyph,
   ExternalLinkGlyph,
+  EyeGlyph,
+  ListGlyph,
+  PinGlyph,
   PlusGlyph,
   SearchGlyph,
   WandSparklesGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
+import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { collapse, diffLines, firstChanged } from "~/lib/diff.ts";
+import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { useRecents } from "~/lib/recents.ts";
 import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
-import { companyMidnight } from "~/lib/range.ts";
+import { clockIn } from "~/lib/range.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { KnowledgeAnswer, KnowledgeHit, PageChange } from "~/protocol/index.ts";
+import type {
+  KnowledgeAnswer,
+  KnowledgeHit,
+  PageChange,
+  PageDetail,
+  PageStatus,
+} from "~/protocol/index.ts";
 import {
   Face,
   KnowledgeBar,
   NewPageButton,
   PageGlyph,
-  changeWords,
+  changeNote,
   PageTags,
   SpacesRow,
   drawnBy,
@@ -86,16 +103,41 @@ import {
   useSpaces,
   type Who,
 } from "./parts.tsx";
-import { withoutRepeatedTitle } from "./page/body.ts";
+import { byDay, dayOf, foldRuns, leadOf, runPhrase, saveRevisions, type Run } from "./landing.ts";
+import { openingOf, withoutRepeatedTitle } from "./page/body.ts";
+import { DiffPane } from "./page/History.tsx";
 
-/** How often the landing's lists are read again. */
+/** How often the landing's tiles are read again. */
 const LANDING_POLL_MS = 60_000;
 
-/** How many rows a landing list draws: a glance, not a history. */
-const PINNED_MAX = 6;
-const READING_MAX = 4;
-const WATCHING_MAX = 5;
-const WRITTEN_MAX = 8;
+/**
+ * How many changes the landing reads: the newest leads the big tile and the
+ * rest run down Recently written. Twelve fills that tall tile beside the
+ * others at 1440 by 900 under its day headings, a glance rather than a
+ * history; Every change is one press away.
+ */
+const WRITTEN_READ = 12;
+
+/**
+ * How many pages a small tile lists: Continue reading, Pinned and Watching.
+ * Three, so the whole landing fits one screen at 1440 by 900 beside the
+ * newest change. The sidebar's Starred group lists every starred page, and
+ * the palette every page opened lately.
+ */
+const TILE_ROWS = 3;
+
+/**
+ * How much of the newest change the big tile draws: the notes of its saves,
+ * the lines its newest save changed, and the page's first lines. Each is a
+ * preview with the rest one press away (the page, and the save in its
+ * History), so the tile stays on the screen beside the others.
+ */
+const LATEST_NOTES = 3;
+const LATEST_DIFF_LINES = 6;
+const LATEST_OPENING_LINES = 8;
+
+/** The kinds the landing's changes are about: writing, not housekeeping. */
+const WRITTEN_KINDS = "created,saved,renamed,comment";
 
 /** A page id off a starred or recent route, or "" for anything else. */
 function pageOf(path: readonly string[]): string {
@@ -105,6 +147,9 @@ function pageOf(path: readonly string[]): string {
 export function Knowledge() {
   const [q] = useParam("q", "");
   const phrase = q.trim();
+  // NO STAR IN THIS BAR: a page is starred from its own More menu, and the
+  // frame's would offer the workspace the sidebar already lists.
+  useOwnStar();
   return (
     <>
       <KnowledgeBar>
@@ -124,12 +169,13 @@ function KnowledgeLanding() {
   const { spaces, loading } = useSpaces();
   if (probe.data?.available === false) return <Unavailable answer={probe.data} />;
   if (probe.data && probe.data.backend !== "native" && probe.data.backend !== "") {
-    // A VENDOR WIKI: nothing on this node to browse, by design.
+    // A VENDOR WIKI: nothing on this node to browse, by design. Confluence is
+    // the one wiki `knowledge.backend` admits beside the engine's own.
     return (
       <EmptyState
         icon={<SearchGlyph size="xl" />}
         title="Search your wiki from the search box"
-        description={`This company's pages live in ${probe.data.backend}, so there is nothing on this engine to browse. The search reaches the wiki live, as the engine's own account.`}
+        description="Pages live in Confluence. Search reaches them live."
       />
     );
   }
@@ -140,44 +186,356 @@ function KnowledgeLanding() {
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="Nothing has been written down yet"
-          description="A space is created the first time somebody writes into it. Give a unit a space, and its agents have somewhere to file what they learn."
+          description="Give a team a space, and its agents file what they learn there."
         />
       ) : (
-        <div className="knowledge-home-grid">
-          <div className="knowledge-home-column">
-            <Pinned />
-            <RecentlyWritten />
-          </div>
-          <div className="knowledge-home-column">
-            <ContinueReading />
-            <Watching />
-            <ForTheAgents />
-          </div>
-        </div>
+        <Tiles />
       )}
     </div>
   );
 }
 
-/** A landing section: its name, a quiet line saying what it is, and its rows. */
-function LandingSection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string | undefined;
-  children: React.ReactNode;
-}) {
-  const id = `knowledge-${title.toLowerCase().replace(/\W+/g, "-")}`;
+/** What both tiles drawn from the one read of the feed know about that read. */
+interface FeedState {
+  error: QueryErrorCode | null;
+  /** No answer has arrived yet. */
+  loading: boolean;
+}
+
+/**
+ * The landing's tiles, each sized by what it is worth: the newest change open
+ * to read, Recently written down the right, and four small tiles for the pages
+ * a person keeps and the agents' own two places, each one line when empty.
+ *
+ * ONE READ OF THE FEED feeds the first two, so the change the big tile leads
+ * with is never listed again beside it. The grid places each tile by a named
+ * area and the markup keeps the reading order, so a keyboard and a screen
+ * reader meet the tiles in the order a reader scans them, at every width.
+ */
+function Tiles() {
+  const zone = useOrg()?.timezone;
+  const feed = useQuery(
+    "page_activity",
+    { kinds: WRITTEN_KINDS, limit: WRITTEN_READ },
+    { pollMs: LANDING_POLL_MS },
+  );
+  const runs = useMemo(() => foldRuns(feed.data?.changes ?? [], zone), [feed.data, zone]);
+  const lead = leadOf(runs);
+  const rest = useMemo(() => runs.filter((_, i) => i !== lead), [runs, lead]);
+  const state: FeedState = { error: feed.error, loading: feed.loading && !feed.data };
   return (
-    <section className="knowledge-section" aria-labelledby={id}>
-      <h2 className="knowledge-section-title" id={id}>
-        {title}
-        {hint && <span className="knowledge-section-hint">{hint}</span>}
-      </h2>
-      {children}
-    </section>
+    <div className="knowledge-tiles">
+      <Latest run={runs[lead]} state={state} />
+      <RecentlyWritten runs={rest} led={lead >= 0} state={state} />
+      <ContinueReading />
+      <Pinned />
+      <Watching />
+      <ForTheAgents />
+    </div>
+  );
+}
+
+/**
+ * THE NEWEST CHANGE, OPEN TO READ: the page, who changed it and when, what
+ * each save said, the lines the newest save changed and the page's opening.
+ *
+ * ONE PAGE READ, of this page alone, and the revision before the save for its
+ * diff. Every other tile names pages; this is the one that reads what a page
+ * says.
+ */
+function Latest({ run, state }: { run: Run | undefined; state: FeedState }) {
+  const id = run?.[0].page_id ?? "";
+  const page = useQuery("page", { id }, { enabled: id !== "", pollMs: LANDING_POLL_MS });
+  // THIS PAGE'S ANSWER, never the last one: a newer change moves the lead to
+  // another page, and the old page's answer stays on screen until the new
+  // page's arrives.
+  const detail = page.data?.page?.id === id ? page.data : null;
+  return (
+    <Card as="article" padding="lg" className="knowledge-latest" aria-label="Newest change">
+      {state.loading ? (
+        <Skeleton variant="text" rows={6} label="Reading the newest change" />
+      ) : (
+        <QueryState
+          error={state.error}
+          loading={false}
+          empty={
+            run
+              ? undefined
+              : {
+                  title: "Nothing has been written yet",
+                  hint: "New saves, comments and pages appear here.",
+                }
+          }
+        >
+          {run && <LatestChange run={run} detail={detail} />}
+        </QueryState>
+      )}
+    </Card>
+  );
+}
+
+function LatestChange({ run, detail }: { run: Run; detail: PageDetail | null }) {
+  const who = usePeople();
+  const now = useNow();
+  const zone = useOrg()?.timezone;
+  const change = run[0];
+  const by = drawnBy(change.actor, change.actor_seat);
+  return (
+    <>
+      <PageHead
+        id={change.page_id}
+        container={detail?.page.container ?? change.container}
+        folder={detail?.folder}
+        status={detail?.page.status}
+        skill={detail?.skill}
+        onboarding={detail?.onboarding}
+      />
+      <DocumentTitle as="h2">{detail?.page.title ?? change.title}</DocumentTitle>
+      <p className="knowledge-latest-who">
+        <Face handle={by} who={who} />
+        <span>
+          <b>{by ? who(by).name : "The engine"}</b> {runPhrase(run)}
+        </span>
+        <span className="spacer" />
+        <time dateTime={change.at} title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}>
+          {dayOf(change.at, now, zone)} {clockIn(tsKey(change.at), zone)}
+        </time>
+      </p>
+      <LatestNotes run={run} zone={zone} />
+      {detail && <SaveDiff change={change} detail={detail} />}
+      {detail && <Opening detail={detail} />}
+    </>
+  );
+}
+
+/**
+ * What each change of the newest row said, newest first, on the clock its day
+ * is cut on: a save's note, a comment's words. A new page and a rename have
+ * nothing to add here, since the page's own first lines are drawn below.
+ */
+function LatestNotes({ run, zone }: { run: Run; zone: string | undefined }) {
+  const kind = run[0].kind;
+  if (kind !== "saved" && kind !== "comment") return null;
+  const shown = run.slice(0, LATEST_NOTES);
+  const more = run.length - shown.length;
+  return (
+    <>
+      <ol className="knowledge-latest-notes">
+        {shown.map((change) => {
+          const note = changeNote(change);
+          return (
+            <li key={change.id} className="knowledge-latest-note">
+              <time dateTime={change.at} title={fmtDateTime(change.at)}>
+                {clockIn(tsKey(change.at), zone)}
+              </time>
+              {note ? (
+                <span>{kind === "comment" ? `“${note}”` : note}</span>
+              ) : (
+                <span className="knowledge-note">No note</span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {more > 0 && <p className="knowledge-note">{plural(more, "earlier save")} that day</p>}
+    </>
+  );
+}
+
+/**
+ * The lines the newest save changed, drawn as the page's History draws them
+ * and cut to a preview, with the count of the rest and the way to the whole
+ * save. Nothing for a save this node no longer holds the revisions of, or one
+ * that left the body as it was.
+ */
+function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }) {
+  const id = detail.page.id;
+  const revs = useMemo(() => saveRevisions(change, detail.history ?? []), [change, detail.history]);
+  // THE BODY THE SAVE MADE is the page's own while no later save has landed,
+  // and a read of that revision otherwise.
+  const made = useQuery(
+    "page_revision",
+    { page: id, version: revs?.made.version ?? 0 },
+    { enabled: revs !== null && !revs.current },
+  );
+  const before = useQuery(
+    "page_revision",
+    { page: id, version: revs?.before.version ?? 0 },
+    { enabled: revs !== null },
+  );
+  // AN ANSWER FOR THESE VERSIONS, never the last pair's: a newer save to the
+  // same page moves both, and a read keeps its old answer until the new one
+  // lands, so for a moment the two halves of a diff belonged to two saves.
+  const after = revs?.current
+    ? (detail.page.body ?? "")
+    : made.data?.version === revs?.made.version
+      ? made.data?.body
+      : undefined;
+  const prior = before.data?.version === revs?.before.version ? before.data?.body : undefined;
+  const preview = useMemo(
+    () =>
+      after === undefined || prior === undefined
+        ? null
+        : firstChanged(collapse(diffLines(prior, after), 0), LATEST_DIFF_LINES),
+    [prior, after],
+  );
+  if (!revs || !preview || preview.sections.length === 0) return null;
+  return (
+    <>
+      <DiffPane sections={preview.sections} />
+      {preview.more > 0 && (
+        <p className="knowledge-note">
+          {plural(preview.more, "more changed line")} in{" "}
+          <a
+            className="prose-link"
+            href={href(pagePath(id), { version: String(revs.made.version) })}
+          >
+            this save
+          </a>
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The page's opening: what it says before it is opened, its title said once. */
+function Opening({ detail }: { detail: PageDetail }) {
+  const opening = useMemo(
+    () => openingOf(detail.page.body ?? "", detail.page.title, LATEST_OPENING_LINES).trim(),
+    [detail.page.body, detail.page.title],
+  );
+  if (!opening) return null;
+  return (
+    <Document size="sm" measure="none" className="knowledge-latest-opening">
+      {renderMarkdown(opening)}
+    </Document>
+  );
+}
+
+/**
+ * Every save, comment and new page across the company after the one the big
+ * tile leads with, under the COMPANY's days. Each row says its time on the
+ * clock its day is cut on, and the note it carries, never the title again.
+ */
+function RecentlyWritten({ runs, led, state }: { runs: Run[]; led: boolean; state: FeedState }) {
+  const who = usePeople();
+  const now = useNow();
+  const zone = useOrg()?.timezone;
+  const days = useMemo(() => byDay(runs, now, zone), [runs, now, zone]);
+  return (
+    <Tile
+      className="knowledge-written"
+      title="Recently written"
+      icon={<ListGlyph size="sm" />}
+      action={
+        <a className="t-link" href={href(["settings", "audit"], { kind: "knowledge" })}>
+          Every change
+        </a>
+      }
+    >
+      {state.loading ? (
+        <TileBody>
+          <Skeleton variant="text" rows={6} label="Reading what was written" />
+        </TileBody>
+      ) : state.error ? (
+        <TileBody>
+          <QueryState error={state.error} loading={false} />
+        </TileBody>
+      ) : days.length === 0 ? (
+        <TileNote>
+          {led ? "Nothing else has been written yet." : "Nothing has been written yet."}
+        </TileNote>
+      ) : (
+        days.map(({ day, runs: rows }) => (
+          <section key={day} aria-label={day}>
+            <h3 className="knowledge-day">{day}</h3>
+            <TileRows>
+              {rows.map((run) => (
+                <WrittenRow key={run[0].id} run={run} who={who} now={now} zone={zone} />
+              ))}
+            </TileRows>
+          </section>
+        ))
+      )}
+    </Tile>
+  );
+}
+
+/**
+ * One row of Recently written: the page, who did what to it, the note it
+ * carries, and WHEN ON THE COMPANY'S CLOCK, the clock its day heading is cut
+ * on. An age read against the heading above it disagreed with it ("1d ago"
+ * under "Oct 09"); the age is the time's title.
+ */
+function WrittenRow({
+  run,
+  who,
+  now,
+  zone,
+}: {
+  run: Run;
+  who: Who;
+  now: number;
+  zone: string | undefined;
+}) {
+  const change = run[0];
+  const by = drawnBy(change.actor, change.actor_seat);
+  const note = changeNote(change);
+  return (
+    <ListItem
+      // A PURGED PAGE keeps its changes and no title: the record that it
+      // existed, with nowhere to go.
+      href={change.title ? href(pagePath(change.page_id)) : undefined}
+      leading={<Face handle={by} who={who} />}
+      trailing={
+        <time
+          className="knowledge-tile-meta"
+          dateTime={change.at}
+          title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}
+        >
+          {clockIn(tsKey(change.at), zone)}
+        </time>
+      }
+    >
+      <span className="knowledge-tile-text">
+        <span className="truncate">{change.title || "A page that is gone"}</span>
+        <span className="knowledge-tile-meta truncate">
+          {by ? who(by).name : "The engine"} {runPhrase(run)}
+        </span>
+        {note && (
+          <span className="knowledge-written-note clamp">
+            {change.kind === "comment" ? `“${note}”` : note}
+          </span>
+        )}
+      </span>
+    </ListItem>
+  );
+}
+
+/** The pages this browser opened last, from its recents. */
+function ContinueReading() {
+  const recents = useRecents();
+  const reading = useMemo(
+    () => recents.filter((recent) => pageOf(recent.path) !== "").slice(0, TILE_ROWS),
+    [recents],
+  );
+  return (
+    <Tile className="knowledge-reading" title="Continue reading" icon={<ClockGlyph size="sm" />}>
+      {reading.length === 0 ? (
+        <TileNote>The pages you open are listed here.</TileNote>
+      ) : (
+        <TileRows>
+          {reading.map((recent) => (
+            <KeptPage
+              key={pageOf(recent.path)}
+              id={pageOf(recent.path)}
+              label={recent.label}
+              gone="This page is gone"
+            />
+          ))}
+        </TileRows>
+      )}
+    </Tile>
   );
 }
 
@@ -189,233 +547,64 @@ function Pinned() {
       [...stars]
         .filter((star) => pageOf(star.path) !== "")
         .sort((a, b) => b.at - a.at)
-        .slice(0, PINNED_MAX),
+        .slice(0, TILE_ROWS),
     [stars],
   );
   return (
-    <LandingSection title="Pinned" hint="your starred pages">
+    <Tile className="knowledge-pinned" title="Pinned" icon={<PinGlyph size="sm" />}>
       {pinned.length === 0 ? (
-        <p className="knowledge-note">Star a page from its More menu to pin it here.</p>
+        <TileNote>Star a page to pin it here.</TileNote>
       ) : (
-        <ul className="knowledge-pins" role="list">
+        <TileRows>
           {pinned.map((star) => (
-            <li key={pageOf(star.path)}>
-              <PinnedCard id={pageOf(star.path)} label={star.label} />
-            </li>
+            <KeptPage
+              key={pageOf(star.path)}
+              id={pageOf(star.path)}
+              label={star.label}
+              gone="This page is gone: unstar it from the sidebar."
+            />
           ))}
-        </ul>
+        </TileRows>
       )}
-    </LandingSection>
-  );
-}
-
-/** One pinned page: its space, its title, and who last saved it, when. */
-function PinnedCard({ id, label }: { id: string; label: string }) {
-  const who = usePeople();
-  const now = useNow();
-  const page = useQuery("page", { id }, { pollMs: LANDING_POLL_MS });
-  const detail = page.data;
-  const read = detail?.page;
-  const last = detail?.history?.[0];
-  const by = last ? drawnBy(last.author, last.author_seat) : "";
-  return (
-    <Card href={href(pagePath(id))} padding="sm" className="knowledge-pin">
-      <span className="knowledge-pin-head">
-        <PageGlyph folder={detail?.folder} />
-        {read && <KeyChip>{read.container}</KeyChip>}
-        {read && <PageTags status={read.status} onboarding={detail?.onboarding} />}
-      </span>
-      <span className="knowledge-pin-title">{read?.title ?? label}</span>
-      {page.error === "not_found" ? (
-        <span className="knowledge-row-meta">This page is gone: unstar it from the sidebar.</span>
-      ) : (
-        last && (
-          <span className="knowledge-row-meta">
-            {by && <Face handle={by} who={who} />}
-            <span className="truncate">
-              {by ? who(by).name : "The engine"} ·{" "}
-              <time dateTime={last.created_at} title={fmtDateTime(last.created_at)}>
-                {relTime(last.created_at, now)}
-              </time>
-            </span>
-          </span>
-        )
-      )}
-    </Card>
-  );
-}
-
-/** The pages this person opened last, from this browser's recents. */
-function ContinueReading() {
-  const recents = useRecents();
-  const reading = useMemo(
-    () => recents.filter((recent) => pageOf(recent.path) !== "").slice(0, READING_MAX),
-    [recents],
-  );
-  return (
-    <LandingSection title="Continue reading">
-      {reading.length === 0 ? (
-        <p className="knowledge-note">The pages you open are listed here.</p>
-      ) : (
-        <Card padding="none">
-          <List variant="divided">
-            {reading.map((recent) => (
-              <ListItem key={pageOf(recent.path)} href={href(recent.path)} leading={<PageGlyph />}>
-                <span className="truncate">{recent.label}</span>
-              </ListItem>
-            ))}
-          </List>
-        </Card>
-      )}
-    </LandingSection>
+    </Tile>
   );
 }
 
 /** The pages this person follows: they are told when these change. */
 function Watching() {
   const viewer = useViewer();
+  const who = usePeople();
   const now = useNow();
   const watched = useQuery(
     "pages",
-    { watcher: viewer.handle, status: "published,draft", skills: false, limit: WATCHING_MAX },
+    { watcher: viewer.handle, status: "published,draft", skills: false, limit: TILE_ROWS },
     { enabled: viewer.handle !== "", pollMs: LANDING_POLL_MS },
   );
   const rows = watched.data?.pages ?? [];
   return (
-    <LandingSection title="Watching" hint="you are told when these change">
+    <Tile className="knowledge-watching" title="Watching" icon={<EyeGlyph size="sm" />}>
       {viewer.handle === "" ? (
-        <p className="knowledge-note">
-          Pages you follow are listed here once your token is bound to your seat.
-        </p>
-      ) : rows.length === 0 && !watched.loading ? (
-        <p className="knowledge-note">Watch a page with the eye in its bar to follow it.</p>
+        <TileNote>Bind your token to your seat to see pages you follow.</TileNote>
+      ) : watched.error ? (
+        <TileBody>
+          <QueryState error={watched.error} loading={false} />
+        </TileBody>
+      ) : rows.length === 0 ? (
+        !watched.loading && <TileNote>Watch a page to follow it.</TileNote>
       ) : (
-        <Card padding="none">
-          <List variant="divided">
-            {rows.map((page) => (
-              <ListItem
-                key={page.id}
-                href={href(pagePath(page.id))}
-                leading={<PageGlyph folder={page.folder} />}
-                trailing={
-                  <span className="knowledge-row-trail">
-                    <KeyChip>{page.container}</KeyChip>
-                    <time dateTime={page.updated_at} title={fmtDateTime(page.updated_at)}>
-                      {fmtDateCompact(page.updated_at, now)}
-                    </time>
-                  </span>
-                }
-              >
-                <span className="truncate">{page.title}</span>
-              </ListItem>
-            ))}
-          </List>
-        </Card>
-      )}
-    </LandingSection>
-  );
-}
-
-/** The kinds a "recently written" row is about: writing, not housekeeping. */
-const WRITTEN_KINDS = "created,saved,renamed,comment";
-
-/**
- * The COMPANY's day a change fell on, as a heading over its rows: the day the
- * engine counts a day in, so a change at 23:00 company time is under the same
- * day on this screen as on every other.
- */
-function dayOf(at: string, now: number, zone: string | undefined): string {
-  const when = Date.parse(at);
-  const today = companyMidnight(now, zone);
-  if (when >= today) return "Today";
-  if (when >= companyMidnight(today - 1, zone)) return "Yesterday";
-  // NOON OF THE COMPANY'S DAY, drawn as a date: the day's own midnight can
-  // read as the day before in the reader's zone.
-  const noon = companyMidnight(when, zone) + 12 * 3_600_000;
-  return fmtDateCompact(new Date(noon).toISOString(), now);
-}
-
-/** Every save, comment and new page across the company, newest first. */
-function RecentlyWritten() {
-  const who = usePeople();
-  const now = useNow();
-  const zone = useOrg()?.timezone;
-  const feed = useQuery(
-    "page_activity",
-    { kinds: WRITTEN_KINDS, limit: WRITTEN_MAX },
-    { pollMs: LANDING_POLL_MS },
-  );
-  const changes = feed.data?.changes ?? [];
-  const days = useMemo(() => {
-    const out: { day: string; rows: PageChange[] }[] = [];
-    for (const change of changes) {
-      const day = dayOf(change.at, now, zone);
-      const last = out[out.length - 1];
-      if (last && last.day === day) last.rows.push(change);
-      else out.push({ day, rows: [change] });
-    }
-    return out;
-  }, [changes, now, zone]);
-  return (
-    <LandingSection title="Recently written" hint="every save, comment and new page">
-      <QueryState
-        error={feed.error}
-        loading={feed.loading && !feed.data}
-        empty={
-          changes.length
-            ? undefined
-            : {
-                title: "Nothing has been written yet",
-                hint: "Every save, comment and new page is listed here as it lands.",
-              }
-        }
-      >
-        <Card padding="none">
-          {days.map(({ day, rows }) => (
-            <section key={day} aria-label={day}>
-              <h3 className="knowledge-day">{day}</h3>
-              <ol className="knowledge-written-rows">
-                {rows.map((change) => (
-                  <WrittenRow key={change.id} change={change} who={who} now={now} />
-                ))}
-              </ol>
-            </section>
+        <TileRows>
+          {rows.map((page) => (
+            <PageRow
+              key={page.id}
+              id={page.id}
+              folder={page.folder}
+              title={page.title}
+              meta={lastSaved(page.saved_at, drawnBy(page.saved_by, page.saved_by_seat), who, now)}
+            />
           ))}
-          <Card.Footer variant="meta">
-            From each space&rsquo;s change log.{" "}
-            <a className="prose-link" href={href(["settings", "audit"])}>
-              Every change
-            </a>
-          </Card.Footer>
-        </Card>
-      </QueryState>
-    </LandingSection>
-  );
-}
-
-function WrittenRow({ change, who, now }: { change: PageChange; who: Who; now: number }) {
-  const by = drawnBy(change.actor, change.actor_seat);
-  return (
-    <li className="knowledge-written-row">
-      <Face handle={by} who={who} size="sm" />
-      <p className="knowledge-written-text">
-        <b>{by ? who(by).name : "The engine"}</b> {changeWords(change.kind).verb}{" "}
-        {change.title ? (
-          <a className="prose-link" href={href(pagePath(change.page_id))}>
-            {change.title}
-          </a>
-        ) : (
-          <span>a page that is gone</span>
-        )}{" "}
-        {change.container && <KeyChip>{change.container}</KeyChip>}
-        {change.excerpt && (
-          <span className="knowledge-written-note">{plainText(change.excerpt)}</span>
-        )}
-      </p>
-      <time dateTime={change.at} title={fmtDateTime(change.at)}>
-        {relTime(change.at, now)}
-      </time>
-    </li>
+        </TileRows>
+      )}
+    </Tile>
   );
 }
 
@@ -436,37 +625,182 @@ function ForTheAgents() {
     .sort()
     .pop();
   return (
-    <LandingSection title="For the agents">
-      <Card padding="none">
-        <List variant="divided">
-          <ListItem
-            href={href(["knowledge", "skills"])}
-            leading={<WandSparklesGlyph size="sm" />}
-            trailing={
-              typeof skills.data?.total === "number" ? (
-                <span>{plural(skills.data.total, "tool skill")}</span>
-              ) : undefined
-            }
-          >
-            Agent skills
-          </ListItem>
-          <ListItem
-            href={href(["knowledge", "diaries"])}
-            leading={<BrainGlyph size="sm" />}
-            trailing={
-              memory.data ? (
-                <span>
-                  {plural(seats.length, "agent")}
-                  {newest ? ` · newest ${relTime(newest, now)}` : ""}
-                </span>
-              ) : undefined
-            }
-          >
-            Agent diaries
-          </ListItem>
-        </List>
-      </Card>
-    </LandingSection>
+    <Tile className="knowledge-agents" title="For the agents" icon={<BotGlyph size="sm" />}>
+      <TileRows>
+        <ListItem
+          href={href(["knowledge", "skills"])}
+          leading={<WandSparklesGlyph size="sm" />}
+          trailing={
+            typeof skills.data?.total === "number" ? (
+              <span className="knowledge-tile-meta">{plural(skills.data.total, "tool skill")}</span>
+            ) : undefined
+          }
+        >
+          Agent skills
+        </ListItem>
+        <ListItem
+          href={href(["knowledge", "diaries"])}
+          leading={<BrainGlyph size="sm" />}
+          trailing={
+            memory.data ? (
+              <span className="knowledge-tile-meta">
+                {plural(seats.length, "agent")}
+                {newest ? ` · newest ${relTime(newest, now)}` : ""}
+              </span>
+            ) : undefined
+          }
+        >
+          Agent diaries
+        </ListItem>
+      </TileRows>
+    </Tile>
+  );
+}
+
+/**
+ * A small tile: a card named by its own heading, its glyph before the name and
+ * its one link at the end of the head. `className` names its area of the
+ * landing's grid.
+ */
+function Tile({
+  className,
+  title,
+  icon,
+  action,
+  children,
+}: {
+  className: string;
+  title: string;
+  icon: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Card as="section" padding="none" className={className}>
+      <Card.Header divided={false} icon={icon} actions={action}>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
+      {children}
+    </Card>
+  );
+}
+
+/** A tile's rows, set in so each row's glyph sits under the tile's own. */
+function TileRows({ children }: { children: ReactNode }) {
+  return (
+    <div className="knowledge-tile-rows">
+      <List variant="plain">{children}</List>
+    </div>
+  );
+}
+
+/** Anything else a tile holds, at the tile's own inset. */
+function TileBody({ children }: { children: ReactNode }) {
+  return <div className="knowledge-tile-body">{children}</div>;
+}
+
+/** What a tile says when it has nothing to list: one line, so an empty tile costs one. */
+function TileNote({ children }: { children: ReactNode }) {
+  return (
+    <TileBody>
+      <p className="knowledge-note">{children}</p>
+    </TileBody>
+  );
+}
+
+/**
+ * A page somebody keeps: its title as the page holds it now, and who last
+ * saved what it says. READ PER ROW, as a pinned card always was, because a
+ * star and a recent carry only the label the page had when it was kept; a
+ * renamed page is drawn by its new title and a gone one says so.
+ */
+function KeptPage({ id, label, gone }: { id: string; label: string; gone: string }) {
+  const who = usePeople();
+  const now = useNow();
+  const page = useQuery("page", { id }, { pollMs: LANDING_POLL_MS });
+  const detail = page.data?.page ? page.data : null;
+  const last = detail?.history?.[0];
+  return (
+    <PageRow
+      id={id}
+      folder={detail?.folder}
+      title={detail?.page.title ?? label}
+      meta={
+        page.error === "not_found"
+          ? gone
+          : lastSaved(last?.created_at, drawnBy(last?.author, last?.author_seat), who, now)
+      }
+    />
+  );
+}
+
+/** One page in a small tile: its glyph, its title, and one line about it. */
+function PageRow({
+  id,
+  folder,
+  title,
+  meta,
+}: {
+  id: string;
+  folder: boolean | undefined;
+  title: string;
+  meta: string;
+}) {
+  return (
+    <ListItem href={href(pagePath(id))} leading={<PageGlyph folder={folder} />}>
+      <span className="knowledge-tile-text">
+        <span className="truncate">{title}</span>
+        {/* A LINE EITHER WAY, so a row does not grow when its read lands. */}
+        <span className="knowledge-tile-meta truncate">{meta || " "}</span>
+      </span>
+    </ListItem>
+  );
+}
+
+/**
+ * "Last saved 2h ago by Crewlet-SWE": the newest change to what a page says,
+ * or "" where nothing says when. A listing's zero instant is not a save.
+ */
+function lastSaved(at: string | undefined, by: string, who: Who, now: number): string {
+  if (tsKey(at) <= 0) return "";
+  return `Last saved ${relTime(at, now)} by ${by ? who(by).name : "the engine"}`;
+}
+
+/**
+ * A page's head on a card that shows it before it is opened: its glyph, its
+ * space, the words it wears, and the way in. One drawing for the newest
+ * change and a search's preview, so the two show a page alike.
+ */
+function PageHead({
+  id,
+  container,
+  folder,
+  status,
+  skill,
+  onboarding,
+}: {
+  id: string;
+  container: string | undefined;
+  folder: boolean | undefined;
+  status: PageStatus | undefined;
+  skill: boolean | undefined;
+  onboarding: boolean | undefined;
+}) {
+  return (
+    <div className="knowledge-preview-head">
+      <PageGlyph folder={folder} />
+      {container && <KeyChip>{container}</KeyChip>}
+      <PageTags status={status} skill={skill} onboarding={onboarding} />
+      <span className="spacer" />
+      <ButtonLink
+        size="small"
+        variant="secondary"
+        leadingIcon={<ArrowUpRightGlyph size="sm" />}
+        href={href(pagePath(id))}
+      >
+        Open page
+      </ButtonLink>
+    </div>
   );
 }
 
@@ -482,34 +816,28 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
       variant={building ? "warning" : "neutral"}
       icon={building ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
     >
-      <span>
-        Search cannot run here: {answer.note || "the engine gave no reason"}.
-        {answer.reason === "no_backend" && (
-          <>
-            {" "}
-            Set <code className="inline">knowledge.backend</code> to{" "}
-            <code className="inline">native</code> to use the engine&rsquo;s own knowledge base, or
-            to <code className="inline">confluence</code> alongside an{" "}
-            <code className="inline">integrations.confluence</code> block.
-          </>
-        )}
-        {answer.reason === "no_scope" && (
-          <>
-            {" "}
-            The backend itself is fine. Add the spaces to search to{" "}
-            <code className="inline">knowledge.scope</code>.
-          </>
-        )}
-        {/* NOT A MISCONFIGURATION: this node joined recently and is still
-            indexing what it holds. Nothing is lost and nothing needs fixing. */}
-        {building && (
-          <>
-            {" "}
-            Nothing is wrong: this node joined recently and is still indexing. Pages that exist are
-            not findable from here yet; try again in a moment.
-          </>
-        )}
-      </span>
+      {/* NOT A MISCONFIGURATION: this node joined recently and is still
+          indexing what it holds. Nothing is lost and nothing needs fixing. */}
+      {building ? (
+        <span>Still indexing. Try again shortly.</span>
+      ) : (
+        <span>
+          Search can&rsquo;t run: {answer.note || "the engine gave no reason"}.
+          {answer.reason === "no_backend" && (
+            <>
+              {" "}
+              Set <code className="inline">knowledge.backend</code> to{" "}
+              <code className="inline">native</code> or <code className="inline">confluence</code>.
+            </>
+          )}
+          {answer.reason === "no_scope" && (
+            <>
+              {" "}
+              Add spaces to <code className="inline">knowledge.scope</code>.
+            </>
+          )}
+        </span>
+      )}
     </Callout>
   );
 }
@@ -567,7 +895,6 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
   useEffect(() => setChosen(0), [phrase, mode, space, grouping]);
   const selected = order[Math.min(chosen, Math.max(0, order.length - 1))]?.hit ?? null;
   const terms = useMemo(() => highlightTerms(phrase), [phrase]);
-  const nav = useNavigator();
 
   if (search.tooLong) return <Callout variant="warning">{search.tooLong}</Callout>;
   if (data?.available === false) return <Unavailable answer={data} />;
@@ -678,9 +1005,9 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
                 title={`Nothing matched “${phrase}”`}
                 description={
                   space
-                    ? "Nothing in this space was among the results. Remove the filter to see the rest."
+                    ? "Remove the space filter to see the rest."
                     : native
-                      ? `Ranked by ${modeLabel(data?.served_mode ?? "")} over this node's copy of the pages. Another mode may find what these words did not.`
+                      ? "Try another search mode."
                       : "This is the wiki's own answer, taken just now."
                 }
               />
@@ -711,19 +1038,12 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
               ))
             )}
             <p className="knowledge-results-foot">
-              <kbd>j</kbd> <kbd>k</kbd> move, <kbd>Enter</kbd> opens.{" "}
-              {native
-                ? "Searched on this node's own copy of the pages, the same search an agent runs."
-                : "Searched live on the wiki at query time, as the engine's own account."}
+              <kbd>j</kbd> <kbd>k</kbd> move, <kbd>Enter</kbd> opens.
             </p>
           </section>
           <section className="knowledge-results-preview" aria-label="Preview">
             {selected ? (
-              <ResultPreview
-                hit={selected}
-                terms={terms}
-                onOpen={() => nav.to(pagePath(selected.id))}
-              />
+              <ResultPreview hit={selected} terms={terms} />
             ) : (
               <p className="knowledge-note">Choose a result to read it here.</p>
             )}
@@ -796,15 +1116,7 @@ function ResultRow({
 }
 
 /** The chosen result: what it is, and the page's opening with the search marked. */
-function ResultPreview({
-  hit,
-  terms,
-  onOpen,
-}: {
-  hit: KnowledgeHit;
-  terms: readonly string[];
-  onOpen: () => void;
-}) {
+function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly string[] }) {
   const who = usePeople();
   const now = useNow();
   const page = useQuery("page", { id: hit.id }, { enabled: !hit.url });
@@ -813,9 +1125,8 @@ function ResultPreview({
   if (hit.url) {
     return (
       <Callout variant="neutral" icon={<ExternalLinkGlyph size="md" />}>
-        This result lives in the wiki.{" "}
         <a className="prose-link" href={hit.url} target="_blank" rel="noreferrer">
-          Open it there
+          Open this result in the wiki
         </a>
         .
       </Callout>
@@ -829,20 +1140,14 @@ function ResultPreview({
   const body = withoutRepeatedTitle(detail.page.body ?? "", detail.page.title);
   return (
     <article className="knowledge-preview" aria-label={detail.page.title}>
-      <div className="knowledge-preview-head">
-        <PageGlyph folder={detail.folder} />
-        <KeyChip>{detail.page.container}</KeyChip>
-        <PageTags status={detail.page.status} skill={detail.skill} onboarding={detail.onboarding} />
-        <span className="spacer" />
-        <Button
-          size="small"
-          variant="secondary"
-          leadingIcon={<ArrowUpRightGlyph size="sm" />}
-          onClick={onOpen}
-        >
-          Open page
-        </Button>
-      </div>
+      <PageHead
+        id={detail.page.id}
+        container={detail.page.container}
+        folder={detail.folder}
+        status={detail.page.status}
+        skill={detail.skill}
+        onboarding={detail.onboarding}
+      />
       <DocumentTitle as="h2">{detail.page.title}</DocumentTitle>
       <dl className="knowledge-facts">
         <div>

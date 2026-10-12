@@ -228,14 +228,11 @@ test("a source whose page stops inside the window says so", async () => {
     },
   });
   mount();
-  await waitFor(() =>
-    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
-  // nobody can act on; "Knowledge answered one page" says where to look.
-  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
-    "Knowledge",
-  );
+  // nobody can act on; "Knowledge shows only its newest rows" says where to
+  // look.
+  expect(screen.getByText(/newest rows/).textContent).toBe("Knowledge shows only its newest rows.");
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -485,17 +482,48 @@ test("a windowed source whose page filled says so", async () => {
     },
   });
   mount();
-  await waitFor(() =>
-    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
-  );
-  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
-    "Runtime",
-  );
-  // A NOTICE OF ITS OWN, never the card header's one line, which cut the
-  // sentence before "not all of them" at every width.
-  const note = screen.getByText(/does not reach the start of this window/);
-  expect(note.textContent).toMatch(/not all of them\.$/);
+  await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
+  // A NOTICE OF ITS OWN, never the card header's one line, which cut an
+  // earlier sentence short at every width.
+  const note = screen.getByText(/newest rows/);
+  expect(note.textContent).toBe("Runtime shows only its newest rows.");
   expect(note.closest(".crewlet-card")).toBeNull();
+});
+
+// EVERY SOURCE THAT FILLED IS NAMED, in one notice. The two smallest pages
+// (the wiki's 100 and the configuration's 50) keep the grid this case draws
+// small.
+test("two sources whose pages filled are named together", async () => {
+  serving({
+    page_activity: {
+      changes: Array.from({ length: 100 }, (_, i) => ({
+        id: `p-${i}`,
+        page_id: "pg-1",
+        kind: "saved",
+        actor: "ada",
+        actor_kind: "human",
+        at: RECENTLY,
+        log_seq: 100 - i,
+        title: "Deploy runbook",
+        container: "ENG",
+        excerpt: `edit ${i}`,
+      })),
+      complete: true,
+    },
+    config_audit: Array.from({ length: 50 }, (_, i) => ({
+      revision_id: `rev-${i}`,
+      summary: `revision ${i}`,
+      source: "api",
+      created_by: "founder",
+      created_by_kind: "operator",
+      created_at: RECENTLY,
+    })),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
+  expect(screen.getByText(/newest rows/).textContent).toBe(
+    "Knowledge and Configuration show only their newest rows.",
+  );
 });
 
 // AN EMPTY "TO" SAYS WHY, IN THE ROW'S OWN TERMS. "Not recorded" is the

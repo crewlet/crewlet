@@ -260,7 +260,7 @@ test("the custom window opens on the company days a named range covers", async (
         ),
     );
     await settle();
-    fireEvent.click(screen.getByTitle("Name two company days of your own"));
+    fireEvent.click(screen.getByTitle("Pick two dates"));
     expect((screen.getByLabelText("First day") as HTMLInputElement).value).toBe("2026-08-31");
     expect((screen.getByLabelText("Last day") as HTMLInputElement).value).toBe("2026-09-29");
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -283,7 +283,7 @@ test("a window the engine refuses shows the engine's own sentence and no figures
   });
   await settle();
   expect(screen.getByText(new RegExp("is 91 days, and a spend window is at most 90"))).toBeTruthy();
-  expect(screen.queryByText(/screen&rsquo;s bug|screen's bug/)).toBeNull();
+  expect(screen.queryByText("The engine refused this request.")).toBeNull();
   expect(screen.queryByText(/Tokens · /)).toBeNull();
 });
 
@@ -332,7 +332,7 @@ test("the monthly budget is drawn in the engine's state, with its reset", async 
   const meter = screen.getByRole("meter", { name: "This month" });
   expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct 1/);
   expect(screen.getByText(/70M of 80M · resets Oct 1/)).toBeTruthy();
-  expect(screen.getByText(/Refusing charges/)).toBeTruthy();
+  expect(screen.getByText("Full until Oct 1.")).toBeTruthy();
 });
 
 const UNCAPPED = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
@@ -572,6 +572,41 @@ test("by model names the top seats and keeps the count of the rest apart", async
   expect(more.previousElementSibling!.textContent).toBe("CEO, SWE");
 });
 
+// THE CHART TAKES ITS ROW'S HEIGHT. Drawn at a fixed 12rem beside a taller
+// hero, the plot stopped short and the split control stood 34 to 68px under
+// the dates. The kit's chart is asked to fill its card instead: the head and
+// the dates keep their heights, the plot's row takes the rest, and the plot
+// is never shorter than the 12rem it was drawn at. jsdom lays nothing out, so
+// what is held is what the chart was asked to draw.
+test("the daily chart fills its card, and its plot is never under 12rem", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(100),
+    token_series: {
+      ...series(100),
+      series: [
+        {
+          ...bucket(100),
+          at: "2026-09-01T00:00:00Z",
+          window: "2026-09-01",
+          days: 1,
+          groups: { execute: bucket(100) },
+          other: bucket(0),
+        },
+      ],
+    },
+    viewer: VIEWER,
+  });
+  await settle();
+  const figure = document.querySelector<HTMLElement>(".spend-chart > .crewlet-stacked-columns")!;
+  expect(figure.classList.contains("crewlet-stacked-columns--fill")).toBe(true);
+  expect(figure.style.gridTemplateRows).toBe("auto minmax(12rem, 1fr) auto");
+  const plot = figure.querySelector<HTMLElement>(".crewlet-stacked-columns__plot")!;
+  expect(plot.style.height).toBe("100%");
+  // The split control follows the figure in the same column, so it stands
+  // right under the dates once the plot has taken the spare height.
+  expect(figure.nextElementSibling?.classList.contains("spend-chart-foot")).toBe(true);
+});
+
 // THE FOUR PHASE BANDS ARE ALWAYS THE LEGEND. The engine answers all four by
 // phase, a band the window never spent in at zero, and the chart keeps it: the
 // sentence under the title names review, workers and auxiliary, and a legend
@@ -671,7 +706,7 @@ test("recent turns link to the turn list by tokens, over the same window where i
   await settle();
   const link = screen.getByRole("link", { name: "Recent turns by tokens →" });
   expect(link.getAttribute("href")).toBe("#/live/turns?sort=-tokens&window=30d");
-  expect(screen.getByText(/the last 30 days — the turn list keeps no older/)).toBeTruthy();
+  expect(screen.getByText("the last 30 days")).toBeTruthy();
 });
 
 // A REFUSED WINDOW HAS NO LIST TO WAIT FOR. The list's question starts where
@@ -745,7 +780,9 @@ test("people are their own rows, and say they take no turns", async () => {
   const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
   expect(within(grid).getByText(/maya/i)).toBeTruthy();
   expect(within(grid).getByText(/ana/i)).toBeTruthy();
-  expect(within(grid).getAllByLabelText(/A person takes no turns/).length).toBeGreaterThan(0);
+  expect(
+    within(grid).getAllByLabelText(/Auxiliary model spend for this person/).length,
+  ).toBeGreaterThan(0);
 });
 
 // THE AUXILIARY MODEL'S SPEND IS NAMED FOR WHAT IT WAS FOR, in the words the
@@ -767,4 +804,105 @@ test("the auxiliary card names each purpose and its provider calls", async () =>
   expect(within(card).getByText("7 calls")).toBeTruthy();
   expect(within(card).getByText("memory filter")).toBeTruthy();
   expect(screen.queryByText("Background workers")).toBeNull();
+});
+
+// WHO SPENT IT, THEN WHAT ON. The seats' table shares its row with the model
+// and team lists, stacked in the narrow track where every ranked list stands,
+// and the tasks share theirs with the auxiliary model: a team list in the wide
+// track ran its bar a thousand pixels from the team's name.
+test("the ranked lists stand in the narrow track, beside the seats and the tasks", async () => {
+  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1_000), viewer: VIEWER });
+  await settle();
+  const card = (title: string) =>
+    screen.getByRole("heading", { name: title }).closest(".spend-card") as HTMLElement;
+  const row = (title: string) => card(title).closest(".spend-pair");
+  expect(card("By model").parentElement!.className).toBe("spend-side");
+  expect(card("By team").parentElement!.className).toBe("spend-side");
+  expect(row("By model")).toBe(row("By agent"));
+  expect(row("Auxiliary model")).toBe(row("Most expensive tasks"));
+  expect(row("Auxiliary model")).not.toBe(row("By agent"));
+  // The wide card leads its row: first in the track, and first to be read.
+  expect(row("By agent")!.firstElementChild).toBe(card("By agent"));
+  expect(row("Most expensive tasks")!.firstElementChild).toBe(card("Most expensive tasks"));
+});
+
+// ONE LABEL COLUMN FOR THE THREE RANKED LISTS. They stand in one track, and By
+// model's half-row words beside the others' 128px drew two bar columns down
+// the page, 37px apart at 1280 and 115px at 1920 (`.spend-bars`, screens.css).
+test("every ranked list takes the one label width, so the bars start at one x", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000, {
+      by_provider: [
+        {
+          ...bucket(1_000),
+          provider_key: "default",
+          models: ["claude-sonnet"],
+          seats: ["swe"],
+          seats_total: 1,
+        },
+      ],
+      by_worker: [{ worker: "memory_filter", ...bucket(200, { calls: 1 }) }],
+    }),
+    token_series: (p: Record<string, unknown>) =>
+      p.group === "unit"
+        ? {
+            ...series(1_000),
+            group: "unit",
+            by_group: [
+              { ...bucket(1_000), group: "Engineering", seats: 2, other: false, folded: 0 },
+            ],
+          }
+        : series(1_000),
+    viewer: VIEWER,
+  });
+  await settle();
+  for (const title of ["By model", "By team", "Auxiliary model"]) {
+    const card = screen.getByRole("heading", { name: title }).closest(".spend-card")!;
+    expect(card.querySelector("ul")?.classList.contains("spend-bars"), title).toBe(true);
+  }
+});
+
+// THE TILES' ROW HOLDS ONLY THE TILES THAT SPEAK, and with neither it is empty,
+// which the sheet takes out of the hero (`.spend-tiles:empty`): drawn, an
+// empty row added a gap under the budget at the hero's foot.
+test("the hero's tiles row holds only the tiles that have something to say", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000),
+    work_items: new QueryError("unknown_query"),
+    viewer: VIEWER,
+  });
+  await settle();
+  // No cache was reported and the tracker is not the engine's: neither tile.
+  expect(document.querySelector(".spend-tiles")!.childNodes).toHaveLength(0);
+  cleanup();
+
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000),
+    work_items: (p: Record<string, unknown>) =>
+      items([], {
+        totals: p.totals
+          ? [
+              { key: "spend_tokens:median", column: "spend_tokens", op: "median", value: 96_000 },
+              { key: "spend_tokens:count", column: "spend_tokens", op: "count", value: 14 },
+            ]
+          : [],
+      }),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(document.querySelectorAll(".spend-tiles > .spend-tile")).toHaveLength(1);
+});
+
+// AN EMPTY CARD SAYS SO AT THE CAPTION STEP, as every ranked list's empty
+// sentence does: the task card's was set at the body size, one step larger
+// than its neighbours' on the same row.
+test("the empty task card says so at the caption step", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1),
+    work_items: items([]),
+    viewer: VIEWER,
+  });
+  await settle();
+  const line = screen.getByText("No task last changed in this window has spent tokens yet.");
+  expect(line.classList.contains("spend-caption")).toBe(true);
 });

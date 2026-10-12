@@ -693,8 +693,7 @@ function auditSummary(parts: {
     parts.edited.map((r) => r.ref),
   );
   if (!template && parts.charter.length > 0) phrases.push("edited the charter");
-  if (phrases.length === 0)
-    return "Saved from the organization builder with no changes to the chart";
+  if (phrases.length === 0) return "Saved with no chart changes";
   const sentence = phrases.join(", ");
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }

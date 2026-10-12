@@ -122,7 +122,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
     target: { value: "node-4" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(screen.getByText(/Durable on every log/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Recorded on every log/)).toBeTruthy());
   // THE REPORT IS ASKED AGAIN AT ONCE, rather than at the next poll.
   expect(refetch).toHaveBeenCalled();
 
@@ -130,7 +130,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   // NOT "Evict…" — which would start a second gesture over the logs this one
   // already holds.
   fireEvent.click(screen.getByRole("button", { name: "Eviction sent…" }));
-  expect(screen.getByText(/Durable on every log/)).toBeTruthy();
+  expect(screen.getByText(/Recorded on every log/)).toBeTruthy();
   expect(screen.queryByLabelText("Type node-4 to confirm")).toBeNull();
   expect(sent.length).toBe(1);
   fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
@@ -284,8 +284,10 @@ test("a log whose evictions could not be read says so above the node block", () 
       <RetentionPanels />
     </Router>,
   );
-  expect(screen.getByText(/an eviction may be hidden rather than absent/)).toBeTruthy();
-  expect(screen.getAllByText(/could not read/).length).toBe(1);
+  expect(screen.getByText(/evicted nodes may not show/).textContent).toBe(
+    "Couldn’t read pages’s evictions, so evicted nodes may not show.",
+  );
+  expect(screen.getAllByText(/evicted nodes may not show/).length).toBe(1);
 });
 
 test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {

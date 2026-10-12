@@ -150,7 +150,7 @@ export function SeatPeek({ handle }: { handle: string }) {
         size="compact"
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
-        description="Seats are addressed by handle. A company revision may have renamed or removed this one."
+        description="It may have been renamed or removed."
       />
     );
   }
@@ -239,16 +239,11 @@ function SeatPeekBody({
             Watch live
           </a>
         )}
-        {human && (
-          <span className="seat-peek-facts">
-            The engine never runs a human seat, so there is no turn, model or token budget here.
-          </span>
-        )}
       </section>
 
       {agent?.last_error && (
         <Callout variant="danger">
-          <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
         </Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
@@ -274,7 +269,7 @@ function SeatPeekBody({
               {seat.manager.name}
             </a>
           ) : (
-            "Nobody — the top of the chart"
+            "Nobody, top of the chart"
           )}
         </dd>
 
@@ -311,8 +306,8 @@ function SeatPeekBody({
                   {/* THE COMPANY'S CEILINGS BIND EVERY SEAT, so a seat with
                       none of its own is capped by those where there are any. */}
                   {companyCeilings(org?.token_budget)
-                    ? `No seat budget — ${companyCeilings(org?.token_budget)}`
-                    : "No budget — nothing caps this seat's tokens"}
+                    ? `No seat budget; ${companyCeilings(org?.token_budget)}`
+                    : "No budget"}
                 </dd>
               </>
             )}

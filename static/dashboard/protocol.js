@@ -140,6 +140,8 @@ function emptyState() {
 		budget: null,
 		schedules: null,
 		connected: false,
+		lostAt: null,
+		everConnected: false,
 		authRejected: false
 	};
 }
@@ -351,13 +353,25 @@ var Store = class {
 	}
 	applyHealth(health) {
 		this.state.health = health ?? null;
-		this.state.connected = !!health;
+		this.link(!!health);
 		this.emit("health");
 	}
 	setConnected(value) {
-		this.state.connected = value;
+		this.link(value);
 		if (!value) this.state.health = null;
 		this.emit("health");
+	}
+	/**
+	* The transport's state, and the two facts about its history the frame
+	* reads (`lostAt`, `everConnected`), written in ONE place so a health frame
+	* and the socket's own open and close cannot disagree about them.
+	*/
+	link(connected) {
+		this.state.connected = connected;
+		if (connected) {
+			this.state.everConnected = true;
+			this.state.lostAt = null;
+		} else if (this.state.lostAt === null) this.state.lostAt = Date.now();
 	}
 	setAuthRejected(value) {
 		const next = !!value;
@@ -1238,7 +1252,7 @@ async function request(method, path, options = {}) {
 	} catch {
 		throw new RestError(response.ok ? 502 : response.status, {
 			error: "unreadable_body",
-			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`
+			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back without the engine's JSON, so something in front of it answered`
 		}, response.ok ? null : response.headers.get("Retry-After"));
 	}
 	if (!response.ok && response.status !== 304) {
@@ -1752,7 +1766,7 @@ var ACTIONS = {
 var ACT_ERRORS = {
 	invalid_token: "The engine refused your API token. Set it again to make changes.",
 	unbound: "This token is not bound to a person, so there is nobody to record the change under.",
-	unknown_tool: "This engine does not make that change. It may be running a different version from this page — reload.",
+	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
 	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
 	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
 	invalid_request_id: "The dashboard sent the change without a usable request id.",

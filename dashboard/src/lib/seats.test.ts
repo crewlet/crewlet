@@ -932,7 +932,7 @@ test("a call whose first round has not come back is on round one", () => {
   expect(roundOf(opening)).toBe(1);
   expect(roundLabel(opening)).toEqual({
     text: "round 1",
-    hint: "the first model round is in flight and has not come back",
+    hint: "First round in progress",
   });
   expect(roundOf(null)).toBe(0);
 });

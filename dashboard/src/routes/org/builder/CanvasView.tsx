@@ -418,7 +418,7 @@ function ReportingChart({
       <EmptyState
         icon={<NetworkGlyph />}
         title="Reporting lines appear after the check"
-        description="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
+        description="The check runs as you edit."
       />
     );
   }
@@ -427,7 +427,7 @@ function ReportingChart({
       <EmptyState
         icon={<NetworkGlyph />}
         title="No seats to report on"
-        description="Who reports to whom is drawn here once the organization has a seat."
+        description="Add a seat to see reporting lines."
       />
     );
   }
@@ -440,12 +440,7 @@ function ReportingChart({
       overlay={
         // Over the canvas rather than above it: a note that came and went
         // with every check would resize the viewport under the operator.
-        stale && (
-          <p className="bchart-note">
-            These reporting lines are from the last check. Changes made since then appear after the
-            next one.
-          </p>
-        )
+        stale && <p className="bchart-note">From the last check.</p>
       }
       nodes={chart.tree}
       cards={cards}
@@ -805,8 +800,7 @@ function ReportingCard({
 }
 
 function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number }) {
-  const note =
-    "These seats manage each other in a loop, so none of them has a top. Each loop is drawn from its first seat in the engine's order.";
+  const note = "These seats manage each other in a loop.";
   return (
     <>
       <div {...card.item(CYCLE_GROUP)} title={note}>

@@ -42,7 +42,6 @@ import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -92,22 +91,22 @@ export const BINDING_WORDS: Record<
   bound: {
     label: "Acts as themself",
     tone: "success",
-    hint: "Their token is accepted and bound to this seat: what they change from the dashboard is recorded under their name.",
+    hint: "Changes they make are recorded under their name.",
   },
   unbound: {
     label: "Not bound",
     tone: "neutral",
-    hint: "The seat names no API token. Agents still reach them on the surfaces listed; they do not act through this engine as themself.",
+    hint: "No token is bound, so they can’t make changes here.",
   },
   unresolved: {
     label: "Variable unset",
     tone: "warning",
-    hint: "contact.crewlet_operator_id is a ${VAR} this engine's environment does not set, so it binds no token. Set the variable, or write the label.",
+    hint: "Its token variable isn’t set. Set it, or write the label directly.",
   },
   no_token: {
     label: "No such token",
     tone: "warning",
-    hint: "contact.crewlet_operator_id names a label api.auth.tokens does not carry, so every press they make is refused. Correct the label on either side.",
+    hint: "The label matches no token. Fix it on either side.",
   },
 };
 
@@ -115,11 +114,11 @@ export const BINDING_WORDS: Record<
 export const SCOPE_WORDS: Record<TokenScope, { label: string; hint: string }> = {
   person: {
     label: "Person",
-    hint: "Every guarded read and write, and acting from the dashboard as the person it is bound to.",
+    hint: "Reads, writes, and acting as its person",
   },
   operator: {
     label: "Operator",
-    hint: "Every guarded read and write, /config, /secrets and the operator MCP surface, under its own label. It cannot act from the dashboard: that needs a token bound to a person.",
+    hint: "Full access, including configuration and secrets. Can’t act as a person.",
   },
 };
 
@@ -143,10 +142,6 @@ export function PeopleAndAccess() {
           Edit people in org →
         </a>
       </PageActions>
-      <PageNote>
-        The people in the chart, where agents reach them, and the API tokens that reach the company
-        through this engine. Labels and bindings — this screen never holds a token&rsquo;s value.
-      </PageNote>
 
       {error && !data && <QueryState error={error} loading={false} />}
 
@@ -155,9 +150,8 @@ export function PeopleAndAccess() {
           <TierACallout auth={data.auth} />
           {data.auth.disabled && (
             <Callout variant="danger" role="alert">
-              <InlineCode>api.auth.disabled</InlineCode> is on: every caller is{" "}
-              <InlineCode>anonymous</InlineCode>, every route serves without a token, and nobody can
-              act from the dashboard as a person. It is a local-development switch.
+              <InlineCode>api.auth.disabled</InlineCode> is on: no token is needed and nobody can
+              act as a person. For local development only.
             </Callout>
           )}
 
@@ -194,10 +188,7 @@ export function PeopleAndAccess() {
             </Card.Header>
             {people.length === 0 ? (
               <div style={{ padding: "var(--spacing-4)" }}>
-                <p className="t-body muted">
-                  The chart has no human seats. Add one with <InlineCode>kind: human</InlineCode>{" "}
-                  and a contact in the org builder.
-                </p>
+                <p className="t-body muted">No people in the chart yet. Add one in Edit org.</p>
               </div>
             ) : (
               <DataGrid<AccessPerson>
@@ -263,9 +254,14 @@ export function PeopleAndAccess() {
             {tokens.length === 0 ? (
               <div style={{ padding: "var(--spacing-4)" }}>
                 <p className="t-body muted">
-                  {data.auth.disabled
-                    ? "The guard is disabled, so it accepts no token at all."
-                    : "No token is configured: every write, and all of /config and /secrets, is refused until one is added under api.auth.tokens."}
+                  {data.auth.disabled ? (
+                    "The guard is disabled, so it accepts no token at all."
+                  ) : (
+                    <>
+                      No tokens configured. Add one under <InlineCode>api.auth.tokens</InlineCode>{" "}
+                      to allow changes.
+                    </>
+                  )}
                 </p>
               </div>
             ) : (
@@ -319,8 +315,8 @@ export function PeopleAndAccess() {
 /**
  * Where tokens are declared, and the read posture beside them.
  *
- * THE KEY, NOT THE TONE'S OWN INFO MARK, as Secrets' strip does: this is about
- * where a credential lives and who can hold one.
+ * THE KEY, NOT THE TONE'S OWN INFO MARK: this is about where a credential
+ * lives and who can hold one.
  *
  * WHO MAY CHANGE THE COMPANY is part of that posture (ADR-0030): a managed
  * document names its writers in Tier A beside the tokens, and this is the
@@ -335,32 +331,30 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
     <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
       <span className="col" style={{ gap: 4 }}>
         <span>
-          API tokens are declared in Tier A under <InlineCode>api.auth.tokens</InlineCode> — the
-          operator&rsquo;s bootstrap file, changed by a restart, never from here. Each has an{" "}
-          <InlineCode>id</InlineCode>, recorded as the author of what it writes, and a value this
-          page never sees. A person acts as themself when their seat names that id in{" "}
-          <InlineCode>contact.crewlet_operator_id</InlineCode>.
+          Tokens are set in <InlineCode>api.auth.tokens</InlineCode> in the bootstrap file.
         </span>
         <span className="t-caption">
-          {auth.anonymous_read
-            ? "Reads outside /config, /secrets and /setup are open without a token (allow_anonymous_read)."
-            : "Every read needs a token (allow_anonymous_read is off)."}{" "}
+          {auth.anonymous_read ? (
+            <>
+              Most reads are open without a token (<InlineCode>allow_anonymous_read</InlineCode>).
+            </>
+          ) : (
+            "Every read needs a token (allow_anonymous_read is off)."
+          )}{" "}
           {origins.length
             ? `Browsers may also call from ${origins.join(", ")}.`
             : "Browsers may call from this origin only."}
         </span>
         {writers.length > 0 && (
           <span className="t-caption">
-            The company document is managed: only{" "}
-            {writers.length === 1 ? "the token" : "the tokens"}{" "}
+            Only{" "}
             {writers.map((id, i) => (
               <span key={id}>
                 {i > 0 && ", "}
                 <InlineCode>{id}</InlineCode>
               </span>
             ))}{" "}
-            may change it (<InlineCode>api.auth.company_writers</InlineCode>); every other token
-            reads it, and can still rotate a credential it names.
+            can change the company document.
           </span>
         )}
       </span>
@@ -384,7 +378,7 @@ function Contacts({ contacts }: { contacts: AccessContact[] }) {
             title={
               c.resolves
                 ? `${c.key}: ${c.value}`
-                : `${c.key}: ${c.value} is not set in the engine's environment, so agents cannot reach them here`
+                : `${c.value} isn’t set, so agents can’t reach them here`
             }
           >
             {surface} <span className="mono">{c.value}</span>
@@ -407,6 +401,6 @@ function Binding({ binding }: { binding: AccessBinding }) {
 
 /** The person a token acts as, or the plain fact that it acts as nobody. */
 function ActsAs({ seat }: { seat: AccessSeat | null }) {
-  if (!seat) return <EmptyValue label="Nobody — writes under its own label" />;
+  if (!seat) return <EmptyValue label="Nobody, writes as itself" />;
   return <SeatCell handle={seat.handle} name={seat.name} kind="human" />;
 }

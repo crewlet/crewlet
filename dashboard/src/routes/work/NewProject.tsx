@@ -36,7 +36,6 @@ import {
   Text,
   type SelectOption,
 } from "@crewlethq/ui";
-import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { KEY_SHAPE } from "~/app/routes.ts";
 import { documentUnits } from "~/lib/seats.ts";
@@ -214,14 +213,9 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <Text as="p" tone="secondary">
-        A project belongs to a team or a seat in the org. Give one a tracker project key in Edit
-        org, and the engine creates the project when the change is saved. The project takes its
-        owner’s name.
-      </Text>
       {config.error ? (
         <Text as="p" role="alert">
-          The org could not be read, so there is no owner to offer. Close this and try again.
+          Couldn’t load the org. Close this and try again.
         </Text>
       ) : (
         <>
@@ -268,10 +262,6 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
           </div>
         </>
       )}
-      <Text as="p" variant="caption" className="row gap-2">
-        <KeyGlyph size="xs" aria-hidden="true" />
-        Saving in Edit org needs an operator credential. This browser holds one.
-      </Text>
     </Modal>
   );
 }

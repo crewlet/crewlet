@@ -68,7 +68,7 @@ import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
-import { HealthCard, healthReading } from "./HealthCard.tsx";
+import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
@@ -95,7 +95,7 @@ export function Sidebar({
   const org = useOrg();
   const agents = useAgents();
   const health = useEngineHealth();
-  const { connected, authRejected } = useConnection();
+  const { connected, authRejected, lostAt, everConnected } = useConnection();
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -222,8 +222,9 @@ export function Sidebar({
             ))}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
-            <HealthCard
-              reading={healthReading({ connected, authRejected, health })}
+            <EnginePanel
+              reading={engineReading({ connected, authRejected, lostAt, everConnected, health })}
+              operator={viewer.operator}
               onSetToken={onSetToken}
             />
           </RailBoundary>

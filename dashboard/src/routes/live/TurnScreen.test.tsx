@@ -169,7 +169,9 @@ test("a phase card shows the duration off the record itself", async () => {
 test("a cut view names the middle as the gap, not the ending", async () => {
   mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
   expect(await screen.findByText(/middle not shown/)).toBeTruthy();
-  expect(screen.getByText(/what is missing is the middle/)).toBeTruthy();
+  expect(
+    screen.getByText(/Too long to show in full; the middle phases are missing\./),
+  ).toBeTruthy();
   // Neither note may state what it used to: "no turn record" is a claim about
   // the TURN, and "first to last event" is a claim about
   // a window this page can no longer assume is whole. Both are `Fact.note`
@@ -262,7 +264,7 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
   expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
-  expect(screen.getByTitle("bytes of conversation a resumed phase re-entered")).toBeTruthy();
+  expect(screen.getByTitle("Size of the resumed conversation")).toBeTruthy();
 });
 
 // A SUSPENDED PHASE DRAWS BOTH OF ITS PROMPTS.
@@ -385,7 +387,7 @@ test("a ledger cell that can be cut carries its whole text in a title", async ()
     },
     "context",
   );
-  const note = await screen.findByText(/but not the newest/);
+  const note = await screen.findByText(/not the newest\. The thread was too long\./);
   expect(note.className).toContain("truncate");
   expect(note.getAttribute("title")).toBe(note.textContent);
   const label = screen.getByText("The thread so far");
@@ -1234,7 +1236,7 @@ test("a parked turn on its second iteration opens the executor it parked in", as
 // stage moves on the push, and the answer naming the run is a refetch behind.
 test("a parked turn whose run is not announced yet says it is reading it", async () => {
   mountWatching(parkedSeat(), [phase("2026-09-13T10:01:30Z", 90_000)]);
-  expect(await screen.findByText(/Reading which run it launched/)).toBeTruthy();
+  expect(await screen.findByText("Finding its coding run…")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -1370,8 +1372,6 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  expect(
-    await screen.findByText("never decided — the engine sent the turn back for another round"),
-  ).toBeTruthy();
+  expect(await screen.findByText("undecided, sent back")).toBeTruthy();
   expect(screen.queryByText("sent the turn back for another round")).toBeNull();
 });
