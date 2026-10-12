@@ -301,15 +301,12 @@ export function Inbox() {
           three, which is why the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
-          No API token is presented, so this browser is nobody. The conditions below are the
-          engine&rsquo;s; a person&rsquo;s updates and decisions need a credential bound to their
-          seat.
+          Set a token bound to your seat to see your updates.
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="warning" className="inbox-callout">
-          This token is <code className="inline">{viewer.operatorID}</code> and no seat claims it.
-          Give a human seat <code className="inline">contact.crewlet_operator_id</code> with that
-          value and this becomes their inbox.
+          No seat uses token <code className="inline">{viewer.operatorID}</code>. Bind it in Edit
+          org.
         </Callout>
       ) : null}
 
@@ -380,12 +377,6 @@ export function Inbox() {
           />
         )}
       </div>
-      {!bound && !viewer.loading && (
-        <p className="t-caption inbox-nobody">
-          With a credential bound to a seat, this screen also shows what reached that person and
-          what waits on their decision.
-        </p>
-      )}
     </div>
   );
 }

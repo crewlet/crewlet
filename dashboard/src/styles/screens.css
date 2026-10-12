@@ -8459,9 +8459,6 @@ a.live-row:focus-visible {
 .inbox-callout {
   margin: var(--spacing-3) var(--spacing-4) 0;
 }
-.inbox-nobody {
-  padding: var(--spacing-2) var(--spacing-4) var(--spacing-4);
-}
 
 /* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is 260 to 340px, as the
    approved Focus split draws it, so the pane keeps a reading measure beside

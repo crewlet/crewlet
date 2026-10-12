@@ -25,7 +25,6 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
 import { firstLine } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
-import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import {
   askQuestion,
   budgetLine,
@@ -121,7 +120,7 @@ export function InboxColumn({
       {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}
       {more && (
         <Text as="p" variant="caption" className="inbox-note">
-          {`More unread updates lie past these ${INBOX_PAGE}. Read these and the next ones come up.`}
+          More unread below. Read these to see them.
         </Text>
       )}
       {bound && (

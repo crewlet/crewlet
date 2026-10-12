@@ -423,11 +423,11 @@ export function inboxQuiet(input: {
   return (answer.seen_through?.seq ?? 0) > 0
     ? {
         title: "You are caught up",
-        hint: "Everything that reached you has been read. Earlier updates holds it.",
+        hint: "Read updates are under Earlier updates.",
       }
     : {
         title: "Nothing has reached you yet",
-        hint: "An update arrives when something you are on the hook for moves: a mention, a question, work assigned to you, a task you watch.",
+        hint: "Mentions, questions and assigned work appear here.",
       };
 }
 
