@@ -55,6 +55,21 @@ import (
 // to a second, which is exactly the quantity the window cases measure.
 var pinned = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
+// THE PIN ABOVE IS ONLY SAFE WHILE IT STAYS INSIDE THE READ FLOOR, and nothing
+// else in this package would say so if it stopped: every case that reads back
+// through [edge.rows] would report an empty log, which looks exactly like a
+// receiver that never wrote. So the margin is asserted rather than trusted,
+// and a pin moved outside it fails here, naming both numbers.
+func TestTheSuiteClockIsInsideTheEventLogsReadFloor(t *testing.T) {
+	t.Parallel()
+	if age := time.Since(pinned); age >= store.EventHistory {
+		t.Fatalf("the suite clock is %s old, at or past the event log's %s read "+
+			"floor: every row this suite writes is invisible to List, and an "+
+			"expired fixture reads exactly like a receiver that recorded nothing",
+			age, store.EventHistory)
+	}
+}
+
 // recorder is a queue.Publisher that keeps the WAKES it was given, and can be
 // made to fail.
 //
