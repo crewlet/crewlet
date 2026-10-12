@@ -302,7 +302,7 @@ test("a peeked tool names its holders from the pushed grant and asks the engine 
 test("a server granted to every agent seat says so", async () => {
   mount(<ToolPeek name="search_docs" />);
   await settle();
-  expect(screen.getByText(/Every agent seat — 2 seats/)).toBeDefined();
+  expect(screen.getByText("Every agent seat (2).")).toBeDefined();
 });
 
 // A TEMPLATE NOBODY IS GRANTED is a finding, said outright.
@@ -311,7 +311,7 @@ test("a server granted to nobody says no seat can call it", async () => {
     roster: { name: "Acme", roles: [{ name: "PM", handle: "pm", tool_sources: ["builtin"] }] },
   });
   await settle();
-  expect(screen.getByText(/No seat can call this/)).toBeDefined();
+  expect(screen.getByText(/No seat is granted/).textContent).toBe("No seat is granted github.");
 });
 
 // THE LIST IS FOR FINDING A TOOL. A description is written for a model and
@@ -341,7 +341,9 @@ test("each server is drawn with the engine's state and a cell per node", async (
   const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
-  expect(screen.getByText(/did not publish its MCP report on the last heartbeat/)).toBeDefined();
+  expect(screen.getByText(/No report from/).textContent).toBe(
+    "No report from node-c, so its status is unknown.",
+  );
 });
 
 test("a node's cell never reads an unreported node as none", () => {
@@ -447,8 +449,10 @@ test("a refused reader on a server's page is never told the server does not exis
   mount(<Tools server="github" />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.getByRole("heading", { name: "github" })).toBeDefined();
-  expect(screen.queryByText(/No configuration this engine can see carries/)).toBeNull();
-  expect(screen.getByText(/status could not be read here/)).toBeDefined();
+  expect(screen.queryByText(/No server called/)).toBeNull();
+  expect(screen.getByText(/See the servers section below/).textContent).toBe(
+    "Couldn’t read github’s status. See the servers section below.",
+  );
 });
 
 // …and a reader who WAS told, about a name nothing carries, is told so.
@@ -456,8 +460,8 @@ test("a server's page for a name the answer does not carry says so", async () =>
   location.hash = "#/settings/tools/servers/nowhere";
   mount(<Tools server="nowhere" />);
   await settle();
-  expect(screen.getByText(/No configuration this engine can see carries/)).toBeDefined();
-  expect(screen.queryByText(/status could not be read here/)).toBeNull();
+  expect(screen.getByText(/No server called/).textContent).toBe("No server called nowhere.");
+  expect(screen.queryByText(/See the servers section below/)).toBeNull();
 });
 
 // --- adding one ---------------------------------------------------------- //
@@ -648,7 +652,9 @@ test("a name only a node still reports is said, not refused", async () => {
   const dialog = screen.getByRole("dialog");
   type(dialog, "Name", "legacy");
   type(dialog, "Command", "x");
-  expect(within(dialog).getByText(/still runs a server called/)).toBeDefined();
+  expect(
+    within(dialog).getByText("Free to use. An old server by this name is still running."),
+  ).toBeDefined();
   await press(dialog, /Add server/);
   expect(within(dialog).queryByText(/already exists/)).toBeNull();
   expect(calls.length).toBeGreaterThan(0);
