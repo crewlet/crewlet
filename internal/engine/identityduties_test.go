@@ -22,12 +22,12 @@ import (
 //
 //  1. A node running the identity domain arms both, at their stated
 //     intervals.
-//  2. A seats-only satellite RUNS the domain, as every node does, and arms
-//     nothing, for the reason the next one does.
-//  3. An ingress-only node RUNS the domain and still arms nothing: every duty
-//     is a worker singleton its roles gate would refuse on every tick, and
-//     loops that never run reported as armed duties are exactly the
-//     look-alike this case exists to rule out.
+//  2. A data node holding seats alone RUNS the domain, as every data node
+//     does, and arms nothing, for the reason the next one does.
+//  3. A data node serving ingress alone RUNS the domain and still arms
+//     nothing: every duty is a worker singleton its roles gate would refuse
+//     on every tick, and loops that never run reported as armed duties are
+//     exactly the look-alike this case exists to rule out.
 func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	t.Parallel()
 	storeDir := func(b *config.Bootstrap) {
@@ -46,8 +46,8 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	})
 
 	for name, roles := range map[string][]string{
-		"a seats-only satellite": {"seats"},
-		"an ingress-only node":   {"ingress"},
+		"a data node holding seats alone":   {"data", "seats"},
+		"a data node serving ingress alone": {"data", "ingress"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

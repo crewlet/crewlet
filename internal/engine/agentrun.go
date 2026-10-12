@@ -50,13 +50,14 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e := l.engine
 	var (
-		manager *sandbox.Manager
-		pending sandbox.PendingStore
+		coordinator *sandbox.Coordinator
+		manager     *sandbox.Manager
+		pending     sandbox.PendingStore
 	)
 	if rt := e.sandbox.Load(); rt != nil {
-		manager, pending = rt.coordinator.Manager(), rt.pending
+		coordinator, manager, pending = rt.coordinator, rt.coordinator.Manager(), rt.pending
 	}
-	if manager == nil || pending == nil {
+	if coordinator == nil || manager == nil || pending == nil {
 		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
 			"runs in a box: configure providers.sandbox, or set `mode: text` on "+
 			"providers.llm.%s", l.codingAgent)
@@ -83,12 +84,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"seat, so a bridged call would have nobody to act as; this is an " +
 			"assembly fault in the runner, not a setting")
 	}
+	// The run's calls, and with each what they have cost the engine so far,
+	// for the segment that resumes from the run to pay — bound to the run's
+	// job by the launch below, before the box that makes them exists.
+	ledger := newBridgeLedger(pending, req.Spend)
 	endpoint := e.bridge.Open(&mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
-		Ledger:  bridgeLedger{store: pending},
+		Ledger:  ledger,
 	})
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
@@ -113,17 +118,21 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	agentLLM, credentials, credentialEnv := l.executorLLM(company)
-	env := underlay(e.sandboxEnv(l.seat, gate, setup), credentialEnv)
+	run, refused := l.executorRun(company, e.sandboxEnv(l.seat, gate, setup))
+	if refused != nil {
+		e.bridge.Close(l.turn.RunID)
+		return refused
+	}
+	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
 		CodingAgent:     l.codingAgent,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        maxTurnsFor(gate),
 		Env:             env,
-		CredentialFiles: credentials,
+		CredentialFiles: run.files,
 	})
-	// THE EXECUTOR'S PHASE, matching executorLLM above: the guard has to
+	// THE EXECUTOR'S PHASE, matching executorRun above: the guard has to
 	// inspect the entry whose login the box will actually run under, and
 	// asking it about llm_sandbox would answer for a model this run never
 	// touches.
@@ -132,7 +141,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return err
 	}
 
-	_, err := sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
+	_, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       l.runTurnRef(ctx),
 		Spec:       spec,
 		Setup:      setup,
@@ -140,6 +149,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		LLM:        agentLLM,
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
+		Opened:     ledger.bind,
 	})
 	if err != nil {
 		// The launch failed, so nothing will ever close this session on
@@ -150,15 +160,17 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	return nil
 }
 
-// executorLLM is the model an agent-mode run works under.
+// executorRun is the [codingRun] an agent-mode run works under.
 //
 // THE EXECUTOR'S OWN ENTRY, not llm_sandbox — this run IS the executor. A
 // method rather than an inline call so the choice has a name a test can hold:
-// see [runLLM] for what the two phases mean, and why sending an agent-mode run
-// to llm_sandbox would silently run a seat's whole turn on the model it chose
-// for a subordinate job.
-func (l *agentLauncher) executorLLM(c *Company) (*sandbox.AgentLLM, map[string]string, map[string]string) {
-	return runLLM(c, l.seat, phase.Execute)
+// see [newCodingRun] for what the two phases mean, and why sending an
+// agent-mode run to llm_sandbox would silently run a seat's whole turn on the
+// model it chose for a subordinate job. Its runner is the one the turn
+// resolved from that same entry, so the run is refused only when an apply
+// since moved the executor onto another CLI.
+func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) (codingRun, error) {
+	return newCodingRun(c, l.seat, phase.Execute, l.codingAgent, seatEnv)
 }
 
 // withBridge adds the engine-side surface to a box's MCP server list.

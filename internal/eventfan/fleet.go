@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -61,7 +62,46 @@ type Fleet struct {
 	// dependency, so this package does not import the recorder to say one
 	// sentence. Nil counts nothing.
 	Report func(Question, Coverage, time.Duration)
+
+	// Clock is the ASKER'S clock: every question is asked at one instant
+	// read from it, which this node's own read and every peer's floor the
+	// history at — see [store.EventLog]. Nil is the wall clock. Read to the
+	// microsecond, whatever it carries finer ([instant]).
+	//
+	// A dependency rather than a call to time.Now buried in each question,
+	// because the instant is what the answer is about: a question asked of
+	// three nodes is one question only if all three answer it as of the
+	// same moment, and the moment has to come from one place to be one.
+	Clock func() time.Time
 }
+
+// now is the instant a question is asked at, read ONCE per question.
+func (f *Fleet) now() time.Time {
+	if f.Clock != nil {
+		return instant(f.Clock())
+	}
+	return instant(time.Now())
+}
+
+// askedAt is the instant a question is asked at: the one its caller pinned —
+// another answer's own, so the two halves of one screen share it — or [now].
+func (f *Fleet) askedAt(pinned time.Time) time.Time {
+	if pinned.IsZero() {
+		return f.now()
+	}
+	return instant(pinned)
+}
+
+// instant is t at the STORE'S RESOLUTION, the microsecond ([store.EncodeTime]).
+//
+// Finer than that, one instant is two edges. Every statement floors at the
+// ENCODED instant, which drops the nanoseconds, while every comparison the
+// asker makes itself — the window it pins, the window a caller names beside an
+// answer — reads them. So a row at the floor's
+// own microsecond was inside the history to the store and under it to the
+// asker: counted by one question of an answer and missing from the listing
+// beside it. Read at the microsecond, the floor is one value on both sides.
+func instant(t time.Time) time.Time { return t.UTC().Truncate(time.Microsecond) }
 
 // Solo is a fleet of this node alone: its own store, nobody to ask.
 //
@@ -80,6 +120,11 @@ type Listing struct {
 	// list it is "a node's page filled", which its answer never reads as a
 	// cursor — see listPartOf.
 	More bool
+
+	// At is the instant the page was asked at, which every node floored it
+	// at — for [TurnDetail.At]'s reason: a caller composing one answer from
+	// this page and a second read asks the second at the same instant.
+	At time.Time
 }
 
 // Trace is every row of one trace the fleet holds, up to the cap.
@@ -104,15 +149,26 @@ type TurnDetail struct {
 	// coding run was out. A stored row carries no node of its own, so this
 	// is the only place the answer can say it.
 	Nodes []string
+
+	// At is the instant the turn was asked at, which every node floored
+	// its part at. Returned so a caller composing ONE answer from this
+	// read and another — the turn page's other attempts — asks the second
+	// at the same instant ([store.TurnQuery.At]): read at a later one, a
+	// row between the two horizons is in this turn and missing from the
+	// second read, which then lists the turn shown as starting later, or
+	// not at all.
+	At time.Time
 }
 
 // TurnPage is a page of turns from the fleet.
 type TurnPage struct {
 	Turns []store.Turn
 
-	// Next is the start to resume from, or nil at the end — and always nil
-	// for a page ranked by tokens, which is a ranking rather than a walk.
-	Next *time.Time
+	// Next is the position to resume from — where the page's last turn is
+	// listed, and that turn's id ([store.TurnCursor]) — or nil at the end,
+	// and always nil for a page ranked by tokens, which is a ranking rather
+	// than a walk.
+	Next *store.TurnCursor
 }
 
 // ---- the scatter ------------------------------------------------------- //
@@ -247,8 +303,8 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 // whose it is, its part, and — when it is not an answer — why.
 //
 // A REFUSAL IS READ BEFORE THE VERSION, because a peer that refused says why in
-// its own words — an older build naming the version it was asked in is the
-// clearest account there is of why it is missing. An ANSWER in any version but
+// its own words — a node on another build naming the version it was asked in
+// is the clearest account there is of why it is missing. An ANSWER in any version but
 // the one asked is not read at all: its fields are not the ones the merge
 // expects, and a part missing a filter or a summed field is wrong rather than
 // short.
@@ -305,6 +361,53 @@ func (g gathered[T]) parts() []T {
 	return out
 }
 
+// settle is the second question an answer that COUNTS needs when some node
+// named a row rather than counting it: every node's part, from the first
+// scatter, beside which of the named rows each node keeps, and the coverage of
+// both scatters. `named` reads a part's named rows.
+//
+// TWO SCATTERS WHEN A ROW IS IN FLIGHT, and one otherwise. Each node counts the
+// rows it KEEPS and names the ones it holds of a custody batch it has not
+// settled — a row a second data node may hold too, kept or not. When any node
+// named one, every node is asked which of them it keeps ([QuestionKept]), and
+// the merge counts each once ([once]). Nothing is named on a fleet with no
+// stateless node, nor between batches on one that has them, which is nearly
+// always, so the second question is the exception; and a node alone needs
+// none, since a row only it holds is counted once by naming it.
+//
+// A NODE THAT ANSWERED ONLY THE SECOND counted nothing the merge holds — the
+// coverage names it for the first — so what it keeps is not read: taken as
+// evidence that a row was counted, a row it keeps and nobody counted would be
+// in no count at all.
+func settle[T any](ctx context.Context, f *Fleet, first gathered[T],
+	named func(T) []store.UnsettledRow,
+) ([]Counted[T], Coverage, error) {
+	parts := make([]Counted[T], 0, 1+len(first.peers))
+	parts = append(parts, Counted[T]{Node: f.Self, Part: first.mine})
+	for _, p := range first.peers {
+		parts = append(parts, Counted[T]{Node: p.node, Part: p.part})
+	}
+	rows := identities(parts, named)
+	if len(rows) == 0 || !first.fanned {
+		return parts, first.coverage, nil
+	}
+	second, err := gather(ctx, f, QuestionKept, keptParams{Rows: rows}, nil,
+		func(ctx context.Context) (keptPart, error) {
+			kept, err := f.Local.KeptRows(ctx, rows)
+			return keptPart{Rows: kept}, err
+		})
+	if err != nil {
+		return nil, Coverage{}, err
+	}
+	parts[0].Kept = second.mine.Rows
+	for _, p := range second.peers {
+		if i := slices.IndexFunc(parts, func(c Counted[T]) bool { return c.Node == p.node }); i >= 0 {
+			parts[i].Kept = p.part.Rows
+		}
+	}
+	return parts, first.coverage.And(second.coverage), nil
+}
+
 // ---- the questions ----------------------------------------------------- //
 
 // List answers a page of the log.
@@ -320,6 +423,8 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if q.Limit <= 0 {
 		q.Limit = store.DefaultListLimit
 	}
+	// ONE INSTANT for the page and the siblings, on every node.
+	q.At = f.askedAt(q.At)
 	g, err := gather(ctx, f, QuestionEvents, listParamsOf(q), nil,
 		func(ctx context.Context) (listPart, error) { return listPartOf(ctx, f.Local, q) })
 	if err != nil {
@@ -330,10 +435,10 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if q.RelatedAgent != "" && g.fanned {
 		traces := store.TraceIDsOf(rows)
 		if len(traces) > 0 {
-			p := traceRowsParams{TraceIDs: traces, Limit: q.Limit}
+			p := traceRowsParams{TraceIDs: traces, Limit: q.Limit, At: q.At}
 			sib, err := gather(ctx, f, QuestionTraceRows, p, nil,
 				func(ctx context.Context) (listPart, error) {
-					sibs, err := f.Local.TraceRows(ctx, traces, q.Limit)
+					sibs, err := f.Local.TraceRows(ctx, traces, q.Limit, q.At)
 					return listPart{Rows: sibs}, err
 				})
 			if err != nil {
@@ -343,54 +448,72 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 			for _, part := range sib.parts() {
 				siblings = append(siblings, part.Rows)
 			}
-			rows = MergeRelated(rows, union(siblings...), q.Limit, more)
+			related := union(siblings...)
+			if q.FeedOnly {
+				// A TRACE'S SIBLINGS CARRY NONE OF THE PAGE'S FILTERS —
+				// they are the cause beside the effect, read by trace id
+				// alone — but a feed-only page is the feed's rows, and a
+				// turn's trace holds every one of its accounting records:
+				// the store's own related-agent read narrows them the same
+				// way ([store.EventLog.List]).
+				related = slices.DeleteFunc(related, func(r store.EventRecord) bool {
+					return events.KeptOutOfFeed(r.Type)
+				})
+			}
+			rows = MergeRelated(rows, related, q.Limit, more)
 			coverage = coverage.And(sib.coverage)
 		}
 	}
 	f.report(QuestionEvents, coverage, started)
-	return Listing{Rows: rows, More: more}, coverage, nil
+	return Listing{Rows: rows, More: more, At: q.At}, coverage, nil
 }
 
 // Histogram answers the log's time axis over the fleet.
 //
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, so every
-// node cuts the same bars — see [store.HistogramQuery.At].
+// node cuts the same bars and floors the rows it counts into them at the same
+// instant — see [store.ListQuery.At].
+//
+// THE PARTIAL BAR IS DROPPED HERE, once, from the sum. Every node cuts a
+// window the history clips down to the bucket the floor falls in
+// ([store.HistogramQuery.Window]), so every part has the same bars, and the
+// axis a caller is shown begins at the first whole bucket inside the history
+// ([store.EventHistogram.InsideHistory]), cut at the instant every node was
+// asked at.
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
-	if q.At.IsZero() {
-		q.At = time.Now().UTC()
-	}
-	p := seriesParams{List: listParamsOf(q.ListQuery), Bucket: q.Bucket, At: q.At}
-	g, err := gather(ctx, f, QuestionSeries, p, nil,
+	q.At = f.askedAt(q.At)
+	g, err := gather(ctx, f, QuestionSeries, seriesParamsOf(q), nil,
 		func(ctx context.Context) (store.EventHistogram, error) { return f.Local.Histogram(ctx, q) })
 	if err != nil {
 		return store.EventHistogram{}, Coverage{}, err
 	}
-	others := make([]store.EventHistogram, 0, len(g.peers))
-	for _, p := range g.peers {
-		others = append(others, p.part)
+	parts, coverage, err := settle(ctx, f, g, histogramNamed)
+	if err != nil {
+		return store.EventHistogram{}, Coverage{}, err
 	}
-	merged, refused := MergeSeries(g.mine, others)
-	coverage := g.coverage
-	for _, i := range refused {
+	merged, refused := MergeSeries(q, parts)
+	for _, node := range refused {
 		coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{
-			ID: g.peers[i].node, Error: "it answered a different window, so its bars " +
-				"cannot be summed with this node's; it is running a different build",
+			ID: node, Error: "it answered a different window, so its bars " +
+				"cannot be summed with this node's",
 		}}})
 	}
 	f.report(QuestionSeries, coverage, started)
-	return merged, coverage, nil
+	return merged.InsideHistory(q.At), coverage, nil
 }
 
 // ByID answers one event, from whichever node holds it.
 //
 // NOT FOUND ANYWHERE is [store.ErrNotFound], and says which nodes could not be
 // asked: a dead link is the ordinary case, and one whose node was merely
-// silent is a different fact.
+// silent is a different fact. A copy under the history horizon is not found
+// either: every node floors its lookup at the asker's instant.
 func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionEvent, idParams{ID: id}, nil,
-		func(ctx context.Context) (eventPart, error) { return eventPartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionEvent, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (eventPart, error) { return eventPartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return store.EventRecord{}, Coverage{}, err
 	}
@@ -409,28 +532,40 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 // Trace answers every row sharing one trace, oldest first.
 func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionTrace, idParams{ID: id}, nil,
-		func(ctx context.Context) (tracePart, error) { return tracePartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionTrace, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (tracePart, error) { return tracePartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return Trace{}, Coverage{}, err
 	}
-	rows, total := MergeTrace(g.parts())
-	f.report(QuestionTrace, g.coverage, started)
-	return Trace{Rows: rows, Total: total}, g.coverage, nil
+	parts, coverage, err := settle(ctx, f, g,
+		func(p tracePart) []store.UnsettledRow { return p.Unsettled })
+	if err != nil {
+		return Trace{}, Coverage{}, err
+	}
+	rows, total := MergeTrace(parts)
+	f.report(QuestionTrace, coverage, started)
+	return Trace{Rows: rows, Total: total}, coverage, nil
 }
 
 // Turn answers every event of one turn, from every node that ran part of it.
 func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionTurn, idParams{ID: id}, nil,
-		func(ctx context.Context) (turnPart, error) { return turnPartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionTurn, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (turnPart, error) { return turnPartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return TurnDetail{}, Coverage{}, err
 	}
-	rows, total, traces := MergeTurn(g.parts())
-	f.report(QuestionTurn, g.coverage, started)
-	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g)},
-		g.coverage, nil
+	parts, coverage, err := settle(ctx, f, g,
+		func(p turnPart) []store.UnsettledRow { return p.Unsettled })
+	if err != nil {
+		return TurnDetail{}, Coverage{}, err
+	}
+	rows, total, traces := MergeTurn(parts)
+	f.report(QuestionTurn, coverage, started)
+	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g), At: at},
+		coverage, nil
 }
 
 // turnNodes is every node that answered with part of the turn.
@@ -453,10 +588,11 @@ func turnNodes(self string, g gathered[turnPart]) []string {
 func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)
-	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before)}
+	at := f.now()
+	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.Phases(ctx, agentID, limit, before)
+			rows, more, err := f.Local.Phases(ctx, agentID, limit, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -464,7 +600,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	}
 	rows, more := MergeListing(g.parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
 // SeatPhases answers one seat's phase records, newest first, payload included —
@@ -481,10 +617,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 		// with an empty one — the store says so the same way.
 		return Listing{}, solo(f.Self), nil
 	}
-	p := phasesParams{AgentID: agentID, Before: cursorOf(before)}
+	at := f.now()
+	p := phasesParams{AgentID: agentID, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.AgentPhases(ctx, agentID, before)
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -492,7 +629,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 	}
 	rows, more := MergeListing(g.parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
 // Turns answers a page of turns, one row per turn however many nodes it ran
@@ -506,131 +643,181 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 // half-turns or as whichever half was nearer.
 //
 // A page by START is exact down to the newest point any full page stopped at,
-// for [MergeListing]'s reason, and the cursor resumes from there. A page by
+// for [MergeListing]'s reason, and the cursor resumes from there. A point is a
+// start AND a turn id ([store.TurnCursor]), the order every node's page and
+// this merge share, because two turns can start at one microsecond: a point
+// that was a start alone put the second of two such turns, past a page's cut,
+// behind the cursor and on no page. A page by
 // TOKENS ranks each node's top candidates by their MERGED totals — which is
 // exact for every turn that ran on one node, and can miss a turn split across
 // nodes whose every half fell below every node's cut. That is stated rather
 // than hidden: the coverage is honest about nodes, and a ranking has no cursor
 // to be honest about.
 //
-// `at` IS THE CALLER'S INSTANT, the one its answer is labelled with: the window
-// is cut from it here and every node — this one included — floors that window
-// against it, so the page and its label are one evaluation of the clock.
-func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery, at time.Time) (TurnPage, Coverage, error) {
+// A TURN IS PAGED BY WHERE IT IS LISTED, which is not always where it began.
+// The cursor is a position on each node's own page, so a turn can be resumed
+// from only at a start some node's page reaches — the earliest start among the
+// nodes that LIST it, which every node says of its own share on the second
+// scatter ([store.EventLog.ListedTurns]). The fold of every share says where
+// the turn began, and that is the start shown; the two differ for a turn whose
+// earliest half its own node does not list — the clean half of a turn that
+// failed later, under a page of failures. Paged by the start shown, such a turn
+// sat below a position no page reached: a full node's page or the page's size
+// cut it, and the cursor moved on past the half that did list it, so no page
+// of the walk held it.
+//
+// `q.At` IS THE CALLER'S INSTANT, the one its answer is labelled with, read
+// here once only when it pinned none: the window is cut from it and every node
+// — this one included — floors that window against it, so the page and its
+// label are one evaluation of the clock.
+func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
 		return TurnPage{}, Coverage{}, fmt.Errorf("%w: sort %q is not one of %v",
 			store.ErrTurnSort, q.Sort, store.TurnSorts)
 	}
 	byTokens := q.Sort == store.TurnSortTokens
-	if byTokens && !q.Before.IsZero() {
+	if byTokens && q.Before != nil {
 		return TurnPage{}, Coverage{}, ErrRankedCursor
 	}
 	q.Limit = turnPage(q.Limit)
 	q.IDs = nil
-	if at.IsZero() {
-		return TurnPage{}, Coverage{}, errNoInstant
-	}
-	at = at.UTC()
 	// THE WINDOW IS PINNED to the caller's instant before anybody is asked,
-	// for [Fleet.PhaseTokens]' reason — and because the whole turn has to
-	// be held against it: a node's half of a resumed turn can start inside
-	// the window while the turn began outside it on another node.
-	q.Since, q.Until = q.Window(at)
+	// for [Fleet.PhaseTokens]' reason — and because the whole turn has to be
+	// held against it: a node's half of a resumed turn can start inside the
+	// window while the turn began outside it on another node. The INSTANT
+	// travels with it, so every node floors the window and its shares at the
+	// asker's history horizon rather than at its own — see
+	// [store.TurnQuery.At].
+	q.At = f.askedAt(q.At)
+	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
-	first, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q, at), nil,
-		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q, at) })
+	wire := turnsParamsOf(q)
+	first, err := gather(ctx, f, QuestionTurns, wire, nil,
+		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q) })
 	if err != nil {
 		return TurnPage{}, Coverage{}, err
 	}
-	var partials []store.TurnPartial
+	var turns []pagedTurn
 	coverage := first.coverage
 	more := false
-	var horizon *time.Time
+	// THE HORIZON IS A POSITION, start and id: the newest last turn of any
+	// full node's page, which every node's page orders by both.
+	var horizon *store.TurnCursor
 	for _, part := range first.parts() {
 		if !part.Full {
 			continue
 		}
 		more = true
 		if n := len(part.Turns); n > 0 && !byTokens {
-			last := part.Turns[n-1].StartedAt
-			if horizon == nil || last.After(*horizon) {
-				horizon = &last
+			last := part.Turns[n-1]
+			if horizon == nil || horizon.Before(last.StartedAt, last.TurnID) {
+				horizon = &store.TurnCursor{Start: last.StartedAt, TurnID: last.TurnID}
 			}
 		}
 	}
 	if !first.fanned {
-		// THIS NODE IS THE FLEET: its page is whole as it stands.
-		partials = first.mine.Turns
+		// THIS NODE IS THE FLEET: its page is whole as it stands, and every
+		// turn on it is listed where it began.
+		for _, p := range first.mine.Turns {
+			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: p.StartedAt})
+		}
 	} else {
 		lists := make([][]store.TurnPartial, 0, 1+len(first.peers))
+		listed := listings{}
 		for _, part := range first.parts() {
 			lists = append(lists, part.Turns)
+			// A TURN ON A NODE'S PAGE IS LISTED THERE, whatever its share
+			// says below — the evidence a share read a moment later cannot
+			// take back.
+			for _, p := range part.Turns {
+				listed.at(p.TurnID, p.StartedAt)
+			}
 		}
+		var partials []store.TurnPartial
 		ids := idsOf(lists...)
 		if len(ids) > 0 {
 			share := q
 			share.IDs = ids
-			second, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q, at), ids,
+			second, err := gather(ctx, f, QuestionTurns, wire, ids,
 				func(ctx context.Context) (turnsPart, error) {
-					return turnsPartOf(ctx, f.Local, share, at)
+					return turnsPartOf(ctx, f.Local, share)
 				})
 			if err != nil {
 				return TurnPage{}, Coverage{}, err
 			}
-			shares := make([][]store.TurnPartial, 0, 1+len(second.peers))
 			for _, part := range second.parts() {
-				shares = append(shares, part.Turns)
+				// WHERE EACH NODE'S PAGE LISTS ITS SHARE, by the node's own
+				// judgement ([turnsPart.Listed]).
+				for _, p := range part.Turns {
+					if slices.Contains(part.Listed, p.TurnID) {
+						listed.at(p.TurnID, p.StartedAt)
+					}
+				}
 			}
-			partials = MergeTurnPartials(shares...)
-			coverage = coverage.And(second.coverage)
+			// EACH SHARE SUMS THE ROWS ITS NODE KEEPS, and a row a custody
+			// batch in flight puts on two nodes is added once ([settle]).
+			shares, sharesCoverage, err := settle(ctx, f, second,
+				func(p turnsPart) []store.UnsettledRow { return p.Unsettled })
+			if err != nil {
+				return TurnPage{}, Coverage{}, err
+			}
+			partials = MergeTurnShares(shares)
+			coverage = coverage.And(sharesCoverage)
 		}
-		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists
-		// a turn as clean when its own half is, and the other half may
-		// have failed.
-		partials = slices.DeleteFunc(partials, func(p store.TurnPartial) bool {
-			if q.Failed != nil && p.Failed != *q.Failed {
+		for _, p := range partials {
+			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: listed[p.TurnID]})
+		}
+		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists a
+		// turn as clean when its own half is, and the other half may have
+		// failed. The cursor is on where the turn is listed, which is what
+		// the cursor that led here was taken from.
+		turns = slices.DeleteFunc(turns, func(t pagedTurn) bool {
+			if q.Failed != nil && t.Failed != *q.Failed {
 				return true
 			}
-			if p.StartedAt.Before(q.Since) {
+			if t.StartedAt.Before(q.Since) {
 				return true
 			}
-			return !byTokens && !q.Before.IsZero() && !p.StartedAt.Before(q.Before)
+			return !byTokens && q.Before != nil && !q.Before.Before(t.listedAt, t.TurnID)
 		})
 		if byTokens {
-			slices.SortStableFunc(partials, func(a, b store.TurnPartial) int {
+			slices.SortStableFunc(turns, func(a, b pagedTurn) int {
 				return cmp.Or(cmp.Compare(b.TotalTokens, a.TotalTokens),
 					b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
 			})
 		} else {
-			slices.SortStableFunc(partials, func(a, b store.TurnPartial) int {
-				return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
+			slices.SortStableFunc(turns, func(a, b pagedTurn) int {
+				return cmp.Or(b.listedAt.Compare(a.listedAt), cmp.Compare(b.TurnID, a.TurnID))
 			})
 			if horizon != nil {
-				partials = slices.DeleteFunc(partials, func(p store.TurnPartial) bool {
-					return p.StartedAt.Before(*horizon)
+				turns = slices.DeleteFunc(turns, func(t pagedTurn) bool {
+					return horizon.Before(t.listedAt, t.TurnID)
 				})
 			}
 		}
 	}
-	if len(partials) > q.Limit {
-		partials, more = partials[:q.Limit], true
+	if len(turns) > q.Limit {
+		turns, more = turns[:q.Limit], true
 	}
-	page := TurnPage{Turns: make([]store.Turn, 0, len(partials))}
-	for _, p := range partials {
-		page.Turns = append(page.Turns, p.Turn())
+	page := TurnPage{Turns: make([]store.Turn, 0, len(turns))}
+	for _, t := range turns {
+		page.Turns = append(page.Turns, t.Turn())
 	}
 	// A CURSOR ONLY WHERE THERE IS MORE. Every non-empty page used to carry
 	// one, so the last page of a seat's forty-seven turns offered "older"
 	// and a reader who asked got an empty page — and a client counting what
 	// it had loaded could only ever write it as a floor ("47+"), because the
 	// answer never said the walk had ended, which is what a nil `Next` is
-	// documented to say.
+	// documented to say. It is where the page's last turn is LISTED, never
+	// the start shown for it, which may be a position no node's page reaches
+	// — and that turn's id, without which a turn listed at the same instant
+	// past the page's cut lay behind the next page's cursor and on no page.
 	if !byTokens && more {
 		switch {
-		case len(page.Turns) > 0:
-			at := page.Turns[len(page.Turns)-1].StartedAt
-			page.Next = &at
+		case len(turns) > 0:
+			last := turns[len(turns)-1]
+			page.Next = &store.TurnCursor{Start: last.listedAt, TurnID: last.TurnID}
 		case horizon != nil:
 			// NOTHING BETWEEN THE CURSOR AND THE HORIZON, and more past
 			// it: resume from the horizon rather than report an end.
@@ -641,38 +828,160 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery, at time.Time) (Tur
 	return page, coverage, nil
 }
 
+// pagedTurn is a folded turn and where a page lists it.
+type pagedTurn struct {
+	store.TurnPartial
+
+	// listedAt is the earliest start at which a node's page lists the turn:
+	// what it is ordered and cut by, with its id, and what a cursor after it
+	// is.
+	listedAt time.Time
+}
+
+// listings is the earliest start at which any node lists each turn.
+type listings map[string]time.Time
+
+func (l listings) at(id string, start time.Time) {
+	if seen, ok := l[id]; !ok || start.Before(seen) {
+		l[id] = start
+	}
+}
+
+// PhaseTokenPage is how many spend records one node sends in one reply of a
+// paged phase-token read ([Fleet.PhaseTokens]).
+//
+// SIZED FROM THE TRANSPORT. A reply is at most [queue.MaxPayloadBytes] (8 MiB),
+// and a spend record encodes to about 590 bytes of JSON with realistic values
+// — an agent id, a role name, a model id, a turn id and a work key — so 4 096
+// records are about 2.4 MiB: under a third of the ceiling, which leaves room
+// for role names and model ids three times the measured ones before a reply
+// has to be cut. A cut is not a loss here, since the next page resumes from
+// where the cut one stopped, but it is fifteen encodes of a reply past the
+// ceiling inside the fleet read budget, which a page sized under it never
+// pays. A larger page buys fewer round trips only for a fleet holding more
+// than this in its window; a smaller one pages a quiet company.
+const PhaseTokenPage = 4096
+
 // PhaseTokens answers the per-phase spend records of a window from every node,
 // newest first, cut to the query's limit — what the live projection's spend
 // rollup is seeded from.
 //
-// THE WINDOW IS PINNED to the CALLER's instant before anybody is asked, for
+// THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At],
+// read here once only when it pinned none) before anybody is asked, for
 // [Fleet.Histogram]'s reason — a peer counting "a day back" from its own clock
-// would answer a window its neighbours did not — and for the store's: `at` is
-// the instant the caller labels its answer with, so a second reading of the
-// clock here would make the rows and the label two windows.
-func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery, at time.Time) ([]tokens.Record, Coverage, error) {
-	started := time.Now()
-	if at.IsZero() {
-		return nil, Coverage{}, errNoInstant
-	}
-	at = at.UTC()
-	q.Since, q.Until = q.Window(at)
-	q.SinceDays = 0
-	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q, at), nil,
-		func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, q, at) })
-	if err != nil {
-		return nil, Coverage{}, err
-	}
-	records := MergeSpend(g.parts(), q.Limit)
-	f.report(QuestionPhaseTokens, g.coverage, started)
-	return records, g.coverage, nil
+// would answer a window its neighbours did not — and for the store's: it is the
+// instant the caller labels its answer with and every node floors the window
+// at, so a second reading of the clock would make the rows and the label two
+// windows.
+//
+// # In pages
+//
+// READ IN PAGES OF [PhaseTokenPage], each resuming below the last record the
+// one before kept, until the limit or the window runs out — never in one
+// reply per node. The seed asks for a whole company-day, which on a busy
+// node is more than one reply carries: asked whole, that node's reply was cut
+// to fit the transport, and the merge — which cannot place a record older
+// than the last one a cut node sent — cut EVERY node's records at that
+// node's horizon, so the restarted node's live window started hours short of
+// its day. Each page is exact for [MergeSpend]'s reason, and the pages are
+// disjoint because each resumes strictly below the last.
+//
+// A page this node could not finish — its own read failing, or the read's
+// context ending — stops the walk with the records read so far, which are the
+// window's newest, and the coverage says the answer is short.
+func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
+	return f.phaseTokens(ctx, q, PhaseTokenPage)
 }
 
-// errNoInstant refuses a windowed read with no instant to measure it from, on
-// the store's own terms: "now" read here would be the second reading of the
-// clock the caller's label was not taken from.
-var errNoInstant = errors.New("eventfan: no instant to measure the window from — " +
-	"pass the one the answer is labelled with")
+// phaseTokens is [Fleet.PhaseTokens] in pages of size records — a parameter so
+// the suite can walk pages of a window it can afford to write.
+func (f *Fleet) phaseTokens(ctx context.Context, q store.PhaseTokenQuery, size int) ([]tokens.Record, Coverage, error) {
+	started := time.Now()
+	q.At = f.askedAt(q.At)
+	q.Since, q.Until = q.Window(q.At)
+	q.SinceDays = 0
+	q.Before = nil
+	var (
+		out      []tokens.Record
+		coverage Coverage
+	)
+	for pages := 0; ; pages++ {
+		page := q
+		page.Limit = size
+		if q.Limit > 0 {
+			page.Limit = min(page.Limit, q.Limit-len(out))
+		}
+		g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(page), nil,
+			func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, page) })
+		if err != nil {
+			if pages == 0 {
+				return nil, Coverage{}, err
+			}
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"the window was read %d pages deep and could not be read further: %s",
+				pages, err.Error())}}})
+			break
+		}
+		if pages == 0 {
+			coverage = g.coverage
+		} else {
+			coverage = coverage.And(g.coverage)
+		}
+		records, more := MergeSpend(g.parts(), page.Limit)
+		out = append(out, records...)
+		if !more || len(records) == 0 || (q.Limit > 0 && len(out) >= q.Limit) {
+			break
+		}
+		last := records[len(records)-1]
+		at, err := time.Parse(time.RFC3339Nano, last.Timestamp)
+		if err != nil {
+			// A RECORD NO CURSOR CAN NAME — the store writes every stamp in
+			// this layout, so this is a peer's record that is not one — ends
+			// the walk where it is rather than guessing a resumption.
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"a spend record's stamp %q names no position, so the window was read "+
+					"no further than it", last.Timestamp)}}})
+			break
+		}
+		q.Before = &store.Cursor{Time: at, ID: last.EventID}
+	}
+	f.report(QuestionPhaseTokens, coverage, started)
+	return out, coverage, nil
+}
+
+// NotificationOutcomes answers how many notifications each third-party app had
+// dropped and merged over `[q.Since, q.At)`, summed across every node.
+//
+// A COUNT OVER A NAMED WINDOW, never a page of the events it counts: the
+// integrations answer states one window for the deliveries and what became of
+// them, and the newest page of outcome events spans whatever it spans.
+//
+// THE INSTANT IS THE ASKER'S, read once when the caller pinned none — and a
+// caller that names a window beside another read passes that read's instant
+// ([Listing.At]), so both halves of one answer share an edge. It is the
+// window's top and the floor's anchor on every node at once.
+//
+// Each node counts the rows it KEEPS and names the ones it holds of a custody
+// batch it has not settled ([store.NotificationOutcomes.Unsettled]), and the
+// asker counts each named row once ([settle], [MergeOutcomes]).
+func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
+	started := time.Now()
+	q.At = f.askedAt(q.At)
+	first, err := gather(ctx, f, QuestionNotificationOutcomes, outcomeParamsOf(q), nil,
+		func(ctx context.Context) (store.NotificationOutcomes, error) {
+			return f.Local.NotificationOutcomes(ctx, q)
+		})
+	if err != nil {
+		return store.NotificationOutcomes{}, Coverage{}, err
+	}
+	parts, coverage, err := settle(ctx, f, first, outcomesNamed)
+	if err != nil {
+		return store.NotificationOutcomes{}, Coverage{}, err
+	}
+	merged := MergeOutcomes(parts)
+	f.report(QuestionNotificationOutcomes, coverage, started)
+	return merged, coverage, nil
+}
 
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no
 // position to resume from, and paging one by start time would mix two orders

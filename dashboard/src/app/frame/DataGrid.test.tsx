@@ -283,9 +283,9 @@ test("a cell carries its column's name, and only when that name is a word", () =
 // for `none`, which a task nobody prioritised carries, and every mark whose
 // rule is "nothing is drawn for no value" does the same. In the table that is an
 // empty track under a head, which is correct and is what keeps the row's
-// columns lined up. Below 860px the head is gone and the label is the CELL's
-// own, so the card opened with `PRIORITY` on a line by itself, on every
-// row that had none.
+// columns lined up. Below the phone breakpoint (640px, `breakpoint.phone`)
+// the head is gone and the label is the CELL's own, so the card opened with
+// `PRIORITY` on a line by itself, on every row that had none.
 //
 // `.grid-cell:empty { display: none }` in frame.css is the fix, because a
 // container cannot ask a child that drew nothing whether it did and the

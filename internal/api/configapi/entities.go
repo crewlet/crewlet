@@ -297,6 +297,13 @@ var entityKinds = map[string]entityAccess{
 		},
 		// A PROVIDER'S IDENTITY IS ITS KEY, and the body carries no name to
 		// disagree with it: the key is the address and nothing else.
+		//
+		// AND IT IS ADDED LAST IN THE ORDER. The provider order is what an
+		// unpinned seat's last resort reads ("the first provider
+		// configured"), and a map has none, so a create records the new key
+		// at the end of `llm_order` — here and in the stored document,
+		// through the one reconciliation [config.Providers.ProviderOrder]
+		// is. Left out, it fell into that order's sorted tail.
 		create: func(c *config.Company, id string, raw submitted) error {
 			if _, ok := c.Providers.LLM[id]; ok {
 				return ErrEntityExists
@@ -305,10 +312,12 @@ var entityKinds = map[string]entityAccess{
 			if err != nil {
 				return err
 			}
+			order := c.Providers.ProviderOrder()
 			if c.Providers.LLM == nil {
 				c.Providers.LLM = map[string]config.LLMProvider{}
 			}
 			c.Providers.LLM[id] = incoming
+			c.Providers.LLMOrder = append(order, id)
 			return nil
 		},
 		place: func(root map[string]any, id string, element map[string]any) {
@@ -322,7 +331,9 @@ var entityKinds = map[string]entityAccess{
 				llm = map[string]any{}
 				providers["llm"] = llm
 			}
+			order := storedProviderOrder(providers, llm)
 			llm[id] = element
+			providers["llm_order"] = append(order, id)
 		},
 	},
 	EntityMCPServers: {
@@ -518,6 +529,9 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // (admission.go).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.refusedManaged(w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		dryRun, ok := dryRunOf(w, r)
 		if !ok {
@@ -581,6 +595,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			return
 		}
 		d.addressedCheck = dryRun && inOrgChart(kind)
+		d.by = attributionOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
@@ -598,7 +613,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			"Name what changed about "+kind+"/"+id) {
 			return
 		}
-		applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
+		applied, err := s.commit(r.Context(), prepared, summary)
 		if err != nil {
 			s.refuseApply(w, err)
 			return
@@ -805,4 +820,27 @@ func decodeEntity[T any](raw submitted, at config.Path) (T, error) {
 		return zero, err
 	}
 	return out, nil
+}
+
+// storedProviderOrder is the provider order a STORED document's providers
+// block resolves to, read off its tree: its `llm_order` reconciled against the
+// keys of its `llm` map by [config.Providers.ProviderOrder] itself, so a
+// stored order and a decoded one can never disagree about where a key sits.
+func storedProviderOrder(providers, llm map[string]any) []any {
+	shape := config.Providers{LLM: make(map[string]config.LLMProvider, len(llm))}
+	for key := range llm {
+		shape.LLM[key] = config.LLMProvider{}
+	}
+	listed, _ := providers["llm_order"].([]any)
+	for _, key := range listed {
+		if name, ok := key.(string); ok {
+			shape.LLMOrder = append(shape.LLMOrder, name)
+		}
+	}
+	order := shape.ProviderOrder()
+	out := make([]any, 0, len(order)+1)
+	for _, key := range order {
+		out = append(out, key)
+	}
+	return out
 }

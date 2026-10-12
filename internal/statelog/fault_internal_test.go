@@ -28,10 +28,10 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	var buf bytes.Buffer
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	runner, err := NewRunner(RunnerDeps{
-		Domain: loggerProbe{}, Verifier: loggerProbeVerifier(t),
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Verifier: loggerProbeVerifier(t),
 		Applier: struct{ Applier }{},
 		Fetch:   struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
-		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
 		Logger: slog.New(slog.NewJSONHandler(&buf, nil)),
 		Now:    func() time.Time { return now },
 	})

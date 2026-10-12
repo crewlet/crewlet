@@ -12,6 +12,7 @@ package extension
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -83,6 +84,12 @@ func (d Decision) Tokens() int { return d.InputTokens + d.OutputTokens }
 
 // Rescue builds a refusal carrying why the engine did not even ask.
 func Rescue(reason string) Decision { return Decision{Reason: reason} }
+
+// ReasonBudgetExhausted is the rescue of a judge the turn's budget stopped
+// before its call: asked before the judge is consulted, by its caller, and
+// once its evidence is rendered, by the judge ([ErrHeld]) — one spelling for
+// both, since a reader of the phase's record cannot tell which asked.
+const ReasonBudgetExhausted = "budget_exhausted"
 
 // Request is what a judge is shown.
 type Request struct {
@@ -262,6 +269,16 @@ func Consider(ctx context.Context, j Judge, p Policy, req Request) (granted int,
 		return 0, Rescue("no_judge")
 	}
 	decision, err := j.Decide(ctx, req)
+	if errors.Is(err, ErrHeld) {
+		// THE BUDGET, NOT THE JUDGE: nothing was called, so nothing is
+		// reported or charged, and the rescue says why as the caller's own
+		// check before asking says it ([ReasonBudgetExhausted]).
+		log.WarnContext(ctx, "extension_judge_over_budget", "phase", req.Phase,
+			"tokens", 0, "error", err.Error(),
+			"detail", "the turn's budget refused once the judge's evidence was rendered, "+
+				"so the judge was not called")
+		return 0, Rescue(ReasonBudgetExhausted)
+	}
 	if err != nil {
 		// THE SPEND SURVIVES THE FAILURE. A judge that answered something
 		// unparseable still made the call and still cost the tokens, and a

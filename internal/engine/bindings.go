@@ -17,7 +17,7 @@ import (
 //
 // A binding lives on the IDENTITY log and the seat it names in the company
 // this node is running. Every binding the directory writes — a person's, which
-// they hold for as long as they are here (ADR-0026), and a service account's,
+// they hold for as long as they are here (ADR-0032), and a service account's,
 // which is optional — is checked against the running org as a HUMAN seat when
 // it is made, and that check is ADVISORY: the org can drop the seat or turn it
 // into an agent's afterwards, and a revision applied elsewhere first is one
@@ -91,13 +91,11 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 
 	if b.Seat == "" {
 		// NO BINDING, so nothing to dangle — the request path serves the
-		// row under its login. A PERSON with none is the report's own
-		// row-level finding (`person_without_seat`, decided from the row
-		// alone, since no chart can say anything about a seat that is not
-		// named), and widening this rule to it would make it disagree with
-		// the seat table it is defined as. A removed person has no row to
-		// be asked about at all: a removal deletes it and leaves the
-		// tombstone.
+		// row under its login, which is a service account's (a person
+		// always holds a seat, ADR-0032), and widening this rule to it
+		// would make it disagree with the seat table it is defined as. A
+		// removed person has no row to be asked about at all: a removal
+		// deletes it and leaves the tombstone.
 		return false, "", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
@@ -123,7 +121,7 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 // bound — one record either way.
 //
 // A PERSON IS NEVER TOLD TO UNBIND: they hold a human seat for as long as
-// they are here (ADR-0026), and the directory refuses the unbind, so the
+// they are here (ADR-0032), and the directory refuses the unbind, so the
 // sentence that used to serve both kinds sent an administrator to a gesture
 // the engine answers `seat_required`. A SERVICE ACCOUNT's seat is optional,
 // so unbinding it is the one-record repair and a move the other. A kind this

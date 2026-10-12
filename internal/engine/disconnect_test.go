@@ -27,6 +27,7 @@ import (
 // and signing secret each seat holds are in this engine's own document. See
 // [slackTeardown].
 func TestEverySurfaceHasADisconnector(t *testing.T) {
+	t.Parallel()
 	got := (&Engine{}).disconnectors()
 	for _, kind := range integration.Kinds {
 		if _, ok := got[kind]; !ok {
@@ -69,6 +70,7 @@ func (noopWriter) Reload(context.Context, string, iam.Actor) error { return nil 
 // attempt is counted, and the node that does hold the document finishes the
 // disconnect.
 func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) {
+	t.Parallel()
 	for _, kind := range integration.Kinds {
 		t.Run(string(kind), func(t *testing.T) {
 			e := &Engine{}
@@ -165,6 +167,7 @@ roles:
 // CREDENTIAL, and the credential had not changed — and reported a 401 as the
 // operator's problem, at a third-party app, for about thirty-five seconds.
 func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	sink, err := e.SetupSink(testParty)
 	if err != nil {
@@ -209,6 +212,7 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 // A TEARDOWN THAT REMOVED NO ACCOUNT DELETES NOTHING, which is what keeps a
 // disconnect that only withdrew a webhook from touching the store at all.
 func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	sink, err := e.SetupSink(testParty)
 	if err != nil {
@@ -281,6 +285,7 @@ func (p *removingPass) Teardown(context.Context, setup.TeardownInput) (provision
 // teardown reports it" and "the engine acts on it" are two facts and only the
 // second one ends the defect.
 func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
+	t.Parallel()
 	e, company := sealingEngine(t, "https://jira.example.com")
 	e.epoch.current.Store(company)
 	e.UseConfigWriter(noopWriter{})
@@ -325,13 +330,11 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 // node holds its duty, and the revision that drops the block — kept for ever —
 // was recorded as the loop's own, while a FORCED disconnect, which drops it
 // inside the request, recorded the person. The row carries who asked
-// ([integration.State.RequestedBy]) and the teardown writes as them. A row that
-// names nobody is an older build's ask, and is the loop's, as it always was.
-// Mutation: drop the block as the loop and the first case goes red.
+// ([integration.State.RequestedBy]) and the teardown writes as them.
+// Mutation: drop the block as the loop and the case goes red.
 func TestADisconnectIsRecordedAsWhoeverAskedForIt(t *testing.T) {
 	for name, tc := range map[string]struct{ by, want iam.Actor }{
-		"a person asked":       {testParty, testParty},
-		"the row names nobody": {iam.Actor{}, loopActor()},
+		"a person asked": {testParty, testParty},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, company := sealingEngine(t, "https://jira.example.com")

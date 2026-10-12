@@ -18,11 +18,23 @@ func TestATurnCompletionCarriesNoSecondSpendTotal(t *testing.T) {
 	// own sum of turn totals as well: a second aggregation of the same
 	// spend, over whatever turns this process happened to have seen, that
 	// no store read could ever reproduce. The turn still moves the seat.
-	s := livestate.New()
+	//
+	// ON A PINNED CLOCK, with a phase record stamped beside the turn's end
+	// as the CONTROL: the window ages on the projection's clock, and on the
+	// wall clock this case's stamps left it long ago — so a turn completion
+	// folded as spend would be refused as already aged, and an empty window
+	// would say nothing about whether it was folded. The phase record
+	// counting is what proves the turn's end was inside the window too.
+	const ended = "2026-06-14T12:00:05Z"
+	s := stoppedAt(t, ended)
 	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute"}))
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute",
+		"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+	}, id("phase"), at(ended)))
 	change := s.Apply(env("agent_turn_completed", map[string]any{
 		"agent_id": "Lead", "turn_id": "tn-1", "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-	}, id("turn"), at("2026-06-14T12:00:05Z")))
+	}, id("turn"), at(ended)))
 
 	if _, moved := change.Agents["Lead"]; !moved {
 		t.Error("a turn ending did not move its seat")
@@ -33,8 +45,9 @@ func TestATurnCompletionCarriesNoSecondSpendTotal(t *testing.T) {
 			t.Errorf("the merged seat row carries %s = %v, a total no rollup agrees with", key, v)
 		}
 	}
-	if got := s.SpendRecords(); len(got) != 0 {
-		t.Errorf("a turn completion became %d spend records; spend is folded from phases", len(got))
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"phase"}) {
+		t.Errorf("the window holds %v, want the phase record alone: spend is folded from "+
+			"phases, and a turn completion is not one", ids)
 	}
 }
 
@@ -555,7 +568,7 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	s := livestate.New()
+	s := stoppedAt(t, defaultTS)
 	s.Apply(&e)
 
 	records := s.SpendRecords()
@@ -569,7 +582,7 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 	// The payload comes off a wire this process does not control. A string
 	// where a count belongs is bad data, not a reason to take the
 	// projection down.
-	s := livestate.New()
+	s := stoppedAt(t, defaultTS)
 	s.Apply(env("agent_phase_completed", map[string]any{
 		"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
 	}))
@@ -583,7 +596,9 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	// Several payloads name the same thing two ways — a phase names its
 	// model, and falls back to the provider entry that served it. The
 	// fallback only helps if an EMPTY first value falls through to it.
-	s := livestate.New()
+	// On a pinned clock: the window ages on the projection's clock, and
+	// on the wall clock these stamps left it long ago.
+	s := stoppedAt(t, defaultTS)
 	s.Apply(env("agent_phase_completed", map[string]any{
 		"agent_id": "a-1", "model": "", "provider_key": "anthropic", "turn_id": "tn-1",
 	}, id("p1")))
@@ -591,7 +606,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 		t.Fatalf("records = %+v, want an empty model to fall through to provider_key", got)
 	}
 
-	s2 := livestate.New()
+	s2 := stoppedAt(t, defaultTS)
 	s2.Apply(env("agent_phase_completed", map[string]any{
 		"agent_id": "a-1", "model": "claude-sonnet-5", "provider_key": "anthropic", "turn_id": "tn-1",
 	}, id("p1")))
@@ -606,7 +621,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 // It is a label and nothing is keyed on it.
 func TestASpendRecordsRoleIsReadAsTheStoreReadsIt(t *testing.T) {
 	t.Parallel()
-	s := livestate.New()
+	s := stoppedAt(t, defaultTS)
 	s.Apply(env("agent_phase_completed", map[string]any{
 		"agent_id": "a-1", "role": "", "agent_role": "Lead", "turn_id": "tn-1",
 	}, id("p1")))

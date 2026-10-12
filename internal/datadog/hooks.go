@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // DefaultWebhookName is the webhook definition this engine keeps at Datadog
@@ -166,13 +167,13 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 		// deliveries that go nowhere. But neither is nothing to say —
 		// this company's alerts reach nobody until somebody sets the
 		// field, so it is reported as the blocked ingress it is.
+		key := setup.BaseKey(opts.WebhookBaseKey)
 		out.Blocked = &Unregistered{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "api.external_url",
+			Subject: key,
 			Detail: "no webhook was registered at Datadog: this deployment has " +
 				"no public base URL, so there is no address to point one at " +
-				"and every monitor that fires reaches nobody. Set " +
-				"api.external_url",
+				"and every monitor that fires reaches nobody. Set " + key,
 		}
 		return out
 	}

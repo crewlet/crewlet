@@ -11,6 +11,7 @@ import { COMPANY_KEY } from "./model/keys.ts";
 import type { Conflict } from "./model/operations.ts";
 import { company, Engine, json, mountBuilder } from "./testkit.tsx";
 import { conflictCells } from "./UpdateDraftDialog.tsx";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -245,7 +246,7 @@ test("a removal somebody else edited first names what they changed", async () =>
     doc.roles![1]!.goal = "Design things";
   });
   engine.revision = "r2";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
   fireEvent.click(await screen.findByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
   const row = within(dialog).getByRole("row", { name: /the whole seat/ });

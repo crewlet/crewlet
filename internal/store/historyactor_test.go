@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A HISTORY ROW NAMES ITS AUTHOR ONCE, and replicated migration 0031 is what
+// A HISTORY ROW NAMES ITS AUTHOR ONCE, and replicated migration 0041 is what
 // takes the second copy away.
 //
 // 0026 added `tracker_history.actor_seat` for the operator-id binding, which
@@ -18,12 +18,12 @@ import (
 // columns that carry the author survive the drop, and the drop took nothing
 // else with it.
 //
-// Mutation: delete 0031's `DROP COLUMN actor_seat`, and the column is reported.
+// Mutation: delete 0041's `DROP COLUMN actor_seat`, and the column is reported.
 func TestAHistoryRowCarriesNoSeatBesideItsActor(t *testing.T) {
 	t.Parallel()
 
-	db := openReplicated(t)
-	columns := columnsOf(t, db, "tracker_history")
+	db := migratedEstate(t)
+	columns := estateColumns(t, db, "tracker_history")
 	if slices.Contains(columns, "actor_seat") {
 		t.Errorf("tracker_history still carries actor_seat — the author is "+
 			"`actor`, and a seat beside it is a second answer: %v", columns)
@@ -37,7 +37,7 @@ func TestAHistoryRowCarriesNoSeatBesideItsActor(t *testing.T) {
 	type author struct{ actor, kind, operator string }
 	want := author{"maya", "human", "session:0192f00d-0000-7000-8000-0000000000b0"}
 	ctx := t.Context()
-	if err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO tracker_history
 			(id, subject_kind, subject_id, kind, actor, actor_kind, operator_id,
 			 log_seq, log_stream, created_at, document)
@@ -48,7 +48,7 @@ func TestAHistoryRowCarriesNoSeatBesideItsActor(t *testing.T) {
 		t.Fatalf("write a history row in the shape the estate ends at: %v", err)
 	}
 	var got author
-	if err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT actor, actor_kind, operator_id
 			FROM tracker_history WHERE id = 'h-1'`).Scan(&got.actor, &got.kind, &got.operator)
 	}); err != nil {

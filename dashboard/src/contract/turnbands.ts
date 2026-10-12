@@ -62,6 +62,9 @@ export const ABSORBED: Readonly<Record<string, string>> = {
   // The stat strip, the header and the turn record.
   agent_turn_completed: "the turn's header and record",
   turn_completed: "the turn's header and record",
+  // What the auxiliary model spent: the in-turn records as the Tokens fact's
+  // "+N auxiliary", the reflection's as the Reflection lane's workers.
+  auxiliary_spend: "the Tokens fact and the Reflection lane",
 };
 
 /**

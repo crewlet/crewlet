@@ -144,7 +144,8 @@ func TestAStateIsRefusedUnlessThisFleetSealedItForThisFlow(t *testing.T) {
 			"prove nothing", err)
 	}
 
-	// AND IT LAPSES WITH ITS WINDOW, which is the claim bucket's age.
+	// AND IT LAPSES WITH ITS WINDOW, which is the TTL the claim spending it
+	// is taken at.
 	now = now.Add(manifestTTL)
 	if _, err := flow.openState(good); !errors.Is(err, ErrStateRefused) {
 		t.Errorf("a state %s old opened (%v), want it lapsed", manifestTTL, err)

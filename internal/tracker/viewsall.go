@@ -41,9 +41,9 @@ type EveryViewQuery struct {
 	// Viewer is whose personal views join the shared ones and whose pins
 	// come first. Empty reads the shared views alone.
 	Viewer string
-	// Units resolves a unit's two spellings when a pinned unit view is
-	// counted — see [ViewQuery.Units].
-	Units Units
+	// Units resolves a unit's name or key to the key a save stores when a
+	// pinned unit view is counted — see [ViewQuery.Units].
+	Units Units `json:"-"`
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -56,7 +56,7 @@ type EveryViewQuery struct {
 	// person's pins are bounded there whichever containers they are in.
 	Counts bool
 	Now    time.Time
-	Zone   *time.Location
+	Zone   *time.Location `json:"-"`
 }
 
 // EveryView answers every saved view the viewer can see, pinned-for-them

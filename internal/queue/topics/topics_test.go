@@ -59,6 +59,8 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 		{"inbox group", topics.AgentInboxGroup(alice), "agent-" + aliceID},
 		{"control subject", topics.AgentControl(alice), "crewlet.agent." + aliceID + ".control"},
 		{"control group", topics.AgentControlGroup(alice), "agent-" + aliceID + "-control"},
+		{"reflect subject", topics.AgentReflect(alice), "crewlet.agent." + aliceID + ".reflect"},
+		{"reflect group", topics.AgentReflectGroup(alice), "agent-" + aliceID + "-reflect"},
 		// THE CANONICAL SPELLING, and only that one: uuid.Parse accepts
 		// braced and urn-prefixed forms that String() never emits, and each
 		// of them would be a different subject naming one seat.
@@ -85,6 +87,9 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 	}
 	if !strings.HasSuffix(topics.AgentControl(alice), topics.AgentControlSuffix) {
 		t.Errorf("AgentControl does not end with AgentControlSuffix %q", topics.AgentControlSuffix)
+	}
+	if !strings.HasSuffix(topics.AgentReflect(alice), topics.AgentReflectSuffix) {
+		t.Errorf("AgentReflect does not end with AgentReflectSuffix %q", topics.AgentReflectSuffix)
 	}
 	if !strings.HasPrefix(topics.Event("agent_phase_started"), topics.EventsPrefix) {
 		t.Errorf("Event does not start with EventsPrefix %q", topics.EventsPrefix)
@@ -125,6 +130,7 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 
 		{topics.AgentInboxPrefix + ">", topics.AgentInbox(alice), true},
 		{topics.AgentInboxPrefix + ">", topics.AgentControl(alice), true},
+		{topics.AgentInboxPrefix + ">", topics.AgentReflect(alice), true},
 		{topics.AgentInboxPrefix + ">", topics.Event("agent_phase_started"), false},
 
 		{topics.NotificationsPrefix + ">", topics.NotificationsInbound, true},
@@ -172,6 +178,8 @@ func TestANilSeatYieldsNoSubject(t *testing.T) {
 		{"AgentInboxGroup", topics.AgentInboxGroup(uuid.Nil)},
 		{"AgentControl", topics.AgentControl(uuid.Nil)},
 		{"AgentControlGroup", topics.AgentControlGroup(uuid.Nil)},
+		{"AgentReflect", topics.AgentReflect(uuid.Nil)},
+		{"AgentReflectGroup", topics.AgentReflectGroup(uuid.Nil)},
 		{"Event", topics.Event("")},
 	} {
 		if tc.got != "" {
@@ -222,6 +230,7 @@ func TestSeatFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 	for _, tc := range []struct{ name, subject string }{
 		{"the empty string", ""},
 		{"a control subject, not an inbox", topics.AgentControl(alice)},
+		{"a reflect subject, not an inbox", topics.AgentReflect(alice)},
 		{"an event subject", topics.Event("agent_phase_started")},
 		{"what an unroutable seat produces", "crewlet.agent..inbox"},
 		{"a token with a dot would be two segments", "crewlet.agent.a.b.inbox"},
@@ -260,6 +269,7 @@ func TestMailboxSeatNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 		for _, pair := range [][2]string{
 			{topics.AgentInbox(id), topics.AgentInboxGroup(id)},
 			{topics.AgentControl(id), topics.AgentControlGroup(id)},
+			{topics.AgentReflect(id), topics.AgentReflectGroup(id)},
 		} {
 			got, ok := topics.MailboxSeat(pair[0], pair[1])
 			if !ok || got != id {
@@ -273,15 +283,26 @@ func TestMailboxSeatNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 		{"an inbox under another seat's group", topics.AgentInbox(alice), topics.AgentInboxGroup(bob)},
 		{"an inbox under the control group", topics.AgentInbox(alice), topics.AgentControlGroup(alice)},
 		{"a control subject under the inbox group", topics.AgentControl(alice), topics.AgentInboxGroup(alice)},
+		{"a reflect subject under the control group", topics.AgentReflect(alice), topics.AgentControlGroup(alice)},
+		{"a control subject under the reflect group", topics.AgentControl(alice), topics.AgentReflectGroup(alice)},
+		{"a reflect subject under another seat's reflect group", topics.AgentReflect(alice),
+			topics.AgentReflectGroup(bob)},
 		// The collision TestGroupNamesAreNotUniqueOnTheirOwn describes,
 		// from the side that must NOT match: `agent-` + X + `-control`
 		// and `agent-` + Y coincide when Y is X + "-control", so that
-		// group on X's INBOX topic is neither seat's mailbox.
+		// group on X's INBOX topic is neither seat's mailbox. The reflect
+		// suffix composes the same way.
 		{"a control group spelled onto an inbox topic", topics.AgentInbox(alice),
 			topics.AgentInboxGroup(alice) + "-control"},
+		{"a reflect group spelled onto an inbox topic", topics.AgentInbox(alice),
+			topics.AgentInboxGroup(alice) + "-reflect"},
 		{"a control subject with a dotted token", "crewlet.agent.a.b.control", "agent-a.b-control"},
+		{"a reflect subject with a dotted token", "crewlet.agent.a.b.reflect", "agent-a.b-reflect"},
 		{"an empty control token", "crewlet.agent..control", "agent--control"},
+		{"an empty reflect token", "crewlet.agent..reflect", "agent--reflect"},
 		{"a handle where a seat id belongs", "crewlet.agent.alice.control", "agent-alice-control"},
+		{"a handle where a seat id belongs, on reflection", "crewlet.agent.alice.reflect",
+			"agent-alice-reflect"},
 		{"a service subscription", topics.NotificationsInbound, "notify-inbound"},
 		{"an event subscription", topics.Event("task_created"), topics.AgentInboxGroup(alice)},
 	} {
@@ -324,8 +345,14 @@ func TestGroupNamesAreNotUniqueOnTheirOwn(t *testing.T) {
 
 	// What makes it harmless: the PAIRS are distinct, because the subjects
 	// are. Assert that, since it is the property a backend relies on.
-	if a, b := topics.AgentInbox(alice), topics.AgentControl(alice); a == b {
-		t.Errorf("a seat's inbox and control subjects are one string: %q", a)
+	for _, pair := range [][2]string{
+		{topics.AgentInbox(alice), topics.AgentControl(alice)},
+		{topics.AgentInbox(alice), topics.AgentReflect(alice)},
+		{topics.AgentControl(alice), topics.AgentReflect(alice)},
+	} {
+		if pair[0] == pair[1] {
+			t.Errorf("two of a seat's mailbox subjects are one string: %q", pair[0])
+		}
 	}
 }
 
@@ -355,8 +382,9 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 		uuid.MustParse("00000000-0000-4000-8000-000000000001")}
 	var subjects, groups []string
 	for _, id := range seats {
-		subjects = append(subjects, topics.AgentInbox(id), topics.AgentControl(id))
-		groups = append(groups, topics.AgentInboxGroup(id), topics.AgentControlGroup(id))
+		subjects = append(subjects, topics.AgentInbox(id), topics.AgentControl(id), topics.AgentReflect(id))
+		groups = append(groups, topics.AgentInboxGroup(id), topics.AgentControlGroup(id),
+			topics.AgentReflectGroup(id))
 	}
 	subjects = append(subjects,
 		topics.Event("agent_phase_started"), topics.Event("agent_turn_completed"),

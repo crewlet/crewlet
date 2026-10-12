@@ -120,3 +120,31 @@ test("the twin the widths are read from is hidden from everything", () => {
   expect(twin.hasAttribute("inert")).toBe(true);
   expect(screen.getAllByRole("tablist")).toHaveLength(1);
 });
+
+// A TAB WITH SOMETHING RUNNING BEHIND IT SAYS SO, drawn and folded alike: the
+// pulsing dot and the words, because the dot is hidden from assistive
+// technology and a hue is never the only carrier.
+test("a live tab says what is happening, on the strip and folded into More", async () => {
+  const live = TABS.map((t) => (t.value === "turns" ? { ...t, live: "running now" } : t));
+  function Live() {
+    const [value, setValue] = useState("overview");
+    return (
+      <ObjectTabs ariaLabel="SWE's sections" items={live} value={value} onValueChange={setValue} />
+    );
+  }
+  lay(2000);
+  render(<Live />);
+  await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(6));
+  const strip = screen.getByRole("tablist", { name: "SWE's sections" });
+  const tab = within(strip).getByRole("tab", { name: "Turns, running now" });
+  expect(tab.querySelector(".crewlet-status-dot")).not.toBeNull();
+  cleanup();
+
+  lay(366);
+  render(<Live />);
+  await waitFor(() => expect(drawn()).toHaveLength(2));
+  fireEvent.click(screen.getByRole("button", { name: /More/ }));
+  const item = await screen.findByRole("menuitem", { name: /Turns/ });
+  expect(item.textContent).toContain("running now");
+  expect(item.querySelector(".crewlet-status-dot")).not.toBeNull();
+});

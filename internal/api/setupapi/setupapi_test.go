@@ -36,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -125,10 +126,11 @@ type surface struct {
 	cipher secrets.Cipher
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
-	// externalBase is this fixture's `api.external_url`, kept so that
-	// [surface.withPass], which rebuilds the service, hands over the same
-	// address the surface was built with rather than none.
-	externalBase string
+	// webhookBase and webhookBaseKey are this fixture's vendor address and
+	// the Tier A key it is read from, kept so that [surface.withPass], which
+	// rebuilds the service, hands over the same address the surface was
+	// built with rather than none.
+	webhookBase, webhookBaseKey string
 	// setup is the service itself, kept so a test can reach the app flow
 	// the webhook callback is served.
 	setup *setupapi.Service
@@ -144,7 +146,7 @@ type surface struct {
 }
 
 func newSurface(t *testing.T) *surface {
-	return newSurfaceWithApps(t, nil, fixtureExternalBase)
+	return newSurfaceWithApps(t, nil, fixtureWebhookBase)
 }
 
 // newSurfaceWithNoExternalURL is a deployment that has no address a vendor can
@@ -158,12 +160,12 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 // newConfigSurface is the config write path over a store of the test's own,
 // sealing under a keyring of its own — which it returns, because a revision
 // the case plants has to be sealed under it to be read back.
-func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Cipher) {
+//
+// writers, when given, are the token ids Tier A names as the company
+// document's only writers (`api.auth.company_writers`).
+func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, secrets.Cipher) {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
@@ -173,7 +175,8 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Ciph
 
 			return nil, nil
 		},
-		Now: func() time.Time { return pinned },
+		CompanyWriters: writers,
+		Now:            func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
@@ -184,14 +187,19 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Ciph
 // newService builds the service over whatever a case names, filling each
 // required dependency it leaves unset with an inert one, so a case names only
 // what it is about.
-// fixtureExternalBase is the `api.external_url` a fixture's service carries.
+// fixtureWebhookBase is the vendor address a fixture's service carries — its
+// `api.external_url`, on a deployment with one listener.
 //
 // IT IS PASSED EXPLICITLY AT EVERY SITE rather than defaulted inside
 // [newService], because "" is a real posture a case has to be able to ask for:
 // a deployment with no address a vendor can reach offers no manifest and
 // refuses every writing pass, and a helper that filled the field in would make
 // that case unreachable.
-const fixtureExternalBase = "https://engine.example.com"
+const fixtureWebhookBase = "https://engine.example.com"
+
+// oneListener is the Tier A key a one-listener deployment's vendor address
+// is read from.
+const oneListener = "api.external_url"
 
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
@@ -228,6 +236,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.StateCipher == nil {
 		opts.StateCipher = testCipher(t)
 	}
+	if opts.WebhookBaseKey == "" {
+		opts.WebhookBaseKey = oneListener
+	}
 	svc, err := setupapi.New(opts)
 	if err != nil {
 		t.Fatalf("setupapi.New: %v", err)
@@ -248,32 +259,34 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:     companySource(t, nil),
-			Config:      cfg,
-			Secrets:     v,
-			Resolve:     v.get,
-			Passes:      setup.NewRunner(nil, nil, nil),
-			Sink:        func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
-			Status:      &statusStore{},
-			SlackApps:   func() map[string]string { return nil },
-			StateCipher: testCipher(t),
-			StateClaims: coordmemory.NewFleet(),
+			Company:        companySource(t, nil),
+			Config:         cfg,
+			Secrets:        v,
+			Resolve:        v.get,
+			Passes:         setup.NewRunner(nil, nil, nil),
+			Sink:           func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
+			Status:         &statusStore{},
+			SlackApps:      func() map[string]string { return nil },
+			StateCipher:    testCipher(t),
+			StateClaims:    coordmemory.NewFleet(),
+			WebhookBaseKey: oneListener,
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
 		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
 	}
 	for field, strip := range map[string]func(*setupapi.Options){
-		"Company":     func(o *setupapi.Options) { o.Company = nil },
-		"Config":      func(o *setupapi.Options) { o.Config = nil },
-		"Secrets":     func(o *setupapi.Options) { o.Secrets = nil },
-		"Resolve":     func(o *setupapi.Options) { o.Resolve = nil },
-		"Passes":      func(o *setupapi.Options) { o.Passes = nil },
-		"Sink":        func(o *setupapi.Options) { o.Sink = nil },
-		"Status":      func(o *setupapi.Options) { o.Status = nil },
-		"SlackApps":   func(o *setupapi.Options) { o.SlackApps = nil },
-		"StateCipher": func(o *setupapi.Options) { o.StateCipher = nil },
-		"StateClaims": func(o *setupapi.Options) { o.StateClaims = nil },
+		"Company":        func(o *setupapi.Options) { o.Company = nil },
+		"Config":         func(o *setupapi.Options) { o.Config = nil },
+		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
+		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
+		"Passes":         func(o *setupapi.Options) { o.Passes = nil },
+		"Sink":           func(o *setupapi.Options) { o.Sink = nil },
+		"Status":         func(o *setupapi.Options) { o.Status = nil },
+		"SlackApps":      func(o *setupapi.Options) { o.SlackApps = nil },
+		"StateCipher":    func(o *setupapi.Options) { o.StateCipher = nil },
+		"StateClaims":    func(o *setupapi.Options) { o.StateClaims = nil },
+		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
 	} {
 		opts := complete()
 		strip(&opts)
@@ -291,13 +304,32 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // newSurfaceWithApps is the same surface with the engine's answer to which
 // Slack app each seat authenticates as. Nil is a node whose Slack transport is
 // not running, or seats that have not come up.
-func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase string) *surface {
+func newSurfaceWithApps(t *testing.T, apps map[string]string, webhookBase string) *surface {
 	t.Helper()
-	cfg, db, cipher := newConfigSurface(t)
+	return newManagedSurface(t, apps, webhookBase)
+}
+
+// newManagedSurface is newSurfaceWithApps on a deployment naming writers as
+// the company document's only writers; none is an unmanaged document.
+func newManagedSurface(t *testing.T, apps map[string]string, webhookBase string,
+	writers ...string) *surface {
+
+	t.Helper()
+	return buildSurface(t, apps, webhookBase, oneListener, writers...)
+}
+
+// buildSurface is every fixture surface: the vendor address and the Tier A
+// key it is read from, the Slack apps the engine reports, and the company
+// document's writers.
+func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBaseKey string,
+	writers ...string) *surface {
+
+	t.Helper()
+	cfg, db, cipher := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
 		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
-		status: &statusStore{}, externalBase: externalBase,
+		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
@@ -318,11 +350,12 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase strin
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
-		Resolve:      v.get,
-		Status:       s.status,
-		SlackApps:    func() map[string]string { return apps },
-		ExternalBase: externalBase,
-		Now:          func() time.Time { return pinned },
+		Resolve:        v.get,
+		Status:         s.status,
+		SlackApps:      func() map[string]string { return apps },
+		WebhookBase:    webhookBase,
+		WebhookBaseKey: webhookBaseKey,
+		Now:            func() time.Time { return pinned },
 	})
 	mount(t, s.mux, s.setup, cfg)
 	return s
@@ -363,6 +396,21 @@ func (s *surface) as(req *http.Request) *http.Request {
 
 func (s *surface) do(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	return s.serve(s.as(request(method, path, body, headers)))
+}
+
+// doAs is do as p — the principal the guard would have resolved — for a case
+// about who asks rather than what the surface does.
+func (s *surface) doAs(t *testing.T, p iam.Principal, method, path, body string,
+	headers map[string]string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	req := request(method, path, body, headers)
+	return s.serve(req.WithContext(iam.WithPrincipal(req.Context(), p)))
+}
+
+// request is one request to the surface, JSON when it carries a body.
+func request(method, path, body string, headers map[string]string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -370,8 +418,12 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	return req
+}
+
+func (s *surface) serve(req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, s.as(req))
+	s.mux.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -496,24 +548,43 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 // ONE FIELD WHERE THERE WERE FOUR. This used to be a Tier B pointer, so the
 // answer also carried `present`, `resolved` and the variable's `reference` —
 // three fields describing a state a `${VAR}` nobody exported produced.
-// `api.external_url` is Tier A and required once the API is served, so a node
-// serving this listing has an address and those three describe nothing.
+// The address is Tier A and required on a node serving this listing, so it
+// has one and those three describe nothing.
+//
+// AND IT IS THE VENDOR'S, named by the key it is read from: once a public
+// listener is set, vendors reach it rather than the person's address, so the
+// listing names `api.public.external_url` — the setting an operator would
+// have to change — rather than the one that answers those routes 404.
 func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	t.Parallel()
+	const public = "https://hooks.example.com"
+	for _, tc := range []struct {
+		name      string
+		s         func(*testing.T) *surface
+		value, at string
+	}{
+		{"one listener", newSurface, fixtureWebhookBase, oneListener},
+		{"a public listener", func(t *testing.T) *surface {
+			return buildSurface(t, nil, public, "api.public.external_url")
+		}, public, "api.public.external_url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := tc.s(t)
+			s.seed(t)
+			body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
+			base, _ := body["external_url"].(map[string]any)
+			if base == nil {
+				t.Fatal("the listing carries no external url")
+			}
+			if base["value"] != tc.value || base["config_path"] != tc.at {
+				t.Errorf("external_url = %v, want %s read from %s", base, tc.value, tc.at)
+			}
+		})
+	}
 	s := newSurface(t)
 	s.seed(t)
-
 	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
-	base, _ := body["external_url"].(map[string]any)
-	if base == nil {
-		t.Fatal("the listing carries no external url")
-	}
-	if base["value"] != fixtureExternalBase {
-		t.Errorf("value = %v, want the deployment's own address", base["value"])
-	}
-	if base["config_path"] != "api.external_url" {
-		t.Errorf("config_path = %v", base["config_path"])
-	}
 	tools, _ := body["tools"].([]any)
 	if len(tools) == 0 {
 		t.Fatal("the listing serves no tools")
@@ -1000,12 +1071,13 @@ func (s *surface) withPassSink(
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
-		Resolve:      s.vault.get,
-		Passes:       runner,
-		Sink:         sink,
-		Status:       status,
-		Now:          func() time.Time { return pinned },
-		ExternalBase: s.externalBase,
+		Resolve:        s.vault.get,
+		Passes:         runner,
+		Sink:           sink,
+		Status:         status,
+		Now:            func() time.Time { return pinned },
+		WebhookBase:    s.webhookBase,
+		WebhookBaseKey: s.webhookBaseKey,
 	})
 	mount(t, s.mux, s.setup, s.config)
 	return status, runner
@@ -1089,6 +1161,40 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	// And the outcome landed on the fleet row the loop reads.
 	if _, ok := status.get(integration.KindGitHub); !ok {
 		t.Error("the pass wrote no status, so the screen would not update")
+	}
+}
+
+// AND THE KEY ITS ADDRESS IS READ FROM, beside it, on a check as on a writing
+// pass. A vendor with no address reports `ingress_blocked` naming the setting
+// to fill in, and behind a public listener that setting is
+// `api.public.external_url`: a pass handed only the address named
+// `api.external_url` — the person's, set, and answering 404 for every webhook
+// route — on exactly the deployments whose vendor address it is not.
+func TestAPassIsHandedTheKeyItsAddressIsReadFrom(t *testing.T) {
+	t.Parallel()
+	const public, key = "https://hooks.example.com", "api.public.external_url"
+	for _, route := range []string{"provision", "check"} {
+		t.Run(route, func(t *testing.T) {
+			t.Parallel()
+			s := buildSurface(t, nil, public, key)
+			s.seed(t)
+			pass := &recordingPass{}
+			s.withPass(t, pass)
+			s.seedGitHub(t)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/"+route, `{}`, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", res.Code, res.Body)
+			}
+			in, calls := pass.last()
+			if calls != 1 {
+				t.Fatalf("the pass ran %d times", calls)
+			}
+			if in.WebhookBase != public || in.WebhookBaseKey != key {
+				t.Errorf("the pass was handed %q read from %q, want %q read from %q",
+					in.WebhookBase, in.WebhookBaseKey, public, key)
+			}
+		})
 	}
 }
 

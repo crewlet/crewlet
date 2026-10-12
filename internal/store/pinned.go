@@ -23,17 +23,19 @@ import (
 // are waiting on, and nothing bounds it.
 //
 // A pin removes the writer from that competition entirely. It costs one
-// connection for the handle's life, which is why [Options.PinnedWriters] is
-// declared by the caller and added to the pool rather than taken out of it.
+// connection for the handle's life, which is why the count of logs is
+// declared by the caller ([DB.OpenReplicated]) and added to the pool rather
+// than taken out of it.
 //
 // # The pool's arithmetic, and the second thing that is not the readers'
 //
-// The whole bound is:
+// The whole bound is [Options.poolSize]:
 //
-//	pool = defaultReaderConns() + identityReserve + PinnedWriters
+//	pool = readers + identityReserve + pins
 //
 // with the pins held by their writers, [identityReserve] held by the handle
-// itself ([DB.reserve]), and what is left the readers'.
+// itself ([DB.reserve]), and the readers what is left — each of the last two
+// ADDED to the readers rather than taken out of them.
 //
 // [identityReserve] is a pin's SIBLING INVARIANT: one connection that ordinary
 // work may not occupy, kept for the lookups that answer "who is acting". It is
@@ -99,11 +101,12 @@ var ErrWriterClosed = errors.New("store: this pinned writer is closed")
 // Writer pins a connection and returns a handle that owns it until Close.
 //
 // REFUSED PAST THE DECLARED COUNT, naming it. The pool was sized as readers
-// plus [Options.PinnedWriters], so an undeclared pin is not a tight fit — it
-// is a reader's connection taken with nothing reporting the loss, and the
-// symptom (a dashboard that queues) appears nowhere near the cause.
+// plus the logs [DB.OpenReplicated] was given, so an undeclared pin is not a
+// tight fit — it is a reader's connection taken with nothing reporting the
+// loss, and the symptom (a dashboard that queues) appears nowhere near the
+// cause.
 func (d *DB) Writer(ctx context.Context) (*Writer, error) {
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return nil, ErrNoEstate
 	}
 	d.pins.mu.Lock()
@@ -112,14 +115,15 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 		d.pins.mu.Unlock()
 		return nil, fmt.Errorf(
 			"store: this handle declared %d pinned writer(s) and %d are held: "+
-				"raise store.Options.PinnedWriters to the number of statelog "+
-				"domains this node runs, so the pool is sized for them",
+				"the replicated estate's pins are one per log it carries — "+
+				"open it with DB.OpenReplicated for the number of logs whose "+
+				"apply loops run on it, so the pool is sized for them",
 			declared, declared)
 	}
 	d.pins.held++
 	d.pins.mu.Unlock()
 
-	conn, err := d.sql.Conn(ctx)
+	conn, err := d.conn(ctx)
 	if err != nil {
 		d.pins.mu.Lock()
 		d.pins.held--
@@ -193,11 +197,11 @@ func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
 	if w == nil || w.closed {
 		return nil, ErrWriterClosed
 	}
-	if w.db == nil || w.db.sql == nil {
+	if !w.db.isOpen() {
 		return nil, ErrNoEstate
 	}
 	if w.conn == nil {
-		conn, err := w.db.sql.Conn(ctx)
+		conn, err := w.db.conn(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("store: re-pin a writer connection: %w", err)
 		}
@@ -213,7 +217,7 @@ func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
 // end and Tx replaces it: ask again after a failed Tx rather than holding the
 // old one. It is NIL only when that replacement could not be had, and the
 // next Tx reports why — so a caller reaching for it directly must check,
-// exactly as one reaching for [DB.Replicated] must. There is deliberately NO
+// exactly as one reaching for [DB.ReplicatedDB] must. There is deliberately NO
 // prepared-statement cache on it, and the reason is a measurement rather than
 // a preference: on this driver, executing an applier-shaped upsert 4 000 times
 // through a statement prepared once on this connection is not faster than
@@ -266,14 +270,14 @@ func (w *Writer) Close() error {
 // applier is committing to, otherwise reports a total that does not match the
 // page under it. A transaction is what makes the two statements one answer.
 //
-// IT PASSES sql.TxOptions{ReadOnly: true}, and that option now MEANS
-// something here — but not what its name suggests. [beginModeDriver] reads it
-// as "take the DEFERRED begin": a snapshot with no write lock, which is what
-// a multi-statement read wants and what keeps a dashboard query from
-// excluding the engine's writes for its duration. It does NOT make the driver
-// refuse a write inside fn. The read-only-ness is still the caller's
-// discipline and this doc; what the option buys is the right begin, not an
-// enforcement.
+// IT PASSES sql.TxOptions{ReadOnly: true}, and [beginModeDriver] reads that
+// option twice. It takes the DEFERRED begin: a snapshot with no write lock,
+// which is what a multi-statement read wants and what keeps a dashboard query
+// from excluding the engine's writes for its duration. And it runs fn with
+// `query_only` on, so a write inside fn is REFUSED by the engine rather than
+// committed — the promise [ReplicatedReader] is handed to every reader of the
+// replicated estate on, which a doc comment alone did not keep (see
+// [beginModeConn.queryOnlyFor]).
 //
 // It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot
 // race too, and a reader that surfaced "database snapshot is stale" to a
@@ -285,7 +289,7 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// to refuse.
 	// See [ErrNoEstate]: this is the second time a maintenance tick racing a
 	// shutdown has taken the engine down through this exact path.
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return ErrNoEstate
 	}
 	// IDENTITY WORK GOES TO THE RESERVED CONNECTION. This is the read path
@@ -295,13 +299,13 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		if err := d.readReserved(ctx, fn); !errors.Is(err, errNoReserve) {
 			return err
 		}
-		// A handle with no room for a reserve (an explicit pool of one)
-		// serves identity work from the pool like everybody else. It is
-		// where those reads were before the reserve existed, and it is
-		// better than refusing a question this handle can answer.
+		// A reserve that could not be drawn just now serves identity work
+		// from the pool like everybody else. It is where those reads were
+		// before the reserve existed, and it is better than refusing a
+		// question this handle can answer.
 	}
 	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
-		conn, err := d.sql.Conn(ctx)
+		conn, err := d.conn(ctx)
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
 		}
@@ -322,11 +326,12 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // errNoReserve is [DB.readReserved] reporting that there is no reserved
 // connection to run on, so the caller should fall through to the pool.
 //
-// TWO STATES ANSWER IT and both call for the same thing: a handle with no room
-// to hold one (an explicit pool of one), and a handle whose reserved
-// connection was retired and could not be re-drawn just now. Neither is a
-// reason to refuse a question this handle can answer from the pool — which is
-// where these reads were before the reserve existed.
+// IT MEANS THE RESERVED CONNECTION COULD NOT BE DRAWN JUST NOW — at the open,
+// or after the last one was retired — which is no reason to refuse a question
+// this handle can answer from the pool, where these reads were before the
+// reserve existed. Every handle holds a reserve: it is added to the pool
+// rather than taken out of it ([Options.poolSize]), so no bound is too small
+// to keep one.
 //
 // Unexported and never returned to a caller: it is a control answer between
 // two functions in this file, and a sentinel rather than a second return value
@@ -348,6 +353,13 @@ func (d *DB) readReserved(ctx context.Context, fn func(*sql.Tx) error) error {
 	d.reserve.mu.Lock()
 	defer d.reserve.mu.Unlock()
 	return retryTransient(ctx, budget(d.busy, d.pool), func() (err error) {
+		// A HANDLE CLOSED UNDER THE CALLER answers as one that was never
+		// open, exactly as [DB.conn] does for the pool: Close may have
+		// released the reserve between [DB.Read]'s guard and this lock.
+		if d.closed.Load() {
+			return fmt.Errorf("%w: %s was closed while this call was in flight",
+				ErrNoEstate, d.path)
+		}
 		conn := d.identityConn(ctx)
 		if conn == nil {
 			return errNoReserve

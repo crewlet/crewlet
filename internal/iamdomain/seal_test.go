@@ -221,7 +221,7 @@ var envelopeShape = regexp.MustCompile(`enc:v1:[^:"\s]+:[A-Za-z0-9+/]+=*`)
 // EVERY TABLE, found rather than listed: a list of where the sealed values are
 // is the thing the erasure itself refused to keep, and a new table carrying
 // one would pass a scan that did not know to read it.
-func openable(t *testing.T, db *store.DB, sealer *iamdomain.Sealer,
+func openable(t *testing.T, db store.ReplicatedHandle, sealer *iamdomain.Sealer,
 	owner owned) map[string]int {
 
 	t.Helper()
@@ -249,7 +249,7 @@ func openable(t *testing.T, db *store.DB, sealer *iamdomain.Sealer,
 		})
 	}
 	out := map[string]int{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		tables, err := namesOf(tx, t, `SELECT name FROM sqlite_master
 			WHERE type = 'table' AND name LIKE 'iam\_%' ESCAPE '\'`)
 		if err != nil {
@@ -489,7 +489,7 @@ func TestARemovalErasesTheTrailOfAnInvitationTheSweepCollected(t *testing.T) {
 	sweep := sweepRecord(t, iamdomain.Sweep{V: iamdomain.DocumentVersion,
 		Bucket:  iamdomain.BucketOf(blindOf(t, address)),
 		Expired: time.Now().Add(24 * time.Hour)})
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := rig.applier.Apply(t.Context(), tx, sweep,
 			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
 		return err

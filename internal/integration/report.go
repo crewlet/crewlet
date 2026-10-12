@@ -67,16 +67,15 @@ const (
 // back by a peer that may be a different build, and named in the docs and the
 // API. What an operator scanning a list of integrations wants is not that.
 //
-// THE WORDS ARE THE CONTROL PLANE'S, so one company reads the same status
-// whichever console it is looking at. backlet's ReconcilePhase and this one
-// are the same vocabulary with two names, and its console renders them as
-// below; anything else here would mean an integration that says "activating"
-// in one product and something else in the other.
+// THE WORDS ARE DECIDED HERE, ONCE, so one company reads the same status on
+// every screen that shows it: the dashboard renders these labels, and any
+// other client renders them too rather than mapping the phases itself.
+// Anything else would mean an integration that says "activating" on one
+// screen and something else on another.
 //
-// ONE of backlet's phases has no counterpart here, and it is not an omission:
-// `disconnected` is a tenant who has not connected an integration yet, which
-// in this engine is a company document with no block at all, so there is no
-// row and no phase to report.
+// THERE IS NO `disconnected` PHASE, and it is not an omission: an integration
+// nobody has connected yet is a company document with no block at all, so
+// there is no row and no phase to report.
 //
 // `disconnecting` IS a phase here, which this comment used to deny on the
 // reasoning that a disconnect is one config write. It is not: the teardown

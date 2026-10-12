@@ -98,14 +98,13 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		// TYPED, like the write half's. A caller deciding what a refusal
 		// means — 404 is "not there yet", 403 is "this credential
 		// cannot" — would otherwise substring-match a message whose
 		// wording differs by GitLab version and by locale.
 		return &APIError{
 			Method: http.MethodGet, Path: path, Status: resp.StatusCode,
-			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
+			Detail: httpx.ReadRefusal(resp),
 		}
 	}
 	if out == nil {

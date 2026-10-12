@@ -485,15 +485,17 @@ describe("the frame's layout", () => {
       /(^|[;\s])(min-|max-)?height:\s*100%/,
     );
     // …and the query container it measures is the SCROLLER, sized by the
-    // shell rather than by what it holds. The page container on the content
-    // column is `inline-size` and so answers no block-axis unit, which is what
-    // lets `cqb` reach past it.
-    expect(
-      block(
-        wide,
-        ".app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame)",
-      ),
-    ).toMatch(/container:\s*scroller\s*\/\s*size/);
+    // shell rather than by what it holds — on EVERY screen, not only on the
+    // frame that asked first: a running phase's transcript and a seat's thread
+    // list are bounded by the same view (`styles/scrollers.test.ts`). The page
+    // container on the content column is `inline-size` and so answers no
+    // block-axis unit, which is what lets `cqb` reach past it.
+    expect(block(wide, ".app .crewlet-app-shell__main")).toMatch(
+      /container:\s*scroller\s*\/\s*size/,
+    );
+    expect(wide, "scoped to one frame, every other screen's `cqb` is the viewport").not.toMatch(
+      /\.crewlet-app-shell__main:has\([^)]*section-frame[^)]*\)\s*\{[^}]*container:/,
+    );
 
     // ON A PHONE the column is back in the flow, and the frame's spare height
     // goes to the section: two `auto` rows split it and opened a band of

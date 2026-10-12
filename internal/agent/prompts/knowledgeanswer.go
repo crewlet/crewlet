@@ -43,8 +43,9 @@ type KnowledgeSource struct {
 	// Label is how the model is told to recognise it: a page's title, or
 	// a work item's key and title.
 	Label string
-	// Text is the source's own words, already cut to the excerpt the
-	// caller allows.
+	// Text is the source's own words — whole, or condensed for the
+	// question by the caller and marked as such. Never cut: a source cut
+	// to its opening reads as a source that ends there.
 	Text string
 }
 

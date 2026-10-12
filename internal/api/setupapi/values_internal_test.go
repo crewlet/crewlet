@@ -3,7 +3,6 @@ package setupapi
 import (
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -76,15 +75,17 @@ func TestAFieldBothSuppliedAndGeneratedSaysSo(t *testing.T) {
 	}
 }
 
-// THE STORED SUMMARY IS ALWAYS VALID UTF-8. It is cut to a length, and a raw
-// byte slice cuts mid-rune whenever a multi-byte character straddles the
-// boundary — leaving a string the JSON encoder substitutes and the Config
-// screen renders as a replacement character.
-func TestTheAuditSummaryIsNeverCutMidRune(t *testing.T) {
+// THE CALLER'S WORDS ARE STORED WHOLE, on one line. They were cut to 120
+// bytes for a row the renderer already elides, so a connect's note was the
+// one summary in the history whose end nobody could read.
+func TestTheAuditSummaryCarriesTheCallersWordsWhole(t *testing.T) {
 	t.Parallel()
-	// Three bytes per rune, so a byte cut lands inside one for most lengths.
-	got := auditSummary(integration.KindGitHub, strings.Repeat("é", 200))
-	if !utf8.ValidString(got) {
-		t.Errorf("the summary is not valid UTF-8: %q", got)
+	words := strings.Repeat("é", 200) + " rotated after the incident"
+	got := auditSummary(integration.KindGitHub, "  "+words+"\nsecond line ")
+	if got != "connect github: "+words+" second line" {
+		t.Errorf("auditSummary = %q, want the words whole on one line", got)
+	}
+	if got := auditSummary(integration.KindGitHub, " \n "); got != "connect github" {
+		t.Errorf("an empty note = %q, want the generated sentence alone", got)
 	}
 }

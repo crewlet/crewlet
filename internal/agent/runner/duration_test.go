@@ -311,13 +311,12 @@ func TestASuspensionRecordsTheClockItParkedOn(t *testing.T) {
 	}
 }
 
-// A PARKED ROW FROM BEFORE THE FIELD EXISTED RESUMES AS IT ALWAYS DID.
+// A PARKED ROW WITH NO RECORDED CLOCK MEASURES THE RE-ENTRY ALONE.
 //
-// The state is persisted to a pending-run row and read back by a build that
-// may not be the one that wrote it, so the fold must be additive: an absent
-// `elapsed_ms` decodes to zero, seeds no offset, and measures the re-entry
-// alone — which is exactly right for a phase whose first half was never
-// measured.
+// `elapsed_ms` is omitted when the half before the suspend took under a
+// millisecond, so it decodes to zero and seeds no offset: the resumed phase's
+// duration is the re-entry, and nothing is added for a first half too short
+// to count.
 func TestAResumeWithNoRecordedClockMeasuresTheReentry(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
@@ -327,8 +326,8 @@ func TestAResumeWithNoRecordedClockMeasuresTheReentry(t *testing.T) {
 	pub := newCapture()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		pub: pub,
-		// suspendedAfterTwoRounds carries no ElapsedMS, like every row
-		// written before the field existed.
+		// suspendedAfterTwoRounds carries no ElapsedMS: a first half too
+		// short to count.
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
 	})
 	if _, _, err := r.Resume(context.Background(), nil); err != nil {

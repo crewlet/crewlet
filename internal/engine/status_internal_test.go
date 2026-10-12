@@ -254,8 +254,8 @@ func (s scripted) Complete(_ context.Context, req llm.Request) (*llm.Completion,
 // depth before it opens a phase, so every case below drives the real runTurn —
 // its prefetch, its runner build, its completion event — without a model call
 // and without the network. What it cannot exercise is a turn that suspends;
-// that is [TestASuspendedTurnKeepsTheIndicatorUp], on the same rule the engine
-// drives keepAlive off.
+// that is [TestAnIndicatorSurvivesOnlyWhatIsStillWorking], on the same rule
+// the engine drives keepAlive off.
 func indicating(t *testing.T, mode notify.StatusMode) (*Engine, *workspace) {
 	t.Helper()
 	return indicatingWith(t, mode, refusingProvider{})
@@ -293,7 +293,9 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 
-	e := &Engine{backends: &Backends{Queue: q}}
+	// A COORDINATION STORE, as every engine `crewlet run` builds has one —
+	// see [starting] for what a turn needs it for.
+	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}}
 	e.epoch.current.Store(&Company{
 		Org:    organization,
 		Models: models,
@@ -314,8 +316,8 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 //
 // THE CHANNEL IS AN ARGUMENT because a session is keyed on (handle, channel,
 // thread): two triggers in one channel are one indicator that two turns hold,
-// which is the shape [TestASuspendedTurnKeepsTheIndicatorUp] has to keep apart
-// from two independent turns.
+// which is the shape [TestAnIndicatorSurvivesOnlyWhatIsStillWorking] has to
+// keep apart from two independent turns.
 func chatTrigger(channel string) *events.Event {
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: slack.Backend, SourceEventType: "message",
@@ -341,6 +343,7 @@ func chatTrigger(channel string) *events.Event {
 // has heard the raise. The clear is asserted after, because the ending turn
 // makes that one itself. See "WHAT IS PROMISED, AND WHEN" above.
 func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
+	t.Parallel()
 	var (
 		e      *Engine
 		ws     *workspace
@@ -351,7 +354,7 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 	})
 
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-1",
+		Handle: "swe", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -384,6 +387,7 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 // what the first one said — and `default` would stop meaning what its config
 // field documents, a phase added later with no pool of its own.
 func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
 	s := e.beginWorkingStatus(t.Context(), "swe", "wk-open",
@@ -415,6 +419,7 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 // a turn whose indicator never reached a review line is a turn whose phases
 // reached nobody.
 func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
+	t.Parallel()
 	reviews := notify.PhasePhrases[phase.Review.String()]
 	// The reviewer's own call is what holds the turn open until its phase
 	// line has landed: the seam fires before a phase's first provider call,
@@ -444,7 +449,7 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	})
 
 	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-phases",
+		Handle: "swe", WorkKey: "wk-phases", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	})
 	if err != nil {
@@ -473,6 +478,7 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 // same way and none of them stamps a transport — so there is no conversation to
 // raise an indicator in, and no person to read it.
 func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
 	// The wake a schedule actually publishes, and the same shape a
@@ -482,7 +488,7 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 		Schedule: "standup",
 	}, events.TraceContext{})
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-2", Depth: 3,
+		Handle: "swe", WorkKey: "wk-2", Depth: 3, WorkSince: time.Now().UTC(),
 		Events: []*events.Event{tick},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -496,6 +502,7 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 // leave it unasked either: a passive channel message wakes every bot in the
 // room, and lighting up N indicators is noise rather than signal.
 func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAddressed)
 
 	passive := chatTrigger("D0ANA")
@@ -503,7 +510,7 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 	n.Metadata["channel"], n.Metadata["channel_type"] = "C0ENG", "channel"
 
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-3", Depth: 3,
+		Handle: "swe", WorkKey: "wk-3", Depth: 3, WorkSince: time.Now().UTC(),
 		Events: []*events.Event{passive},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -524,6 +531,7 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 // given is the frames' own business, and the cases below it drive that
 // end to end.
 func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 	// One conversation per case: a second turn in the SAME channel would
 	// JOIN the first's session rather than raise its own, so a case that
@@ -606,6 +614,7 @@ func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
 // [notify.StatusDriver.ClearFor] was added to bound and what nothing else
 // would ever have taken down.
 func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
+	t.Parallel()
 	// THE ROW IS KEYED ON THE RUN, not on the work it was dispatched for
 	// (ADR-0017), so the request below names its own RunID rather than
 	// letting runTurn mint one: a row seeded under any other id is not
@@ -614,7 +623,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	// others.
 	launching := func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
 		t.Helper()
-		if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 			TurnID: "run-code", WorkKey: "wk-code",
 			AgentHandle: "swe", Role: "SWE",
 		}, sandbox.Fence{}); err != nil {
@@ -647,7 +656,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 			equipForCode(t, e, tc.pending(t, store))
 
 			res, err := e.runTurn(t.Context(), Request{
-				Handle: "swe", WorkKey: "wk-code", RunID: "run-code",
+				Handle: "swe", WorkKey: "wk-code", RunID: "run-code", WorkSince: time.Now().UTC(),
 				Events: []*events.Event{chatTrigger("D0ANA")},
 			})
 			if err != nil {
@@ -771,6 +780,7 @@ func (suspendingTool) CallDetached(_ context.Context, t *turnctx.Turn, _ map[str
 // AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn in the
 // same thread is still working and keeps its own.
 func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
 	coding := e.beginWorkingStatus(t.Context(), "swe", "wk-code",
@@ -825,6 +835,7 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 // AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn working
 // in the same thread keeps its own.
 func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 	e.backends.Fleet = coordmem.NewFleet()
 	company := e.Company()
@@ -839,7 +850,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
 	}
 	rt := e.sandbox.Load()
-	if err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -896,6 +907,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 // resume that invented a conversation for it would be claiming a thread it
 // cannot prove it is in.
 func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
 	answered, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "wk-code", chatTrigger("D0ANA"))
@@ -931,6 +943,7 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 // that hold when the resumed turn ends, or the indicator this node is
 // re-asserting outlives every turn there is.
 func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
+	t.Parallel()
 	reviews := notify.PhasePhrases[phase.Review.String()]
 	// The resumed turn's reviewer holds it open until its phase line has
 	// landed, for the reason [TestTheIndicatorFollowsTheTurnsPhases] gives:
@@ -968,7 +981,8 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 			TurnID: "wk-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test",
 		},
-		Turn:   &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
+		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
+			WorkSince: time.Now().UTC()},
 		Answer: "the tests pass now",
 	})
 	if err != nil {
@@ -1024,6 +1038,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 // this: the answer route has the opposite answer on all three, and
 // [TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator] is that half.
 func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
+	t.Parallel()
 	for name, derail := range resumeRetries {
 		t.Run(name, func(t *testing.T) {
 			e, ws := indicating(t, notify.StatusAlways)
@@ -1044,7 +1059,8 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 					TurnID: "wk-1", AgentHandle: "swe", Reply: derail(company),
 					TaskDescription: "fix the failing test",
 				},
-				Turn:   &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
+				Turn: &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
+					WorkSince: time.Now().UTC()},
 				Answer: "the tests pass now",
 			})
 			if err == nil {
@@ -1105,6 +1121,7 @@ var resumeRetries = map[string]func(*Company) string{
 // did. A completion has no such second life: it is the run finishing, not a
 // person talking, so a redelivered one has only the hold to take back.
 func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
+	t.Parallel()
 	for name, derail := range resumeRetries {
 		t.Run(name, func(t *testing.T) {
 			e, ws := indicating(t, notify.StatusAlways)
@@ -1122,7 +1139,8 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 					// Where the coordinator's claim will put it back.
 					ClaimedFrom: sandbox.StatusAwaiting,
 				},
-				Turn:    &turnctx.Turn{RunID: "run-wk-code", WorkKey: "wk-code", Seat: seat, Org: company.Org},
+				Turn: &turnctx.Turn{RunID: "run-wk-code", WorkKey: "wk-code", Seat: seat, Org: company.Org,
+					WorkSince: time.Now().UTC()},
 				Answer:  "use the release branch",
 				Trigger: chatTrigger("D0ANA"),
 			})
@@ -1188,6 +1206,7 @@ func TestTheIndicatorsConversationComesOffTheTrigger(t *testing.T) {
 // the chat-surface twin of the `terminated` event this same hook publishes,
 // except that a stale indicator is a live request rather than a stale row.
 func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 
 	s := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
@@ -1216,6 +1235,7 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 // claiming the agent is still working until the backend expires it. The same
 // rule the rest of the engine's rollbacks follow.
 func TestTheClearSurvivesTheCancellationThatEndedTheTurn(t *testing.T) {
+	t.Parallel()
 	e, ws := indicating(t, notify.StatusAlways)
 	ctx, cancel := context.WithCancel(t.Context())
 

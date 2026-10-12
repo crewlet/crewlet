@@ -134,18 +134,21 @@ func TestNoBackendIsNoDuty(t *testing.T) {
 
 func TestTheDutyClaimIsUngated(t *testing.T) {
 	t.Parallel()
-	// A duty record left at an older protocol by a build that predates the
-	// gate would block every seat claim fleet-wide the moment the version
-	// moved, so a duty claim never gates on the fleet protocol floor. It
-	// still carries THIS build's protocol, so it never becomes the thing
-	// that blocks either.
+	// A fleet singleton keeps running through a rolling upgrade on whichever
+	// build takes it, so a duty claim never waits on the mixed-version gate
+	// even while an older node holds a seat. Ungated skips the check, never
+	// the stamp: the duty still records THIS build's protocol, which is what
+	// a reader of the lease is told about who holds it. (The stamp holds no
+	// claim back — the gate counts presence and seats, never a duty; the
+	// coordtest case an_older_duty_lease_does_not_hold_a_newer_claim_back
+	// certifies that on every backend.)
 	backend := memory.New()
 	ctx := t.Context()
 
 	// A peer holding an unrelated resource at protocol 1 — the situation the
 	// gate exists for.
 	legacy := coord.SeatResource(uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"))
-	if _, err := backend.TryAcquire(ctx, legacy, coord.AcquireOptions{
+	if _, _, err := backend.TryAcquire(ctx, legacy, coord.AcquireOptions{
 		Owner: "old-node#1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("seed the old lease: %v", err)
@@ -161,8 +164,8 @@ func TestTheDutyClaimIsUngated(t *testing.T) {
 		t.Fatalf("Get(worker:scheduler) = %v, %v", lease, err)
 	}
 	if lease.Protocol != coord.ProtocolVersion {
-		t.Fatalf("the duty was claimed at protocol %d, want this build's %d — a duty record "+
-			"below the floor blocks every seat claim in the fleet",
+		t.Fatalf("the duty was claimed at protocol %d, want this build's %d — ungated "+
+			"must skip the gate's check, never the stamp",
 			lease.Protocol, coord.ProtocolVersion)
 	}
 	if lease.Preferred != "node-a" {
@@ -176,8 +179,8 @@ func TestTheDutyClaimIsUngated(t *testing.T) {
 // ever changes.
 type faultyBackend struct{ err error }
 
-func (f faultyBackend) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, error) {
-	return nil, f.err
+func (f faultyBackend) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+	return nil, "", f.err
 }
 func (f faultyBackend) Renew(context.Context, string, string, int64, time.Duration) (bool, error) {
 	return false, f.err

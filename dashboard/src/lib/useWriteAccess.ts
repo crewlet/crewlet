@@ -51,6 +51,7 @@ import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 /** Why a control cannot act, as a value a test can name. */
 export type WriteBlock = "refused" | "offline" | "loading" | "anonymous" | "not_served" | "held";
@@ -171,9 +172,22 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * read here rather than guessed per screen. The step-up such a write may
  * ask for is the transport's to replay (`protocol/rest.ts`), not a block: a
  * person asked to confirm who they are can, on the spot.
+ *
+ * AND A DOCUMENT CAN BE MANAGED (ADR-0030): then only the credentials the
+ * deployment names as its writers may change it, whatever grant or subtree
+ * anybody else holds — which `viewer.configWriter` answers ([managedBlock]).
+ * [mayChangeConfig] is the two together, for a screen that has to know
+ * before anything is pressed.
  */
 export type ConfigWriteBlock =
-  "refused" | "offline" | "loading" | "anonymous" | "no_grant" | "outside_scope" | "held";
+  | "refused"
+  | "offline"
+  | "loading"
+  | "anonymous"
+  | "no_grant"
+  | "outside_scope"
+  | "managed"
+  | "held";
 
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
@@ -181,9 +195,13 @@ export type ConfigWriteAccess =
 /** The grant a configuration write is decided by (`iam.GrantConfigWrite`). */
 export const CONFIG_WRITE_GRANT = "config:write";
 
-/** The sentence each block is shown as — every block but a [HoldWrites]'. */
+/**
+ * The sentence each block is shown as — every block but a [HoldWrites]', a
+ * lead's `outside_scope` ([outsideScopeReason]) and `managed`, whose sentence
+ * names who manages the document ([managedSentence]).
+ */
 export const CONFIG_WRITE_REASONS: Readonly<
-  Record<Exclude<ConfigWriteBlock, "held" | "outside_scope">, string>
+  Record<Exclude<ConfigWriteBlock, "held" | "outside_scope" | "managed">, string>
 > = {
   refused: WRITE_REASONS.refused,
   offline: WRITE_REASONS.offline,
@@ -210,6 +228,44 @@ export function configGuardedReason(code: string): string {
   return code === "unauthorized" || own === null ? CONFIG_WRITE_REASONS.no_grant : own;
 }
 
+/**
+ * Why THIS caller may not change a managed company document, or null — when
+ * the document is managed by nobody, or by this caller's own credential.
+ *
+ * The engine's own answer decides (`viewer.config_writer`), and only a
+ * document somebody manages is managed: a reader the engine named no writers
+ * to (an anonymous one) is not told the document is managed here, because
+ * the gate in front of this one already says what they lack.
+ */
+export function managedBlock(viewer: ViewerState): string | null {
+  if (viewer.configManagedBy.length === 0 || viewer.configWriter) return null;
+  return managedSentence(viewer.configManagedBy);
+}
+
+/**
+ * [managedBlock] for the screen this browser is on: the sentence a managed
+ * document's editing controls are disabled with, or null.
+ */
+export function useManagedConfig(): string | null {
+  return managedBlock(useViewer());
+}
+
+/**
+ * Whether this reader may change the company's configuration at all — the
+ * `config:write` grant, and on a managed document a credential it names as a
+ * writer.
+ *
+ * THE STANDING ANSWER, apart from this moment's connection or a screen's
+ * hold: what a screen asks when it decides whether a change is the reader's
+ * to make — a stopped seat counted as THEIR decision, "Set one" offered as a
+ * link — rather than whether a control may be pressed now
+ * ([configWriteAccess]). Both read the same two answers, so they cannot
+ * disagree about who may write.
+ */
+export function mayChangeConfig(viewer: ViewerState): boolean {
+  return viewer.grants.includes(CONFIG_WRITE_GRANT) && managedBlock(viewer) === null;
+}
+
 /** The decision over values — what the hook reads, and what a test pins. */
 export function configWriteAccess(
   viewer: ViewerState,
@@ -217,7 +273,7 @@ export function configWriteAccess(
   held: string | null = null,
 ): ConfigWriteAccess {
   const blocked = (
-    block: Exclude<ConfigWriteBlock, "held" | "outside_scope">,
+    block: Exclude<ConfigWriteBlock, "held" | "outside_scope" | "managed">,
   ): ConfigWriteAccess => ({
     can: false,
     block,
@@ -227,6 +283,12 @@ export function configWriteAccess(
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (!viewer.grants.includes(CONFIG_WRITE_GRANT)) return blocked("no_grant");
+  // AFTER THE GRANT, because a reader who could not write anyway is told the
+  // thing they can clear; and BEFORE A HOLD, because no screen can release
+  // it. The engine's own answer decides — `config_writer` — and only a
+  // document somebody manages is managed.
+  const managed = managedBlock(viewer);
+  if (managed !== null) return { can: false, block: "managed", reason: managed };
   if (held) return { can: false, block: "held", reason: held };
   return { can: true };
 }
@@ -272,7 +334,9 @@ export function outsideScopeReason(scope: LeadScope): string {
  * writes (`/config/roles/{handle}`, `/config/units/{key}`), and the engine
  * refuses whatever such a write reaches outside it. A control about a seat
  * or a unit OUTSIDE what they lead says so in its own words rather than as a
- * missing grant, since the person may well know they lead something.
+ * missing grant, since the person may well know they lead something. And on a
+ * managed document (ADR-0030) a lead's write is refused like everybody's but
+ * its writers', so the lead path ends at [managedBlock] too.
  */
 export function orgWriteAccess(
   viewer: ViewerState,
@@ -288,6 +352,11 @@ export function orgWriteAccess(
     (target !== "company" &&
       ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit)));
   if (!inside) return { can: false, block: "outside_scope", reason: outsideScopeReason(scope) };
+  // A LEAD IS NO WRITER OF A MANAGED DOCUMENT either: the engine refuses
+  // every credential its writers list does not name, a lead's subtree write
+  // included (ADR-0030). After the scope, for the grant's reason above.
+  const managed = managedBlock(viewer);
+  if (managed !== null) return { can: false, block: "managed", reason: managed };
   if (held) return { can: false, block: "held", reason: held };
   return { can: true };
 }

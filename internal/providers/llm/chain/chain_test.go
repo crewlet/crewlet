@@ -300,6 +300,41 @@ func TestAFatalFailureStopsTheWalk(t *testing.T) {
 	}
 }
 
+// A REFUSAL STOPS THE WALK, and fires no fallback. The next member might
+// answer — which is exactly why it is not asked: routing a refused request
+// round the models until one complies is circumventing the decision, not
+// recovering from a fault. The refused completion leaves the chain named with
+// the entry and model that served it, because it is billed like an answer.
+func TestARefusalIsNotHandedToTheNextMember(t *testing.T) {
+	t.Parallel()
+	refused := &llm.Completion{InputTokens: 9, StopReason: llm.StopRefusal}
+	head := &fake{model: "head-model", err: llm.Refused("p", "head-model",
+		&llm.Refusal{Category: "bio", Completion: refused})}
+	backup := answering("backup-model", "y")
+	fired := 0
+	c := build(t, Options{OnFallback: func(Fallback) { fired++ }},
+		member("primary", head), member("backup", backup))
+
+	_, err := c.Complete(context.Background(), llm.Request{})
+	if backup.calls.Load() != 0 {
+		t.Fatal("a refusal walked to the next member")
+	}
+	if fired != 0 {
+		t.Fatalf("%d fallbacks fired for a refusal", fired)
+	}
+	if llm.KindOf(err) != llm.KindRefusal {
+		t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
+	}
+	var refusal *llm.Refusal
+	if !errors.As(err, &refusal) || refusal.Category != "bio" {
+		t.Fatalf("err = %v, want the member's refusal reachable", err)
+	}
+	if refused.Model != "head-model" || refused.ProviderKey != "primary" {
+		t.Fatalf("refused completion named %q/%q, want head-model/primary",
+			refused.Model, refused.ProviderKey)
+	}
+}
+
 // KindOf answers KindFatal for anything it did not classify, and the chain
 // must honour that: walking every member for a request none can serve turns
 // one clear failure into N slow ones.

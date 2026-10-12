@@ -7,9 +7,9 @@ package store
 //
 // A statement's parameters are bounded by the engine, and the number is the
 // engine's rather than the dialect's: SQLite's default has been 32 766 since
-// 3.32 and was 999 before it, and Turso's is a third answer neither of those
-// predicts. [Capabilities.MaxVariables] is measured against the live driver at
-// open, which is the only way to be right on all three.
+// 3.32 and was 999 before it, and an engine in this family may pick a third.
+// [Capabilities.MaxVariables] is measured against the live driver at open,
+// which is the only way to be right on all of them.
 //
 // # Why chunking at all
 //
@@ -50,14 +50,13 @@ func RowsPerInsert(maxVariables, columns int) int {
 // is where the round-trip saving has already flattened: it is 1/1000th of the
 // per-row overhead, and the next order of magnitude buys a further 0.09 %.
 //
-// ON THE DRIVER PINNED HERE IT IS INERT, and that is worth saying rather than
-// discovering: [Capabilities.MaxVariables] probes to 2 000, so this cap can
-// only bind for rows of two columns or fewer (2 000 ÷ 2 = 1 000) and the
-// divisor wins at every width an applier actually uses — 285 rows at seven
-// columns, 666 at three. It is a ceiling against a FUTURE engine reporting
-// SQLite's post-3.32 limit of 32 766, where a two-column insert would
-// otherwise chunk at 16 383 rows. Keeping it costs nothing and removing it
-// would make that engine's first bulk apply the place the cost is found.
+// ON THE DRIVER PINNED HERE IT IS WHAT BINDS, at every width an applier uses:
+// [Capabilities.MaxVariables] reports the probe's own 32 766 ceiling, so the
+// divisor allows 4 680 rows at seven columns and 10 922 at three, and this
+// caps both at 1 000. Without it a two-column insert would chunk at 16 383
+// rows. (The probe reported 2 000 until it was found to be measuring the
+// result-set width rather than the parameter limit, and this cap was inert
+// at every width but two columns or fewer while it did.)
 const maxBatchRows = 1000
 
 // Chunks splits n rows into contiguous [start, end) ranges of at most

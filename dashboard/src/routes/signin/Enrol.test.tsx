@@ -8,7 +8,7 @@
  * terminal.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
@@ -91,7 +91,7 @@ const ENROLLED: Answer = {
 const CODES = ["a1b2-c3d4", "e5f6-g7h8", "i9j0-k1l2"];
 const NEXT = "#/admin/config";
 
-function mount() {
+async function mount() {
   location.hash = `#/enrol?next=${encodeURIComponent(NEXT)}`;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -99,13 +99,19 @@ function mount() {
   // enrolment lands; `reconnect` is nothing an enrolment may call.
   const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <App />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
+  // (`app/lazyScreen.ts`), and a synchronous act stops flushing at the first
+  // render that used a promise, settled or not — so the screen's first effects,
+  // and every answer the stubbed engine gives them, would be left unflushed.
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
   return { dial, reconnect };
 }
 
@@ -150,7 +156,7 @@ describe("enrolling", () => {
         body: { codes: CODES },
       },
     });
-    mount();
+    await mount();
 
     expect(await screen.findByText(groupedKey("JBSWY3DPEHPK3PXPJBSWY3DP"))).toBeDefined();
     expect(screen.getByRole("link", { name: "open it in the app" }).getAttribute("href")).toBe(
@@ -187,7 +193,7 @@ describe("enrolling", () => {
         },
       },
     });
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     needSession("second_factor");
     await confirmCode("123456");
 
@@ -218,7 +224,7 @@ describe("enrolling", () => {
         },
       ],
     });
-    mount();
+    await mount();
     await confirmCode("000000");
 
     await waitFor(() =>
@@ -244,7 +250,7 @@ describe("enrolling", () => {
         },
       ],
     });
-    mount();
+    await mount();
     await confirmCode("123456");
     fireEvent.click(await screen.findByRole("button", { name: "Sign in again" }));
     await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`));
@@ -258,7 +264,7 @@ describe("enrolling", () => {
         body: { error: "unavailable", message: "This node cannot answer that right now." },
       },
     });
-    mount();
+    await mount();
     await confirmCode("123456");
     fireEvent.click(await screen.findByRole("button", { name: "Continue without recovery codes" }));
     await waitFor(() => expect(location.hash).toBe(NEXT));

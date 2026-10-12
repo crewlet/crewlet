@@ -49,7 +49,8 @@ import (
 // When the engine is STOPPED there is no KV to reach and no API to call, so
 // the command writes this node's own table. That is the bootstrap path: the
 // engine migrates those rows onto the fleet at its next start and removes
-// them. Which of the two is in play is not a guess — the store's file lock
+// them, the later of its value and the fleet's winning a name both hold
+// (fleetsecrets.Migrate). Which of the two is in play is not a guess — the store's file lock
 // makes "the engine holds this database" an answer with a pid on it — and
 // the command says which one it used after every write.
 //
@@ -80,7 +81,7 @@ api.auth.tokens list is what the node ACCEPTS, not a wallet this command helps
 itself from.
 `
 
-func runSecrets(args []string, stdout, stderr io.Writer) error {
+func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, secretsUsage, defaultBootstrapPath)
@@ -142,7 +143,7 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath, *apiURL)
+	sv, closeStore, err := openSecretStore(ctx, environ, *bootstrapPath, *apiURL)
 	if err != nil {
 		return err
 	}
@@ -284,7 +285,7 @@ type secretTarget struct {
 // up" with a pid attached, and a successful open means it is not. Probing the
 // API instead would confuse "the node is stopped" with "the node is up but
 // its HTTP port is bound elsewhere", and those need opposite answers.
-func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
+func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
 	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
 	// document that loaded carries it, and the refusal an operator sees
 	// names `secrets.keys` in the file's own terms.
@@ -298,7 +299,7 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 	// database in the Tier A file does not exist and opening it would
 	// create an empty one nothing ever reads.
 	if strings.TrimSpace(apiURL) != "" {
-		client, cerr := newSecretsClient(boot, apiURL)
+		client, cerr := newSecretsClient(environ, boot, apiURL)
 		if cerr != nil {
 			return nil, nil, cerr
 		}
@@ -314,7 +315,7 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 				"can see until the engine migrates them at its next start",
 		}, closeStore, nil
 	}
-	target, rerr := throughTheRunningNode(boot, bootstrapPath, err)
+	target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, err)
 	if rerr != nil {
 		return nil, nil, rerr
 	}
@@ -330,11 +331,11 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 // path, a driver that will not load — is a broken node, and answering one of
 // those by silently trying HTTP would replace an accurate message with a
 // connection refused.
-func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
+func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
-	client, cerr := newSecretsClient(boot, "")
+	client, cerr := newSecretsClient(environ, boot, "")
 	if cerr != nil {
 		// BOTH FACTS, because either alone is misleading. "The engine
 		// holds the database" without "and here is why I could not go
@@ -384,6 +385,11 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 // openSecretValues opens the store a loaded bootstrap names, under its
 // keyring — which a Tier A that loaded always carries.
 func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
+	if err := refuseScratchStore(boot, "crewlet secrets",
+		"Use the API of a node that holds data: /secrets writes the company's "+
+			"credential store, which every node reads."); err != nil {
+		return nil, nil, err
+	}
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
@@ -392,7 +398,10 @@ func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.Secre
 	// secret read must not depend on the company document, and the vector
 	// columns are only sized when a migration actually runs — which a
 	// running node has already done.
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
+	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
+	// are the node's own, and this command reads nothing a state log
+	// applies, so it opens no replicated estate.
+	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
@@ -523,7 +532,8 @@ const secretsFleetNote = "The running fleet reads it at its next configuration "
 // stopped and saw nothing propagate would reasonably conclude the write
 // failed, and the fix — start the node, or point -api at one that is up — is
 // not guessable.
-const secretsLocalNote = "This node will put it on the fleet at its next start. " +
+const secretsLocalNote = "This node will put it on the fleet at its next start, " +
+	"unless the fleet holds a value written after this one. " +
 	"To reach a RUNNING fleet now, re-run against a node that is up."
 
 // getSecret is the ONLY read-back, and it is break-glass.

@@ -58,12 +58,16 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	if positions, err := r.fleet.Positions(ctx); err == nil {
 		in.Register, in.RegisterReadable = positions, true
 	}
-	if r.leases != nil {
-		// THE SAME PRESENCE THE TRIM READS, through the same function:
-		// this block renders who the trim is waiting for, and a screen
-		// assembling the set differently from the gate is how the two
-		// come to disagree about a peer.
-		if live, err := livePresences(ctx, r.leases); err == nil {
+	// THE LIVE DATA NODES, LISTED ONCE and from the trim's own source — the
+	// gate's own reading ([livePresences]): they are both who the node block
+	// marks live and the half of every log's counted set that is not the
+	// register ([statelog.ReportInputs.Live]). Listed once for each question,
+	// every node's every tick paid a second certified listing a round trip
+	// after the first, and a screen assembling the set differently from the
+	// gate is how the two come to disagree about a peer. Unread, each log's
+	// mark counts its rows alone.
+	if r.holders != nil {
+		if live, err := r.holders.LiveData(ctx); err == nil {
 			in.Live = live
 		}
 	}
@@ -90,17 +94,18 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// alarm reading below rather than read again there: both are one
 	// node's answer about the same instant, and two reads a broker round
 	// trip apart could disagree about it.
-	healths := make(map[string]domainHealth, len(r.state.order))
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
-		if running == nil {
-			continue
-		}
+	held := r.state.running()
+	healths := make(map[string]domainHealth, len(held))
+	// EACH LOG'S CENSUS, read off the recorder once for every log, as the
+	// reading's other windowed figures are ([retention.census]).
+	census := r.census(held)
+	for _, running := range held {
+		name := running.domain.Name()
 		d := statelog.DomainInputs{
 			Domain:      name,
-			Stream:      running.domain.Stream().Name,
+			Stream:      running.spec.Name,
 			Generation:  running.runner.Committed().Generation,
-			Replay:      running.domain.Stream().Replay,
+			Replay:      running.spec.Replay,
 			Reservation: statelog.ReservationOf(running.domain),
 		}
 		if stats, err := running.log.Stats(ctx); err == nil {
@@ -176,13 +181,17 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			tombs, read := r.tombstones(ctx, running, d.Generation)
 			perLog = append(perLog, tombs)
 			d.EvictionsUnreadable = !read
+			d.Tombstones = tombs
 		}
-		d.SnapshotSkip = r.skipFor(in.Register, name)
+		d.SnapshotSkip = r.skipFor(in.Register, running)
 		r.deferral(&d, running, now)
 		// THE HEARTBEAT'S OBSERVATION OF THIS LOG'S FLOOR, read back rather
 		// than taken, because its age is an interval between observations —
 		// one taken per poll would make it whatever the poll rate is.
 		d.FloorUnknownFor, d.FloorUnknownCause = r.floors.of(name)
+		if c, counted := census[name]; counted {
+			d.LinearizableReads, d.LinearizableReadsExpected = c.reads, c.expected
+		}
 		in.Domains = append(in.Domains, d)
 	}
 	in.Tombstones = fleetTombstones(perLog)
@@ -194,9 +203,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 
 // deferral fills one log's held record: the oldest this node's applier retains
 // on it and cannot decode, how long it has been held, and whether holding it
-// past the grace moves this node's seats.
+// past the grace takes this node's copy of the estate out of service.
 //
-// THE MEASURED AGE, from the two facts the shed itself reads — the applier
+// THE MEASURED AGE, from the two facts the copy's judgement itself reads — the applier
 // holding a record it cannot decode NOW, and the position heartbeat's first
 // sighting of it — through the one arithmetic both share
 // ([statelog.DeferredSince.Age]). It stood the grace in for the age once, so a
@@ -208,10 +217,11 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 // register — neither clears a firing alarm nor hides a new one.
 //
 // PER LOG, which is the one arrangement in which the consequence the alarm
-// states is true: the question [stateLog.Healthy] asks before it lets a
-// deferral shed seats is the log's own [statelog.Domain.ReadinessInput], so two
-// logs holding records at once are two different answers.
-func (r *retention) deferral(d *statelog.DomainInputs, running *runningDomain,
+// states is true: the question [stateLog.judgeCopy] asks before it lets a
+// deferral take the copy out of service is the log's own
+// [statelog.Domain.ReadinessInput], so two logs holding records at once are two
+// different answers.
+func (r *retention) deferral(d *statelog.DomainInputs, running *runningLog,
 	now time.Time) {
 
 	record, holding := running.runner.Deferred()
@@ -222,7 +232,7 @@ func (r *retention) deferral(d *statelog.DomainInputs, running *runningDomain,
 	d.DeferredRecord = fmt.Sprintf("at %s, written at record version %d against "+
 		"the %d this build reads", record.Position, record.Version,
 		running.domain.RecordVersion())
-	d.DeferredSheds = running.domain.ReadinessInput()
+	d.DeferredJudgesCopy = running.domain.ReadinessInput()
 }
 
 // fleetTombstones folds each identity-claiming log's own tombstones into the
@@ -243,6 +253,8 @@ func (r *retention) deferral(d *statelog.DomainInputs, running *runningDomain,
 // The window is measured from the latest tombstone because the node stops
 // being counted on every log only once the last of them has aged past it; the
 // earliest would call the eviction effective while one log still counts it.
+// And the latest is taken WHOLE, so the operator it names is the one whose
+// gesture made the eviction the fleet's.
 //
 // No log at all — a report assembled with no identity-claiming domain — is no
 // tombstone.
@@ -292,12 +304,11 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 		return nil
 	}
 	var oldest *statelog.MaintenanceReport
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open {
 			continue
 		}
@@ -371,15 +382,16 @@ func decisionOf(floor coord.TrimFloor) statelog.TrimDecision {
 	return d
 }
 
-// skipFor is this node's own snapshot skip reason for one domain, read back
-// off the register it published rather than held in memory — so the answer is
-// the same one every peer can see.
-func (r *retention) skipFor(register []coord.NodePositions, domain string) statelog.SkipReason {
+// skipFor is this node's own snapshot skip reason for one log — the estate's,
+// since an artefact is a copy of the estate's file and covers every log — read
+// back off the register it published rather than held in memory, so the
+// answer is the same one every peer can see.
+func (r *retention) skipFor(register []coord.NodePositions, running *runningLog) statelog.SkipReason {
 	for _, row := range register {
 		if row.NodeID != r.nodeID {
 			continue
 		}
-		if _, runs := row.Domains[domain]; runs {
+		if _, runs := row.Domains[running.domain.Name()]; runs {
 			return statelog.SkipReason(row.SnapshotSkip)
 		}
 	}
@@ -391,9 +403,13 @@ func (r *retention) replica() statelog.ReplicaReport {
 	out := statelog.ReplicaReport{
 		RejoinWindowSeconds: r.cfg.RejoinWindow().Seconds(),
 	}
-	if r.db != nil {
-		if info, err := os.Stat(r.db.Replicated().Path()); err == nil {
-			out.StoreBytes = info.Size()
+	// THE REPLICATED ESTATE'S FILE, because replacing the node is adopting
+	// it. Measured at its path whether or not it is open at this instant:
+	// an adoption holding it closed is replacing it, and the file the node
+	// would have to be given again is still the one at that name.
+	if path := r.db.ReplicatedFile(); path != "" {
+		if info, err := os.Stat(path); err == nil {
+			out.StoreBytes += info.Size()
 		}
 	}
 	out.ProjectedJoinSeconds = statelog.ProjectJoinSeconds(out.StoreBytes)
@@ -428,8 +444,8 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// alarm then told a company four seconds old that its newest verified
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
+		name := running.domain.Name()
 		if running == nil {
 			continue
 		}
@@ -447,6 +463,12 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
 	}
 	out.SemanticCoverage = r.semanticCoverage()
+	if r.index != nil {
+		r.index(ctx, &out)
+	}
+	if r.objects != nil {
+		r.objects(now, &out)
+	}
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
@@ -473,12 +495,11 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 	if r.fleet == nil {
 		return
 	}
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open || op.EnteredAt.IsZero() {
 			continue
 		}
@@ -494,7 +515,7 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 // AT THE MEASURED DRAIN, so the number an alarm fires on is a duration rather
 // than a count: "this node is 4m12s behind" is actionable and "this node is
 // 500 000 records behind" is a number an operator has to divide.
-func applyLagOf(health statelog.Health, running *runningDomain) time.Duration {
+func applyLagOf(health statelog.Health, running *runningLog) time.Duration {
 	if health.Lag == nil {
 		// UNMEASURED IS NOT ZERO anywhere else in this file, and it is
 		// zero here for one reason: an alarm reading has no third value
@@ -576,12 +597,6 @@ func (r *retention) observed(out *statelog.Reading) {
 	// the day somebody re-tuned the fan-out.
 	out.HistoryReadBudget = eventfan.FleetReadBudget
 
-	// THE DECLARED RATE, beside the observed one below. It is a constant
-	// rather than a configured value because it is a term in the log's own
-	// sizing: an operator who could set it would be silencing the alarm
-	// rather than resizing the deployment it is about.
-	out.LinearizableReadsExpected = statelog.LinearizableReadsPerDay
-
 	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
@@ -597,12 +612,6 @@ func (r *retention) observed(out *statelog.Reading) {
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
 			out.FeedUnreadable += int(snapshot.Total)
-		case metrics.StatelogBarrierAppends:
-			// THE BARRIER APPEND IS THE LINEARIZABLE READ. One is
-			// appended per read that asks for the level, so the
-			// counter and the census input are the same quantity —
-			// which is exactly why the drift is checkable at all.
-			out.LinearizableReads += int(snapshot.Total)
 		case metrics.StatelogReadRefusals:
 			// ANY REFUSAL AT ALL IS ONE, and the alarm's own
 			// condition is a DURATION rather than a count — so what
@@ -614,6 +623,79 @@ func (r *retention) observed(out *statelog.Reading) {
 			}
 		}
 	}
+}
+
+// logCensus is one log's census half: the barrier records it received over
+// the window, and the census it was sized for.
+type logCensus struct {
+	reads, expected int
+}
+
+// census is each log's census half, keyed by the log's domain: of every log
+// this node applies whose domain has a read index, the barrier records it
+// received over the window and the census it was sized for — evaluated PER LOG
+// by the report ([statelog.DomainInputs.LinearizableReads]), because each log
+// was sized for its own census and is past it on its own. Nil where this
+// process keeps no recorder, which every condition reads as nothing to report.
+//
+// # The rate is the LOG'S, read where it is applied
+//
+// A barrier record is what a linearizable read costs the log, so the census
+// input is the barrier records a log received — and every data node applies
+// every record, while a node without `data` applies none and keeps no recorder,
+// so the count this node's applier took of them is the whole fleet's, not this
+// node's. What this replaced summed the barriers THIS NODE appended,
+// which on a fleet of several serving nodes is only its share of the reads: a
+// three-node fleet exceeding its census threefold read as a company exactly at
+// it, and the alarm could not fire until the company was six times past what
+// its logs were sized for.
+//
+// # The census is per seat, plus the engine's own
+//
+// Declared rather than configured — it is a term in the log's own sizing, so
+// an operator who could set it would be silencing the alarm rather than
+// resizing the deployment it is about — scaled by the company's own seats,
+// plus what the engine's own periodic reads put on the log whatever the seats
+// do ([statelog.Census]).
+//
+// WINDOWED, like every alarm input [retention.observed] reads: a count since
+// the process started only grows, and a threshold against it latches.
+func (r *retention) census(running []*runningLog) map[string]logCensus {
+	if r.metrics == nil {
+		return nil
+	}
+	received := map[string]int{}
+	for _, snapshot := range r.metrics.ReadWindow() {
+		if snapshot.Name == metrics.StatelogBarriersApplied {
+			received[snapshot.Attrs["stream"]] += int(snapshot.Total)
+		}
+	}
+	seats := 0
+	if r.seats != nil {
+		seats = r.seats()
+	}
+	background := func(string) int { return 0 }
+	if r.background != nil {
+		background = r.background
+	}
+	out := make(map[string]logCensus, len(running))
+	for _, l := range running {
+		if barrierEncoder(l.domain) == nil {
+			// A LOG NO READ APPENDS TO has no census to drift from: its
+			// domain has no read index, so nothing it receives is a
+			// linearizable read.
+			continue
+		}
+		name := l.domain.Name()
+		out[name] = logCensus{
+			reads: received[l.spec.Name],
+			expected: statelog.Census{
+				Seats:      seats,
+				Background: background(name),
+			}.Expected(),
+		}
+	}
+	return out
 }
 
 // quantileDuration reads a histogram's quantile back as the duration its unit

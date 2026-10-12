@@ -267,11 +267,11 @@ func TestAMoveWithinALaneReordersOnlyThatItem(t *testing.T) {
 
 // AN EDIT AFTER A DRAG KEEPS THE CARD WHERE IT WAS DRAGGED.
 //
-// The order moves a task's rank column and never its document, and every task
-// write re-upserts the row from a document — so a task write that took its
-// rank from the document put the card back at the key it was filed at, and a
-// board's manual order lasted until somebody next touched the card. The detail
-// read answered the same stale key as the card's place.
+// The order writes a task's place into its document and its rank column alike,
+// and every task write re-upserts the row from a document merged against that
+// place — so a write carries the dragged key through rather than putting the
+// card back at the key it was filed at, and the detail read answers the same
+// place the board draws.
 func TestAnEditAfterADragKeepsTheCardsPlace(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -442,12 +442,11 @@ func TestADropThatNamesNoGapIsRefused(t *testing.T) {
 
 // AN EDIT AFTER A DRAG LEAVES THE CARD WHERE IT WAS DRAGGED.
 //
-// A drag moves the task's ROW — the order writes `tracker_tasks.rank` and
-// leaves the task's document alone — so the document still holds the key the
-// task was filed at. An applier that merged a later edit into the document and
-// upserted the row from it would put the card back where it was filed the next
-// time anybody touched it. Every task write carries the ROW's key through, so
-// the edit leaves both the column and the document at the dragged key.
+// A drag writes the dragged key to the task's ROW and to its DOCUMENT, and a
+// later edit merges into the document and upserts the row from it — so a drag
+// that left either copy at the key the task was filed at would have the next
+// edit put the card back there, the next time anybody touched it. The edit
+// leaves both the column and the document at the dragged key.
 func TestAnEditAfterADragLeavesTheCardWhereItWasDragged(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -483,7 +482,7 @@ func TestAnEditAfterADragLeavesTheCardWhereItWasDragged(t *testing.T) {
 
 	var column string
 	var document []byte
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT rank, document FROM tracker_tasks WHERE id = 't-1'`).
 			Scan(&column, &document)

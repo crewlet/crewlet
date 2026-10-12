@@ -32,6 +32,6 @@ Call `lookup_colleague` for their identity before writing the body. The surfaces
 - **Work item:** `${crewlet_base_url}/#/work/{KEY}` — e.g. `ENG-42`
 - **Page:** `${crewlet_base_url}/#/knowledge/pages/{page-id}`
 
-`${crewlet_base_url}` is filled in for you by the engine from where this deployment answers; if it still shows as a literal dollar-brace placeholder, this deployment has no public address configured — say so rather than guessing a URL, and share the item's KEY instead, which a colleague can paste into the board's own search.
+`${crewlet_base_url}` is filled in for you by the engine from where people reach this deployment's dashboard; if it still shows as a literal dollar-brace placeholder, this deployment has no dashboard address configured — say so rather than guessing a URL, and share the item's KEY instead, which a colleague can paste into the board's own search.
 
 This skill is enforced (the `required` default) and triggers on exactly the write tools — posting with broken mention markup is visible to human teammates, while reads never wait on it.

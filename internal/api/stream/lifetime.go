@@ -35,8 +35,9 @@ import (
 //     login, `token:<id>`). Only the sockets a move names are decided again,
 //     each on its own goroutine, by the guard over the request it was opened
 //     with ([auth.Guard.ResolveOpen]) — a direct read, and there are few.
-//     Every node applies the identity log, so every node hears this from its
-//     own applier and decides its own sockets; nothing is sent between nodes.
+//     Every node serving the API holds the estate and applies the identity
+//     log, so every such node hears this from its own applier and decides its
+//     own sockets; nothing is sent between nodes.
 //   - A MOVE THAT NAMES NOBODY: the fleet-wide session generation moved, this
 //     node retained an identity record it cannot read (whose person is inside
 //     the payload), an adoption replaced the estate, or this node stopped

@@ -21,7 +21,7 @@ import (
 // at that same instant, or each is served on its last decision for as long as
 // the node runs.
 //
-// The domain here is a running domain whose checkpoint was last seen moving at
+// The log here is a running log whose checkpoint was last seen moving at
 // t0 with records owed — the figure the identity reader is built with — and
 // the listener is the one the API registers. At exactly the grace the guard
 // still serves (it compares PAST the grace), so nothing is said; one second
@@ -37,7 +37,7 @@ func TestANodeThatStopsVouchingNamesEveryoneOnce(t *testing.T) {
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	heard := &heardMoves{}
 	e.SetOnIdentityMoved(heard.hear)
-	running := &runningDomain{}
+	running := &runningLog{}
 	watch := identityVouching(e, running)
 
 	t0 := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)

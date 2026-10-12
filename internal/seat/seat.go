@@ -1,23 +1,32 @@
 // Package seat is which seats this node runs, and how it comes to run them.
 //
 // A seat is an agent's chair in the org: its turns, its per-role MCP
-// children and its inbox consumer all belong to whoever holds
-// seat:{handle}. This package is the placement half — claiming, holding and
-// letting go. What a node DOES with an owned seat is the engine's business,
-// and it arrives here as [Hooks].
+// children and its inbox consumer all belong to whoever holds seat:{id} — the
+// lease named by the agent id derived from the seat's handle (ADR-0013), the
+// id its mailbox is named by too ([placement.Seat.ID]). The handle is what
+// every log line, hook and local map calls the seat. This package is the
+// placement half — claiming, holding and letting go. What a node DOES with an
+// owned seat is the engine's business, and it arrives here as [Hooks].
 //
 // # The policy is deliberately dumb
 //
 // A cleverer one is a standing temptation, so the reasons are worth stating:
 //
 //   - Greedy claim up to a fair share. Capacity is ceil(seats / live nodes),
-//     live nodes being the node:* presence leases of nodes that actually run
-//     seats. No membership service, no gossip, no coordinator — every node
+//     live nodes being the node:* presence leases of nodes that run seats
+//     and have not withdrawn from placement because they cannot serve them.
+//     No membership service, no gossip, no coordinator — every node
 //     computes the same number from the same table and stops there. Two nodes
 //     racing for the last seat is resolved by the lease, not by the
 //     arithmetic. With role placement in play the share is computed per
-//     placement GROUP and summed, because one fleet-wide ratio strands pinned
-//     seats; see [placement.Compute].
+//     placement GROUP, because one fleet-wide ratio strands pinned seats,
+//     and it bounds that group alone: a node holds at most its share OF EACH
+//     group it matches, claiming and shedding against each separately,
+//     because a total it could spend on any of them lets unpinned seats
+//     crowd out a pinned one. Seats it cannot give back are charged first,
+//     against the least constrained groups, through the same per-group
+//     numbers — never a second, pooled bound. See [placement.Compute] and
+//     [placement.Plan.Room].
 //   - Converge in BOTH directions. Claiming alone only converges for a fleet
 //     that SHRINKS: a node that booted alone holds every seat, and a peer
 //     joining later computes a share it can never reach because the seats it
@@ -33,6 +42,14 @@
 //     it is spawning that seat's stdio MCP children. A node absorbing a dead
 //     peer's twenty seats at once would fork twenty subprocess trees in one
 //     tick.
+//   - A change to the seats themselves sweeps AT ONCE ([Host.Resweep]).
+//     The sweep's tick is sized for watching the fleet, and the seat list
+//     moves only when a configuration is applied: a role a revision added,
+//     and the whole company on a node that booted without one, sat
+//     unclaimed for up to [SweepInterval] waiting for a tick that had
+//     nothing to learn but what the apply already knew. At most one such
+//     pass per interval, so the rate limit above still bounds a node to
+//     two passes' claims in any interval however many applies arrive.
 //
 // # Losing a seat is as important as gaining one
 //
@@ -147,7 +164,9 @@ const (
 	// the heartbeat keeps what this node has, the sweep looks for what it
 	// should take. Five seconds means a dead peer's seats are fully
 	// absorbed within ~TTL plus a few sweeps, without polling the store
-	// hard enough to matter.
+	// hard enough to matter. It is the cadence for what changes in the
+	// FLEET; a change to the seats themselves asks for a pass at once
+	// ([Host.Resweep]).
 	SweepInterval = 5 * time.Second
 
 	// ClaimLimitPerSweep is how many seats one sweep may newly claim.
@@ -214,6 +233,9 @@ var ErrInvalidConfig = errors.New("seat: invalid host configuration")
 // role. Every symptom is an absence — nothing fires, nothing is received,
 // nothing errors — which is why they need saying out loud.
 var unmannedHints = map[placement.NodeRole]string{
+	placement.RoleData: "no live node holds the company's durable state, so nothing " +
+		"can read or write the tracker or the knowledge base, and every node " +
+		"without the role is waiting on one that does. Give a node the 'data' role.",
 	placement.RoleIngress: "no live node serves the HTTP API, so no webhook from any " +
 		"integration reaches this company and the dashboard is down. " +
 		"Give a node the 'ingress' role.",
@@ -273,19 +295,18 @@ const (
 	// to end.
 	ReasonPosture ReleaseReason = "posture"
 
-	// ReasonUnserviceable is this node's copy of the company's records
-	// being WRONG rather than behind — a halted applier, an eviction, a
-	// position below the log's first surviving record, or a record it has
-	// been unable to decode past the deferral grace. See
+	// ReasonUnserviceable is this node being unable to serve its seats'
+	// work at all — in the engine, a node that can no longer say where
+	// the estate its seats read and write is served. See
 	// [Config.Serviceable].
 	//
 	// VOLUNTARY, unlike ReasonPosture, and the difference is what is
 	// actually lost. A shedding posture means this node may be running a
 	// company revision the fleet has moved off, so what it is doing right
-	// now is suspect and must stop at once. This means its ROWS are wrong
-	// while its lease is perfectly good — so the turn in flight, which is
-	// already running against those rows, is better finished than
-	// abandoned, and the seat leaves the moment it goes idle.
+	// now is suspect and must stop at once. This means its reach is gone
+	// while its lease is perfectly good — so the turn in flight is better
+	// finished (or failed on its own calls) than abandoned, and the seat
+	// leaves the moment it goes idle.
 	ReasonUnserviceable ReleaseReason = "unserviceable"
 
 	// ReasonUnprepared is a seat this node already holds that could not be
@@ -339,6 +360,25 @@ type Hooks interface {
 	// fleet while nothing runs it.
 	OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
+	// OnEstablished reports that a seat OnAcquire returned for is
+	// ESTABLISHED: from this call on, [Host.MayStart] admits turns on it.
+	//
+	// It exists because establishment is the one transition into admission
+	// nothing else announces. The acquire hook runs while the seat is still
+	// refusing every turn, so a decision made inside it about whether the
+	// seat may run something — the engine's recovery of a run whose answer
+	// a previous holder recorded and never resumed with, retried from the
+	// hook — is told no, and has nothing to wait on but the clock: the next
+	// renew is a heartbeat away (15 s at the default TTL) and reports
+	// nothing to anyone, because an established seat's first renew is not an
+	// admission EDGE (see OnAdmission). This is that edge.
+	//
+	// Called once per acquisition, after OnAcquire returned nil and the seat
+	// stopped establishing, under the seat's own lock like OnAcquire. It
+	// cannot fail the acquisition — the seat is already serving — so it
+	// returns nothing; anything it does that can fail is its own to retry.
+	OnEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease)
+
 	// OnRelease tears the seat down. The reason decides whether in-flight
 	// work is finished or abandoned — see [ReleaseReason].
 	//
@@ -378,9 +418,10 @@ type Hooks interface {
 // does nothing, so a caller that only cares about acquire and release writes
 // only those two.
 type HookFuncs struct {
-	Acquire   func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
-	Release   func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error
-	Admission func(ctx context.Context, seat placement.Seat, admitted bool) error
+	Acquire     func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
+	Established func(ctx context.Context, seat placement.Seat, lease coord.Lease)
+	Release     func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error
+	Admission   func(ctx context.Context, seat placement.Seat, admitted bool) error
 }
 
 // OnAcquire implements [Hooks].
@@ -389,6 +430,14 @@ func (h HookFuncs) OnAcquire(ctx context.Context, seat placement.Seat, lease coo
 		return nil
 	}
 	return h.Acquire(ctx, seat, lease)
+}
+
+// OnEstablished implements [Hooks].
+func (h HookFuncs) OnEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease) {
+	if h.Established == nil {
+		return
+	}
+	h.Established(ctx, seat, lease)
 }
 
 // OnRelease implements [Hooks].
@@ -417,10 +466,13 @@ type SweepResult struct {
 	// the undead by design — nothing new starts on a seat whose teardown
 	// was never proven.
 	Held int
-	// Capacity is this node's fair share, summed over the placement groups
-	// it is eligible for.
+	// Capacity is this node's fair share: the sum of its shares of the
+	// placement groups it is eligible for. Each share bounds only its own
+	// group, so this is how many seats the node may hold in all, never how
+	// many of any one group. Zero while it is withdrawn.
 	Capacity int
-	// LiveNodes is how many live nodes run seats at all — the denominator.
+	// LiveNodes is how many live nodes are placing seats — running seats,
+	// and not withdrawn — the denominator.
 	LiveNodes int
 	// Claimed are the seats this pass newly established. A seat is counted
 	// only once its acquire hook succeeded.
@@ -431,15 +483,17 @@ type SweepResult struct {
 	// erased whatever the pass had shed, so a node that gave back two
 	// seats and then lost a third reported only the third.
 	Lost []string
-	// Unplaceable are the seats whose placement matches no live
-	// seat-running node. Nothing this node can act on — a pin to a node
-	// that is down, a label nobody carries — but it is the one placement
-	// failure that is otherwise invisible: the seat is simply not served,
-	// and every node in the fleet reports a perfectly healthy sweep.
+	// Unplaceable are the seats whose placement matches no live node
+	// placing seats, read off the same per-group shares the claims are
+	// bounded by. Nothing this node can act on — a pin to a node that is
+	// down or withdrawn, a label nobody carries — but it is the one
+	// placement failure that is otherwise invisible: the seat is simply
+	// not served, and every node in the fleet reports a perfectly healthy
+	// sweep.
 	Unplaceable []string
 	// BlockedByProtocol is the fleet's protocol floor when an
-	// older-protocol peer holds leases and this node is therefore refusing
-	// to claim; zero when nothing is blocking (no protocol is zero — see
+	// older-protocol peer holds a presence or seat lease and this node is
+	// therefore refusing to claim; zero when nothing is blocking (no protocol is zero — see
 	// coord.ProtocolVersion). Without it, a node stalled by the
 	// mixed-version gate is indistinguishable from one whose peers simply
 	// hold every seat.
@@ -450,6 +504,12 @@ type SweepResult struct {
 	// node at capacity, a node whose peers hold everything and a node
 	// waiting on its own projection all report an identical empty sweep.
 	Withheld bool
+	// FleetFull says this node had room and tried no claim, because the
+	// live seat-running nodes' own counts say they hold every seat any of
+	// them may run ([Host.fleetHoldsEverySeat]). The ordinary state of a
+	// node whose share did not come out even, and distinct from Withheld:
+	// this node is ready, and there is simply nothing to take.
+	FleetFull bool
 }
 
 // Blocked reports whether the mixed-version gate is what stopped this pass

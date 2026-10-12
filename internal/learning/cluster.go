@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -150,7 +150,8 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	agentID string, cluster SkillCluster,
 ) ([]events.Payload, error) {
 	handle := seat.Handle()
-	member, err := s.models.Head(seat, phase.Auxiliary)
+	member, err := s.models.Auxiliary(seat, auxspend.Use{Stage: types.AuxStageBackground,
+		Purpose: types.AuxSkillClustering})
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill clustering: %w", err)
 	}
@@ -162,6 +163,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 			{Role: llm.RoleUser, Content: buildClusterPrompt(cluster)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   s.maxTokens,
 	})
 	if err != nil {

@@ -30,15 +30,19 @@ func (e *Engine) armSandboxTails(ctx context.Context) error {
 	}
 	pending := sandbox.NewCoordStore(e.backends.Fleet)
 	owner := e.node.Owner()
-	e.sandboxTails = &sandbox.TailReader{
-		Owner: owner, Pending: pending, Manager: e.sandboxManager,
-	}
+	// THE READINGS OUTLIVE THE REQUESTS THAT START THEM, and are ended here
+	// rather than by whichever context built the engine: a read of a box is
+	// shared by everybody watching the run and runs under its own budget.
+	e.sandboxFeeds = sandbox.NewLiveFeeds(context.WithoutCancel(ctx), sandbox.LiveFeedsOptions{
+		Manager: e.sandboxManager,
+	})
+	e.sandboxTails = &sandbox.TailReader{Owner: owner, Pending: pending, Feeds: e.sandboxFeeds}
 	if e.backends.Queue == nil {
 		// A NODE WITH NO BROKER IS THE FLEET: it owns every run there is.
 		return nil
 	}
 	e.sandboxTails.Queue = e.backends.Queue
-	stop, err := sandbox.ServeTail(ctx, e.backends.Queue, owner, pending, e.sandboxManager, nil)
+	stop, err := sandbox.ServeTail(ctx, e.backends.Queue, owner, pending, e.sandboxFeeds)
 	if err != nil {
 		return err
 	}
@@ -46,16 +50,18 @@ func (e *Engine) armSandboxTails(ctx context.Context) error {
 	return nil
 }
 
-// stopSandboxTails withdraws this node as an answerer, before the seats are
-// released and the boxes stop being this node's to read.
+// stopSandboxTails withdraws this node as an answerer and ends its readings,
+// before the seats are released and the boxes stop being this node's to read.
 func (e *Engine) stopSandboxTails(ctx context.Context) {
-	if e.stopTailServe == nil {
-		return
+	if e.stopTailServe != nil {
+		if err := e.stopTailServe(context.WithoutCancel(ctx)); err != nil {
+			log.WarnContext(ctx, "sandbox_tail_answerer_not_withdrawn", "error", err)
+		}
+		e.stopTailServe = nil
 	}
-	if err := e.stopTailServe(context.WithoutCancel(ctx)); err != nil {
-		log.WarnContext(ctx, "sandbox_tail_answerer_not_withdrawn", "error", err)
+	if e.sandboxFeeds != nil {
+		e.sandboxFeeds.Stop()
 	}
-	e.stopTailServe = nil
 }
 
 // SandboxTails answers `sandbox_tail`: a running coding run's live output,

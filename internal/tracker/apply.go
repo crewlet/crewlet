@@ -70,9 +70,10 @@ func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
 // publish.
 //
 // What happens here is the one consequence no other node needs: telling THIS
-// node's open dashboards whose inbox just moved (inboxmove.go). Every node
-// applies every record, so every node tells its own — and a node that dies
-// before telling them has no sockets left to tell.
+// node's open dashboards whose inbox just moved (inboxmove.go). Every data
+// node applies every record, and only a data node serves dashboards (ingress
+// requires `data`), so each one tells its own — and a node that dies before
+// telling them has no sockets left to tell.
 func (a *Applier) Committed(context.Context) {
 	// RESET BEFORE THE CALL, not after: the listener may take long enough
 	// for the next batch to be waiting behind it, and a set drained
@@ -124,8 +125,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		}
 	}
 
-	// The deletion gate reads the subject's own marker. A purge is the one
-	// operation that removes rows, and its marker is what makes the
+	// The deletion gate reads the marker of the task the record is ABOUT —
+	// [markedTask], which the publisher's reader asks too. A purge is the
+	// one operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
 	//
 	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
@@ -136,17 +138,17 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// EVERY node, since every node applies the same log in the same order —
 	// a fleet-wide wedge from one ordinary race. Gated, it is read past and
 	// counted as a hit on the marker like any other late write.
-	if ObjectKind(rec.Subject.Kind).GatedByPurge() {
+	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
 			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
-			rec.Subject.ID).Scan(&author)
+			taskID).Scan(&author)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return "", false, nil
 		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the deletion gate for "+
-				"task %s: %w", rec.Subject.ID, err)
+				"task %s: %w", taskID, err)
 		}
 		// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its
 		// own id — not by its op kind. "Any purge" would let a SECOND
@@ -160,9 +162,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tracker_deletions
 			SET rejects = rejects + 1, last_reject_at = ?
-			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), rec.Subject.ID); err != nil {
+			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), taskID); err != nil {
 			return "", false, fmt.Errorf("tracker: count a gate hit on the "+
-				"purged task %s: %w", rec.Subject.ID, err)
+				"purged task %s: %w", taskID, err)
 		}
 		return statelog.ReasonDeleted, true, nil
 	}
@@ -173,8 +175,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 //
 // The dispatch is on the SUBJECT KIND, and every kind has a case — including
 // the two that write nothing, which are cases rather than a default so that a
-// kind added later without one is a compile-time hole rather than a silently
-// ignored record.
+// kind added later without one faults below rather than being silently
+// ignored. A Go switch is not exhaustive, so that fault — certified by
+// TestAKindNobodyDeclaredFaults — is the only thing that catches it.
 func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	opts statelog.ApplyOptions) (int, error) {
 
@@ -211,7 +214,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyCounter(ctx, tx, at)
 	case KindTask:
 		return a.applyTask(ctx, tx, at)
-	case KindProject, KindTags, KindCatalogue, KindView, KindPerson:
+	case KindProject, KindTags, KindCatalogue, KindView, KindPerson, KindFile:
 		return a.applyDocument(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD

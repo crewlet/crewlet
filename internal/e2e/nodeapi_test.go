@@ -91,13 +91,16 @@ func serveAPI(
 // ends only that goroutine and leaves the test running with a nil member.
 //
 // THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages,
-// backlinks and search, and the operator surface both transports serve — and
-// for the same cure: each is built by internal/api ([api.NativeSources], and
-// the operator inside [api.NewHumanSurfaces]) over the engine, resolved per
-// request, because a node meets its tracker and knowledge base at its first
-// company, which a node that booted with none meets after its API is serving.
-// So `/operator/act` here is the route a person's dashboard writes through,
-// and the viewer names the same verbs.
+// backlinks, search and file listing, and the operator surface both transports
+// serve — and for the same cure: each is built by internal/api
+// ([api.NativeSources], and the operator inside [api.NewHumanSurfaces]) over
+// the engine, resolved per request, because a node meets its tracker and
+// knowledge base at its first company, which a node that booted with none
+// meets after its API is serving. So `/operator/act` here is the route a
+// person's dashboard writes through, and the viewer names the same verbs. The
+// file byte routes are IN too, served by the human write surface, because a
+// file's bytes crossing between members is something only a fleet here can
+// exercise.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -141,7 +144,8 @@ func wireAPI(
 	}
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
-		Holders: configapi.DirectoryHolders(e.IAM()),
+		Holders:        configapi.DirectoryHolders(e.IAM()),
+		CompanyWriters: boot.API.Auth.CompanyWriters,
 	})
 	if err != nil {
 		return fail("config surface", err)
@@ -165,23 +169,33 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company:     company,
-		Config:      configSurface,
-		Secrets:     fleetsecrets.New(backends.Fleet, cipher),
-		Resolve:     e.LookupSecret,
-		Passes:      e.SetupRunner(),
-		Sink:        e.SetupSink,
-		Status:      status,
-		SlackApps:   e.SlackApps,
-		StateCipher: cipher,
-		StateClaims: backends.Fleet,
+		Company: company,
+		Config:  configSurface,
+		Secrets: fleetsecrets.New(backends.Fleet, cipher),
+		Resolve: e.LookupSecret,
+		// WHERE A VENDOR REACHES THIS NODE, from Tier A as cmd/crewlet
+		// reads it, and the key it is read from.
+		WebhookBase:    boot.API.WebhookBase(),
+		WebhookBaseKey: boot.API.WebhookBaseKey(),
+		Passes:         e.SetupRunner(),
+		Sink:           e.SetupSink,
+		Status:         status,
+		SlackApps:      e.SlackApps,
+		StateCipher:    cipher,
+		StateClaims:    backends.Fleet,
 	})
 	if err != nil {
 		return fail("setup surface", err)
 	}
 	copier, err := backup.New(backup.Options{
-		Store: backends.Store, Conn: backends.Conn(),
+		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
+		Conn: backends.Conn(), API: backends.API(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
+		// AS cmd/crewlet WIRES IT, the stream included: a backup of a fleet
+		// whose files ride the broker's bucket snapshots that stream and
+		// checks each object it names, rather than copying them beside it.
+		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
+			Stream: e.ObjectsStream()},
 	})
 	if err != nil {
 		return fail("backup", err)
@@ -203,7 +217,7 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	workSource, pageSource, backlinkSource, searchSource := api.NativeSources(e)
+	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
@@ -211,7 +225,6 @@ func wireAPI(
 		Inbox:        e,
 		Credentials:  e,
 		QueueBackend: backends.Queue.Backend(),
-		EventLog:     backends.Store.Events(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
 			// the node the harness serves answers history the way a real
@@ -227,28 +240,43 @@ func wireAPI(
 			// AND WHOSE CONTACT IDENTITIES THE REGISTRY WITHHOLDS, which
 			// api.New requires too.
 			WithheldContacts: e.WithheldContacts,
-			// THE FLEET'S LEASE TABLE, as cmd/crewlet wires it: the seat
-			// states the dashboard is served read placement from it.
-			Coord: backends.Coord,
+			// AND WHAT A `${VAR}` IN A SEAT'S CONTACT IDS RESOLVES TO,
+			// through the node's own chain as cmd/crewlet wires it: a
+			// node here is HANDED its environment
+			// ([engine.Options.Environment]), so a read surface left on
+			// the process environment finds nobody by an id the node's
+			// routing resolves.
+			Env: e.LookupSecret,
+			// THE FLEET VIEW, over the lease table, the control plane and
+			// the object collector's recorded report, as cmd/crewlet reads
+			// it: the seat states the dashboard is served read placement
+			// from the leases, and a member that ran no pass reads the
+			// collector's report off the store every member reads.
+			Coord:   backends.Coord,
+			Plane:   backends.Fleet,
+			Objects: backends.Fleet,
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
 			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
 			// them.
 			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
-			WorkSearch: searchSource,
+			WorkSearch: searchSource, Files: fileSource,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
 		Setup:     setupSurface,
 		Retention: backends.Fleet,
 		Capacity:  e,
-		Backup:    copier,
+		// THE FLEET BROKER'S MEMBERSHIP, through the engine's own surface,
+		// as `crewlet run` wires it.
+		FleetBroker: e.FleetBroker(),
+		Backup:      copier,
 		// THE RUNTIME AUDIT, onto this node's own queue as cmd/crewlet
 		// hands it: api.New requires it.
 		Audit: backends.Queue,
-		// THE EVICTION GATE, which every node holds from boot and api.New
-		// requires.
+		// THE EVICTION GATE, which every node holding the estate runs
+		// from boot and api.New requires.
 		Nodes: e.NodeGate(),
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.

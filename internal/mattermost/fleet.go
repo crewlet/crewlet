@@ -44,6 +44,27 @@ import (
 // catch up after an outage: every replayed message costs a full agent turn,
 // so an hour-long gap replayed in full would be both expensive and wrong —
 // those conversations have moved on and been resolved by people.
+//
+// # Every node listens, and one delivers
+//
+// The transport opens EVERY seat's socket on EVERY node, not only the seats a
+// node holds: a node that restarts, drains or loses a seat's lease leaves the
+// seat heard by every other node meanwhile, so there is no gap for a backfill
+// to cover and no handover to get wrong. The price is that each post arrives
+// once per node, so a post is CLAIMED fleet-wide before it is published
+// (`mattermost|<handle>|<post id>`, [ClaimTTL]): the node that wins publishes
+// it and records the delivery, and every other node drops it. A claim store
+// that cannot answer fails OPEN — a post published by two nodes is a duplicate
+// the second layer collapses, while one suppressed by a store blip is a
+// message nobody answers. The second layer is the wake's id, derived from the
+// seat and the post ([WakeID]), which the inbox and the fleet completion ledger
+// both key on.
+//
+// A POST IS NOT SPENT UNTIL IT IS QUEUED. A publish that fails releases the
+// claim, forgets the post and holds the seat's cursor before it, and the seat
+// reconnects and replays from there — so the post is read again, by this node
+// or by whichever peer gets there first. It used to move the cursor past the
+// post first, which lost it for good.
 
 // ReconnectBackoff is the delay before each reconnect attempt; the last
 // value repeats.
@@ -64,6 +85,24 @@ var ReconnectBackoff = []time.Duration{
 // skipped rather than silently truncated, because "we missed two hours" is
 // something an operator needs to know and a seat cannot infer.
 const MaxBackfill = 15 * time.Minute
+
+// ClaimTTL is how long a post stays claimed by the node that delivered it.
+//
+// IT MUST OUTLIVE THE REPLAY HORIZON, because a replay is where a duplicate
+// comes from: a peer's socket that drops and returns re-reads up to
+// [MaxBackfill] behind the moment it reconnects, so a post can be read again
+// up to MaxBackfill after it was written — and a claim that lapsed first lets
+// that peer publish the post a second time and wake its seat about a message
+// already answered. The first claim on a post is taken no earlier than the
+// post was written, so MaxBackfill is the floor; on top of it sit the replay's
+// own floor falling back to the ENGINE's clock when the server cannot be asked
+// (minutes of skew are possible, seconds are usual), the claim judged against
+// each claiming node's own clock, and a reconnect that waited out the
+// [ReconnectBackoff] ceiling (5 minutes, plus a quarter of jitter) before it
+// replayed. TWICE THE WINDOW — thirty minutes — covers all of it with room,
+// and is coord.MaxClaimTTL, the longest claim the coordination store keeps.
+// Longer buys nothing: a post older than the window is never replayed.
+const ClaimTTL = 2 * MaxBackfill
 
 // dedupeRing is how many post ids each seat remembers.
 //
@@ -135,9 +174,23 @@ type Socket interface {
 	Close() error
 }
 
+// Claims is the fleet-wide first-claim registry a post is claimed in before it
+// is published. Satisfied by coord.Claims.
+type Claims interface {
+	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
+	Release(ctx context.Context, key string) error
+}
+
 // FleetOptions configure a [Fleet].
 type FleetOptions struct {
 	Publisher Publisher
+
+	// Claims is where a post is claimed before it is published, so that of
+	// the nodes all reading one seat's socket exactly one delivers each
+	// post. REQUIRED: every node opens every seat's socket, and a fleet
+	// that deduplicated only within one process would wake a seat once per
+	// node for every message.
+	Claims Claims
 
 	// Connect opens a socket; nil takes the real websocket dialer.
 	Connect Connector
@@ -156,14 +209,16 @@ type FleetOptions struct {
 	// test of the reconnect PATH would be testing the sleep instead.
 	Backoff []time.Duration
 
-	// Now is the clock used for LOCAL bookkeeping only. The backfill
-	// cursor comes from the server — see [Client.ServerTime].
+	// Now is this node's clock: the instant a claim is taken at, and the
+	// backfill floor when the server cannot be asked. The backfill cursor
+	// itself comes from the server — see [Client.ServerTime].
 	Now func() time.Time
 }
 
 // Fleet holds one socket per seat.
 type Fleet struct {
 	publisher Publisher
+	claims    Claims
 	connect   Connector
 	backfill  time.Duration
 	backoff   []time.Duration
@@ -184,8 +239,13 @@ func NewFleet(opts FleetOptions) (*Fleet, error) {
 	if opts.Publisher == nil {
 		return nil, fmt.Errorf("mattermost: the fleet needs a publisher")
 	}
+	if opts.Claims == nil {
+		return nil, fmt.Errorf("mattermost: the fleet needs a claim registry — every node " +
+			"reads every seat's socket, and without one each post wakes its seat once per node")
+	}
 	f := &Fleet{
 		publisher:  opts.Publisher,
+		claims:     opts.Claims,
 		connect:    opts.Connect,
 		backfill:   opts.Backfill,
 		backoff:    opts.Backoff,
@@ -227,6 +287,10 @@ type seatSocket struct {
 	// clock. Zero means it has seen nothing, and a reconnect then reads
 	// from the connect moment rather than from the epoch.
 	cursor time.Time
+	// held is the cursor a replay must resume from INSTEAD, when a post at
+	// or after it was read and could not be queued: the replay re-reads it.
+	// Zero when nothing is owed. See [seatSocket.since].
+	held   time.Time
 	seen   []string
 	seenAt map[string]bool
 }
@@ -308,12 +372,37 @@ func (f *Fleet) run(ctx context.Context, s *seatSocket) {
 		// before connecting means anything said DURING the backfill is
 		// lost. Doing it in this order can only produce duplicates,
 		// which the dedupe ring absorbs.
-		f.replay(ctx, s)
-		attempt = 0
+		//
+		// A replay that could not queue a post ends this connection
+		// WITHOUT resetting the backoff: the queue is what is down, and
+		// the next attempt replays from before that post — so a broker
+		// that stays down is retried on the backoff, not in a loop.
+		if err := f.replay(ctx, s); err != nil {
+			_ = socket.Close()
+			continue
+		}
+		// THE BACKOFF RESETS ONLY AFTER A CONNECTION THAT STAYED UP.
+		// Mattermost closes without a close frame, so a server that
+		// accepts a socket and hangs up on sight looks exactly like an
+		// ordinary drop — and resetting on every accepted socket retried
+		// such a server at the one-second floor for ever, each retry a
+		// backfill walking every channel the seat is in.
+		opened := time.Now()
 		f.pump(ctx, s, socket)
 		_ = socket.Close()
+		if time.Since(opened) >= stableConnection {
+			attempt = 0
+		}
 	}
 }
+
+// stableConnection is how long a socket must have stayed up for the next drop
+// to be treated as a fresh one, with the backoff back at its floor.
+//
+// A MINUTE: twice the heartbeat, so a connection that lived through at least
+// one ping round trip has proved the server keeps it — while a server that
+// hangs up at once, or after its first frame, keeps climbing the backoff.
+const stableConnection = time.Minute
 
 // delay is the backoff for an attempt, jittered.
 func (f *Fleet) delay(attempt int) time.Duration {
@@ -343,6 +432,8 @@ func (f *Fleet) delay(attempt int) time.Duration {
 //
 // A failed ping closes the socket, which ends Read and drops into the
 // existing reconnect-and-replay path — so recovery needs no new machinery.
+// So does a post that could not be queued: the pump ends, and the replay
+// after the reconnect reads it again.
 func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -361,7 +452,9 @@ func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
 			}
 			return
 		}
-		f.deliver(ctx, s, body, false)
+		if err := f.deliver(ctx, s, body, false); err != nil {
+			return
+		}
 	}
 }
 
@@ -398,7 +491,11 @@ func (f *Fleet) heartbeat(ctx context.Context, s *seatSocket, socket Socket) {
 }
 
 // replay re-reads what a seat missed while it was disconnected.
-func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
+//
+// An error means a post was read and could not be queued; the replay stops
+// there, with the seat's cursor held where this replay began, so the next one
+// reads every post this one had not yet queued.
+func (f *Fleet) replay(ctx context.Context, s *seatSocket) error {
 	since, ok := s.since()
 	if !ok {
 		// Nothing seen yet: this seat is starting, not resuming, so
@@ -411,7 +508,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 			log.WarnContext(ctx, "mattermost_server_time_unavailable",
 				"handle", s.seat.Handle, "error", err.Error())
 		}
-		return
+		return nil
 	}
 
 	// The floor is measured from NOW, not from the cursor — measuring it
@@ -429,11 +526,16 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		since = floor
 	}
 
-	channels, err := f.channels(ctx, s)
+	// A CHANNEL THAT COULD NOT BE READ IS STILL OWED. The cursor moves
+	// with every post the other channels deliver, so without holding it
+	// here the next replay would start past whatever this one could not
+	// read, and those posts would be lost for good.
+	channels, complete, err := f.channels(ctx, s)
 	if err != nil {
 		log.WarnContext(ctx, "mattermost_backfill_channels_unavailable",
 			"handle", s.seat.Handle, "error", err.Error())
-		return
+		s.hold(since)
+		return nil
 	}
 	var replayed int
 	for _, ch := range channels {
@@ -441,20 +543,42 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		if err != nil {
 			log.WarnContext(ctx, "mattermost_backfill_failed", "handle", s.seat.Handle,
 				"channel", ch.ID, "error", err.Error())
+			complete = false
 			continue
 		}
 		for _, p := range posts {
-			f.deliver(ctx, s, map[string]any{
+			// CREATED IN THE GAP, not merely touched in it. `since=`
+			// is UPDATE-based: a reaction touches a post and deleting
+			// a reply touches its thread root, so the read hands back
+			// posts the seat already answered, and replaying them
+			// woke it to answer again. The live socket delivers only
+			// what was posted, and the replay delivers no more.
+			if p.CreateAt <= since.UnixMilli() {
+				continue
+			}
+			if err := f.deliver(ctx, s, map[string]any{
 				"event": "posted", "post": postMap(p),
 				"channel_type": ch.Type, "channel_name": ch.Name,
-			}, true)
+			}, true); err != nil {
+				// Posts in channels not yet read may be OLDER than
+				// this one, so the whole replay is owed again —
+				// from where it began, not from the post.
+				s.hold(since)
+				return err
+			}
 			replayed++
 		}
+	}
+	if complete {
+		s.settle(since)
+	} else {
+		s.hold(since)
 	}
 	if replayed > 0 {
 		log.InfoContext(ctx, "mattermost_backfilled", "handle", s.seat.Handle,
 			"posts", replayed, "since", since.UTC().String())
 	}
+	return nil
 }
 
 // floor is the oldest instant a replay may reach back to.
@@ -479,13 +603,15 @@ func (f *Fleet) floor(ctx context.Context, s *seatSocket) (time.Time, bool) {
 }
 
 // channels is the seat's work list: every channel it could have been spoken
-// to in, across every team it belongs to.
-func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, error) {
+// to in, across every team it belongs to — and whether that is every team's,
+// since a team that could not be listed is a gap the replay still owes.
+func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, bool, error) {
 	teams, err := s.client.Teams(ctx, s.seat.UserID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var out []Channel
+	complete := true
 	for _, team := range teams {
 		channels, err := s.client.Channels(ctx, s.seat.UserID, team.ID)
 		if err != nil {
@@ -493,15 +619,22 @@ func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, error) 
 			// three teams should still hear two of them.
 			log.WarnContext(ctx, "mattermost_team_channels_unavailable",
 				"handle", s.seat.Handle, "team", team.ID, "error", err.Error())
+			complete = false
 			continue
 		}
 		out = append(out, channels...)
 	}
-	return out, nil
+	return out, complete, nil
 }
 
-// deliver republishes one post onto the raw-webhook envelope.
-func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any, replayed bool) {
+// deliver claims one post fleet-wide, republishes it onto the raw-webhook
+// envelope and records the delivery.
+//
+// An error means the post was read and could NOT be queued. Nothing about it is
+// kept — the claim is released, the id forgotten and the cursor held before
+// it — so the caller ends the connection and the replay after the reconnect
+// reads it again.
+func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any, replayed bool) error {
 	// ONE check for two cases that lead to the same place: this is not a
 	// post event at all — the socket carries typing indicators, presence
 	// changes and status updates, none of which is something to wake a
@@ -511,17 +644,40 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 	post, _ := body["post"].(map[string]any)
 	id := str(post, "id")
 	if id == "" {
-		return
+		return nil
 	}
 	if !s.first(id) {
 		// The reconnect boundary: this post arrived through the
 		// backfill read AND from the live socket that came up
 		// mid-read. A duplicate here is a duplicate agent turn.
-		return
+		return nil
 	}
-	if at := stamp(post, "create_at"); !at.IsZero() {
+	at := stamp(post, "create_at")
+
+	// AND ACROSS THE FLEET. Every node reads this seat's socket, so the
+	// ring above only stops this process seeing a post twice; the claim is
+	// what stops the fleet delivering it once per node.
+	key := ClaimKey(s.seat.Handle, id)
+	won, err := f.claims.Claim(ctx, key, ClaimTTL, f.now())
+	switch {
+	case err != nil:
+		// FAILED OPEN. A post suppressed because the store blinked is
+		// a message nobody answers; one delivered twice is collapsed by
+		// the wake's derived id ([WakeID]) at the inbox and the ledger.
+		log.WarnContext(ctx, "mattermost_post_dedupe_unavailable", "handle", s.seat.Handle,
+			"post", id, "error", err.Error(),
+			"detail", "delivering the post, which a peer may deliver too")
+	case !won:
+		// A PEER DELIVERED IT. Nothing is owed here: the post is that
+		// node's to queue, and to read again should its publish fail.
 		s.mark(at)
+		return nil
 	}
+	claimed := err == nil
+
+	// WHAT ARRIVED, for the record — before the seat's identity is added
+	// below, which is this engine's annotation rather than the server's.
+	arrived, _ := json.Marshal(body)
 
 	// The seat's own identity rides along, because the parser needs it to
 	// suppress the seat's own posts and the prompt needs it to teach the
@@ -537,18 +693,121 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 	}, tracing.TraceOf(ctx))
 	ev.Source = Backend
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
+		// NOTHING IS KEPT, so the post is read again. WithoutCancel on
+		// the release: a pump ending because its context did is often
+		// WHY the publish failed, and a claim left standing would refuse
+		// every node's re-read of this post for the whole ClaimTTL.
+		if claimed {
+			if rerr := f.claims.Release(context.WithoutCancel(ctx), key); rerr != nil {
+				log.WarnContext(ctx, "mattermost_post_release_failed", "handle", s.seat.Handle,
+					"post", id, "error", rerr.Error(),
+					"detail", "the post's re-read is refused until its claim lapses")
+			}
+		}
+		s.forget(id)
+		if !at.IsZero() {
+			s.hold(at.Add(-time.Millisecond))
+		}
 		log.ErrorContext(ctx, "mattermost_publish_failed", "handle", s.seat.Handle,
 			"post", id, "error", err.Error(),
 			"detail", "the post was read off the socket and could not be queued; "+
-				"it will not be re-read, because the cursor has moved past it")
+				"reconnecting to read it again")
+		return fmt.Errorf("mattermost: queue post %s for %s: %w", id, s.seat.Handle, err)
+	}
+	s.mark(at)
+	f.record(ctx, s, post, arrived, replayed)
+	return nil
+}
+
+// record publishes the delivery's record: one post presented to one seat,
+// counted once across the fleet because only the claim's winner gets here.
+//
+// PUBLISHED rather than written, because this runs on every node and a node
+// without `data` keeps no event log — its records reach a data node through
+// custody, as every event it publishes does. Best effort: the wake is queued,
+// and a lost record costs a row on a screen, not a message.
+func (f *Fleet) record(ctx context.Context, s *seatSocket, post map[string]any,
+	arrived []byte, replayed bool) {
+
+	ev := events.New(types.InboundDelivery{
+		Label: "socket:posted", Route: Backend,
+		Text:      deliverySummary(post, s.seat, replayed),
+		Recipient: s.seat.Handle, DeliveryKey: str(post, "id"),
+		Channel: str(post, "channel_id"), Replayed: replayed,
+		Body: arrived,
+	}, tracing.TraceOf(ctx))
+	ev.Source = Backend
+	if err := f.publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "mattermost_delivery_unrecorded", "handle", s.seat.Handle,
+			"post", str(post, "id"), "error", err.Error(),
+			"detail", "the post was queued and will wake its seat; only its row "+
+				"on the integrations screen and in the event log is missing")
 	}
 }
 
-// since is the cursor to resume from, and whether there is one.
+// deliverySummary is a delivery row's one line: which bot heard it, and where.
+func deliverySummary(post map[string]any, seat Seat, replayed bool) string {
+	out := "post for @" + seat.Username
+	if replayed {
+		out = "replayed " + out
+	}
+	if channel := str(post, "channel_id"); channel != "" {
+		out += " in channel " + channel
+	}
+	return out
+}
+
+// ClaimKey is the fleet-wide identity of one post presented to one seat.
+//
+// PER SEAT, because one post is a delivery to every bot in its channel — each
+// has its own socket and its own turn to take — and a key on the post alone
+// would let the first seat's delivery suppress the rest.
+func ClaimKey(handle, postID string) string { return Backend + "|" + handle + "|" + postID }
+
+// since is the cursor to resume from, and whether there is one: the newest
+// post seen, or the HELD cursor when that is earlier — a post at or after it
+// was read and is still owed.
 func (s *seatSocket) since() (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.held.IsZero() && (s.cursor.IsZero() || s.held.Before(s.cursor)) {
+		return s.held, true
+	}
 	return s.cursor, !s.cursor.IsZero()
+}
+
+// hold makes a replay resume from at or earlier, never later.
+func (s *seatSocket) hold(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held.IsZero() || at.Before(s.held) {
+		s.held = at
+	}
+}
+
+// settle drops a hold a completed replay from `from` has paid off. A hold
+// taken after the replay began — by a live post that failed meanwhile — is
+// later than `from` only if it was taken in the gap, and is kept.
+func (s *seatSocket) settle(from time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.held.After(from) {
+		s.held = time.Time{}
+	}
+}
+
+// forget drops a post id from the ring, so its re-read is not taken for a
+// duplicate.
+func (s *seatSocket) forget(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.seenAt[id] {
+		return
+	}
+	delete(s.seenAt, id)
+	if i := slices.Index(s.seen, id); i >= 0 {
+		s.seen = slices.Delete(s.seen, i, i+1)
+	}
 }
 
 // mark advances the cursor, never backwards.

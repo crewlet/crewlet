@@ -7,7 +7,7 @@
  * could not be spent from a browser at all.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
@@ -74,17 +74,23 @@ const SPENT: Answer = {
   },
 };
 
-function mount(link = `${ID}.${SECRET}`) {
+async function mount(link = `${ID}.${SECRET}`) {
   location.hash = `#/reset/${link}`;
   const store = new Store();
   const socket = new LiveSocket(store);
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <App />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
+  // (`app/lazyScreen.ts`), and a synchronous act stops flushing at the first
+  // render that used a promise, settled or not — so the screen's first effects,
+  // and every answer the stubbed engine gives them, would be left unflushed.
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
 }
 
 function type(label: RegExp | string, value: string) {
@@ -110,7 +116,7 @@ afterEach(() => {
 describe("opening the link", () => {
   test("says whose password it sets, asking with the secret beside the id", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     expect(screen.getByText("jane.doe")).toBeDefined();
     const view = sent.find((s) => s.url.includes("/auth/reset/"));
@@ -123,23 +129,23 @@ describe("opening the link", () => {
   // refusal probe raises the sign-in need on every load: the screen stays.
   test("stays put when the transports say nobody is signed in", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     needSession("sign_in");
     await screen.findByLabelText("New password");
     expect(location.hash).toBe(`#/reset/${ID}.${SECRET}`);
   });
 
-  test("a link cut short says so, and asks the engine nothing", () => {
+  test("a link cut short says so, and asks the engine nothing", async () => {
     const sent = engine({});
-    mount(ID);
+    await mount(ID);
     expect(screen.getByText("Part of the link is missing.")).toBeDefined();
     expect(sent.filter((s) => s.url.includes("/auth/reset/"))).toEqual([]);
   });
 
   test("a link that no longer works is the engine's one answer, with no form", async () => {
     engine({ [`GET ${PATH}`]: SPENT });
-    mount();
+    await mount();
     expect(
       await screen.findByText(
         "This password reset link is no longer valid. Ask an administrator for a new one.",
@@ -167,7 +173,7 @@ describe("a first password link", () => {
       [`GET ${PATH}`]: FIRST,
       [`POST ${PATH}`]: { status: 200, body: { status: "password_set", login: "jane.doe" } },
     });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     expect(screen.getByText("Choose your password")).toBeDefined();
     expect(screen.getByText(/sets the first password for/)).toBeDefined();
@@ -184,7 +190,7 @@ describe("a first password link", () => {
       [`GET ${PATH}`]: VIEW,
       [`POST ${PATH}`]: { status: 200, body: { status: "password_set", login: "jane.doe" } },
     });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     expect(screen.getByText("Choose a new password")).toBeDefined();
     expect(screen.getByText(/Setting it ends every session you hold/)).toBeDefined();
@@ -200,7 +206,7 @@ describe("a first password link", () => {
   // and for a day" was wrong for every first link.
   test("a link that no longer opens names no lifetime", async () => {
     engine({ [`GET ${PATH}`]: SPENT });
-    mount();
+    await mount();
     await screen.findByText(
       "This password reset link is no longer valid. Ask an administrator for a new one.",
     );
@@ -212,7 +218,7 @@ describe("a first password link", () => {
 describe("spending it", () => {
   test("a password under the floor is refused here, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     type("New password", "too-short");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
@@ -224,7 +230,7 @@ describe("spending it", () => {
   // which types it the same way twice and is posted.
   test("a password typed differently the second time is refused here, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery stable");
@@ -243,7 +249,7 @@ describe("spending it", () => {
       [`GET ${PATH}`]: VIEW,
       [`POST ${PATH}`]: { status: 200, body: { status: "password_set", login: "jane.doe" } },
     });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery staple");
@@ -262,7 +268,7 @@ describe("spending it", () => {
 
   test("a link spent between the view and the post becomes the one answer", async () => {
     engine({ [`GET ${PATH}`]: VIEW, [`POST ${PATH}`]: SPENT });
-    mount();
+    await mount();
     await screen.findByLabelText("New password");
     type("New password", "correct horse battery staple");
     type("Confirm new password", "correct horse battery staple");

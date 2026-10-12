@@ -27,10 +27,10 @@
 // a person or an open invitation — by naming them
 // ([ErrTaken]), and publishes at that one subject's arbitration anchor — so two
 // directory writes contend at the broker and the loser decides again from rows
-// that hold the winner. It is the org chart's structure rule applied to the
-// directory: directory writes are an administrator's or an invitation's, so
-// serialising them costs nothing, and a uniqueness question answered by one
-// read in one snapshot needs no sequence, no reservation and no release.
+// that hold the winner. Directory writes are an administrator's or an
+// invitation's, so serialising them on one subject costs nothing, and a
+// uniqueness question answered by one read in one snapshot needs no sequence,
+// no reservation and no release.
 //
 // EVERYTHING THAT SETS NOTHING UNIQUE STAYS OFF IT. A person's own content —
 // their name, grants, credentials, stage and revocation epoch, and a new
@@ -69,7 +69,7 @@
 // document: a document that changes a handle has removed one seat and created
 // another.
 //
-// # Every person holds a HUMAN seat for as long as they are here (ADR-0026)
+// # Every person holds a HUMAN seat for as long as they are here (ADR-0032)
 //
 // A person is created on a human seat ([Writer.Create]) or invited onto one
 // ([Writer.Invite], [Writer.Redeem]), and their seat is MOVED, never cleared
@@ -80,11 +80,9 @@
 // optional: it acts as itself and binds one only to act as it. Every binding,
 // of either kind, is checked against the running organisation to be a human
 // seat ([Writer.humanSeat]); a node running no company has none to offer
-// ([ErrNoCompany]). The applier writes whatever a record says — a person a
-// build before the rule enrolled with no seat included — because refusing a
-// record there stops the log on every node; the WRITER's decides are where the
-// rule is enforced, and the directory check reports the residue
-// ([PersonRow.Seatless]).
+// ([ErrNoCompany]). The WRITER's decides are where the rule is enforced and
+// never the applier, which writes whatever a record says, because refusing a
+// record there stops the log on every node.
 package iamdomain
 
 import (
@@ -265,6 +263,24 @@ func (k ObjectKind) Identified() bool {
 		return false
 	}
 	return true
+}
+
+// GatedByRemoval reports whether a record on this kind can be ABOUT a person,
+// and so whether a removal's tombstone may drop it ([markedPerson]).
+//
+// THREE OF EIGHT ARE: a person's own subject, which names them; and the
+// directory and a session, whose subjects name nobody and a lineage, and
+// whose person is in the record's payload. An invalidation, a sweep, an
+// eviction, a generation and a barrier are about no person at all, so no
+// tombstone holds one back — and stating that on the kind is what lets the
+// applier and the publisher's reader ask one rule rather than each decoding
+// whatever body it is handed.
+func (k ObjectKind) GatedByRemoval() bool {
+	switch k {
+	case KindPerson, KindDirectory, KindSession:
+		return true
+	}
+	return false
 }
 
 // RootScoped reports whether a record on this kind may state the whole estate

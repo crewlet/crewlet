@@ -12,26 +12,6 @@ import (
 // a self-hosted fork renames one, and a summary builder that indexed blindly
 // would turn a cosmetic difference into a 500 on a verified delivery.
 
-// preview trims a title to n runes and marks that it was cut.
-//
-// RUNES rather than [github.com/crewlet/crewlet/internal/textcut]'s bytes,
-// which is the one reason this is not that: every budget here is a column of
-// a one-line feed row, so the unit a caller means is characters, and a CJK
-// title cut to 60 BYTES is 20 of them. The cut still lands on a boundary —
-// a byte slice through UTF-8 leaves a broken code point, which renders as a
-// replacement character in the feed.
-//
-// ONE SPELLING OF THE MARKER, "…" rather than "...", which is textcut's own
-// rule and the drift it was written to end: this helper predated it and was
-// the last place in the tree where the same cut read differently.
-func preview(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
-
 // join assembles a summary from the parts that are present.
 //
 // The empty filter is what keeps an absent field from becoming a gap in the
@@ -48,11 +28,21 @@ func join(parts ...string) string {
 	return strings.Join(kept, " ")
 }
 
-func quoted(s string, n int) string {
+// quoted is a title or a message as the summary quotes it: WHOLE, on one
+// line.
+//
+// It used to be cut to 50-80 characters and marked, for a feed row's width.
+// The row is the renderer's to fit, and it already does — it elides the line
+// and shows the whole of it on hover — so the cut only ever shortened the
+// hover text, and the one place a long title could be read in full was the
+// raw payload. Whitespace runs collapse to one space, because a message's own
+// newlines would break the line the feed draws.
+func quoted(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {
 		return ""
 	}
-	return `"` + preview(s, n) + `"`
+	return `"` + s + `"`
 }
 
 func slackSummary(handle string, body map[string]any) string {
@@ -74,7 +64,7 @@ func slackSummary(handle string, body map[string]any) string {
 		}
 		what := who + " sent a message"
 		if text != "" {
-			what = who + ` said ` + quoted(text, 80)
+			what = who + ` said ` + quoted(text)
 		}
 		where := ""
 		if channel != "" {
@@ -106,7 +96,7 @@ func jiraSummary(body map[string]any) string {
 		str(object(body, "user"), "displayName"),
 		action,
 		str(issue, "key"),
-		quoted(str(object(issue, "fields"), "summary"), 60))
+		quoted(str(object(issue, "fields"), "summary")))
 }
 
 func githubSummary(event string, body map[string]any) string {
@@ -121,10 +111,10 @@ func githubSummary(event string, body map[string]any) string {
 		what = "pushed " + strconv.Itoa(len(list(body, "commits"))) + " commit(s) to " + branch
 	case "pull_request":
 		pr := object(body, "pull_request")
-		what = join(action+" PR #"+num(pr, "number"), quoted(str(pr, "title"), 60))
+		what = join(action+" PR #"+num(pr, "number"), quoted(str(pr, "title")))
 	case "issues":
 		issue := object(body, "issue")
-		what = join(action+" issue #"+num(issue, "number"), quoted(str(issue, "title"), 60))
+		what = join(action+" issue #"+num(issue, "number"), quoted(str(issue, "title")))
 	default:
 		what = join(event, action)
 	}
@@ -150,10 +140,10 @@ func gitlabSummary(event string, body map[string]any) string {
 	switch kind {
 	case "merge_request":
 		what = join(orElse(action, "updated")+" MR !"+num(attrs, "iid"),
-			quoted(str(attrs, "title"), 60))
+			quoted(str(attrs, "title")))
 	case "issue":
 		what = join(orElse(action, "updated")+" issue #"+num(attrs, "iid"),
-			quoted(str(attrs, "title"), 60))
+			quoted(str(attrs, "title")))
 	case "note":
 		what = "commented on " + orElse(str(attrs, "noteable_type"), "item")
 	case "pipeline":
@@ -188,7 +178,7 @@ func confluenceSummary(body map[string]any) string {
 		where = "[" + key + "]"
 	}
 	return join("Confluence", who, strings.ReplaceAll(event, "_", " "),
-		where, quoted(str(page, "title"), 60))
+		where, quoted(str(page, "title")))
 }
 
 func forgeSummary(source, legacy string, body map[string]any) string {
@@ -205,14 +195,14 @@ func forgeSummary(source, legacy string, body map[string]any) string {
 			if title == "" {
 				return join("Forge", where, what)
 			}
-			return join("Forge", where, what, "on "+quoted(title, 50))
+			return join("Forge", where, what, "on "+quoted(title))
 		}
-		return join("Forge", where, what, quoted(title, 50))
+		return join("Forge", where, what, quoted(title))
 	case "jira":
 		issue := object(body, "issue")
 		what := strings.ReplaceAll(strings.TrimPrefix(legacy, "jira:"), "_", " ")
 		return join("Forge", what, str(issue, "key"),
-			quoted(str(object(issue, "fields"), "summary"), 50))
+			quoted(str(object(issue, "fields"), "summary")))
 	default:
 		return join("Forge", legacy)
 	}
@@ -232,13 +222,10 @@ func datadogSummary(body map[string]any) string {
 	if transition := str(body, "alert_transition"); transition != "" {
 		parts = append(parts, transition)
 	}
-	// BOUNDED AND QUOTED like every other summary here. A monitor title is
-	// whatever a person typed into Datadog, and this string is stored on the
-	// event row and rendered in the feed beside five others that all trim at
-	// 60-80 runes; unbounded, one alert's title pushes the rest of the line
-	// off the screen.
+	// QUOTED like every other summary here, and whole: the feed row elides
+	// a long line and shows all of it on hover (see [quoted]).
 	if title := str(body, "title"); title != "" {
-		parts = append(parts, quoted(title, 80))
+		parts = append(parts, quoted(title))
 	}
 	// READ THE WAY [datadog.decode] READS IT, which is the only other reader
 	// of this field. The template sends `$PRIORITY`, and Datadog expands that

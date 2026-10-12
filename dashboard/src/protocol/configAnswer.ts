@@ -47,6 +47,14 @@ export type ConfigRefusal =
    * different, and only the first is a grant to ask an administrator for.
    */
   | { readonly kind: "guarded"; readonly code: string }
+  /**
+   * `403 config_managed`: the credential was ACCEPTED and is not one the
+   * deployment lets change the company document — another system manages it
+   * (ADR-0030), whatever grant or subtree the caller holds. Nothing was
+   * stored, and no retry with this credential changes the answer;
+   * [managedSentence] is how a screen says so.
+   */
+  | { readonly kind: "managed"; readonly managedBy: readonly string[] }
   | {
       readonly kind: "conflict";
       readonly reason: ConfigConflictReason;
@@ -75,6 +83,21 @@ export type ConfigRefusal =
       readonly hint: string;
     };
 
+/**
+ * Why a managed company document cannot be changed from here, naming who
+ * manages it (ADR-0030) — the ONE sentence every screen shows for it, whether
+ * the viewer said so before a press or the engine refused one.
+ *
+ * MANAGED IS NOT A PERMISSION THIS PERSON LACKS, it is where the company is
+ * written: another system renders the document and writes it with its own
+ * token, and replaces any revision made here at its next reconcile. So the
+ * sentence says where to change it, and what stays possible.
+ */
+export function managedSentence(managedBy: readonly string[]): string {
+  const who = managedBy.length > 0 ? managedBy.join(", ") : "another system";
+  return `This company's configuration is managed by ${who} — change it there. An edit made here would be overwritten; a credential it already names can still be rotated from Settings › Integrations.`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -91,6 +114,17 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE CREDENTIAL, which the
+  // engine accepted: it is about where the company is written (ADR-0030), so
+  // it is its own answer rather than a grant to ask for. FIRST, because it is
+  // also a 403: read as a guarded refusal it would send a person who holds
+  // every grant to an administrator who cannot help them.
+  if (answer.status === 403 && code === "config_managed") {
+    const managedBy = Array.isArray(body.managed_by)
+      ? body.managed_by.filter((id): id is string => typeof id === "string")
+      : [];
+    return { kind: "managed", managedBy };
+  }
   // A WRITE REFUSED PART BY PART. Without `config:write` the engine admits a
   // write only where everything it changes is inside a unit the caller leads,
   // and its refusal names each part that is not (`refused`,

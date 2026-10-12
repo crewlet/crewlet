@@ -45,8 +45,17 @@ func resumed(conversation, partition string) resumeInput {
 			AgentHandle:     "swe",
 			ConversationKey: conversation,
 			PartitionKey:    partition,
+			// Every launch writes who is waiting; a resume refuses a row
+			// that says nothing.
+			Reply: "tool",
 		},
-		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
+		// BEGUN A MINUTE AGO: the start is what the resumed half mints at
+		// while it is inside the ledger's horizon, and a zero one would be
+		// rebased onto the resume — a coordination store's business, not
+		// this helper's.
+		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1",
+			WorkSince: time.Now().UTC().Add(-time.Minute),
+			Seat:      &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
 	}
 }
 
@@ -228,8 +237,7 @@ func TestAResumeKeepsThePartitionAndTheConversationApart(t *testing.T) {
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
 
-	tel := (&Engine{}).describeResume(context.Background(), company,
-		resumed(theDM, theDMThread))
+	tel := mustDescribeResume(t, &Engine{}, company, resumed(theDM, theDMThread))
 
 	if tel.convKey != theDM {
 		t.Errorf("the resumed turn's conversation = %q, want the DM line the "+
@@ -342,10 +350,11 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	in := resumed(theDM, theDMThread)
 	in.Company = admitted
 	in.Run.AgentHandle = seat.Handle()
-	in.Turn = &turnctx.Turn{
-		RunID: in.Run.TurnID, WorkKey: in.Run.WorkKey,
-		Seat: seat, Org: admitted.Org,
-	}
+	// A RUN MINTED NOW, with no unit of work: its ids are seeded from the
+	// run and minted at its start, which is inside the ledger's horizon, so
+	// the resume needs no coordination store to record a rebase in.
+	in.Run.TurnID = newRunID()
+	in.Turn = resumedTurn(in.Run, seat, admitted.Org)
 
 	err := e.resumeTurn(t.Context(), in)
 	if err == nil || !strings.Contains(err.Error(), "resume round 1") {
@@ -357,15 +366,10 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 // A PARKED ROW OUTLIVES THE BUILD THAT WROTE IT, so who is waiting for a
 // resumed turn is read off it defensively.
 //
-// An ABSENT value is [turn.NoReply], the reading [sandbox.PendingRun] states
-// for it: `reply` is an omitempty column, nothing rewrites a parked row, and a
-// run launched before the field existed simply has none. Refused instead, those
-// runs could never be resumed, so a box that had already done the work was
-// collected and its answer dropped.
-//
-// A value this build does not recognise is a ROUTING refusal rather than a
-// default, so the completion reaches a peer that can read it instead of being
-// settled here against a guess at who is waiting.
+// A value this build does not recognise — a successor's kind, or none at all —
+// is a ROUTING refusal rather than a default, so the completion reaches a peer
+// that can read it instead of being settled here against a guess at who is
+// waiting.
 func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -373,7 +377,6 @@ func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
 		stored string
 		want   turn.Reply
 	}{
-		{"a row written before the field existed", "", turn.NoReply()},
 		{"nobody is waiting", "none", turn.NoReply()},
 		{"somebody is waiting, on no surface the trigger named", "tool", turn.ToolReply("")},
 		{"somebody is waiting on a named surface", "tool:mattermost", turn.ToolReply("mattermost")},
@@ -390,9 +393,11 @@ func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
 			}
 		})
 	}
-	_, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: "whisper"})
-	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
-		t.Fatalf("a reply kind this build does not know = %v, want a routing refusal so "+
-			"the completion reaches a node that can read it", err)
+	for _, stored := range []string{"whisper", ""} {
+		_, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: stored})
+		if !errors.Is(err, sandbox.ErrResumeUnavailable) {
+			t.Fatalf("reply %q = %v, want a routing refusal so the completion "+
+				"reaches a node that can read it", stored, err)
+		}
 	}
 }

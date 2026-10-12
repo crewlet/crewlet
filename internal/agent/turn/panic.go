@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // PanicError is a panic recovered while handling a turn.
@@ -58,6 +60,10 @@ const (
 	// AbandonedPanicked is a turn that panicked.
 	AbandonedPanicked = "the turn panicked, and a redelivery would run the " +
 		"same defect on the same input"
+
+	// AbandonedRefused is a turn whose model declined the request.
+	AbandonedRefused = "the model declined the request, and a redelivery " +
+		"would only ask it again"
 )
 
 // Abandon reports why a turn that returned err must NOT be run again from its
@@ -68,14 +74,19 @@ const (
 // carry its own copy of the rule; a panic added to one and forgotten in the
 // other is exactly the drift one function makes impossible.
 //
-// Two cases, and a panic outranks a proven write because it is the more
-// specific account of what happened:
+// Three cases, each outranking the next because it is the more specific
+// account of what happened:
 //
 //   - a PANIC is never retried. The premise a retry rests on is that the
 //     turn's own record proves nothing reached outside, and a panic destroys
 //     the record of the round it happened in, so that premise cannot be
 //     established at all. Even when it could, the redelivery runs the same
 //     defect again.
+//   - a model's REFUSAL ([llm.KindRefusal]) is never retried. Nothing about
+//     it is transient: a redelivery puts the same trigger in front of the
+//     same model, and a retry budget of twenty-five is twenty-four more
+//     requests to reconsider a policy decision — the fallback chain refuses
+//     to walk a refusal round the models for the same reason.
 //   - a turn whose record PROVES an outward write is not retried either,
 //     because the retry would repeat the write. See [Result.Acted].
 //
@@ -90,6 +101,8 @@ func Abandon(res Result, err error) (reason string, abandon bool) {
 	switch {
 	case errors.As(err, &panicked):
 		return AbandonedPanicked, true
+	case llm.KindOf(err) == llm.KindRefusal:
+		return AbandonedRefused, true
 	case res.Acted:
 		return AbandonedActed, true
 	}

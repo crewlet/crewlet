@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A SUSPENSION WITHDRAWS A SEAT'S CONTACT IDENTITIES WITHIN ONE APPLY, with no
@@ -90,20 +91,21 @@ func TestUnsuspendingRestoresThem(t *testing.T) {
 	}
 }
 
-// EVERY NODE READS ITS OWN DIRECTORY, WHATEVER ITS ROLES — decided by the
+// EVERY DATA NODE READS ITS OWN DIRECTORY, WHATEVER ITS ROLES — decided by the
 // wiring a running node goes through, not asserted of a hand-built engine.
 //
-// Every node runs the identity domain, a seats-only satellite included, so each
-// reads its OWN rows, gated on its own applier's position. The satellite is the
-// case that matters: it consumes inbound deliveries and runs seats like every
-// other node, so a registry built there from anything but the directory would
-// attribute a suspended person's messages to their seat. Mutation: narrow the
-// identity domain off a seats-only node and it opens no reader.
-func TestEveryNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
+// A data node runs the identity domain whatever its company and its other
+// roles, so it reads its OWN rows, gated on its own applier's position. The
+// node that serves no API is the case that matters: it consumes inbound
+// deliveries and runs seats like every other node, so a registry built there
+// from anything but the directory would attribute a suspended person's
+// messages to their seat. Mutation: narrow the identity domain to the nodes
+// that serve the API and the second case opens no reader.
+func TestEveryDataNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
 	t.Parallel()
 	for name, roles := range map[string][]string{
-		"a node declaring no roles": nil,
-		"a seats-only satellite":    {"seats"},
+		"a node declaring no roles":  nil,
+		"a data node serving no API": {"data", "seats", "workers"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -124,12 +126,42 @@ func TestEveryNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
 	}
 }
 
-// AN ENGINE WITH NO NATIVE RUNTIME IS CHART-ONLY, and a signal changes nothing.
+// A NODE WITHOUT `data` READS A DATA NODE'S DIRECTORY, through the estate
+// router, with no position to gate on.
 //
-// That is `crewlet validate`, and a test: nothing started a directory, so the
-// registry consults none and the trigger has nothing to rebuild from — not
-// even the pointer, which is what a reader holding the live registry compares.
-func TestAnEngineWithNoNativeRuntimeIsChartOnly(t *testing.T) {
+// It runs no applier (ADR-0025), so it has no rows of its own to read and no
+// signal that they moved: a registry built from the chart instead would route
+// a suspended person's word to their seat for as long as the node ran. So it
+// is handed the directory a data node answers for it, re-read on the
+// registry's own timer. Mutation: hand it the local reader's shape, or a
+// position gate, and this fails.
+//
+// WHAT THIS HOLDS IS THE HAND-OVER'S BODY, called by hand on a rig: a node
+// without `data` needs a leaf link to a data member to boot, which only
+// internal/e2e stands up. That [New] calls it on such a node — and that a
+// suspension written on a data node then reaches the stateless node's registry
+// — is internal/e2e's TestAStatelessNodesPartyRegistryReadsTheDirectory.
+func TestANodeWithoutDataReadsTheDirectoryThroughTheRouter(t *testing.T) {
+	t.Parallel()
+	e, _ := statelessOver(t)
+	e.directoryNudge = make(chan struct{}, 1)
+	e.startRoutedDirectory(t.Context())
+	t.Cleanup(e.routedDirectory.end)
+	dir, at := e.partyDirectory()
+	if _, routed := dir.(routedIdentity); !routed || at != nil {
+		t.Fatalf("the directory is %T (position gate %v), want a data node's, "+
+			"read through the router with no position of this node's", dir, at != nil)
+	}
+}
+
+// AN ENGINE HANDED NO DIRECTORY IS CHART-ONLY, and a signal changes nothing.
+//
+// That is `crewlet validate`, and a test: neither the core runtime nor the
+// routed hand-over a node without `data` gets ran, so the registry consults no
+// directory and the trigger has nothing to rebuild from — not even the
+// pointer, which is what a reader holding the live registry compares. No
+// engine [New] builds is in this posture.
+func TestAnEngineHandedNoDirectoryIsChartOnly(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	company := directoryCompany(t, e)
@@ -440,11 +472,8 @@ type directoryRig struct {
 
 func newDirectoryRig(t *testing.T) *directoryRig {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -453,7 +482,7 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db, Log: log})
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db.Replicated().Reader(), Log: log})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}

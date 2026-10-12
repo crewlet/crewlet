@@ -74,10 +74,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
-			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredSheds: true,
+			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredJudgesCopy: true,
 				DeferredRecord: "at CREWLET_TRACKER_LOG@1:42"},
 			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m, past the 30m " +
-				"deferral grace, at which this node's seats move to a peer",
+				"deferral grace, at which this node stops serving its copy of the estate",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
@@ -115,6 +115,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{SemanticCoverage: statelog.Frac(0.5)},
 			"current vectors",
 		},
+		"an index measured below its floor": {
+			statelog.KindIVFRecallBelowFloor,
+			statelog.Reading{IVFRecall: statelog.Frac(0.91), IVFRecallFloor: 0.98,
+				IVFMeasuredOn: 20_000, IVFShape: "source:page"},
+			"0.9100 against the exact scan in the source:page shape over 20000 sources",
+		},
 		"a gated record": {
 			statelog.KindRecordsGated,
 			statelog.Reading{RecordsGated: 1},
@@ -132,8 +138,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a volume with no room for a second copy": {
 			statelog.KindVolumeLow,
-			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30},
-			"free against",
+			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30, StoreVolume: "/var/lib/crewlet"},
+			"1.0 GiB free on the volume holding /var/lib/crewlet",
+		},
+		"a store volume nobody can measure": {
+			statelog.KindVolumeLow,
+			statelog.Reading{StoreVolumeUnmeasured: "measure the free space on /mnt/estate: input/output error"},
+			"/mnt/estate",
 		},
 		"a write-ahead log nothing is checkpointing": {
 			statelog.KindWALLarge,
@@ -148,7 +159,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a read rate the sizing did not assume": {
 			statelog.KindCensusDrift,
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
-			"sized for",
+			"5000 linearizable reads a day against the 1000 this log was sized for",
+		},
+		"files the object store lost or damaged": {
+			statelog.KindObjectsMissing,
+			statelog.Reading{ObjectsMissing: 2},
+			"2 file(s) are missing from the object store or damaged in it",
 		},
 		"a ceiling smaller than the replay window at the measured rate": {
 			statelog.KindLogCeilingShort,
@@ -347,6 +363,46 @@ func TestABlockedTrimAlarmsOnlyOnceItHasKeptARecordPastTheWindow(t *testing.T) {
 	}
 }
 
+// THE INDEX RECALL ALARM FIRES AT THE EVALUATION'S FLOOR, NOT BELOW A NUMBER OF
+// ITS OWN (ADR-0015).
+//
+// The floor is the curve `crewlet search eval` judges a corpus against, at the
+// size the training measured, handed in by the engine because the curve is the
+// search package's. A recall AT the floor passes that evaluation, so it must
+// not alarm; an index nobody trained measured nothing and must not alarm
+// either — zero recall is the alarm, not the absence.
+func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"a recall at the floor": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.93), IVFRecallFloor: 0.93}, false},
+		"a recall above it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.99), IVFRecallFloor: 0.93}, false},
+		"a recall a hair below it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.9299), IVFRecallFloor: 0.93}, true},
+		"a measured zero": {statelog.Reading{
+			IVFRecall: statelog.Frac(0), IVFRecallFloor: 0.93}, true},
+		"nothing measured": {statelog.Reading{IVFRecallFloor: 0.93}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE UNREADABLE-FILES ALARM IS SILENT ON NOTHING MISSING — including a reading
+// from a node that holds no collector duty, which reports no audit at all.
+func TestTheObjectStoreAlarmIsSilentWithNothingMissing(t *testing.T) {
+	t.Parallel()
+	if got := statelog.Evaluate(statelog.Reading{}); len(got) != 0 {
+		t.Errorf("an empty reading raised %v", kindsOf(got))
+	}
+}
+
 // THE BACKUP ALARM FIRES AT THE POLICY'S OWN THRESHOLD, once.
 //
 // The form this replaces had two: a flag set when the newest backup passed
@@ -454,8 +510,8 @@ func TestTheAlarmTableIsWellFormed(t *testing.T) {
 
 // AN ALARM IS LOGGED ONCE WHEN IT STARTS AND ONCE WHEN IT ENDS.
 //
-// Not on every tick: evaluated on a fifteen-second heartbeat, a level would
-// write the same line four times a minute for as long as the condition holds,
+// Not on every tick: evaluated on a ten-second heartbeat, a level would
+// write the same line six times a minute for as long as the condition holds,
 // and the one thing an operator needs from a log — when it STARTED — would be
 // buried under thousands of repetitions of the fact that it is still true.
 func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
@@ -501,7 +557,7 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 // ONE KIND ON TWO LOGS IS TWO ALARMS, each logged when it starts and when it
 // ends.
 //
-// Five conditions are evaluated once per log, so one evaluation can carry
+// Six conditions are evaluated once per log, so one evaluation can carry
 // `trim_blocked` for the tracker's log and again for the knowledge base's.
 // Keyed on the kind alone, the tracker folded the second into the first: it
 // raised no line of its own, the tracker's clearing while the knowledge base's
@@ -707,6 +763,69 @@ func TestTheTableIsEvaluatedFinerThanItsThresholds(t *testing.T) {
 				"past %s (%s) up to a quarter of it late or worse",
 				statelog.AlarmInterval, name, threshold)
 		}
+	}
+}
+
+// THE TABLE IS EVALUATED ON THE POSITION HEARTBEAT, the loop that publishes
+// the positions its fastest input — a node's lag behind the log — is measured
+// against.
+//
+// Slower raises every threshold to its own period (the case above); faster
+// re-evaluates facts nothing has republished. The cadence was once one
+// declaration in the engine bound to the heartbeat, then two literals in two
+// packages bound by a comment saying they were the same number — which held
+// only until somebody retuned one. This is the binding stated where a retune
+// of either fails it.
+func TestTheTableIsEvaluatedOnThePositionHeartbeat(t *testing.T) {
+	t.Parallel()
+	switch every, beat := statelog.AlarmInterval, statelog.PositionHeartbeat; {
+	case every > beat:
+		t.Errorf("the table is evaluated every %s and the positions it reads "+
+			"are republished every %s — a condition the register already shows "+
+			"is named up to %s later than the heartbeat could have named it",
+			every, beat, every-beat)
+	case every < beat:
+		t.Errorf("the table is evaluated every %s and the positions it reads "+
+			"are republished every %s — evaluations between two beats re-read "+
+			"a register that has not moved", every, beat)
+	}
+}
+
+// A LOG'S CENSUS IS PER SEAT, NEVER ZERO — AND PLUS WHAT THE ENGINE READS ON
+// ITS OWN.
+//
+// The reference company — 100 seats, one tracker log — is the 12 500 the
+// sizing was derived from, so that is what its log is expected to take. A
+// company twice the size doing the same work per seat takes twice it, which
+// the fixed figure read as drift. A company with no agent seat is still one
+// seat's worth, since its operators read too and an expectation of zero is an
+// alarm that cannot fire. The engine's own periodic reads are added to it,
+// since each of them is a barrier on every log it reads: without them a
+// one-seat company on one data node reading exactly its census put 293
+// barriers a day on a log expected to take 125.
+func TestALogsCensusIsPerSeat(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		census statelog.Census
+		want   int
+	}{
+		{"the reference company", statelog.Census{Seats: 100}, 12_500},
+		{"twice the company", statelog.Census{Seats: 200}, 25_000},
+		{"no agent seat", statelog.Census{}, 125},
+		{"one seat beside one data node's passes",
+			statelog.Census{Seats: 1, Background: 168}, 293},
+		{"a small company beside the engine's own reads",
+			statelog.Census{Seats: 3, Background: 504}, 879},
+		{"a negative background adds nothing", statelog.Census{Seats: 1, Background: -5}, 125},
+	} {
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
+		}
+	}
+	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {
+		t.Errorf("the per-seat census is %d, and the reference company's 12 500 "+
+			"over its 100 seats is 125", statelog.LinearizableReadsPerSeatDay)
 	}
 }
 

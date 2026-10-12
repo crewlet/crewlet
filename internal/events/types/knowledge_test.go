@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// A READ'S QUERY IS CLIPPED ON A RUNE AND SAYS SO. The query is a label a
-// reader recognises a search by, and a clip through a multi-byte rune is
-// invalid UTF-8 that a JSON encoder substitutes — so the stored label would
-// not be the text anybody typed, nor valid text at all.
-func TestAReadsQueryIsClippedOnARuneBoundary(t *testing.T) {
+// A READ'S QUERY IS RECORDED WHOLE, trimmed. Every producer bounds it where it
+// is written, so a clip here could only make two searches sharing an opening
+// read as one.
+func TestAReadsQueryIsRecordedWhole(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
@@ -22,24 +20,11 @@ func TestAReadsQueryIsClippedOnARuneBoundary(t *testing.T) {
 	}{
 		{"a short query is untouched, trimmed", "  deploy rollback  ", "deploy rollback"},
 		{"an empty query stays empty", "", ""},
-		{"exactly at the cap is untouched",
-			strings.Repeat("a", KnowledgeReadQueryMax), strings.Repeat("a", KnowledgeReadQueryMax)},
+		{"a long one is whole", strings.Repeat("é", 300), strings.Repeat("é", 300)},
 	} {
 		if got := KnowledgeReadQuery(tc.query); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
-	}
-	// Two-byte runes, so the cap falls between the bytes of one of them.
-	long := strings.Repeat("é", KnowledgeReadQueryMax)
-	got := KnowledgeReadQuery(long)
-	if len(got) > KnowledgeReadQueryMax {
-		t.Errorf("clipped query is %d bytes, over the %d cap", len(got), KnowledgeReadQueryMax)
-	}
-	if !utf8.ValidString(got) {
-		t.Errorf("clipped query %q is not valid UTF-8: the cut went through a rune", got)
-	}
-	if !strings.HasSuffix(got, "…") {
-		t.Errorf("clipped query %q does not say it was clipped", got)
 	}
 }
 
@@ -75,15 +60,15 @@ func TestAnUnknownReadViaIsAValueNotAPanic(t *testing.T) {
 	}
 }
 
-// A SKILL LOAD AN OLDER BUILD WROTE STILL DECODES, naming no page — which is
-// the honest reading of a record from before a load could say where its skill
-// came from — and re-encodes without inventing one.
-func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
+// A SYNTHESIZED SKILL'S LOAD NAMES NO PAGE, because it lives in the node's own
+// store rather than in the knowledge base — and it decodes and re-encodes
+// without one being invented.
+func TestASynthesizedSkillUsedNamesNoPage(t *testing.T) {
 	t.Parallel()
 	const raw = `{"id":"6f1c3d2e-0000-4000-8000-000000000032","type":"skill_used",` +
 		`"timestamp":"2026-09-24T09:00:00Z","source":"cto","agent_id":"a",` +
 		`"agent_handle":"cto","role":"CTO","turn_id":"run-1","skill_name":"deploys",` +
-		`"skill_id":"","source_kind":"registry","file_loaded":""}`
+		`"skill_id":"sk-1","source_kind":"synthesized"}`
 	var ev events.Event
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -92,7 +77,8 @@ func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded as %T", ev.Data)
 	}
-	if used.SourcePageID != "" || used.SourceContainer != "" || used.SkillName != "deploys" {
+	if used.SourcePageID != "" || used.SourceContainer != "" || used.SkillName != "deploys" ||
+		used.SourceKind != SkillSourceSynthesized {
 		t.Errorf("decoded %+v", *used)
 	}
 	out, err := json.Marshal(&ev)
@@ -100,7 +86,7 @@ func TestASkillUsedFromBeforeItNamedItsPageStillDecodes(t *testing.T) {
 		t.Fatalf("re-encode: %v", err)
 	}
 	if strings.Contains(string(out), "source_page_id") || strings.Contains(string(out), "source_container") {
-		t.Errorf("re-encoding an old record invented a page: %s", out)
+		t.Errorf("re-encoding a synthesized load invented a page: %s", out)
 	}
 }
 

@@ -53,6 +53,12 @@ type workPayload struct {
 // Checking HERE rather than after the phase means a wrong claim costs one
 // bounced tool call inside the loop, which the model can fix, instead of a
 // whole review round or a silently accepted no-op.
+//
+// `called` is the TURN's record, the closed rounds included ([turn.Record]),
+// never the phase's own: a delivery an earlier round made is citable, because
+// the prior-work ledger forbids the round to make it again. Read per phase, a
+// round sent back for a re-read had eleven citations of its own turn's comment
+// refused, and ran out of rounds saying so.
 func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() turn.Surface,
 ) func(map[string]any) (workPayload, error) {
 	return func(args map[string]any) (workPayload, error) {
@@ -139,21 +145,33 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 	}
 	slices.Sort(eligible)
 	if len(eligible) == 0 {
-		// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine was
-		// called" reads as plainly false to a model looking at its own
-		// successful write to another surface, and a refusal a model does
-		// not believe is one it argues with rather than acts on.
-		if on := reply.Surface; on != "" && s.Reaches(on) {
-			return fmt.Errorf("nothing has been delivered on %s yet, which is where "+
+		// THE REMEDY NAMES THE TOOLS ([turn.Remedy]). Pointing every seat at
+		// discovery sent one woken on the tracker — whose tools it already
+		// held — to the only MCP server it had, to post where nothing could
+		// count it.
+		remedy := turn.Remedy(s, reply)
+		on := reply.Surface
+		switch {
+		case on != "" && s.Reaches(on) && turn.Delivered(calls, s):
+			// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine
+			// was called" reads as plainly false to a model looking at its
+			// own successful write to another surface, and a refusal a model
+			// does not believe is one it argues with rather than acts on.
+			return fmt.Errorf("nothing has been delivered on `%s` yet, which is where "+
 				"this was asked — a call that reached somewhere else does not answer "+
-				"the person waiting. Call the tool that delivers on %s — "+
-				"`list_mcp_server_tools` and `activate_tool` will find it — before "+
-				"reporting the work delivered", on, on)
+				"the person waiting. %s Do that before reporting the work delivered",
+				on, remedy)
+		case on != "" && s.Reaches(on):
+			// And only when it is TRUE. "A call that reached somewhere else"
+			// said to a turn that reached nowhere sends the model looking for
+			// a write it never made.
+			return fmt.Errorf("nothing has been delivered on `%s` yet, which is where "+
+				"this was asked: no call in this turn has reached anybody. %s Do that "+
+				"before reporting the work delivered", on, remedy)
 		}
-		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the " +
-			"engine has been called successfully in this turn. Call the one that delivers " +
-			"on the surface this arrived from — `list_mcp_server_tools` and " +
-			"`activate_tool` will find it — before reporting the work delivered")
+		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the "+
+			"engine has been called successfully in this turn. %s Do that before "+
+			"reporting the work delivered", remedy)
 	}
 	return fmt.Errorf("deliveries names no call that delivered: cite one of %s, "+
 		"or report the outcome honestly if none of them is the delivery",

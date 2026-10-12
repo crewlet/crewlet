@@ -37,8 +37,10 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // hand-maintained one is exactly what drifts, and it would drift towards
 // claiming the server answers more than it does.
 //
-// BOTH CALL SHAPES: the `useQuery` hook a screen renders from, and the direct
-// `socket.query` a pager or an action uses. Read by [clientsource.Calls], so a
+// EVERY CALL SHAPE: the `useQuery` hook a screen renders from, the
+// `useSearchQuery` hook every ranked search is asked through (it applies the
+// search bound before `useQuery`), and the direct `socket.query` a pager or an
+// action uses. Read by [clientsource.Calls], so a
 // call a formatter wrapped across lines, one with type arguments and one
 // inside markup are the calls they are. The sweep this replaced was a regular
 // expression whose name class once could not match `a2a_channels` and whose
@@ -50,11 +52,12 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // A kind handed over in anything but a string literal is invisible here —
 // [clientsource.Calls] can read nothing else — and that is safe only because
 // the dashboard refuses one: `app/source.test.ts`'s "every read names its
-// question" requires a literal at every `useQuery(` and `query(` call, bare or
-// as a method, which is every call Calls is asked for below.
+// question" requires a literal at every `useQuery(`, `useSearchQuery(` and
+// `query(` call, bare or as a method, which is every call Calls is asked for
+// below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "query")
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable
@@ -101,16 +104,34 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
+		// A PROJECT'S FILES, their own seam for the same reason.
+		Files: emptyFiles{},
 		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
+		FleetBroker: emptyBroker{},
 		// EVERY MODEL'S KEY BAG, which the engine always supplies.
 		CredentialPools: func() []engine.CredentialPool { return nil },
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 	}
+}
+
+// emptyBroker is a fleet broker with nothing to list, on emptyWork's terms.
+type emptyBroker struct{}
+
+func (emptyBroker) List(context.Context) (engine.BrokerView, error) {
+	return engine.BrokerView{}, nil
+}
+
+// emptyFiles is a project with no files.
+type emptyFiles struct{}
+
+func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
+	return tracker.FileListing{}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on

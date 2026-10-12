@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -26,16 +27,20 @@ const (
 	// went quiet". It is a named constant so the API can ship the number to
 	// a dashboard footer rather than each query inlining a literal.
 	//
-	// IT IS MEASURED AGAINST THE WALL CLOCK, which is a rule every FIXTURE
-	// has to obey and one of them did not. A caller's clock can be pinned
-	// and this floor cannot — deliberately, so a row's timestamp, the read
-	// floor and the retention sweep cannot disagree about what "now" is
-	// (see [now]). So a suite that pins an ABSOLUTE date and reads its own
-	// rows back works until the window passes that date, and then fails for
-	// ever, on every machine at once, with no change to any file and
-	// nothing in the failure naming a clock. internal/api/webhooks lost a
-	// whole package to exactly that. Anchor a fixture clock relative to
-	// time.Now.
+	// Measured back from the instant a read is ASKED AT — taken once per
+	// answer, or the one its caller pinned (see [EventLog]) — and never from
+	// a fresh read of the clock in each half of one answer.
+	//
+	// A READ THAT PINS NO INSTANT IS MEASURED FROM THE WALL CLOCK, which is
+	// a rule every FIXTURE has to obey and one of them did not. The floor
+	// of such a read is [now], deliberately, so a row's timestamp, the read
+	// floor and the retention sweep cannot disagree about what "now" is.
+	// So a suite that writes rows at an ABSOLUTE date and reads them back
+	// without pinning the read works until the window passes that date, and
+	// then fails for ever, on every machine at once, with no change to any
+	// file and nothing in the failure naming a clock. internal/api/webhooks
+	// lost a whole package to exactly that. Anchor a fixture clock relative
+	// to time.Now, or pin the read to the instant the fixture is written at.
 	//
 	// Appending BELOW the floor is still legal, and has to be: the floor's
 	// own tests and the retention sweep's prove what they prove by writing
@@ -128,17 +133,11 @@ type EventRecord struct {
 	// WorkKey is the unit of work this row's run was an attempt at — see
 	// ADR-0017 and [ListQuery.WorkKey].
 	//
-	// OFF THE COLUMN, and it is the one promoted value that is NOT a copy
-	// of a tag. schema/0029 backfilled the column from `turn_id`, which is
-	// where the work key lived before the split, and it could not
-	// reasonably rewrite every historical tags blob to match — so for rows
-	// written before that migration the column holds the work key and
-	// `Tags["work_key"]` is empty. A reader going through the tags would
-	// therefore answer "no unit of work" for exactly the history the
-	// backfill exists to preserve, while `/events?work_key=` — which
-	// filters on the column — returned those same rows. One authority,
-	// and it is the column every other work-key reader already uses
-	// (turnlist's grouping, the phase-token rollup, the filter above).
+	// OFF THE COLUMN: one authority, and it is the column every other
+	// work-key reader already uses (turnlist's grouping, the phase-token
+	// rollup, the filter above), so a row read here and a row matched by
+	// `/events?work_key=` can never disagree about which unit of work it
+	// belongs to.
 	WorkKey string `json:"work_key,omitempty"`
 
 	// AgentID is the agent seat the event is about, when it is about one:
@@ -155,9 +154,7 @@ type EventRecord struct {
 	// Failed says whether the work this event reports failed. Derived on
 	// read from the event type plus the stored `failed` tag, because a
 	// listing never selects the payload and the tag is all that survives
-	// into history. Events written before the writer stamped that tag read
-	// back as not-failed — a real discontinuity at that point in the
-	// timeline, not a bug to paper over.
+	// into history.
 	Failed bool `json:"failed"`
 
 	// Spend is what one LLM call cost, present only on a phase completion.
@@ -212,6 +209,13 @@ type Spend struct {
 	// when a phase names no model; this is the key itself, never the
 	// fallback. schema/0032.
 	ProviderKey string `json:"provider_key,omitempty"`
+
+	// Calls is how many PROVIDER CALLS the row covers — a phase's rounds,
+	// an auxiliary record's coalesced calls — and zero on a row that is no
+	// call. Stage is an auxiliary record's stage (`turn`, `reflection`, …),
+	// empty on every other row. schema/0040.
+	Calls int    `json:"calls,omitempty"`
+	Stage string `json:"stage,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -285,16 +289,15 @@ type ListQuery struct {
 
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
-	// inside it. Rows written before migration 0014 carry an empty
-	// turn_id and do not answer this filter; see the migration.
+	// inside it. A row whose event carries no turn_id field — a cron fire,
+	// a trigger the dispatcher declined — writes an empty column and does
+	// not answer this filter.
 	TurnID string
 
 	// WorkKey selects EVERY RUN of one unit of work — the attempts at a
 	// trigger that was redelivered, which TurnID by construction cannot
 	// ask for once it names one execution. Backed by the partial index
-	// schema/0029 ships; rows from before it carry the work key in
-	// turn_id, and that migration's backfill copies it across so the
-	// history answers this filter too. See ADR-0017.
+	// schema/0029 ships. See ADR-0017.
 	WorkKey string
 
 	// WorkItem selects every event on one work item, by its identity
@@ -302,10 +305,8 @@ type ListQuery struct {
 	// its key, which a move rewrites. Every turn-level record carries the
 	// item it was charged to, so this is "everything that happened on this
 	// item": each turn's start, its phases, its completion, a coding run it
-	// launched. Backed by the partial index schema/0033 ships, whose
-	// backfill gives the rows already stored their column; their stored
-	// tags blob is not rewritten, so the filter — which reads the column —
-	// is the authority and a `tags.work_item` read is not.
+	// launched. Backed by the partial index schema/0033 ships; the column
+	// is filled from the same payload field as the row's `work_item` tag.
 	WorkItem string
 
 	// RelatedAgent is a broad filter, by an AGENT ID: the events that
@@ -318,6 +319,19 @@ type ListQuery struct {
 	// shorter than Limit does NOT mean history is exhausted here; only a
 	// zero-row page does.
 	RelatedAgent string
+
+	// FeedOnly selects the rows the ACTIVITY FEED carries: every stored type
+	// but the ones [events.Unfed] keeps out of it — a related agent's trace
+	// siblings included. It is what every read that is merged with or drawn
+	// beside the live ring asks: the live projection's startup seed, which
+	// rebuilds the feed from the store and must fill it with what the stream
+	// would have put there, and the activity views' older pages and axes,
+	// which a reader scrolls on from the ring. Filtered in the read rather
+	// than afterwards, because a page of the newest rows filtered afterwards
+	// would hand back fewer than it asked for whenever a burst of accounting
+	// rows was newest. [EventLog.Histogram] counts through the same
+	// predicate, so a feed-only bar counts what a feed-only page lists.
+	FeedOnly bool
 
 	// Since and Until bound the window a caller is asking about, as a
 	// half-open interval `[Since, Until)`.
@@ -339,7 +353,36 @@ type ListQuery struct {
 
 	// Before is an exclusive cursor. Nil starts at the newest row.
 	Before *Cursor
+
+	// At is the instant the read is asked at: the history floor sits
+	// [EventHistory] before it, and on an axis ([HistogramQuery]) it is
+	// also what an unbounded top edge means and what the window is cut
+	// against. Zero is now. A listing's unbounded top edge stays unbounded
+	// — the newest rows are what a feed is read for.
+	//
+	// A FIELD rather than every log reading its own clock, because a fleet
+	// asks several logs ONE question (internal/eventfan) and merges what
+	// they answer. An axis's bars are summed index by index, so two nodes
+	// whose clocks straddle a minute would otherwise snap to windows one
+	// bar apart, and every bar of the sum would add one node's minute to
+	// the other's next one.
+	//
+	// AND THE FLOOR, not only the window: every row an answer counts or
+	// lists is kept from At − [EventHistory] up. The floor was once a
+	// second read of each log's own clock, so a node answering a scatter a
+	// second after the asker pinned its window dropped that second's rows
+	// from a first bar every node said it covered — and an At in the past,
+	// which is what the asker's instant is by the time any peer reads it,
+	// dropped every row between its floor and the reader's. Those rows are
+	// still on disk, because [EventRetention] keeps a day past the floor,
+	// so an asker whose clock runs up to a day behind a peer's still finds
+	// them there.
+	At time.Time
 }
+
+// at is the instant the read is asked at — read ONCE per answer, because an
+// unpinned query's is the clock.
+func (q ListQuery) at() time.Time { return askedAt(q.At) }
 
 // EventLog is the audit and observability event store.
 //
@@ -351,10 +394,84 @@ type ListQuery struct {
 // which answers nil for a seat it cannot name at all — a question it did not
 // understand, rather than one whose answer is empty. A caller that needs to
 // know whether there are rows asks `len`, which is right either way.
+//
+// EVERY READ IS ASKED AT AN INSTANT, and the history floor sits
+// [EventHistory] before it: a query type carries it as `At`, and every other
+// read takes it as its last argument, `at`. Zero is now, read once by the
+// read itself. A CALLER'S rather than the log's own clock, for two reasons
+// that are one: an answer assembled from several reads — a turn's rows, its
+// count, its ending and its traces — floored each read at its own reading of
+// the clock, so a row crossing the floor between them made the count come
+// back short of the rows beside it; and a fleet asks every node one
+// question, so every node must floor it at the ASKER'S instant or the merged
+// answer is a union of different windows, each node's as of its own clock.
+//
+// A READ GROUPING ITS ROWS BY A COLUMN SELECTS THEM IN A DERIVED TABLE —
+// `SELECT … FROM (SELECT … FROM crewlet_events WHERE …) GROUP BY …` — because
+// there the planner seeks the index a filter has: the facet counts
+// ([ListQuery.facetSQL]), a turn's traces ([turnTracesSQL]), the turn list and
+// its shares ([TurnQuery.partialsSQL]) and the outcome counts
+// ([OutcomeQuery.countSQL]). Over the table itself, such a GROUP BY under the
+// history floor was planned on the primary key `event_time` leads: the floor
+// taken as a range of it and read whole (a turn's traces), or that range
+// intersected with the filter's own index (`MULTI-INDEX AND`: a facet count
+// narrowed to a seat, a trace, a turn, a unit of work, an item or a channel,
+// and the turn list narrowed to a unit of work). Either way the read cost the
+// thirty-day window rather than the rows it was about — on 60,000 rows, 15 ms
+// against 0.2 ms for one turn's traces and 10 ms against 0.2 ms for a facet
+// count of one unit of work, on every node a fleet asks. The axis's bars are
+// the one grouped read over the table itself: they group by an expression over
+// `event_time` rather than by a column, and for that the planner seeks the
+// filter's index as the statement stands ([HistogramQuery.barsSQL]). The plans
+// are read back for the exact statements in
+// TestEveryGroupedReadSeeksItsFiltersIndex, the bars' at every bucket width.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.
 func (d *DB) Events() *EventLog { return &EventLog{db: d} }
+
+// EventSnapshot is the event log read at ONE SNAPSHOT: every read on it sees
+// the log exactly as the others do, whatever is written or settled between
+// them.
+//
+// For a reader that assembles one answer from several reads — a trace's rows,
+// how many it holds and which of them are unsettled; a turn's opening, its
+// count, its ending, its traces and its unsettled rows. Read one statement at a
+// time, a custody batch settled between two of them is counted by one and named
+// by the other, and the answer counts it twice or not at all (see unsettled.go).
+// Read-only by construction: it carries reads and nothing else, so nothing
+// written inside one is mistaken for part of the snapshot it was read at.
+type EventSnapshot struct{ q querier }
+
+// Snapshot runs fn against one snapshot of the log. fn may run more than once —
+// a read that met a transient conflict is retried on a fresh snapshot — so it
+// builds its answer afresh each time.
+func (l *EventLog) Snapshot(ctx context.Context, fn func(EventSnapshot) error) error {
+	return l.db.Read(ctx, func(tx *sql.Tx) error { return fn(EventSnapshot{q: tx}) })
+}
+
+// live is the log read one statement at a time, each at its own snapshot —
+// what every read answered by a single statement needs and no more.
+func (l *EventLog) live() EventSnapshot { return EventSnapshot{q: l.db.sql} }
+
+// Unsettled is the rows of one trace or one turn — `column` is `trace_id` or
+// `turn_id` — inside the history at `at` that this node holds of a custody
+// batch it has written and not settled: the rows a count of the trace's or the
+// turn's extent leaves to the asker (see unsettled.go). Read at this snapshot,
+// beside the count it is taken out of. Never nil.
+func (s EventSnapshot) Unsettled(ctx context.Context, column, id string, at time.Time) ([]UnsettledRow, error) {
+	switch column {
+	case "turn_id", "trace_id":
+	default:
+		return nil, fmt.Errorf("store: unsettled rows: %q is not a countable column", column)
+	}
+	rows, err := readUnsettled(ctx, s.q, []string{column + " = ?", "event_time >= ?"},
+		[]any{id, EncodeTime(askedAt(at).Add(-EventHistory))})
+	if err != nil {
+		return nil, fmt.Errorf("store: unsettled rows of %s %s: %w", column, id, err)
+	}
+	return rows, nil
+}
 
 const eventInsertSQL = `
 INSERT INTO crewlet_events (
@@ -364,9 +481,10 @@ INSERT INTO crewlet_events (
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
-	cache_read_tokens, cache_write_tokens, provider_key, work_item
+	cache_read_tokens, cache_write_tokens, provider_key, work_item,
+	calls, spend_stage
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -379,6 +497,38 @@ var ErrIncompleteRecord = errors.New("store: incomplete event record")
 // present the same (time, id) pair. Raising instead would make every one of
 // them log a write failure that describes nothing wrong.
 func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
+	row, err := prepareEvent(rec, l.db.eventSeatsNow())
+	if err != nil {
+		return err
+	}
+	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
+		return row.insert(ctx, tx)
+	}); err != nil {
+		return fmt.Errorf("store: append event %s: %w", rec.ID, err)
+	}
+	return nil
+}
+
+// eventRow is a record made ready for its insert — its identity checked, its
+// tags encoded, its spend derived and its parties resolved — so the insert
+// itself can run inside whichever transaction the caller holds: its own
+// ([EventLog.Append]), or one that writes a whole custody batch
+// ([EventLog.WriteCustody]).
+type eventRow struct {
+	rec     EventRecord
+	tags    map[string]string
+	tagJSON string
+	payload string
+	spend   Spend
+	parties []string
+}
+
+// prepareEvent readies one record for its insert, or refuses it. seats is what
+// a handle the record names resolves to an agent id through ([partiesOf]): the
+// writing node's, which is the custody keeper's for a batch it writes for a
+// stateless node — the chart both run is the company's, so the two resolve one
+// handle to one id.
+func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 	// The identity is checked here because SQL cannot check it. NOT NULL
 	// catches a missing column; it does not catch a zero one, and both
 	// halves of this key have a zero value that stores fine and then reads
@@ -386,10 +536,10 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// floor, and an empty ID collides with every other record that forgot
 	// the same field. Either way the row exists and no query returns it.
 	if rec.ID == "" {
-		return fmt.Errorf("%w: no event id", ErrIncompleteRecord)
+		return eventRow{}, fmt.Errorf("%w: no event id", ErrIncompleteRecord)
 	}
 	if rec.Time.IsZero() {
-		return fmt.Errorf("%w: event %s has no timestamp", ErrIncompleteRecord, rec.ID)
+		return eventRow{}, fmt.Errorf("%w: event %s has no timestamp", ErrIncompleteRecord, rec.ID)
 	}
 	tags := rec.Tags
 	if tags == nil {
@@ -397,7 +547,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	}
 	tagJSON, err := json.Marshal(tags)
 	if err != nil {
-		return fmt.Errorf("store: encode event tags (%s): %w", rec.ID, err)
+		return eventRow{}, fmt.Errorf("store: encode event tags (%s): %w", rec.ID, err)
 	}
 	payload := rec.Payload
 	if len(payload) == 0 {
@@ -463,39 +613,44 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	if spend.WorkKey == "" {
 		spend.WorkKey = tags["work_key"]
 	}
-	// IN ONE TRANSACTION with its party rows, because the party table is an
-	// INDEX of this one and an index that can be missing entries is not an
-	// index: an event stored without its parties is invisible to the filter
-	// that reads them, permanently and with nothing to say so. The cost is
-	// a begin and a commit on a path that runs a handful of times a second.
-	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, eventInsertSQL,
-			EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
-			rec.TraceID, rec.SpanID, rec.ParentSpanID,
-			tags["agent_id"], tags["agent_role"], tags["task_id"],
-			tags["channel_id"], tags["sender"],
-			rec.Summary, rec.Actor, string(tagJSON), string(payload),
-			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
-			spend.TurnID, spend.WorkKey, spend.Iteration,
-			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
-			spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
-			// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
-			// from the nested `work_item` object — a copy of a tag, like
-			// agent_id's beside it, so the column and the tag can never
-			// name two different items. See schema/0033.
-			tags["work_item"],
-		); err != nil {
+	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
+		payload: string(payload), spend: spend,
+		parties: partiesOf(tags, seats)}, nil
+}
+
+// insert writes the row and its party rows inside tx.
+//
+// IN ONE TRANSACTION with its party rows, because the party table is an INDEX
+// of this one and an index that can be missing entries is not an index: an
+// event stored without its parties is invisible to the filter that reads them,
+// permanently and with nothing to say so. The cost is a begin and a commit on
+// a path that runs a handful of times a second.
+func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
+	rec, tags, spend := r.rec, r.tags, r.spend
+	if _, err := tx.ExecContext(ctx, eventInsertSQL,
+		EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
+		rec.TraceID, rec.SpanID, rec.ParentSpanID,
+		tags["agent_id"], tags["agent_role"], tags["task_id"],
+		tags["channel_id"], tags["sender"],
+		rec.Summary, rec.Actor, r.tagJSON, r.payload,
+		spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
+		spend.TurnID, spend.WorkKey, spend.Iteration,
+		spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
+		spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
+		// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
+		// from the nested `work_item` object — a copy of a tag, like
+		// agent_id's beside it, so the column and the tag can never
+		// name two different items. See schema/0033.
+		tags["work_item"],
+		spend.Calls, spend.Stage,
+	); err != nil {
+		return err
+	}
+	for _, party := range r.parties {
+		if _, err := tx.ExecContext(ctx, partyInsertSQL,
+			party, EncodeTime(rec.Time), rec.ID); err != nil {
 			return err
 		}
-		for _, party := range partiesOf(tags, l.db.eventSeatsNow()) {
-			if _, err := tx.ExecContext(ctx, partyInsertSQL,
-				party, EncodeTime(rec.Time), rec.ID); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("store: append event %s: %w", rec.ID, err)
 	}
 	return nil
 }
@@ -638,7 +793,17 @@ func qualifiedListColumns(joined bool) string {
 // `event_time` and `event_id` — the pair the party table also carries — would
 // work today and break the day that table grows a column sharing a name with
 // one of these.
-func (q ListQuery) predicate() (from string, where []string, args []any, col func(string) string) {
+//
+// `at` is the instant the question is asked at, and the HISTORY FLOOR sits
+// [EventHistory] before it. A PARAMETER rather than a clock this function
+// reads, because one answer compiles it more than once — the axis's bars and
+// its facet counts — and a fleet asks every node one question: read here,
+// each compilation floored its rows at its own instant, so the counts beside
+// one axis described different sets, and a node answering a scatter a second
+// after the asker pinned its window dropped that second's rows from a bar the
+// answer said it covered. The caller reads the clock once (or takes the
+// instant its query pinned) and hands the same one to every half.
+func (q ListQuery) predicate(at time.Time) (from string, where []string, args []any, col func(string) string) {
 	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
 	// because "involves this agent" is one fact spread over five places on
 	// the event, and the party table is where it was normalised to. The
@@ -654,7 +819,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	}
 
 	where = []string{col("event_time") + " >= ?"}
-	args = []any{EncodeTime(now().Add(-EventHistory))}
+	args = []any{EncodeTime(at.Add(-EventHistory))}
 	addEq := func(name, val string) {
 		if val != "" {
 			where = append(where, col(name)+" = ?")
@@ -703,6 +868,13 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 		where = append(where, expr)
 		args = append(args, failedArgs...)
 	}
+	if unfed := events.Unfed(); q.FeedOnly && len(unfed) > 0 {
+		where = append(where, col("event_type")+" NOT IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(unfed)), ",")+")")
+		for _, name := range unfed {
+			args = append(args, name)
+		}
+	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -733,15 +905,29 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
-	query, args := q.listSQL(limit)
+	// ONE INSTANT FOR THE PAGE AND ITS SIBLINGS, so a related-agent page is
+	// one set floored once: the siblings read the clock a query later, and a
+	// trace straddling the floor kept its direct matches on the page while
+	// the rows beside them that had just crossed it went missing.
+	at := q.at()
+	query, args := q.listSQL(limit, at)
 	out, err := l.scanRows(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	if q.RelatedAgent != "" {
-		siblings, err := l.traceSiblings(ctx, out, limit)
+		siblings, err := l.traceSiblings(ctx, out, limit, at)
 		if err != nil {
 			return nil, err
+		}
+		if q.FeedOnly {
+			// A TRACE'S SIBLINGS CARRY NONE OF THE PAGE'S FILTERS — they
+			// are the cause beside the effect — but a feed-only page is
+			// the feed's rows, and a turn's trace holds every one of its
+			// accounting records.
+			siblings = slices.DeleteFunc(siblings, func(r EventRecord) bool {
+				return events.KeptOutOfFeed(r.Type)
+			})
 		}
 		out = mergeRelated(out, siblings, limit)
 	}
@@ -751,9 +937,10 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 // listSQL is the statement [EventLog.List] runs for one page, and its
 // arguments — a function of its own so the plan a filter gets can be read
 // back for exactly the statement that runs (see
-// TestEveryPartiallyIndexedFilterSeeksItsIndex).
-func (q ListQuery) listSQL(limit int) (string, []any) {
-	from, where, args, col := q.predicate()
+// TestEveryPartiallyIndexedFilterSeeksItsIndex). `at` is the instant the
+// page is asked at; see [ListQuery.predicate].
+func (q ListQuery) listSQL(limit int, at time.Time) (string, []any) {
+	from, where, args, col := q.predicate(at)
 	joined := q.RelatedAgent != ""
 
 	if q.Before != nil {
@@ -792,8 +979,10 @@ func (q ListQuery) listSQL(limit int) (string, []any) {
 // It reads through the trace index, so it costs one seek per trace on the
 // page. The old shape found siblings only among the rows it happened to have
 // over-fetched, which meant a cause older than that window was simply missing.
-func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int) ([]EventRecord, error) {
-	return l.TraceRows(ctx, TraceIDsOf(direct), limit)
+//
+// Floored at `at`, the instant the page itself was read at.
+func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int, at time.Time) ([]EventRecord, error) {
+	return l.TraceRows(ctx, TraceIDsOf(direct), limit, at)
 }
 
 // TraceRows is the newest rows of any of these traces, newest first, up to
@@ -803,8 +992,10 @@ func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limi
 // related-agent page is merged from several logs before anybody knows which
 // traces it holds, and whose siblings sit in logs that held no direct match at
 // all — the inbound webhook row lives on the node the delivery reached, and
-// the agent work it caused on the node that holds the seat.
-func (l *EventLog) TraceRows(ctx context.Context, traceIDs []string, limit int) ([]EventRecord, error) {
+// the agent work it caused on the node that holds the seat. Floored at `at`
+// (see [EventLog]) — the page's own instant, so the siblings are the same
+// window as the matches they sit beside.
+func (l *EventLog) TraceRows(ctx context.Context, traceIDs []string, limit int, at time.Time) ([]EventRecord, error) {
 	if len(traceIDs) == 0 {
 		return []EventRecord{}, nil
 	}
@@ -815,7 +1006,7 @@ func (l *EventLog) TraceRows(ctx context.Context, traceIDs []string, limit int) 
 	for _, id := range traceIDs {
 		args = append(args, id)
 	}
-	args = append(args, EncodeTime(now().Add(-EventHistory)), limit)
+	args = append(args, EncodeTime(askedAt(at).Add(-EventHistory)), limit)
 	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
 		strings.Repeat(",?", len(traceIDs)-1) +
 		") AND event_time >= ? ORDER BY event_time DESC, event_id DESC LIMIT ?"
@@ -867,13 +1058,20 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 
 // Trace returns every event in a trace, OLDEST first, because a trace is read
 // as a causal sequence rather than a feed. A caller that gets exactly
-// MaxTraceEvents rows should say the view is truncated.
-func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, error) {
-	return l.scanRows(ctx,
+// MaxTraceEvents rows should say the view is truncated — and asks
+// [EventLog.TraceEventCount] at the SAME `at`, or the count is floored
+// elsewhere than the rows it counts.
+func (l *EventLog) Trace(ctx context.Context, traceID string, at time.Time) ([]EventRecord, error) {
+	return l.live().Trace(ctx, traceID, at)
+}
+
+// Trace is [EventLog.Trace] read at this snapshot.
+func (s EventSnapshot) Trace(ctx context.Context, traceID string, at time.Time) ([]EventRecord, error) {
+	return s.scanRows(ctx,
 		"SELECT "+listColumns+" FROM crewlet_events "+
 			"WHERE trace_id = ? AND event_time >= ? "+
 			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
-		traceID, EncodeTime(now().Add(-EventHistory)), MaxTraceEvents)
+		traceID, EncodeTime(askedAt(at).Add(-EventHistory)), MaxTraceEvents)
 }
 
 // Turn returns every event of one turn, OLDEST first.
@@ -890,12 +1088,21 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 // is where the records a reader came for live. The cap is the trace's, for the
 // same reason: a turn that has self-iterated many times is the one worth
 // reading, and a bound low enough to cut it short would hide exactly that.
-func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, error) {
-	return l.scanPayloads(ctx,
+//
+// Every read of one turn's view takes the SAME `at`: the count, the ending and
+// the traces are floored where these rows are, or a row crossing the floor
+// between two of them makes the count come back short of the rows it counts.
+func (l *EventLog) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
+	return l.live().Turn(ctx, turnID, at)
+}
+
+// Turn is [EventLog.Turn] read at this snapshot.
+func (s EventSnapshot) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
+	return s.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
-		turnID, EncodeTime(now().Add(-EventHistory)), MaxTurnEvents)
+		turnID, EncodeTime(askedAt(at).Add(-EventHistory)), MaxTurnEvents)
 }
 
 // MaxTurnEvents bounds one turn's read.
@@ -913,8 +1120,13 @@ const MaxTurnEvents = MaxTraceEvents
 // question is asked rather than guessed at, and only on the reads that
 // filled. It is a range scan of the same (turn_id, event_time, event_id)
 // index the read walked.
-func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, error) {
-	return l.countEvents(ctx, "turn_id", turnID)
+func (l *EventLog) TurnEventCount(ctx context.Context, turnID string, at time.Time) (int, error) {
+	return l.live().TurnEventCount(ctx, turnID, at)
+}
+
+// TurnEventCount is [EventLog.TurnEventCount] read at this snapshot.
+func (s EventSnapshot) TurnEventCount(ctx context.Context, turnID string, at time.Time) (int, error) {
+	return s.countEvents(ctx, "turn_id", turnID, at)
 }
 
 // TurnTraces is every trace one turn touched, in the order it first touched
@@ -930,15 +1142,18 @@ func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, erro
 //
 // A DISTINCT walk of the same (turn_id, event_time, event_id) index the read
 // walked, bounded by the same history window, so it is a seek over one turn's
-// range rather than a scan. Ordered by first appearance, because that is the
-// order a reader follows them in: the trace the turn started under comes
-// first.
-func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]TurnTrace, error) {
-	rows, err := l.db.sql.QueryContext(ctx,
-		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
-			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
-			"GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
-		turnID, EncodeTime(now().Add(-EventHistory)))
+// range rather than a scan — through a derived table, which is what makes the
+// planner seek it (see [EventLog] and [turnTracesSQL]). Ordered by first
+// appearance, because that is the order a reader follows them in: the trace
+// the turn started under comes first.
+func (l *EventLog) TurnTraces(ctx context.Context, turnID string, at time.Time) ([]TurnTrace, error) {
+	return l.live().TurnTraces(ctx, turnID, at)
+}
+
+// TurnTraces is [EventLog.TurnTraces] read at this snapshot.
+func (s EventSnapshot) TurnTraces(ctx context.Context, turnID string, at time.Time) ([]TurnTrace, error) {
+	query, args := turnTracesSQL(turnID, at)
+	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
@@ -959,6 +1174,22 @@ func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]TurnTrace, 
 	return out, nil
 }
 
+// turnTracesSQL is the statement [EventLog.TurnTraces] runs and its arguments,
+// a function of its own so its plan can be read back for exactly the statement
+// that runs (TestEveryGroupedReadSeeksItsFiltersIndex).
+//
+// THE TURN'S ROWS ARE SELECTED IN A DERIVED TABLE and grouped outside it. Over
+// the table itself this GROUP BY was planned as a range of the primary key from
+// the history floor up — every row of the thirty-day log, on every turn page,
+// on every node — under a doc comment promising a seek.
+func turnTracesSQL(turnID string, at time.Time) (string, []any) {
+	return "SELECT trace_id, MIN(event_time) AS first_at FROM (" +
+			"SELECT trace_id, event_time FROM crewlet_events " +
+			"WHERE turn_id = ? AND event_time >= ?) " +
+			"WHERE trace_id != '' GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
+		[]any{turnID, EncodeTime(askedAt(at).Add(-EventHistory))}
+}
+
 // TurnTrace is one trace a turn touched and when it first did.
 //
 // THE INSTANT TRAVELS WITH THE ID because the order is a property of every log
@@ -970,8 +1201,13 @@ type TurnTrace struct {
 }
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
-func (l *EventLog) TraceEventCount(ctx context.Context, traceID string) (int, error) {
-	return l.countEvents(ctx, "trace_id", traceID)
+func (l *EventLog) TraceEventCount(ctx context.Context, traceID string, at time.Time) (int, error) {
+	return l.live().TraceEventCount(ctx, traceID, at)
+}
+
+// TraceEventCount is [EventLog.TraceEventCount] read at this snapshot.
+func (s EventSnapshot) TraceEventCount(ctx context.Context, traceID string, at time.Time) (int, error) {
+	return s.countEvents(ctx, "trace_id", traceID, at)
 }
 
 // countEvents counts one id's rows inside the history window.
@@ -980,16 +1216,16 @@ func (l *EventLog) TraceEventCount(ctx context.Context, traceID string) (int, er
 // parameter a request can reach: it is interpolated into the statement, which
 // is the one place in this package where that would be an injection rather
 // than a convenience.
-func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, error) {
+func (s EventSnapshot) countEvents(ctx context.Context, column, id string, at time.Time) (int, error) {
 	switch column {
 	case "turn_id", "trace_id":
 	default:
 		return 0, fmt.Errorf("store: count events: %q is not a countable column", column)
 	}
 	var n int
-	err := l.db.sql.QueryRowContext(ctx,
+	err := s.q.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM crewlet_events WHERE "+column+" = ? AND event_time >= ?",
-		id, EncodeTime(now().Add(-EventHistory))).Scan(&n)
+		id, EncodeTime(askedAt(at).Add(-EventHistory))).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("store: count events: %w", err)
 	}
@@ -1019,7 +1255,12 @@ func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, err
 // The rows may OVERLAP the head read on a turn that only just reached the cap
 // — they are the same rows from the other end — so a caller merges on the
 // event id rather than concatenating.
-func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([]EventRecord, error) {
+func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
+	return l.live().TurnClosing(ctx, turnID, limit, at)
+}
+
+// TurnClosing is [EventLog.TurnClosing] read at this snapshot.
+func (s EventSnapshot) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
 	if limit <= 0 {
 		// ALLOCATED, like every other list read here — asking for no rows is
 		// still a read that succeeded, and the contract on [EventLog] does
@@ -1027,11 +1268,11 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 		// a computed limit; today's one caller passes a constant.
 		return []EventRecord{}, nil
 	}
-	out, err := l.scanPayloads(ctx,
+	out, err := s.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time DESC, event_id DESC LIMIT ?",
-		turnID, EncodeTime(now().Add(-EventHistory)), limit)
+		turnID, EncodeTime(askedAt(at).Add(-EventHistory)), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,8 +1283,9 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 // ByID returns one event WITH its payload, or ErrNotFound.
 //
 // The identity is (event_time, event_id) and a caller holding only an id — a
-// link, a line pasted from a log — has no time to seek with, so this reads the
-// id index and takes the newest match.
+// link, a line pasted from a log — has no time to seek with, so this seeks the
+// id index and takes the newest match: see [byIDSQL] for what it takes to make
+// the planner do that.
 //
 // THROUGH THE SHARED SCANNER although it wants one row, which is what
 // QueryRow would give it more directly. A second hand-written Scan is a second
@@ -1053,10 +1295,21 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 // and this reader kept a twelve-argument Scan that failed at RUNTIME — on the
 // one read a person reaches by pasting an id. LIMIT 1 makes the slice at most
 // one row, so the cost is one allocation on a path that serves a link.
-func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
-	recs, err := l.scanPayloads(ctx,
-		"SELECT "+listColumns+", payload FROM crewlet_events "+
-			"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
+//
+// FLOORED LIKE EVERY OTHER READ, at `at` (see [EventLog]). History past
+// [EventHistory] is gone by design — the health envelope ships the horizon as
+// `event_history_seconds`, "how far back the event log can be read", and the
+// API reference gives events, turns and traces one 30-day reach — and the rows
+// still on disk below it are the sweep's slack, not history: [EventRetention]
+// keeps a day past the floor, and a node whose maintenance singleton has
+// lapsed keeps rows of any age. Unfloored, a pasted link to an event past the
+// horizon resolved on a node whose sweep had not reached it and was not found
+// on one whose had, and it opened onto an event whose trace and turn — both
+// floored — read as empty. Floored at the asker's instant, a link answers the
+// same on every node whatever its sweep has done.
+func (l *EventLog) ByID(ctx context.Context, id string, at time.Time) (EventRecord, error) {
+	query, args := byIDSQL(id, at)
+	recs, err := l.scanPayloads(ctx, query, args...)
 	if err != nil {
 		return EventRecord{}, fmt.Errorf("store: read event %s: %w", id, err)
 	}
@@ -1064,6 +1317,38 @@ func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
 		return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
 	}
 	return recs[0], nil
+}
+
+// byIDSQL is the statement [EventLog.ByID] runs and its arguments — a function
+// of its own so the plan it gets can be read back for exactly the statement
+// that runs (see TestALookupByIDSeeksTheIDIndex).
+//
+// BOTH `event_time` TERMS CARRY A UNARY PLUS, which changes no value and hides
+// the column from the planner, so the only term it can seek on is the id — the
+// id index (`crewlet_events_id_idx`, schema/0001) — and what is left is to
+// sort the few rows that share the id. Unadorned, `event_time` leads the
+// primary key, and the planner reached for that key instead, two ways
+// (EXPLAIN QUERY PLAN, measured on 60,000 rows):
+//
+//   - to satisfy the ORDER BY, by walking the whole key newest first and
+//     stopping at the first match — quick for an event from the last few
+//     minutes, and the entire thirty-day log for an old id or a dead link,
+//     which is the lookup a pasted link makes. That was this read's plan
+//     before it had a floor, and is its plan with only the floor's plus;
+//   - with the floor as a term, by reading it as a RANGE of that key and
+//     intersecting every row id in it with the id index's (`MULTI-INDEX
+//     AND`): the same cost for every id, linear in the window — about 4 ms a
+//     lookup on those rows against 0.2 ms for the seek, paid by every node a
+//     fleet asks, inside its read budget.
+//
+// On this build the ORDER BY's plus alone already seeks the index. The floor's
+// is what leaves the id as the ONLY term an index could serve, so no plan —
+// this build's or a later one's — can make a range of the key out of it; the
+// floor still applies, to the rows the seek returns, which is where it belongs.
+func byIDSQL(id string, at time.Time) (string, []any) {
+	return "SELECT " + listColumns + ", payload FROM crewlet_events " +
+			"WHERE event_id = ? AND +event_time >= ? ORDER BY +event_time DESC LIMIT 1",
+		[]any{id, EncodeTime(askedAt(at).Add(-EventHistory))}
 }
 
 // Purge deletes events past EventRetention and reports how many went.
@@ -1118,7 +1403,11 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 }
 
 func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return l.scan(ctx, false, query, args...)
+	return l.live().scanRows(ctx, query, args...)
+}
+
+func (s EventSnapshot) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return s.scan(ctx, false, query, args...)
 }
 
 // scanPayloads is scanRows for a query whose SELECT ends in `payload`.
@@ -1128,11 +1417,15 @@ func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]E
 // column added to `listColumns` comes to be read into the wrong field by one
 // of them.
 func (l *EventLog) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return l.scan(ctx, true, query, args...)
+	return l.live().scanPayloads(ctx, query, args...)
 }
 
-func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+func (s EventSnapshot) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return s.scan(ctx, true, query, args...)
+}
+
+func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
+	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: query events: %w", err)
 	}
@@ -1240,15 +1533,41 @@ type PhaseTokenQuery struct {
 	// the projection's record cap was read in full, into memory, inside the
 	// seed's time budget, only to be cut down to that cap on arrival.
 	Limit int
+
+	// At is the instant the window is cut against — what SinceDays counts
+	// back from, what an unbounded top edge means, and where the
+	// [MaxPhaseTokenDays] floor sits. Zero is now.
+	//
+	// A FIELD for [ListQuery.At]'s reason: a fleet pins the window on
+	// the asker's clock and every node must floor it at the asker's instant
+	// rather than its own. The asker's Since is already floored at ITS
+	// clock; floored again at a peer's later one, every record between the
+	// two floors was dropped from a window the answer said it covered.
+	At time.Time
+
+	// Before resumes a read below a record already held: only records
+	// strictly older than it in the read's own (event_time, event_id)
+	// order. Nil reads from the top of the window.
+	//
+	// A KEYSET, for the reason [ListQuery.Before] is one: records share a
+	// microsecond in a burst, and a cursor on the instant alone skips or
+	// repeats whatever collided with it — and a repeated spend record is a
+	// double count.
+	Before *Cursor
 }
 
-// Window reports the instants this query actually covers, after the floor.
+// at is the instant the window is cut against, read ONCE per answer.
+func (q PhaseTokenQuery) at() time.Time { return askedAt(q.At) }
+
+// Window reports the instants this query actually covers, after the floor,
+// against `now` — the query's own [PhaseTokenQuery.At] when the caller is
+// answering a pinned question.
 //
 // Exported because the CALLER labels the answer: a rollup headed with the
 // window that was asked for, over rows from the window that was served, is a
 // lie about the numbers beside it — and the clamp lives here, where the floor
-// is defined, rather than being re-derived at every surface. The caller hands
-// [EventLog.PhaseTokens] the same now it passes here, which is what makes the
+// is defined, rather than being re-derived at every surface. The caller sets
+// [PhaseTokenQuery.At] to the same now it passes here, which is what makes the
 // heading and the rows one evaluation rather than two readings of a clock.
 //
 // TOTAL IN BOTH EDGES: an unbounded top edge means "up to now", and what this
@@ -1321,14 +1640,25 @@ const (
 // row of the table. The extraction is free of a scan cost the filter does not
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
+//
+// BOTH SPEND TYPES — a phase's record and an auxiliary record — and one more
+// payload read on the second alone: a PERSON's auxiliary spend names no agent
+// and no agent role, since a person is not an agent seat, and carries the role
+// of the person's seat as `actor_role`, which the per-seat breakdown names it
+// by. The person themselves is the envelope's ACTOR, a column already.
 const phaseTokenSQL = `
-SELECT event_time, event_id, agent_id, agent_role,
+SELECT event_time, event_id, agent_id,
+       CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
+            THEN COALESCE(json_extract(payload, '$.actor_role'), '')
+            ELSE agent_role END,
+       CASE WHEN agent_id = '' AND event_type = 'auxiliary_spend' THEN actor ELSE '' END,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        cache_read_tokens, cache_write_tokens, provider_key,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0)
+       COALESCE(json_extract(payload, '$.cost_usd'), 0),
+       calls, spend_stage
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type IN ('agent_phase_completed', 'auxiliary_spend') AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1337,6 +1667,12 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // response verbatim, so a hundred of them is already megabytes on the wire for
 // a list nobody scrolls to the end of. The dashboard keeps its own cap at the
 // same number, so the page and the answer agree about where history stops.
+//
+// PHASES ONLY, and an auxiliary record is deliberately not one: it is a SUM of
+// calls with no prompt and no response, so it has nothing this list renders,
+// and a compaction's burst would push a seat's real model calls off its first
+// page. What the auxiliary model spent is in every spend figure and on the
+// turn's own page.
 const AgentPhaseLimit = 50
 
 // The event_time floor is EventHistory, the same one every other read of this
@@ -1380,14 +1716,14 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // by design, so history here is exactly the calls that finished.
 //
 // more reports that the seat holds phases past this page — see [pastPage].
-func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor) (rows []EventRecord, more bool, err error) {
+func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
 	// An EMPTY id names no seat, and bound as one it would match every row
 	// that carries none — every non-agent event in the window.
 	if agentID == "" {
 		return nil, false, nil
 	}
 	query := agentPhaseSQL + ` AND agent_id = ?`
-	args := []any{EncodeTime(now().Add(-EventHistory)), agentID}
+	args := []any{EncodeTime(askedAt(at).Add(-EventHistory)), agentID}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -1425,12 +1761,14 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // `agentID` narrows to ONE SEAT, by the id every node derives for it
 // ([org.DeriveAgentID]) — the promoted `agent_id` column [ListQuery.AgentID]
 // reads — and empty means the company. Not a role name, for
-// [EventLog.AgentPhases]' reason: two seats may share one, and a rename
-// changes it while the history keeps the old one. more reports that records
-// exist past this page — see [pastPage].
-func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor) (rows []EventRecord, more bool, err error) {
+// [EventLog.AgentPhases]' reason: two seats may share one — two unit seats
+// stamped from one template among them — so a role filter answered "this
+// seat's phases" with every such seat's, and a rename changes it while the
+// history keeps the old one. more reports that records exist past this page —
+// see [pastPage].
+func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
 	query := phasesSQL
-	args := []any{EncodeTime(now().Add(-EventHistory))}
+	args := []any{EncodeTime(askedAt(at).Add(-EventHistory))}
 	if agentID != "" {
 		query += ` AND agent_id = ?`
 		args = append(args, agentID)
@@ -1493,7 +1831,7 @@ const MaxPhasePage = 60
 // rollup reported a cache that never hit. The price stays in the payload for
 // the reason given at phaseTokenSQL.
 //
-// # The window is measured from at, which is the CALLER's instant
+// # The window is measured from q.At, which is the CALLER's instant
 //
 // Every caller labels its answer with [PhaseTokenQuery.Window] — that is why
 // the method is exported — and a label is only true of the rows beneath it if
@@ -1502,15 +1840,12 @@ const MaxPhasePage = 60
 // production microseconds after the label's, enough for a record stamped in
 // between to be counted by a rollup headed as ending before it; and under a
 // caller's pinned clock a different window altogether, so a test that pinned
-// the API's clock read a rollup headed with June over October's rows. A zero
-// at is REFUSED rather than read as now, because "now" is exactly the second
-// reading this parameter exists to remove.
-func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery, at time.Time) ([]tokens.Record, error) {
-	if at.IsZero() {
-		return nil, errors.New("store: phase tokens: no instant to measure the " +
-			"window from — pass the one the answer is labelled with")
-	}
-	since, until := q.Window(at)
+// the API's clock read a rollup headed with June over October's rows. So a
+// caller that labels its answer sets [PhaseTokenQuery.At] to the instant the
+// label is cut against, and a zero At — a caller that labels nothing — is now,
+// read ONCE for the whole answer.
+func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
+	since, until := q.Window(q.at())
 
 	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
 	// half-open window the bucketing folds over, so a record on the
@@ -1524,6 +1859,10 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery, at time.T
 	if q.AgentID != "" {
 		sql += " AND agent_id = ?"
 		args = append(args, q.AgentID)
+	}
+	if q.Before != nil {
+		sql += " AND (event_time, event_id) < (?, ?)"
+		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
 	}
 	// Newest first, which is the order the breakdown renders in, and the
 	// order a Limit keeps the head of. No LIMIT unless the caller asked for
@@ -1546,12 +1885,12 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery, at time.T
 			at  int64
 			rec tokens.Record
 		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
+		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
 			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
-			&rec.CostUSD,
+			&rec.CostUSD, &rec.Calls, &rec.Stage,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

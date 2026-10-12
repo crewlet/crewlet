@@ -28,7 +28,7 @@ import (
 // credential authenticates as, whether every project the org names exists
 // and agrees about its lead, and whether the inbound webhook is registered.
 
-func runJiraProvision(args []string, stdout, stderr io.Writer) error {
+func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("jira provision", flag.ContinueOnError)
@@ -36,7 +36,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
-			"defaults to api.external_url")
+			"defaults to "+publicURLDefault)
 	recreate := fs.Bool("recreate-webhook", false,
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -113,7 +113,8 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		opts.WebhookBaseKey = webhookBaseKey(boot)
+		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
 		if openErr != nil {
 			return openErr
 		}

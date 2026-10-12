@@ -166,7 +166,7 @@ func TestAnUnresolvedKeyNeverBorrowsTheConventionalOne(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r := tierB(map[string]string{"ANTHROPIC_API_KEY": "sk-ant-conventional", "LLM_BASE_URL": srv.URL})
-	p, err := buildProvider("acme", config.LLMProvider{
+	p, _, err := buildProvider("acme", config.LLMProvider{
 		Type: config.LLMAnthropic, Model: "claude-test", BaseURL: "${LLM_BASE_URL}",
 		APIKeys: []string{"${ACME_KEY}"},
 	}, r)

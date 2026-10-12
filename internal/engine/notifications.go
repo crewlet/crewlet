@@ -70,27 +70,40 @@ type notifications struct {
 	// would park every delivery behind it. Always taken BEFORE mu, never
 	// while holding it.
 	//
-	// It exists because the registry now has TWO rebuild triggers — a
-	// published company, and the identity applier's committed batch — and
-	// the second rebuilds for the SAME company the first built for, which
-	// is exactly the case registryFor's identity test cannot tell apart.
+	// It exists because the registry has TWO rebuild triggers — a
+	// published company, and a moved directory: the identity applier's
+	// committed batch on a data node, the periodic net's re-read on a node
+	// without `data` — and the second rebuilds for the SAME company the
+	// first built for, which is exactly the case registryFor's identity
+	// test cannot tell apart.
 	// Two rebuilds interleaved that way publish whichever finished last,
 	// and that can be the one that read the directory first.
 	rebuilding sync.Mutex
 
-	// directory is this node's identity directory as the registry reads
-	// it, or nil on an engine with no core runtime — `crewlet validate` and
-	// a test, which keep the chart-only behaviour. Set once, when the core
-	// runtime opens the domain at boot, under mu.
+	// directory is the identity directory as the registry reads it:
+	//
+	//   - on a data node, this node's own rows, handed over by the core
+	//     runtime as it opens the domain at boot ([Engine.startCore]);
+	//   - on a node without `data`, a data node's rows through the
+	//     estate's router ([routedIdentity]), handed over by
+	//     [Engine.startRoutedDirectory] — the chart and this node's own
+	//     Tier A tokens applied to the answer here, on the asking side;
+	//   - nil only on an engine that calls neither — `crewlet validate`
+	//     and a test — which keeps the chart-only behaviour no running
+	//     node builds from.
+	//
+	// Set once, at boot, under mu.
 	directory notify.Directory
 
 	// directoryAt is the identity applier's committed position, and
 	// readAt what it was when the last reading was taken — so the
 	// periodic safety net can tell "nothing was applied since" from "rows
 	// moved with no committed hook", which is what an adoption does.
-	// directoryFailed marks a last reading that could not be taken, so
-	// the net retries it however still the position is. All three are
-	// read and written under [notifications.rebuilding].
+	// NIL ON A NODE WITHOUT `data`, which runs no applier whose position
+	// could say the rows moved, so the net reads the directory on every
+	// tick there. directoryFailed marks a last reading that could not be
+	// taken, so the net retries it however still the position is. All
+	// three are read and written under [notifications.rebuilding].
 	directoryAt     func() statelog.Position
 	readAt          statelog.Position
 	directoryFailed bool
@@ -485,6 +498,10 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	parsers = append(parsers, nativeParsers...)
 	prompts = append(prompts, nativePrompts...)
 
+	// THROUGH THE ONE DOOR every fleet-wide group passes ([Engine.joins]).
+	if !e.joins(ctx, notify.InboundGroup) {
+		return nil
+	}
 	svc, err := notify.New(notify.Options{
 		Queue:     e.backends.Queue,
 		Registry:  e.Registry,
@@ -691,6 +708,13 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 		return nil, fmt.Errorf("engine: mattermost: url resolved empty (%q)", cfg.URL)
 	}
 
+	// EVERY SEAT, ON EVERY NODE — not the seats this node holds. A node that
+	// restarts, drains or loses a lease leaves its seats heard by every other
+	// node meanwhile, so a seat's socket has no handover and no gap for a
+	// backfill to cover. What that costs is N sockets and N backfills per bot
+	// on an N-node fleet, and what makes it correct is the fleet-wide claim
+	// each post takes before it is published (Claims, below): one node
+	// delivers it, and every other node drops it.
 	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
 		// Enabled with no provisioned seats is a company mid-setup, not
@@ -705,8 +729,12 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 			Seats:  seats,
 		},
 		Publisher: e.backends.Queue,
-		Follows:   e.followStore(),
-		Registry:  e.Registry,
+		// THE FLEET'S, as the change feed's and the webhook edge's are:
+		// a claim only this process could see would leave a post woken
+		// once per node.
+		Claims:   e.backends.Fleet,
+		Follows:  e.followStore(),
+		Registry: e.Registry,
 	})
 	if err != nil {
 		return nil, err

@@ -46,6 +46,11 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return n.Metadata["issue_key"] != ""
 }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject is the
+// issue's key and summary, which on a comment is the only place the topic is
+// named at all.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed implements [notify.Prompt]: a mention or an assignment.
 //
 // The SAME two reasons the prompt frames as a directed ask — see the routing

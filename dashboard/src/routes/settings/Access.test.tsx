@@ -257,51 +257,22 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   expect(within(lee).getAllByText("Nobody holds it").length).toBeGreaterThan(0);
 });
 
-// A PERSON WITH NO SEAT IS A FAULT, not a neutral blank: every person holds a
-// human seat, and one recorded before that held is what the directory
-// reports (`person_without_seat`), worded here rather than drawn as its raw
-// code. A service account bound to none is ordinary. The CONTROL is the
-// suspended service account on page two. Mutation: draw the person's empty
-// seat like a machine's and the warning is gone.
-test("a person with no seat is drawn as the fault the directory reports", async () => {
-  stubIam((url) => {
-    if (url.pathname === "/iam/people" && !url.searchParams.get("after")) {
-      return json(200, {
-        ...PAGE_ONE,
-        people: [
-          ...PAGE_ONE.people,
-          { id: "p-ed", kind: "person", stage: "active", login: "ed.vance", name: "Ed Vance" },
-        ],
-      });
-    }
-    if (url.pathname === "/iam/check") {
-      return json(200, {
-        ...CHECK,
-        findings: [
-          {
-            kind: "person_without_seat",
-            person: "p-ed",
-            login: "ed.vance",
-            detail: "the person ed.vance holds no human seat",
-          },
-        ],
-      });
-    }
-    return null;
-  });
+// A FINDING IS DRAWN IN WORDS, never its code: the kind's label from
+// `FINDING_WORDS` beside the engine's own detail, so the screen never prints a
+// code an administrator would have to look up. A service account bound to
+// none reads as the ordinary state it is. Mutation: draw the finding's kind
+// raw and its code appears.
+test("a finding is drawn in words beside the engine's detail, never as its code", async () => {
+  stubIam(() => null);
   mount();
-  const ed = (await screen.findByText("Ed Vance")).closest(".grid-row") as HTMLElement;
-  expect(within(ed).getByText("No seat")).toBeTruthy();
-  expect(within(ed).queryByText("Bound to no seat")).toBeNull();
+  const finding = (await screen.findByText("The seat removed-seat is not in the org chart."))
+    .parentElement as HTMLElement;
+  expect(within(finding).getByText("Seat gone")).toBeTruthy();
+  expect(screen.queryByText("binding_dangling")).toBeNull();
   const ci = (await screen.findAllByText("ci:release"))
     .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
     .find((row) => row && within(row).queryByText("Service account"))!;
   expect(within(ci).getByText("Bound to no seat")).toBeTruthy();
-  // THE FINDING IN WORDS, never its code.
-  const finding = (await screen.findByText("The person ed.vance holds no human seat."))
-    .parentElement as HTMLElement;
-  expect(within(finding).getByText("No seat")).toBeTruthy();
-  expect(screen.queryByText("person_without_seat")).toBeNull();
 });
 
 // THE BOUND SEAT'S KIND IS THE CHART'S: a token bound to an AGENT seat is the
@@ -331,6 +302,32 @@ test("a row bound to an agent seat draws the agent's badge", async () => {
   expect(within(boss).getByRole("link", { name: /CEO/ })).toBeTruthy();
   expect(outline(boss)).toBe("agent");
   expect(outline(await row("token:deploy"))).toBe("human");
+});
+
+// A MANAGED DOCUMENT (ADR-0030) IS PART OF THE POSTURE: the tokens that alone
+// write it are named on this node's tokens card, in words that cover every
+// credential — a session and a machine token are refused exactly as an
+// unlisted token is — and nothing is said when every credential may write.
+// Mutation: drop the list from the read and the first half fails; draw it
+// unconditionally and the second does.
+test("a managed document names its writers beside the tokens", async () => {
+  stubIam((url) =>
+    url.pathname === "/iam/node-tokens"
+      ? json(200, { ...TOKENS, company_writers: ["gitops", "ci"] })
+      : null,
+  );
+  mount();
+  const line = (await screen.findByText(/The company document is managed/)).closest("span");
+  expect(line?.textContent).toMatch(
+    /only the tokens gitops, ci may change it \(api\.auth\.company_writers\)/,
+  );
+  expect(line?.textContent).toMatch(/Every other credential — a person’s session/);
+  cleanup();
+
+  stubIam();
+  mount();
+  await screen.findAllByText("token:spare");
+  expect(screen.queryByText(/The company document is managed/)).toBeNull();
 });
 
 // A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and

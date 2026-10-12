@@ -41,6 +41,7 @@ import { shortAge } from "~/lib/seats.ts";
 import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { CardLive, SeatKind, SeatRing } from "~/lib/seats.ts";
 import {
   DEFAULT_TYPE,
@@ -81,6 +82,12 @@ export interface RowChrome {
    * [seatResolvers], so a builder cannot thread the name and drop this.
    */
   seatKind?: (handle: string) => SeatKind | undefined;
+  /**
+   * How an agent is drawn: its character and colour, the chart's third
+   * answer, and from [seatResolvers] with the other two for the same reason.
+   * `undefined` for a seat the chart does not hold, which keeps its initials.
+   */
+  seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
   types?: WorkTypeDef[];
   statuses?: WorkStatusDef[];
 }
@@ -236,6 +243,7 @@ export function Assignee({
   handle,
   seatName,
   seatKind,
+  seatAvatar,
   size = "sm",
   name: showName,
   ring,
@@ -243,6 +251,7 @@ export function Assignee({
   handle?: string;
   seatName?: (handle: string) => string;
   seatKind?: (handle: string) => SeatKind | undefined;
+  seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
   size?: "sm" | "md";
   name?: boolean;
   /**
@@ -289,6 +298,7 @@ export function Assignee({
         name={label}
         size={size}
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
+        avatar={seatAvatar?.(handle)}
         decorative={showName}
         ring={ring}
       />
@@ -653,6 +663,7 @@ export function WorkCard({
           handle={row.assignee}
           seatName={chrome.seatName}
           seatKind={chrome.seatKind}
+          seatAvatar={chrome.seatAvatar}
           ring={ring}
         />
       </div>
@@ -779,7 +790,12 @@ export function WorkRow({
         <TypeIcon type={row.type} types={chrome.types} />
       </span>
       <span className="work-cell work-cell-who">
-        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+        <Assignee
+          handle={row.assignee}
+          seatName={chrome.seatName}
+          seatKind={chrome.seatKind}
+          seatAvatar={chrome.seatAvatar}
+        />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
         {relTime(row.updated, now)}
@@ -1054,8 +1070,8 @@ export function TaskBlock({
   /**
    * The engine's count of the WHOLE claim (`WorkMyWork.totals`), which is what
    * the header draws — never `rows.length`, which is the page: a block holds at
-   * most twenty rows of however many the claim has. Absent (an engine that
-   * counts none) draws no figure rather than the page's.
+   * most twenty rows of however many the claim has. Absent while the answer
+   * has not arrived, which draws no figure rather than the page's.
    */
   total: WorkClaimTotal | undefined;
   rows: WorkSummary[];

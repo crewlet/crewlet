@@ -58,13 +58,6 @@ var allowed = []Allowance{
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/queue/jetstream",
-		Test:    "TestConformance/EventQueue/nak_returns_the_event_to_the_front_of_the_mailbox",
-		When:    Always,
-		Why: "JetStream returns a redelivered message BEHIND never-delivered ones. " +
-			"queue.OrderForDispatch exists because of it. Certified on the memory twin.",
-	},
-	{
-		Package: "internal/queue/jetstream",
 		Test:    "TestConformance/EventQueue/start_stop_lifecycle",
 		When:    Always,
 		Why: "Open establishes the connection and the streams, so Start is a no-op and " +
@@ -85,6 +78,34 @@ var allowed = []Allowance{
 		When:    Always,
 		Why: "Pull consumers fetch on their own schedule, so batch boundaries are not " +
 			"deterministic and there is no inline dispatch to observe. Certified on the " +
+			"memory twin.",
+	},
+
+	// THE SAME THREE, THROUGH A LEAF. The suite runs a second time against
+	// a client of a JetStream-less leaf, which is the same JetStream client
+	// reaching the members' domain across one link — so each case skips
+	// for the reason its member entry above gives, and the memory twin
+	// certifies it once for both.
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/EventQueue/start_stop_lifecycle",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: Open establishes the connection " +
+			"and the streams, so there is no Start barrier. Certified on the memory twin.",
+	},
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/EventQueue/stop_clears_pause",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: Stop is terminal, so there is " +
+			"no restart for a pause to survive. Certified on the memory twin.",
+	},
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/Batch/zero_linger_dispatches_inline_single_event_batches",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: pull consumers fetch on their " +
+			"own schedule, so batch boundaries are not deterministic. Certified on the " +
 			"memory twin.",
 	},
 
@@ -220,6 +241,22 @@ var allowed = []Allowance{
 			"quoting against a real parser rather than against this package's own reading " +
 			"of it; the table cases check the bytes written, which is what a wrong quoting " +
 			"rule would agree with.",
+	},
+
+	// -----------------------------------------------------------------
+	// Environment: git on the engine host. Listed for the same reason as the
+	// shell entry above — it does not fire on any machine the gates run on
+	// (ubuntu runners ship git, and a checkout needs it) — and an entry is
+	// what makes the day it starts firing visible.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/sandbox/codingagent",
+		Test:    "TestTheAskShimRecordsTheBranchItWasRunOn",
+		When:    Environment,
+		Why: "Needs `git` on PATH: the ask shim reads the branch a run pushed from the " +
+			"repository it asked in, and only a real repository proves the upstream, " +
+			"detached-HEAD and no-repository readings. The branch an agent names with " +
+			"--branch, which needs no git, is TestTheAskShimRecordsTheBranchItIsGiven's.",
 	},
 
 	// -----------------------------------------------------------------

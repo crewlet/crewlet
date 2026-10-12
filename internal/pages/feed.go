@@ -11,7 +11,7 @@ import (
 )
 
 // Source is the notification source name the native knowledge base registers
-// under. Bare, for the reason [work.Source] is.
+// under. Bare, for the reason [tracker.Source] is.
 const Source = "page"
 
 // FeedGroup is the durable consumer's name, and it is STABLE for the

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,13 @@ type discardWalk struct {
 // THE PRODUCTION HALF ONLY, which is the opposite of the pool guard in
 // internal/httpx: there the test half carries the bug, and here the test half
 // is where discarding is the right call.
+//
+// THE IMPORTS ARE READ FIRST, as the pool guard reads them and for its
+// reason: every selector this judges is on the log/slog import, and an import
+// path is a string literal that escapes can spell unlike its bytes, so the
+// imports are parsed (parser.ImportsOnly) rather than searched for. Thirty-odd
+// files import log/slog; parsing all eleven hundred whole to find them was
+// five seconds under the race detector.
 func walkForDiscardingLoggers(t *testing.T, root string) discardWalk {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -131,12 +139,21 @@ func walkForDiscardingLoggers(t *testing.T, root string) discardWalk {
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			file, err := parser.ParseFile(fset, path, nil, 0)
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			imports, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ImportsOnly)
 			if err != nil {
 				t.Errorf("parse %s: %v", path, err)
 				return nil
 			}
-			if _, ok := importName(file, "log/slog", "slog"); !ok {
+			if _, ok := importName(imports, "log/slog", "slog"); !ok {
+				return nil
+			}
+			file, err := parser.ParseFile(fset, path, src, 0)
+			if err != nil {
+				t.Errorf("parse %s: %v", path, err)
 				return nil
 			}
 			out.files++
@@ -153,6 +170,36 @@ func walkForDiscardingLoggers(t *testing.T, root string) discardWalk {
 		}
 	}
 	return out
+}
+
+// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN: a production file building a
+// discarding handler under a renamed import, one importing log/slog cleanly, a
+// test file that discards (which is allowed), and a file importing something
+// else whose body is not Go — so a walk that parsed past its imports would
+// report it.
+func TestTheDiscardWalkReadsEveryFileImportingSlog(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"internal/p/p.go": "package p\n\nimport s \"log/slog\"\n\nvar _ = s.New(s.DiscardHandler)\n",
+		"cmd/q/q.go":      "package main\n\nimport \"log/slog\"\n\nvar _ = slog.Default()\n",
+		"internal/p/p_test.go": "package p\n\nimport \"log/slog\"\n\n" +
+			"var _ = slog.New(slog.DiscardHandler)\n",
+		"internal/r/r.go": "package r\n\nimport \"strings\"\n\nthis is not Go\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := walkForDiscardingLoggers(t, root)
+	if found.files != 2 || len(found.hits) != 1 || found.hits[0].what != "s.DiscardHandler" {
+		t.Errorf("files %d, hits %+v; want the two production importers, and p's "+
+			"s.DiscardHandler", found.files, found.hits)
+	}
 }
 
 // importName is the local name path is imported under in file, if it is.

@@ -31,15 +31,13 @@ import (
 // never consulted for it: its login is the handle, which is exactly why
 // internal/iam makes a login and a seat handle disjoint by grammar — the two
 // namespaces meet in one author column and neither may be mistaken for the
-// other. Who lands on it is a SERVICE ACCOUNT, a Tier A token's machine row
-// left unbound, or a PERSON recorded before every person held a human seat
-// (internal/iamdomain's ADR-0026) — which the directory's check reports, and
-// which keeps serving here: refusing it would lock out a company whose only
-// administrator predates the rule, and this table cannot tell a person from a
-// machine anyway ([PersonRow] carries no kind). Every binding the directory
-// WRITES now names a human seat, so the gone arm below is reached by a
-// revision that took the seat away — or by a binding an earlier build wrote to
-// an AGENT's seat, which an administrator's create and a bind once allowed.
+// other. Who lands on it is a SERVICE ACCOUNT or a Tier A token's machine row
+// left unbound — never a PERSON, who holds a human seat for as long as they
+// are here (internal/iamdomain's ADR-0032) — and this table cannot tell a
+// person from a machine anyway ([PersonRow] carries no kind), so it is the
+// directory's writer, not this table, that keeps a person off it. Every
+// binding the directory WRITES names a human seat, so the gone arm below is
+// reached by a revision that took the seat away.
 
 // Chart is what the organisation this node is running says about one seat —
 // the org chart of the configuration epoch it applied.

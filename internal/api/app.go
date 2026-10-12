@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
 )
@@ -40,12 +40,6 @@ type App struct {
 	// write that is the part they do not need.
 	csrf *auth.CSRF
 
-	// secure says a BROWSER reaches this deployment over https, which is
-	// what the `Strict-Transport-Security` header turns on. Read from
-	// `api.external_url` rather than from the bind address or `r.TLS`:
-	// this engine ordinarily sits behind a TLS-terminating proxy, so the
-	// request it receives is plain http on a loopback socket.
-	secure bool
 	state  *livestate.LiveState
 	stream *stream.Service
 
@@ -86,41 +80,88 @@ type App struct {
 	// answer an operator needs.
 	capacity capacityRunner
 
+	// fleetBroker reads and changes the fleet broker's membership. See
+	// fleetbroker.go.
+	fleetBroker FleetBrokerControl
+
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
 	company func() (*config.Company, *org.Organization)
 
-	// estate answers whether the replicated estate can be read at the
+	// estateFloor answers whether the replicated estate can be read at the
 	// log's floor, for /ready. See [EstateFloor].
-	estate EstateFloor
+	//
+	// Named for its type and never `estate`: internal/store's applier
+	// gate matches a call by METHOD NAME across the tree (it parses, it
+	// does not type-check), and `estate()` is the engine's accessor for
+	// the replicated estate's write handle — so a call through a field of
+	// that name reads to the gate as a write to the estate.
+	estateFloor EstateFloor
 
 	// identity answers whether anybody is enrolled, for /health. See
 	// [Identity].
 	identity Identity
 
 	handler http.Handler
+
+	// public is the handler of the dedicated public listener, or nil when
+	// there is none and every route is [App.ServeHTTP]'s. See [App.Public].
+	public http.Handler
+
+	// routes is every pattern mounted, in mount order. See [routeTable].
+	routes []string
 }
 
-// EstateFloor reports whether this node's REPLICATED estate can answer at the
-// state log's floor, and names the term that says it cannot.
+// routeTable is the one mux every surface mounts on, keeping the pattern of
+// each route it is handed.
+//
+// KEPT because the listeners split ONE table by a predicate over paths
+// ([auth.Public]), and a predicate cannot say which paths exist: a route
+// mounted under a public prefix is published and unguarded whatever it was
+// meant to be, and one an outside party calls mounted outside them is
+// unreachable the day a deployment sets api.public. Only the table can be
+// walked to catch either, and [net/http.ServeMux] does not list its own.
+//
+// EVERY MOUNT SIGNATURE IS ITS: [authz.Mux], which a guarded surface states
+// each route's policy through, [auth.Mux], which /auth registers on, and
+// [httpjson.Router] — so a route mounted through any of them is in the table.
+type routeTable struct {
+	mux      *http.ServeMux
+	patterns []string
+}
+
+func (t *routeTable) Handle(pattern string, handler http.Handler) {
+	t.patterns = append(t.patterns, pattern)
+	t.mux.Handle(pattern, handler)
+}
+
+func (t *routeTable) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	t.Handle(pattern, http.HandlerFunc(handler))
+}
+
+// EstateFloor reports whether this node can answer from the company's
+// replicated estate at all, and names the term that says it cannot.
 //
 // # Why /ready turns on it
 //
 // A node's SQL copy is derived from an ordered log, and the log is trimmed. A
 // consumer whose position falls below the stream's first sequence is clamped
 // UPWARD with no error at all and then reports itself caught up over a hole —
-// so a node below the floor answers every question confidently, out of rows
-// with records missing from them for good. That is not "briefly behind": it is
-// a copy the fleet has abandoned, and a load balancer sending a webhook, a
-// dashboard query or a seat's tool read to it gets an answer somebody acts on.
-// "There is no such work item" is how a duplicate gets filed.
+// so a copy below the floor answers every question confidently, out of rows
+// with records missing from them for good. "There is no such work item" is how
+// a duplicate gets filed.
 //
-// The engine already decides this, twice and for two purposes — seat admission
-// (`engine.Engine.StateLogHydrated`, which is the strict form of
-// `statelog.Health.Established`) and whether the seats it holds may STAY
-// (`engine.Engine.SeatsServiceable`). This seam is the same question asked for
-// TRAFFIC, so the node that will not admit a seat also stops being sent work
-// to do with one.
+// WHICH IS WHY SUCH A COPY ANSWERS NOTHING, and why the node holding it is
+// still sent traffic: a copy that is wrong — below the log, its applier
+// halted, its node evicted — goes OUT OF SERVICE, and every read and write the
+// node takes for the tracker and the knowledge base is routed to a data node
+// whose copy is sound. What no copy of its own makes up for is a node that can
+// no longer say WHERE to route: its own copy out of service and its view of
+// the fleet too stale to name another. That is the question the engine asks
+// before letting the seats a node holds STAY (`engine.Engine.SeatsServiceable`)
+// — and `crewlet run` hands this seam exactly that, so the node that gives its
+// seats back is the node that stops being sent work, and the two never
+// disagree about one copy.
 //
 // A CONTEXT, because the answer is read live: the terms it rests on — the
 // published floor, the stream's own first and last sequence — move while the
@@ -140,7 +181,7 @@ type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 //
 // A fresh install has nobody in it, and the way the first person gets in is
 // onto a human seat the company declares — every person holds one for as long
-// as they exist (ADR-0026): an invitation into it, or a person an
+// as they exist (ADR-0032): an invitation into it, or a person an
 // administrator creates on it, either issued under a Tier A token
 // (`crewlet iam invite -seat`, `crewlet iam create -seat`, or the seat's
 // Invite and Create in the org chart). An operator who has just started a
@@ -162,19 +203,21 @@ type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 // operator to invite somebody who has already signed in.
 //
 // THREE-VALUED: an error is this node unable to read its identity estate, or
-// holding rows that have not applied the whole identity log — every node
-// applies it from boot, so a node that has just joined a fleet holds none for
-// a moment — which is `unknown` and never `unclaimed`: told there is nobody, a
-// dashboard would offer an empty company's guidance to one that has started.
+// holding rows that have not applied the whole identity log — every node that
+// serves this API holds the estate and applies the identity log from boot
+// (ingress requires the `data` role, ADR-0025), so a node that has just joined
+// a fleet holds none for a moment — which is `unknown` and never `unclaimed`:
+// told there is nobody, a dashboard would offer an empty company's guidance to
+// one that has started.
 type Identity func(ctx context.Context) (enrolled bool, err error)
 
 // authMounter is the /auth surface's own mount, over a mux it can NAME.
 //
-// [http.ServeMux] satisfies it, which is what the one caller passes. The
-// narrower type exists so internal/api/authapi's own gate can walk what the
-// surface registered and hold it against internal/api/auth's exemption list —
-// the standard mux reports nothing about what was mounted on it, and the
-// failure when those two drift is a credential surface behind no credential.
+// The API's [routeTable] satisfies it, as [http.ServeMux] does. The narrower
+// type exists so internal/api/authapi's own gate can walk what the surface
+// registered and hold it against internal/api/auth's exemption list — the
+// standard mux reports nothing about what was mounted on it, and the failure
+// when those two drift is a credential surface behind no credential.
 type authMounter interface {
 	Routes(mux auth.Mux)
 }
@@ -207,11 +250,11 @@ type guardedMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Inbox, EventLog, Sources.Company, Sources.Chart, Sources.Holders,
+// Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Retention, Capacity, Backup, Nodes, AuthEvents and Audit are
-// REQUIRED, and [New] refuses a missing one by name.
+// Setup, Retention, Capacity, FleetBroker, Backup, Nodes, AuthEvents and Audit
+// are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -246,11 +289,12 @@ type Options struct {
 	//
 	// OPTIONAL, and nil is what a suite about something else has: Tier A
 	// tokens are then the whole of authentication. `crewlet run` always
-	// wires it, beside [Options.Auth], on every node — the identity estate
-	// is the engine's core and runs from boot, so a node with no company
-	// serves the session a Tier A token exchanges for, which is how its
-	// company is created, and signs its people in once that company has
-	// any.
+	// wires it, beside [Options.Auth], on every node serving the API —
+	// each holds the estate, since ingress requires the `data` role
+	// (ADR-0025), and the identity estate is the core every data node
+	// starts at boot, company or none — so a node with no company serves
+	// the session a Tier A token exchanges for, which is how its company
+	// is created, and signs its people in once that company has any.
 	Sessions *auth.Sessions
 
 	// Tokens turns a machine token — a person's own access token or a
@@ -259,7 +303,8 @@ type Options struct {
 	//
 	// NIL IS AN API THAT RESOLVES NO MACHINE TOKEN, which is what a suite
 	// has. `crewlet run` ALWAYS builds one over its engine's directory,
-	// which every node holds from boot.
+	// which every node serving the API holds from boot — ingress requires
+	// the `data` role (ADR-0025).
 	Tokens *auth.Tokens
 
 	// AuthEvents is where the guard counts a refused credential.
@@ -280,9 +325,11 @@ type Options struct {
 	// how `api.auth.disabled` reached production.
 	DevPrincipal *auth.DevPrincipal
 
-	// Bootstrap supplies the auth posture. Nil is permitted and is not the
-	// same as absent config: the guard then refuses every write, because
-	// nobody has said who may make one.
+	// Bootstrap supplies the auth posture, and whether the public routes
+	// have a listener of their own (api.public — see [App.Public]). Nil is
+	// permitted and is not the same as absent config: the guard then
+	// refuses every write, because nobody has said who may make one, and
+	// every route is served on the one listener.
 	//
 	// It does NOT supply the node's name. The raw `node.id` is empty on a
 	// node named through CREWLET_NODE_ID and may itself be a ${VAR}; the
@@ -298,7 +345,8 @@ type Options struct {
 	// sockets watching each seat — see [InboxFeed].
 	//
 	// REQUIRED, like Runtime: every node that serves the API applies the
-	// tracker's log, so a node that heard nothing would be a wiring
+	// tracker's log — and relays a peer's movements while its own copy is
+	// out of service — so a node that heard nothing would be a wiring
 	// mistake rather than a narrower node, and the dashboard would go back
 	// to learning about somebody's work a poll interval late.
 	Inbox InboxFeed
@@ -307,22 +355,23 @@ type Options struct {
 	// identity batch moved, which [New] turns into a fresh decision of
 	// every open socket opened with one — see [CredentialFeed].
 	//
-	// REQUIRED, for Inbox's reason: every node applies the identity log
-	// whatever its roles, and a socket authenticated at its handshake is
+	// REQUIRED, for Inbox's reason: every node that serves the API holds
+	// the estate and applies the identity log, and a socket authenticated
+	// at its handshake is
 	// ended by the record that ends its credential — a node that heard
 	// nothing would leave every revoked session's open tab receiving the
 	// company's state until it closed on its own.
 	Credentials CredentialFeed
 
-	// State is the projection to serve. Nil builds an empty one.
+	// State is the projection to serve. Nil builds an empty one on
+	// [Options.Now].
+	//
+	// The projection ages and labels the live spend window on a clock of
+	// its own ([livestate.WithClock]), and the live `tokens` answer's
+	// window is that clock's rather than Now's — so an embedder that
+	// supplies a projection and pins Now pins the projection to the same
+	// clock, or the one surface answers on two.
 	State *livestate.LiveState
-
-	// EventLog is this node's OWN event store, which the webhook edge writes
-	// every delivery it accepts into. Not the read surface's history, which
-	// is the fleet's (Sources.Events): a write goes to this node and nowhere
-	// else, and a read of one node's store is a third of a three-node
-	// fleet's.
-	EventLog *store.EventLog
 
 	// Sources are what the read surface answers from. Company, Events,
 	// NodeID, Chart, Holders, WithheldContacts and Coord are required; see
@@ -350,7 +399,8 @@ type Options struct {
 	QueueBackend string
 
 	// Now is injectable so a test can pin the timestamps. It is the
-	// questions' clock too unless [queries.Sources.Now] pins one of its own.
+	// questions' clock too unless [queries.Sources.Now] pins one of its own,
+	// and the clock of the projection a nil [Options.State] builds.
 	Now func() time.Time
 
 	// HealthInterval overrides the shared tick's cadence.
@@ -380,10 +430,11 @@ type Options struct {
 	// the registration could not read one half of what it is about.
 	//
 	// OPTIONAL, unlike the four above, for a suite about something else:
-	// `crewlet run` mounts one on every node, since every node holds the
-	// identity directory from boot, company or none — it used to be absent
-	// on a node that had met no company, which was the node its first
-	// person had to sign in on. An API with none serves no /auth at all
+	// `crewlet run` mounts one on every node serving the API, since each
+	// holds the identity directory from boot, company or none — ingress
+	// requires the `data` role (ADR-0025) — and it used to be absent on a
+	// node that had met no company, which was the node its first person
+	// had to sign in on. An API with none serves no /auth at all
 	// rather than one that answers 503 to every attempt. ABSENT MEANS A
 	// NIL INTERFACE, never a nil *authapi.Service inside one, which [New]
 	// cannot tell from a surface that is there — [HumanSurfaces.Mount] is
@@ -394,8 +445,9 @@ type Options struct {
 	// directory.
 	//
 	// OPTIONAL, and nil — the routes ABSENT — is what a suite about
-	// something else has. `crewlet run` always mounts it: every node holds
-	// the directory from boot, and a node with nobody in its company is
+	// something else has. `crewlet run` always mounts it: every node
+	// serving the API holds the directory from boot (ingress requires the
+	// `data` role, ADR-0025), and a node with nobody in its company is
 	// exactly where the first person is invited.
 	IAM guardedMounter
 
@@ -438,7 +490,8 @@ type Options struct {
 	// Unlike OtelReceiver it is NOT a split-deployment surface: a session
 	// is a live tool surface in the process that opened it, so it must be
 	// the ENGINE's own bridge, served by the node that runs the seat. A
-	// node without the ingress role serves it alone, through [BridgeOnly].
+	// node without the ingress role serves it beside its probes and
+	// nothing else, through [Probes].
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base as ONE tool
@@ -468,13 +521,19 @@ type Options struct {
 	//
 	// REQUIRED. It was optional, and nil answered `503 no_state_log`, for
 	// a node that had met no company and so ran no state log. There is no
-	// such node: the state log is the engine's core, started on every node
-	// at boot, so every engine this API runs beside holds a gate — and a
+	// such node here: the state log is the engine's core, started at boot
+	// on every node that holds the estate, company or none, and the API is
+	// served only on such a node — ingress requires the `data` role
+	// (ADR-0025) — so every engine this API runs beside holds a gate, and a
 	// nil is a wiring mistake, not a narrower node.
 	Nodes NodeGate
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
+
+	// FleetBroker reads and changes the fleet broker's membership — see
+	// [FleetBrokerControl].
+	FleetBroker FleetBrokerControl
 
 	// Backup copies this node's durable state to a path an operator
 	// names.
@@ -486,18 +545,21 @@ type Options struct {
 	// Optional, and nil is what a suite about something else has: with
 	// nothing to ask about who is in the company, the health body leaves
 	// the field out rather than calling the company unclaimed. `crewlet
-	// run` always wires it, over the identity estate every node runs from
-	// boot.
+	// run` always wires it, over the identity estate every data node runs
+	// from boot — and only a data node serves the API (ingress requires
+	// `data`, ADR-0025).
 	Identity Identity
 
-	// Estate answers whether this node's replicated estate can be read at
-	// the log's floor, for /ready. See [EstateFloor].
+	// Estate answers whether this node can answer from the replicated
+	// estate at all, for /ready. See [EstateFloor].
 	//
-	// Optional, and nil is a real configuration rather than a missing
-	// wire: a company on Jira and Confluence runs no state-log domain
-	// whose health gates anything, which the engine itself reports as
-	// trivially established. What nil must NOT be read as is "assume the
-	// worst" — a node with nothing replicated would then never be ready.
+	// Optional, and nil is what a suite about something else has: an API
+	// with no estate to judge is ready on its other terms. `crewlet run`
+	// always wires it ([engine.Engine.SeatsServiceable]), which itself
+	// answers ready for a company whose tracker and knowledge base are
+	// both a vendor's — there is nothing of theirs to route. What nil must
+	// NOT be read as is "assume the worst": a node with nothing to judge
+	// would then never be ready.
 	Estate EstateFloor
 
 	// Audit is where a backup publishes its runtime audit record — this
@@ -531,7 +593,10 @@ func New(opts Options) (*App, error) {
 	}
 	state := opts.State
 	if state == nil {
-		state = livestate.New()
+		// ON THE APP'S CLOCK: the live spend window is labelled by the
+		// projection's, and one on the wall clock beside a pinned Now
+		// would answer the surface's questions on two clocks.
+		state = livestate.New(livestate.WithClock(now))
 	}
 
 	a := &App{
@@ -540,7 +605,6 @@ func New(opts Options) (*App, error) {
 			WithTokens(opts.Tokens).
 			WithAudit(opts.AuthEvents),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
-		secure:       servedOverHTTPS(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
 		nodeID:       opts.Sources.NodeID,
@@ -550,9 +614,9 @@ func New(opts Options) (*App, error) {
 		// second field an embedder could set inconsistently with it:
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
-		company:  opts.Sources.Company,
-		estate:   opts.Estate,
-		identity: opts.Identity,
+		company:     opts.Sources.Company,
+		estateFloor: opts.Estate,
+		identity:    opts.Identity,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
@@ -602,8 +666,11 @@ func New(opts Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
 	}
-	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat.
+	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
+	// and when what this node hears has a gap, every watched inbox read
+	// again.
 	opts.Inbox.SetOnInboxMoved(a.pushInboxMoved)
+	opts.Inbox.SetOnInboxGap(a.pushInboxGap)
 	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
 	// again.
 	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
@@ -621,15 +688,22 @@ func New(opts Options) (*App, error) {
 	if sources.State == nil {
 		sources.State = state
 	}
+	// THE BROKER'S MEMBERSHIP IS READ THROUGH THE SAME SEAM ITS REMOVAL IS
+	// MADE THROUGH, so one wiring serves the question and the gesture.
+	if sources.FleetBroker == nil {
+		sources.FleetBroker = opts.FleetBroker
+	}
 	// ONE CLOCK PER APP. The questions read [queries.Sources.Now] while the
 	// stream service and the webhook edge read [Options.Now], so a caller
 	// that pinned the app's clock and not the sources' had its pushes and
-	// deliveries at the pinned instant and its answers on the wall clock —
-	// a question stamping "now" on its answer, the live spend window's
-	// edges, answered a REST call and a socket call a second apart with two
-	// different windows, and a test that pinned the app to compare one
-	// question across both transports compared two wall-clock readings
-	// instead. A caller that pinned the sources' own clock keeps it.
+	// deliveries at the pinned instant and its answers on the wall clock — a
+	// question stamping "now" on its answer answered a REST call and a socket
+	// call a second apart with two different instants, and a test that pinned
+	// the app to compare one question across both transports compared two
+	// wall-clock readings instead. A caller that pinned the sources' own clock
+	// keeps it. (The live spend window is labelled by the projection, on the
+	// clock it was aged on — which a nil State builds on this one: see
+	// [Options.State].)
 	if sources.Now == nil {
 		sources.Now = now
 	}
@@ -649,22 +723,31 @@ func New(opts Options) (*App, error) {
 	if sources.Acts == nil && opts.Operator != nil {
 		sources.Acts = opts.Operator.Acts
 	}
+	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
+	// surface enforces it from, so the viewer offers exactly the edits that
+	// surface admits (ADR-0030). A caller that supplied its own keeps it.
+	if sources.CompanyWriters == nil && opts.Bootstrap != nil {
+		sources.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.nodes = opts.Retention, opts.Nodes
 	a.capacity = opts.Capacity
+	a.fleetBroker = opts.FleetBroker
 
-	mux := http.NewServeMux()
+	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
+	mux := &routeTable{mux: http.NewServeMux()}
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
 	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures
-	// and the capacity window — each mounted with the grant it takes, and
-	// failing the boot where a policy is missing.
+	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures,
+	// the capacity window and the fleet broker's membership — each mounted
+	// with the grant it takes, and failing the boot where a policy is
+	// missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
@@ -686,7 +769,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, opts.EventLog, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -762,28 +845,90 @@ func New(opts Options) (*App, error) {
 	// THE ORDER IS THE ARGUMENT. Outermost is the page policy, so a
 	// response no handler thought about still carries its headers. Then
 	// the CANONICAL-PATH refusal, before anything reads the path: the
-	// guard decides from `r.URL.Path` which routes are exempt, and a path
-	// like `/webhooks/../config` reads to it as an exempt prefix and to
-	// ServeMux as another route entirely — the mux answered it with a
-	// redirect, so nothing was served, but the guard and the router were
-	// deciding about two different paths and only the redirect kept that
-	// harmless. Then CORS, which must answer a preflight before the guard
-	// sees it — a browser attaches no credential to one. Then the guard,
-	// which resolves the principal. Then the CSRF check, INSIDE the guard
-	// because the credential's SHAPE is what decides whether a missing
-	// Origin is a refusal, and nothing before the guard knows which shape
-	// arrived. Innermost, the mux's OWN 404 and 405 are answered in the
-	// engine's envelope ([httpjson.Mux]), like every other answer this
-	// surface writes: a client reads a refusal with no code as something in
-	// front of the node, so a route this node simply does not serve — a
-	// work purge on a node serving no human write surface, any route a
-	// newer client asks an older node for — read as a write whose outcome
-	// was unknown.
-	a.handler = pagepolicy.Apply(authz.CanonicalPath(
-		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
-			a.drainGate(httpjson.Mux(mux)))))),
-		a.secure)
+	// partition and the guard both decide from `r.URL.Path` — which
+	// listener serves a route, and which routes are exempt — and a path
+	// like `/webhooks/../config` reads to them as a public, exempt prefix
+	// and to ServeMux as another route entirely. Then the PARTITION, before
+	// the guard (see [partition]). Then CORS, which must answer a preflight
+	// before the guard sees it — a browser attaches no credential to one.
+	// Then the guard, which resolves the principal. Then the CSRF check,
+	// INSIDE the guard because the credential's SHAPE is what decides
+	// whether a missing Origin is a refusal, and nothing before the guard
+	// knows which shape arrived. Innermost, the mux's OWN 404 and 405 are
+	// answered in the engine's envelope ([httpjson.Mux]), like every other
+	// answer this surface writes: a client reads a refusal with no code as
+	// something in front of the node, so a route this node simply does not
+	// serve — a work purge on a node serving no human write surface, any
+	// route a newer client asks an older node for — read as a write whose
+	// outcome was unknown.
+	//
+	// ONE ROUTE TABLE AND ONE CHAIN, whatever the listeners. With a dedicated
+	// public listener (Tier A api.public) the two sockets serve the same
+	// handler behind a partition — the public one only [auth.Public]'s
+	// routes, this one everything else — so a route is mounted, guarded and
+	// drained exactly once, and which socket answers it is decided by one
+	// predicate rather than by which of two muxes somebody registered it on.
+	a.routes = mux.patterns
+	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
+		a.drainGate(httpjson.Mux(mux.mux)))))
+	// EACH SOCKET SAYS WHETHER IT IS HTTPS BY ITS OWN ADDRESS
+	// ([servedOverHTTPS]). The two are published apart — an admin side on a
+	// private http address beside a public one behind TLS is the natural
+	// shape of the split — and the public side serves pages a browser
+	// renders (the GitHub App return, the Slack OAuth landing), so judged by
+	// the admin side's scheme those went out with no Strict-Transport-Security
+	// exactly where the deployment had published them over https.
+	served := func(public bool, h http.Handler) http.Handler {
+		return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(opts.Bootstrap, public))
+	}
+	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
+		a.handler = served(false, chain)
+		return a, nil
+	}
+	a.handler = served(false, partition(false, chain))
+	a.public = served(true, partition(true, chain))
 	return a, nil
+}
+
+// partition serves the requests on one side of [auth.Public] and answers every
+// other with a 404.
+//
+// BEFORE THE GUARD, which is the point on the public side: a route this
+// listener does not serve is absent there before any credential is asked for,
+// so the socket a deployment publishes answers a missing token, a wrong one and
+// the right one alike, and cannot be used to tell a valid operator token from an
+// invalid one.
+//
+// THE PUBLIC SIDE'S 404 IS THE MUX'S OWN, byte for byte ([httpjson.NoRoute]):
+// absent as on a node whose build lacks the route. Anything more — a hint naming
+// api.port, a wording of its own — would tell whoever scans the published
+// socket that a private admin port exists and which paths it serves.
+//
+// THE ADMIN SIDE'S 404 NAMES THE RIGHT LISTENER, for the reverse reason: the
+// caller there is on the operator's own network, and the likeliest one is a
+// vendor somebody configured with the wrong port, who must learn it from the
+// first delivery rather than from one quietly accepted on the socket nobody
+// published.
+//
+// Inside the security headers, so the 404 carries them like every other answer.
+func partition(public bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch serves := auth.Public(r.URL.Path); {
+		case serves == public:
+			next.ServeHTTP(w, r)
+		case public:
+			httpjson.NoRoute(w, r)
+		default:
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
+				"detail": fmt.Sprintf("this listener serves nothing at %s %s",
+					r.Method, r.URL.Path),
+				"hint": "This node has a public listener (api.public): the " +
+					"webhooks, the vendor app landings and the sandbox " +
+					"endpoints are served there and only there. Point the " +
+					"sender at that address.",
+			})
+		}
+	})
 }
 
 // missing names every required dependency these options leave nil, or reports
@@ -798,7 +943,6 @@ func (o Options) missing() error {
 		{"Inbox", o.Inbox == nil},
 		{"Credentials", o.Credentials == nil},
 		{"Sources.Company", o.Sources.Company == nil},
-		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
 		{"Sources.Chart", o.Sources.Chart == nil},
@@ -814,6 +958,7 @@ func (o Options) missing() error {
 		{"Setup", o.Setup == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
+		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
 		{"Nodes", o.Nodes == nil},
 		{"AuthEvents", o.AuthEvents == nil},
@@ -832,8 +977,9 @@ func (o Options) missing() error {
 }
 
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
-// than the company: the backup, the retention gestures and the capacity
-// window. Every one takes [iam.GrantFleetOperate], through the
+// than the company: the backup, the retention gestures, the capacity window
+// and the fleet broker's membership. Every one takes [iam.GrantFleetOperate],
+// through the
 // authority table's [authz.ActionFleetOperate] for a write and
 // [authz.ActionFleetRead] for a read, stated where it is mounted.
 //
@@ -868,7 +1014,7 @@ func (o Options) missing() error {
 // the one fact about a route this surface already treats as its read/write
 // line (the session table's columns are keyed on it too), and a second list
 // of which patterns read would be the thing that drifts.
-func (a *App) mountDeployment(mux *http.ServeMux) error {
+func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
 	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
@@ -895,6 +1041,11 @@ func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
 	// and it is why the verb can run at all on a topology whose broker
 	// binds no socket. See retention.go.
 	a.mountCapacity(mount)
+	// The removal of a member the fleet broker's metadata group still
+	// counts after it is gone for good — a change to the quorum every
+	// election runs on. The listing beside it is the `fleet_broker`
+	// question, a named read. See fleetbroker.go.
+	a.mountFleetBroker(mount)
 }
 
 // deploymentPolicy is the verb one deployment route is decided under: a read
@@ -911,9 +1062,11 @@ func deploymentPolicy(pattern string) authz.Policy {
 // has: somewhere to republish a delivery, the epoch's verification material,
 // and the cross-process dedupe.
 //
-// The rest of what the edge needs (the event log, the live stream, whether a
-// revision is active, the clock) comes from the app itself, so those cannot be
-// wired differently here than they are everywhere else on this node.
+// The rest of what the edge needs (whether a revision is active, the clock)
+// comes from the app itself, so those cannot be wired differently here than
+// they are everywhere else on this node. It needs no event log and no live
+// stream: a delivery's row and its live envelope both come from the record it
+// PUBLISHES, through the node's publish listener and every node's projection.
 //
 // Publisher, Claims, Secrets and AppFlow are required; see [Options]. The edge
 // is mounted on every node that serves the API, because every such node runs
@@ -942,7 +1095,7 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventLog, now func() time.Time) error {
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Time) error {
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -950,8 +1103,6 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventL
 		Keys:       in.Keys,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
-		Events:     events,
-		Stream:     a.stream,
 		Configured: a.Configured,
 		Now:        now,
 	})
@@ -962,24 +1113,39 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, events *store.EventL
 	return nil
 }
 
-// ServeHTTP makes the app the process's handler.
+// ServeHTTP makes the app the handler of api.port: every route, or every route
+// but the public ones when the node has a public listener.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
 
+// Public is the handler of the dedicated public listener (Tier A api.public):
+// the routes outside parties call — see [auth.PublicPrefixes] — and nothing
+// else. Nil when the node has none, and every route is then [App.ServeHTTP]'s.
+func (a *App) Public() http.Handler { return a.public }
+
 // InboxFeed is where this node hears whose inbox moved: the engine, whose
-// tracker applier says so after every committed batch.
+// tracker applier says so after every committed batch — and, while this
+// node's own copy is out of service, a sound peer's applier relayed.
 //
-// CONSUMER-DEFINED and one method wide. The engine satisfies it with
-// [engine.Engine.SetOnInboxMoved]; a test hands in a feed it fires by hand.
+// CONSUMER-DEFINED and two methods wide: the movements, and the GAPS between
+// them — the engine switching where its movements come from, after which what
+// moved in between is not replayed. The engine satisfies it with
+// [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
+// hands in a feed it fires by hand.
 type InboxFeed interface {
 	SetOnInboxMoved(func([]tracker.InboxMovement))
+	SetOnInboxGap(func())
 }
 
 // pushInboxMoved turns one committed batch's inbox movements into
 // `inbox_changed` frames, each reaching only the sockets watching that seat.
 //
-// NO FORWARDING BETWEEN NODES, and none is missing: every node applies every
-// tracker record, so every node hears every movement from its own applier and
-// pushes to the sockets it holds.
+// FROM ONE SOURCE AT A TIME, which the engine chooses: every node that serves
+// this API holds the estate — ingress requires the `data` role (ADR-0025) —
+// and applies every tracker record, so while its copy serves it hears every
+// movement from its own applier. A copy out of service keeps the node in
+// rotation and its applier announces nothing it can trust, so for as long as
+// it is out the engine relays a sound peer's movements instead, and says when
+// it switched ([App.pushInboxGap]).
 func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
@@ -988,6 +1154,11 @@ func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
 		})
 	}
 }
+
+// pushInboxGap tells every watched inbox to read itself again: the engine
+// switched where this node's movements come from, and what moved in the gap is
+// not replayed — see [stream.Service.InboxReread].
+func (a *App) pushInboxGap() { a.stream.InboxReread() }
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }
@@ -1037,8 +1208,9 @@ func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 
-// ReasonEstateBehind is what a refused /ready names when this node's
-// replicated estate cannot be read at the log's floor.
+// ReasonEstateBehind is what a refused /ready names when the estate seam
+// refused it ([EstateFloor]) — on a running node, that this node can no longer
+// route the estate's reads and writes to a sound copy.
 //
 // One code rather than the term that decided it, for the same reason
 // [Readiness.Reason] carries a code at all: it is recorded by a load balancer
@@ -1104,16 +1276,15 @@ func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, body)
 }
 
-// estateReady reports whether this node's replicated estate can answer at the
-// log's floor, and names the term that says it cannot.
+// estateReady reports whether this node can answer from the replicated estate,
+// and names the term that says it cannot.
 //
-// A node with no seam declared has no replicated estate to be behind on, which
-// is what a company on Jira and Confluence has — see [Options.Estate].
+// A node with no seam declared has nothing to judge — see [Options.Estate].
 func (a *App) estateReady(ctx context.Context) (bool, string) {
-	if a.estate == nil {
+	if a.estateFloor == nil {
 		return true, ""
 	}
-	return a.estate(ctx)
+	return a.estateFloor(ctx)
 }
 
 // writeJSON is [httpjson.Write] under this package's own name, kept so the
@@ -1324,15 +1495,26 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	}
 }
 
-// servedOverHTTPS reports whether a browser reaches this deployment over TLS.
+// servedOverHTTPS reports whether a browser reaches one of this node's
+// listeners over TLS, which is what turns on `Strict-Transport-Security`
+// ([pagepolicy.Apply]): the public listener's when public is true, and
+// api.port's otherwise.
 //
-// THE EXTERNAL URL AND NOTHING ELSE, for the reason [App.secure] gives: the
-// bind address and `r.TLS` both describe the hop between the proxy and this
-// process, which on a hardened node is plain http over loopback — so either
-// would withhold the header from exactly the deployments that need it.
-func servedOverHTTPS(b *config.Bootstrap) bool {
-	if b == nil {
+// THE ADDRESS THAT LISTENER IS PUBLISHED AT AND NOTHING ELSE. The bind address
+// and `r.TLS` both describe the hop between the proxy and this process, which
+// on a hardened node is plain http over loopback — so either would withhold
+// the header from exactly the deployments that need it. api.port is published
+// at `api.external_url`; the public listener at `api.public.external_url`
+// ([config.API.WebhookBase], which is that address whenever the listener is
+// set) — two sockets, two addresses, and possibly two schemes, so one answer
+// for both sent the header on neither or on the wrong one.
+func servedOverHTTPS(b *config.Bootstrap, public bool) bool {
+	switch {
+	case b == nil:
 		return false
+	case public:
+		return strings.HasPrefix(b.API.WebhookBase(), "https://")
+	default:
+		return strings.HasPrefix(b.API.ExternalBase(), "https://")
 	}
-	return strings.HasPrefix(b.API.ExternalBase(), "https://")
 }

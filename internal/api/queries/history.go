@@ -2,7 +2,6 @@ package queries
 
 import (
 	"context"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
@@ -21,14 +20,17 @@ type FleetEvents interface {
 	ByID(ctx context.Context, id string) (store.EventRecord, eventfan.Coverage, error)
 	Trace(ctx context.Context, id string) (eventfan.Trace, eventfan.Coverage, error)
 	Turn(ctx context.Context, id string) (eventfan.TurnDetail, eventfan.Coverage, error)
-	// Turns takes the instant the answer is labelled with, which every
-	// node cuts a window of whole days from — one reading of the clock, so
-	// pages cut a moment apart are never merged.
-	Turns(ctx context.Context, q store.TurnQuery, at time.Time) (eventfan.TurnPage, eventfan.Coverage, error)
+	// Turns is asked at [store.TurnQuery.At], the instant the answer is
+	// labelled with, which every node cuts a window of whole days from —
+	// one reading of the clock, so pages cut a moment apart are never
+	// merged, and a second read composed into one answer with a first is
+	// asked at the first one's instant ([eventfan.TurnDetail.At]).
+	Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error)
 	Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (eventfan.Listing, eventfan.Coverage, error)
 	// SeatPhases is one seat's finished calls by its AGENT ID alone: a role
 	// name is shared by every seat a unit template stamps out.
 	SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (eventfan.Listing, eventfan.Coverage, error)
+	NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, eventfan.Coverage, error)
 }
 
 var _ FleetEvents = (*eventfan.Fleet)(nil)

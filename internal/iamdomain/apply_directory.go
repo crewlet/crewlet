@@ -260,11 +260,11 @@ func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // directory decide holds a seat against ([heldByInvitation]) and what the seat
 // listing reads an invitation by — a lookup over a column, as every other
 // hold here is, rather than a decode of every open invitation's document per
-// decide. It is the document's own value, written whatever it holds: an
-// invitation a build before seats were required issued carries none, and this
-// applier salvages it as it is — refusing it here would stop the log on every
-// node — while the writer's decides are what refuse to redeem it. A row this
-// build did not write was filled by [Applier.Rederive].
+// decide. It is the document's own value, written whatever it holds — the
+// writer's decides are what refuse an invitation naming no seat
+// ([Writer.Invite]), and an applier that refused a record would stop the log
+// on every node. [Applier.Rederive] recomputes it from the same decode
+// whenever a checkpoint's rule set differs from this build's.
 func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	at applyContext, invitation Invitation) (int, error) {
 

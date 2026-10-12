@@ -16,7 +16,7 @@ import (
 // nothing: another write to the subject is still in process at the leader, and
 // it may be this caller's own, already acknowledged. Read as a refusal it gave
 // a create race over a just-removed record no winner, so it is NOT one here —
-// [leaderBucket.settle] waits it out instead.
+// every bucket handle is [settled], which waits it out instead.
 //
 // The message in each fixture below is DELIBERATELY UNRELATED: a test whose
 // error text says "wrong last sequence" passes for a substring match too, and

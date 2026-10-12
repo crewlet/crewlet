@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -361,9 +362,22 @@ func Interrupted(w http.ResponseWriter, r *http.Request, key, tool string, err e
 // tell a person to fix their input. And "the node's" is the tools' TWO answers
 // ([builtin.Condition]): a condition waiting clears is `unavailable`, and a
 // fault of the node's own is `internal_error`.
+//
+// A WRITE THAT MAY HAVE LANDED IS NEITHER, and is read by the tools' own rule
+// for that too ([builtin.UnknownCause]): a walk that stopped at a step nobody
+// can confirm, and a write the estate's router sent to a data node that never
+// answered, become an UNKNOWN outcome — which [Fail] answers with
+// `outcome: "unknown"` under the request's key, and the audit records as
+// `unknown` rather than as a refusal that wrote nothing.
 func ClassifyWrite(err error) error {
 	if err == nil || classOf(err) != "" {
 		return err
+	}
+	// ASKED OF THE RESULT rather than by comparing it with err: an error
+	// is an interface, and comparing two whose dynamic type is a struct
+	// holding a slice panics.
+	if cause := builtin.UnknownCause("", err); errors.Is(cause, crewletmcp.ErrOutcomeUnknown) {
+		return cause
 	}
 	return crewletmcp.Classify(writeClass(err), err)
 }
@@ -390,10 +404,17 @@ const writeFault = "the write failed on a fault in this node itself — not " +
 	"the node's log has the details"
 
 // writeSentence is the words [FailWrite] answers a writer's error with.
+//
+// A WRITE NOBODY ANSWERED FOR is told in fixed words too ([builtin.Unanswered]),
+// for a condition's reason: the router's own name every node it asked, and the
+// words a person reads are what to do, which the unknown's own answer carries.
 func writeSentence(ctx context.Context, cause, err error) string {
-	if classOf(cause) == crewletmcp.RefusalInternalError {
+	switch {
+	case classOf(cause) == crewletmcp.RefusalInternalError:
 		log.ErrorContext(ctx, "operator_write_fault", "error", err.Error())
 		return writeFault
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		return builtin.Unanswered
 	}
 	if why, ok := builtin.Condition(err); ok {
 		return why
@@ -418,11 +439,6 @@ func writeClass(err error) crewletmcp.Refusal {
 		return crewletmcp.RefusalForbidden
 	case errors.Is(err, tracker.ErrInvalid), errors.Is(err, pages.ErrInvalid):
 		return crewletmcp.RefusalInvalid
-	case errors.Is(err, tracker.ErrStepUnresolved):
-		// A WALK THAT STOPPED AT A STEP NOBODY CAN CONFIRM, which the
-		// same operation finishes: the tracker composed what to do, and
-		// it is a state of the node rather than a fault of it.
-		return crewletmcp.RefusalUnavailable
 	}
 	if _, ok := builtin.Condition(err); ok {
 		return crewletmcp.RefusalUnavailable

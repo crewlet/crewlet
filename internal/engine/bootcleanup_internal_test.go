@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -38,7 +39,8 @@ import (
 // bootCleanupCompany fails at the FIRST step after the native start.
 //
 // Its embeddings model is a `${VAR}` nothing sets, which validates (the width
-// is stated, so nothing has to be looked up in the model table) and then
+// and the limits are stated, so nothing has to be looked up in the model
+// table) and then
 // resolves to the empty string when `equip` builds the provider — the step
 // immediately after [Engine.startNative] has succeeded. A config-driven
 // failure rather than a broken broker verb, because the point of this case is
@@ -56,6 +58,9 @@ providers:
     type: openai
     model: "${CREWLET_TEST_EMBEDDING_MODEL_NOBODY_SETS}"
     dimensions: 768
+    max_input_tokens: 512
+    max_batch_inputs: 32
+    max_batch_tokens: 16384
     api_key: "${K}"
 roles:
   - name: CEO
@@ -86,7 +91,10 @@ type servedQueue struct {
 	withdrawn map[string]int
 }
 
-// Serve registers for real and wraps the withdrawal so it can be counted.
+// Serve registers for real and wraps the withdrawal so it can be counted, per
+// subject: a search answerer and the estate server are different claims on
+// the fleet, and a count of both together would let one leak while the other
+// was withdrawn twice.
 func (q *servedQueue) Serve(ctx context.Context, subject string,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
@@ -120,6 +128,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -156,6 +165,19 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
 			"failed before the native half was up, so this case is no "+
 			"longer testing what it says", got)
+	}
+	// AND THE ESTATE SERVER, registered before the native start: a data
+	// node whose boot failed must not stay on the fleet's stateless nodes'
+	// list of who to ask, answering from a runtime that is being torn down.
+	// Asserted registered, so the withdrawal loop below has it to judge.
+	nodeID, err := config.ResolveNodeID(&b, nil)
+	if err != nil {
+		t.Fatalf("resolve the node id: %v", err)
+	}
+	if got := served[estate.Subject(nodeID)]; got != 1 {
+		t.Fatalf("this node registered %d estate servers, want 1 — a data "+
+			"node registers it before the native start, so this case expects "+
+			"exactly one", got)
 	}
 	// THE HISTORY ANSWERER TOO, which is armed before the native start on
 	// every node: a case that saw only the search answerer could pass with

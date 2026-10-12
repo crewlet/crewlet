@@ -6,11 +6,13 @@
  * draft and the saved company hold, a removed node's included; an identity
  * typed over the offer that breaks the grammar or is held is refused before
  * anything is recorded; what is added lands at the end of the parent's list
- * under a key minted for it, as the kind chosen, carrying its identity; and a
- * refusal keeps the dialog open instead of adding nothing silently.
+ * under a key minted for it, as the kind chosen, carrying its identity; an
+ * agent is added wearing the look it was suggested or given, and nothing else
+ * wears one; and a refusal keeps the dialog open instead of adding nothing
+ * silently.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { isMintedKey } from "./model/keys.ts";
@@ -89,6 +91,44 @@ test("the handle follows the name until typed, avoids a removed seat's, and a he
   });
 });
 
+test("an agent is added wearing the look it was suggested: a character no agent wears yet", () => {
+  // Every agent in the fixture chose nothing, so each is drawn as the Crewlet,
+  // and six of them have moved the colour once round the six.
+  const view = open(keyedState(fixtureCompany()), "unit:sales");
+  expect(screen.getByRole("radio", { name: "Hexlet", checked: true })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  const op = view.state().log.ops[0];
+  expect(op?.type === "addSeat" && op.data.avatar).toEqual({
+    character: "hexlet",
+    color: "purple",
+  });
+});
+
+test("an agent is added wearing the character and colour its author chose", () => {
+  const view = open(keyedState(fixtureCompany()), "unit:sales");
+  fireEvent.click(screen.getByRole("radio", { name: "Foxlet" }));
+  fireEvent.click(
+    within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", { name: "Rose" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  const op = view.state().log.ops[0];
+  expect(op?.type === "addSeat" && op.data.avatar).toEqual({ character: "foxlet", color: "rose" });
+});
+
+test("a person and a unit are offered no look and added without one", () => {
+  for (const kind of ["human", "unit"] as const) {
+    const view = open(keyedState(fixtureCompany()), null, kind);
+    expect(screen.queryByRole("radiogroup", { name: "Character" }), kind).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Color" }), kind).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: kind === "human" ? "Add human seat" : "Add unit" }),
+    );
+    const op = view.state().log.ops[0];
+    expect(op && "data" in op && "avatar" in op.data, kind).toBe(false);
+    cleanup();
+  }
+});
+
 test("a unit is added with its key and type at the company root; a key any node holds is not offered", () => {
   const view = open(keyedState(fixtureCompany()), null, "unit");
   expect(screen.getByText(/everything that names this unit uses its key/)).toBeDefined();
@@ -98,7 +138,7 @@ test("a unit is added with its key and type at the company root; a key any node 
   fireEvent.change(nameBox(), { target: { value: "Dev" } });
   expect(keyBox().value).toBe("dev-2");
   fireEvent.change(nameBox(), { target: { value: "Legal" } });
-  pick(screen.getByLabelText("Type"), "Department");
+  fireEvent.click(screen.getByRole("radio", { name: "Department" }));
   fireEvent.click(screen.getByRole("button", { name: "Add unit" }));
   expect(view.state().log.ops[0]).toMatchObject({
     type: "addUnit",

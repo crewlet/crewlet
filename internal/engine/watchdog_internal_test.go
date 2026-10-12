@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // watchdogCompanyDoc is the smallest company that builds an epoch.
@@ -31,6 +33,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &boot)
 	// No HTTP surface: this is about the seat host, and binding a port
 	// would make the test fight every other one in the package for it.
 	boot.API.Port = 0
@@ -59,6 +62,7 @@ func watchdogEngine(t *testing.T) *Engine {
 // watched and when nothing is live, and only becomes non-zero once a watched,
 // live duty has actually stamped a beat.
 func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	if e.watchdog == nil {
 		t.Fatal("New built no watchdog, so a wedged node would never end itself")
@@ -90,6 +94,7 @@ func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 // the wedge it exists to end. Exiting through the middle of a drain abandons
 // the seat release that makes it graceful.
 func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -120,17 +125,18 @@ func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 // of rounds while making obvious progress was rescued exactly like one that
 // was thrashing.
 func TestTheEngineSuppliesAnExtensionJudge(t *testing.T) {
+	t.Parallel()
 	e := watchdogEngine(t)
-	if got := e.judgeFor(e.Company(), "ceo"); got == nil {
+	if got := e.judgeFor(e.Company(), "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got == nil {
 		t.Error("no judge for a seat whose company configures a model")
 	}
 	// A handle that is not a seat in this company has no chain to resolve
 	// and no judge — an ordinary answer, which Consider reads as "do not
 	// ask" rather than as a failure.
-	if got := e.judgeFor(e.Company(), "nobody"); got != nil {
+	if got := e.judgeFor(e.Company(), "nobody", auxspend.Use{Stage: types.AuxStageTurn}); got != nil {
 		t.Error("a judge for a handle that is not a seat")
 	}
-	if got := e.judgeFor(nil, "ceo"); got != nil {
+	if got := e.judgeFor(nil, "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got != nil {
 		t.Error("a judge built from no epoch")
 	}
 }

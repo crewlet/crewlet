@@ -19,12 +19,41 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// fleetAsker answers a scattered note from a scripted set of replies, and
-// records what it was asked.
+// steerRing is the keyring every node of the tool's test fleet holds, and
+// steerWire the steer channel they sign on.
+var (
+	steerRing = statelog.OneKey("k1", "the steer_turn cases' fleet key material")
+	steerWire = mustSteerWire(steerRing)
+)
+
+func mustSteerWire(ring statelog.Keyring) *signedask.Channel[steer.Request, steer.Reply] {
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel, ring)
+	if err != nil {
+		panic(err)
+	}
+	return wire
+}
+
+// signedReply is rep as a node of the fleet signs it, bound to whatever
+// request it names.
+func signedReply(t *testing.T, wire *signedask.Channel[steer.Request, steer.Reply], rep steer.Reply) []byte {
+	t.Helper()
+	out, err := wire.SealReply(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// fleetAsker answers a scattered note the way the node running its turn does —
+// replies signed by the fleet and bound to the request they answer — plus any
+// raw bytes a case adds, and records what it was asked. A request the fleet
+// did not sign is refused, so a tool that sent one fails every case.
 type fleetAsker struct {
 	replies []steer.Reply
 	raw     [][]byte
@@ -36,17 +65,22 @@ type fleetAsker struct {
 
 func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want int) ([][]byte, error) {
 	a.subject, a.want = subject, want
-	var req steer.Request
-	if err := json.Unmarshal(request, &req); err != nil {
-		return nil, err
+	admitted := steerWire.Admit(request, signedask.NewGuard(), time.Now())
+	if admitted.Disposition != signedask.Admitted {
+		return nil, fmt.Errorf("the tool sent a request the fleet cannot take: %s", admitted.Why)
 	}
+	req := admitted.Request
 	a.asked = append(a.asked, req)
 	if a.err != nil {
 		return nil, a.err
 	}
 	out := append([][]byte(nil), a.raw...)
 	for _, r := range a.replies {
-		b, _ := json.Marshal(r)
+		r.Request = req.ID
+		b, err := steerWire.SealReply(r)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, b)
 	}
 	return out, nil
@@ -78,7 +112,7 @@ func newSteerRig(t *testing.T, asker builtin.FleetAsker, key string,
 	cto := ctoSeat(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Org: func() *org.Organization { return o },
-		Steer: builtin.SteerDeps{Asker: asker, Actor: func(ctx context.Context,
+		Steer: builtin.SteerDeps{Asker: asker, Wire: steerWire, Actor: func(ctx context.Context,
 			turn *turnctx.Turn) (builtin.Actor, error) {
 			actor, err := builtin.PrincipalActor(ctx, turn)
 			if key != "" {
@@ -241,9 +275,19 @@ func TestARetriedRequestIsOneNote(t *testing.T) {
 // is the same note — and never that the turn is over, which nobody said.
 func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 	t.Parallel()
+	accepted := steer.Reply{Version: 1, TurnID: "run-1", AgentHandle: "swe",
+		Status: steer.StatusAccepted}
+	elsewhere := accepted
+	elsewhere.Request = "somebody-elses"
 	for name, asker := range map[string]*fleetAsker{
 		"silence":             {},
 		"an unreadable reply": {raw: [][]byte{[]byte("{not json")}},
+		// A REPLY NOBODY CAN VOUCH FOR IS NO REPLY, however much it
+		// promises: one not signed by the fleet, and the fleet's own
+		// answer to another request.
+		"a reply the fleet did not sign": {raw: [][]byte{signedReply(t,
+			mustSteerWire(statelog.OneKey("k1", "not the fleet's material")), accepted)}},
+		"the fleet's reply to another request": {raw: [][]byte{signedReply(t, steerWire, elsewhere)}},
 		"another turn's reply": {replies: []steer.Reply{{TurnID: "run-2",
 			Status: steer.StatusClosed}}},
 		"a status this build does not know": {replies: []steer.Reply{{TurnID: "run-1",
@@ -396,6 +440,62 @@ func TestAProbeThatSaysNothingSendsNothing(t *testing.T) {
 			}
 			if len(asker.asked) != 1 || !asker.asked[0].Probe {
 				t.Errorf("asked the fleet %+v, want the probe alone", asker.asked)
+			}
+		})
+	}
+}
+
+// A NOTE IS SIGNED AND BOUND, every time: the running node offers it as the
+// person it names on this node's decision, so what crosses the broker is the
+// fleet's — a fresh id per ask, so a probe and the offer after it are two
+// requests, and a deadline the running node remembers the id until.
+func TestEveryNoteIsSignedAndBound(t *testing.T) {
+	t.Parallel()
+	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
+		Agent: ctoSeat(t).String(), AgentHandle: "agent-cto", Status: steer.StatusAccepted}}}
+	res, _ := steerCall(t, newSteerRig(t, asker, requestKey(), boundTo("jane"), seatLeads),
+		"run-1", "use staging")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	if len(asker.asked) != 2 {
+		t.Fatalf("asked the fleet %d times, want a probe and an offer", len(asker.asked))
+	}
+	probe, offer := asker.asked[0], asker.asked[1]
+	if probe.ID == "" || offer.ID == "" || probe.ID == offer.ID {
+		t.Errorf("the probe and the offer were bound to %q and %q, want an id each", probe.ID, offer.ID)
+	}
+	if probe.Deadline.IsZero() || offer.Deadline.After(time.Now().Add(builtin.SteerAskBudget)) {
+		t.Errorf("deadlines %s and %s, want each within the ask's budget", probe.Deadline,
+			offer.Deadline)
+	}
+}
+
+// THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the person
+// is told that — what it holds, and that the keyring is what to fix — rather
+// than `unknown`, which a retry would never change. On the probe as on the
+// offer, and nothing is offered after a probe that says so.
+func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
+	t.Parallel()
+	unverified := steer.Reply{Version: 1, TurnID: "run-1",
+		Unverified: "the node running turn run-1 does not hold the key the note is " +
+			"signed under (it holds [k0]) — add the key to its secrets.keys"}
+	for name, caller := range map[string]iam.Principal{
+		"the offer, by the deployment's operator": operatorCaller,
+		"the probe, by a lead":                    boundTo("jane"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			asker := &fleetAsker{replies: []steer.Reply{unverified}}
+			res, _ := steerCall(t, newSteerRig(t, asker, requestKey(), caller, seatLeads),
+				"run-1", "use staging")
+			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+				!strings.Contains(res.Output, "secrets.keys") {
+				t.Fatalf("answered %s: %q, want unavailable naming the keyring",
+					tools.RefusalOf(res), res.Output)
+			}
+			if len(asker.asked) != 1 {
+				t.Errorf("asked the fleet %d times, want once and nothing offered after", len(asker.asked))
 			}
 		})
 	}

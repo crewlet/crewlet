@@ -29,15 +29,16 @@
  * under a unit are the engine's, because only the engine knows what a seat, a
  * unit and a reporting cycle are.
  *
- * EVERY NODE IS THE CHART'S OWN NEUTRAL SURFACE. Colour on this dashboard
- * says what a seat is DOING and never who it is, and a draft is not doing
- * anything: an agent seat used to carry one of six hues hashed from its key,
- * reaching its fill, its edge, its halo, its name and the branch arriving at
- * it, which is a legend a reader had to learn and could never decode — the
- * same seat was purple here and neutral on the chart they had just left. What
- * tells a person's seat from an agent's is the badge's outline, a shape the
- * design system draws, so it reads to somebody who cannot separate a hue at
- * all. The one colour a node takes is the accent ring of the selection.
+ * ONE HUE, FOR WHAT A SEAT IS, ON BOTH CHARTS. An agent seat is toned in the
+ * agent hue and every other node keeps the chart's neutral surface
+ * (`ui/orgNodes.tsx`), here and on the live org chart alike. An agent seat
+ * used to carry one of six hues hashed from its key, reaching its fill, its
+ * edge, its halo, its name and the branch arriving at it, which was a legend a
+ * reader had to learn and could never decode, and the same seat was purple
+ * here and neutral on the chart they had just left. The kind is told by shape
+ * as well (the Crewlet figure, or a person inside a dashed ring), so it reads
+ * to somebody who cannot separate a hue at all. What a seat is DOING is the
+ * live chart's dot, and never a node's hue.
  *
  * EVERY SEAT IS A NODE OF ITS OWN. A unit's seats used to be drawn as ROWS
  * stacked inside the unit's card, which made a unit as tall as its membership
@@ -125,25 +126,16 @@ import {
   reportingMenu,
   type OpenScreen,
 } from "./nodeActions.tsx";
-import {
-  NodeGlyph,
-  ReportingMarks,
-  SeatMarks,
-  UnitMarks,
-  handleLabel,
-  seatKindLabel,
-  unitTypeLabel,
-} from "./nodeMarks.tsx";
+import { nodeTone, ReportingMarks, SeatMarks, UnitMarks, handleLabel } from "./nodeMarks.tsx";
+import { NodeGlyph, NodeToggle, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
   NetworkGlyph,
-  ChevronRightGlyph,
   XGlyph,
   Repeat2Glyph,
   TrashGlyph,
   PencilGlyph,
-  ChevronDownGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -152,12 +144,12 @@ import {
   Kbd,
   Menu,
   type MenuEntry,
-  OrgNodeDisclosure,
   OrgNodeLabel,
   OrgNodeLead,
   TreeCanvas,
   type TreeCanvasHandle,
   type TreeCardContext,
+  type TreeCardTone,
   type TreeCardInput,
   type TreeComposing,
   type TreeInput,
@@ -165,7 +157,6 @@ import {
   type TreeModel,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { CANVAS_LABELS, largestRoot, useLegibleFirstView } from "~/ui/canvasView.ts";
 
 /**
@@ -187,14 +178,14 @@ export function CanvasView({
    * The node a surface opened OVER the chart is about: the parent an add will
    * hang from, the node an editor is editing. Null while nothing is open.
    *
-   * WHAT IT IS FOR. A dialog that asks for the name of a child says nothing
-   * about WHERE that child will go, and the chart is the only thing that can
-   * say it. Named here, the chart pushes itself back behind the surface and
-   * eases onto the node it is about, and the reader is put back exactly where
-   * they were when it closes. It is the chart this is drawn from's own gesture
-   * (it saves its viewBox, eases onto the ghost of the node being added, and
-   * restores it on close), and it is drawn by the design system's canvas, so a
-   * reader who asked for less motion is moved without an animation.
+   * WHAT IT IS FOR. Named here, the chart pushes itself back behind the
+   * surface, blurred and faded by the design system's canvas, so the decision
+   * being made has the organization it is about behind it.
+   *
+   * THE VIEW DOES NOT MOVE FOR IT. The chart used to ease onto the node a
+   * surface was about and zoom back out when it closed, which turned every
+   * edit into two zooms the reader had not asked for: the node is the one
+   * they just pressed, so it is already on screen, at the zoom they chose.
    */
   about?: string | null;
   /**
@@ -348,6 +339,7 @@ function StructureChart({
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
+      cardTone={(id) => nodeTone(structure.nodes.get(id))}
       onNodeKey={onNodeKey}
       /*
        * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside,
@@ -459,6 +451,7 @@ function ReportingChart({
       nodes={chart.tree}
       cards={cards}
       cardOf={(id) => id}
+      cardTone={(id) => nodeTone(seatOf(id))}
       onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
       hasNodeMenu={(id) => seatOf(id) !== undefined}
@@ -510,6 +503,7 @@ function Chart({
   hasNodeMenu,
   isNode,
   overlay,
+  cardTone,
 }: {
   label: string;
   chrome: Chrome;
@@ -527,6 +521,8 @@ function Chart({
   /** Whether an id names a node of the draft, which is what a selection can hold. */
   isNode: (id: string) => boolean;
   overlay?: ReactNode;
+  /** The hue a card and the branch into it are drawn in: an agent seat's, or none. */
+  cardTone: (id: string) => TreeCardTone | undefined;
 }) {
   const api = useBuilder();
   const view = useRef<TreeCanvasHandle>(null);
@@ -579,19 +575,6 @@ function Chart({
   );
   useBuilderView(handle);
 
-  /*
-   * THE CHART GOES TO THE NODE A SURFACE IS ABOUT, and comes back when it
-   * closes. Nothing else moves the view: an add that changes the draft is a
-   * relayout, which the chart tweens and anchors on its own.
-   */
-  useEffect(() => {
-    if (about === null) {
-      view.current?.restoreView();
-      return;
-    }
-    view.current?.focusRegion(about);
-  }, [about]);
-
   return (
     <div className="bchart" ref={setHost}>
       <TreeCanvas
@@ -601,14 +584,19 @@ function Chart({
         // THE LABELS THE FLOOR PRESSES BY (`ui/canvasView.ts`).
         labels={CANVAS_LABELS}
         appearance="node"
+        // THE SAME DOTTED FIELD AS THE LIVE CHART, so the chart a reader edits
+        // and the one they watch are drawn on one ground, and the field says
+        // it pans before anybody drags it.
+        ground="dotted"
         // THE DESIGN SYSTEM'S OWN CONNECTOR, named rather than defaulted so
         // the choice is on the page: this chart drew the console's single
         // cubic once, and beside the live chart's elbows the two charts of
         // one organization read as two products.
         connector="elbow"
-        // AND NO `cardTone`: every node is the chart's neutral surface — see
-        // the module note. The design system tints a card and the branch
-        // arriving at it only when asked, so asking for nothing is the rule.
+        // AN AGENT SEAT IS TONED, as the console chart draws one, and every
+        // other node keeps the chart's neutral surface. The design system
+        // tints the card and the branch arriving at it together.
+        cardTone={cardTone}
         nodes={nodes}
         cards={cards}
         cardOf={cardOf}
@@ -673,19 +661,19 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={seatTitle(view)}>
           <OrgNodeLabel
-            // A SEAT LEADS WITH ITS BADGE, and the badge's outline is who
-            // holds it: a person's circle, an agent's squircle. That is the
-            // one cue — the card is the same solid card for both, and the
-            // dashed edge a person's seat used to wear now means only "a place
-            // nothing fills yet".
-            avatar={seatBadge(view.name, view.kind)}
+            // A SEAT LEADS WITH ITS MARK, as the console chart draws it: the
+            // Crewlet figure on an agent's toned card, a person inside a
+            // dashed ring on the neutral one. The card's own edge stays solid
+            // for both, since a dashed card means only "a place nothing fills
+            // yet".
+            {...seatMark(view.kind, view.avatar)}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
           />
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
-        <ToggleButton card={card} id={id} name={view.name} />
+        <NodeToggle card={card} id={id} name={view.name} />
         <NodeActions
           api={api}
           card={card}
@@ -710,7 +698,7 @@ function StructureCard({
           />
           <VisuallyHidden>{counts}</VisuallyHidden>
         </div>
-        <ToggleButton card={card} id={id} name={view.name || "the company"} />
+        <NodeToggle card={card} id={id} name={view.name || "the company"} />
         <NodeActions
           api={api}
           card={card}
@@ -736,7 +724,7 @@ function StructureCard({
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
-      <ToggleButton card={card} id={id} name={view.name} />
+      <NodeToggle card={card} id={id} name={view.name} />
       <NodeActions
         api={api}
         card={card}
@@ -794,7 +782,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          avatar={seatBadge(item.name, item.kind)}
+          {...seatMark(item.kind, item.avatar)}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
@@ -802,7 +790,7 @@ function ReportingCard({
         <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
       </div>
-      <ToggleButton card={card} id={item.id} name={item.name} />
+      <NodeToggle card={card} id={item.id} name={item.name} />
       <div {...card.actions(item.id)}>
         {seat && (
           <KeyboardMenu
@@ -830,7 +818,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
         />
         <VisuallyHidden>{note}</VisuallyHidden>
       </div>
-      <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
+      <NodeToggle card={card} id={CYCLE_GROUP} name="the reporting cycles" />
     </>
   );
 }
@@ -955,48 +943,6 @@ function FullscreenHint() {
       <Kbd keys={["Esc"]} />
       <span>to leave fullscreen</span>
     </>
-  );
-}
-
-/**
- * The control that opens and closes what hangs under a node, on its leading
- * edge.
- *
- * BESIDE THE TREEITEM, NEVER INSIDE IT, which is what `OrgNodeDisclosure` is
- * for: a tree's items hold nothing focusable, so the design system draws this
- * as a sibling of the node's own item, exactly where the actions strip goes,
- * and places it on the card's boundary from there. It used to hang on the
- * BRANCH beside the Add, where the add pill splitting open into its three
- * kinds covered it, which is the one gesture a reader makes right next to it.
- *
- * A NODE WITH NOTHING UNDER IT DRAWS NONE, so a leaf of the chart is a card
- * with no disclosure rather than one with an empty slot.
- *
- * AND THE PRESS LANDS ON THE NODE, never in the control, which is why
- * `card.press` is spread on the region rather than on the button inside it:
- * it is the same rule the actions strip gets from `card.actions`, and the
- * design system asks a caller for it here because only the chart knows which
- * node this belongs to. Focus in a subtree hidden from assistive technology is
- * focus nowhere, so a press that left it on the expander would leave the chart
- * with no announced position at all.
- */
-function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
-  if (!card.expandable(id)) return null;
-  const expanded = card.expanded(id);
-  return (
-    <OrgNodeDisclosure {...card.press(id)}>
-      <IconButton
-        label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-        icon={expanded ? <ChevronDownGlyph /> : <ChevronRightGlyph />}
-        size="sm"
-        variant="ghost"
-        tabIndex={-1}
-        onClick={(e) => {
-          e.stopPropagation();
-          card.toggle(id);
-        }}
-      />
-    </OrgNodeDisclosure>
   );
 }
 

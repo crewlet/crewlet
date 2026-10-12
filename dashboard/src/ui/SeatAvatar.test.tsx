@@ -58,6 +58,49 @@ describe("a seat's badge", () => {
   });
 });
 
+describe("an agent drawn as itself", () => {
+  test("draws its character on a plate of its colour, in place of initials", () => {
+    const { container } = render(
+      <SeatAvatar name="Agent CTO" kind="agent" avatar={{ character: "foxlet", color: "rose" }} />,
+    );
+    const badge = container.querySelector(".crewlet-avatar")!;
+    expect(badge.classList.contains("crewlet-avatar--hue-rose")).toBe(true);
+    expect(container.querySelector('[data-character="foxlet"]')).not.toBeNull();
+    expect(badge.textContent).toBe("");
+    // Still announced by the whole name, the drawing being decorative.
+    expect(screen.getByRole("img", { name: "Agent CTO avatar" })).toBeDefined();
+  });
+
+  test("a person is drawn as themself whatever avatar a caller hands it", () => {
+    const { container } = render(
+      <SeatAvatar
+        name="Pat Lee"
+        kind="human"
+        avatar={{ character: "foxlet", color: "rose" }}
+        decorative
+      />,
+    );
+    expect(container.querySelector("[data-character]")).toBeNull();
+    expect(container.querySelector(".crewlet-avatar")!.textContent).toBe("PL");
+    expect(seatBadge("Pat Lee", "human", { character: "foxlet", color: "rose" })).toEqual({
+      name: "Pat Lee",
+      kind: "human",
+    });
+  });
+
+  test("a badge handed no avatar keeps its initials", () => {
+    const { container } = render(<SeatAvatar name="Agent CTO" kind="agent" decorative />);
+    expect(container.querySelector("[data-character]")).toBeNull();
+    expect(container.querySelector(".crewlet-avatar")!.textContent).toBe("CT");
+    expect(seatBadge("Agent CTO", "agent", { character: "octlet", color: "blue" })).toEqual({
+      name: "CTO",
+      kind: "agent",
+      character: "octlet",
+      hue: "blue",
+    });
+  });
+});
+
 // ONE PLACE DRAWS A SEAT'S BADGE. The kit's `Avatar` makes initials from
 // whatever name it is handed, so a screen that reached it directly would draw
 // "Agent CTO" as `AC` again — and nothing on that screen would look wrong

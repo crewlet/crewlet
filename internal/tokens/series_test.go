@@ -114,7 +114,7 @@ func TestAWeekBucketIsTheCompanysISOWeek(t *testing.T) {
 func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 	t.Parallel()
 	for phase, want := range map[string]tokens.Band{
-		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute, "plan": tokens.BandExecute,
+		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute,
 		"review":    tokens.BandReview,
 		"subagent":  tokens.BandWorkers,
 		"auxiliary": tokens.BandAuxiliary, "judge": tokens.BandAuxiliary,
@@ -320,6 +320,157 @@ func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 	}
 	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 || root.Label != "" {
 		t.Errorf("the root seat's band = %+v, want its own, printed by its key", root)
+	}
+}
+
+func TestAUnitBandIsSplitIntoItsSeatsFromTheSameCells(t *testing.T) {
+	t.Parallel()
+	// A team's bar is drawn in its seats' shares, so the parts come from the
+	// cells that made the band: biggest first, keyed as the seat grouping
+	// keys a band — the agent id — named and linked as the chart names the
+	// seat now, and summing to the band exactly.
+	cells := []tokens.Cell{
+		cell("2026-06-14", "dev", "execute", "sonnet", 20),
+		cell("2026-06-14", "ops", "execute", "sonnet", 4),
+		cell("2026-06-15", "dev", "review", "sonnet", 5),
+		cell("2026-06-15", "ops", "execute", "haiku", 26),
+		cell("2026-06-15", "ceo", "execute", "sonnet", 10),
+	}
+	engineering := func(handle, name string) tokens.Seat {
+		return tokens.Seat{Handle: handle, Name: name, UnitKey: "engineering", UnitName: "Engineering"}
+	}
+	got := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+		Seats: tokens.Seats{
+			"id-dev": engineering("dev", "Developer"),
+			"id-ops": engineering("ops", "Operator"),
+			"id-ceo": {Handle: "ceo", Name: "Chief"},
+		},
+	})
+	rows := map[string]tokens.GroupRow{}
+	for _, row := range got.ByGroup {
+		rows[row.Group] = row
+	}
+	eng := rows["engineering"]
+	type part struct {
+		group, label, handle string
+		total                int
+	}
+	var parts []part
+	sum := 0
+	for _, p := range eng.Parts {
+		parts = append(parts, part{p.Group, p.Label, p.Handle, p.TotalTokens})
+		sum += p.TotalTokens
+	}
+	want := []part{{"id-ops", "Operator", "ops", 30}, {"id-dev", "Developer", "dev", 25}}
+	if !slices.Equal(parts, want) {
+		t.Errorf("Engineering's parts = %+v, want %+v", parts, want)
+	}
+	if sum != eng.TotalTokens {
+		t.Errorf("the parts sum to %d, and the band is %d", sum, eng.TotalTokens)
+	}
+	if root := rows["no unit"]; len(root.Parts) != 1 || root.Parts[0].Group != "id-ceo" {
+		t.Errorf("the root seats' band = %+v, want the one seat that spent in it", root.Parts)
+	}
+
+	// EVERY OTHER GROUPING IS UNSPLIT, and so is a residual holding several
+	// units: its parts would be seats from teams the chart does not name.
+	bySeat := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupSeat, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+	})
+	for _, row := range bySeat.ByGroup {
+		if row.Parts != nil {
+			t.Errorf("seat band %q has parts %+v", row.Group, row.Parts)
+		}
+	}
+	folded := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+		Seats: tokens.Seats{
+			"id-dev": engineering("dev", "Developer"),
+			"id-ops": {Handle: "ops", UnitKey: "operations", UnitName: "Operations"},
+		},
+		Groups: 1,
+	})
+	last := folded.ByGroup[len(folded.ByGroup)-1]
+	if !last.Other || last.Parts != nil {
+		t.Errorf("residual = %+v, want an other with no parts", last)
+	}
+
+	// ON THE WIRE a part is the seat's key, its name, its handle and its
+	// bucket, and a band without parts says nothing about them.
+	wire, err := json.Marshal(eng.Parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"group":"id-ops","label":"Operator","handle":"ops"`) ||
+		!strings.Contains(string(wire), `"total_tokens":30`) {
+		t.Errorf("a part marshals as %s", wire)
+	}
+	unsplit, err := json.Marshal(bySeat.ByGroup[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsplit), `"parts"`) {
+		t.Errorf("a band with no parts marshals them anyway: %s", unsplit)
+	}
+}
+
+// A PERSON'S SPEND IS BANDED AS THEIR HUMAN SEAT'S: under the unit the chart
+// files that seat in, as a part of that unit's bar, and as a seat band of their
+// own — keyed on [tokens.PersonKey] and linked by their handle. A person is no
+// agent seat and has no agent id, so keyed as a seat is every person fell into
+// one band under an empty id; and a person whose seat the chart no longer holds
+// keeps their band and their handle, the only identity it has, in the
+// unattached unit.
+//
+// Mutation: band a unit by the cell's agent id rather than its spender key, and
+// Maya's spend lands in "no unit".
+func TestAPersonsSpendIsBandedAsTheirHumanSeats(t *testing.T) {
+	t.Parallel()
+	person := func(handle string, total int) tokens.Cell {
+		return tokens.Cell{Day: "2026-06-14", Handle: handle, Role: "Founder", Person: true,
+			Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge", Model: "haiku",
+			Bucket: tokens.Bucket{TotalTokens: total, Calls: 1}}
+	}
+	cells := []tokens.Cell{
+		cell("2026-06-14", "dev", "execute", "sonnet", 20),
+		person("maya", 7),
+		person("ana", 3),
+	}
+	seats := tokens.Seats{
+		"id-dev":                 {Handle: "dev", Name: "Developer", UnitKey: "leadership", UnitName: "Leadership"},
+		tokens.PersonKey("maya"): {Handle: "maya", Name: "Chair", UnitKey: "leadership", UnitName: "Leadership"},
+	}
+	r := days(t, "2026-06-14", "2026-06-14", time.UTC)
+
+	byUnit := tokens.BucketDaily(cells, tokens.SeriesOptions{Group: tokens.GroupUnit, Range: r, Seats: seats})
+	units := map[string]tokens.GroupRow{}
+	for _, row := range byUnit.ByGroup {
+		units[row.Group] = row
+	}
+	lead := units["leadership"]
+	if lead.TotalTokens != 27 || lead.Seats != 2 || len(lead.Parts) != 2 {
+		t.Fatalf("leadership = %+v, want the seat's 20 and Maya's 7 over two spenders", lead)
+	}
+	if p := lead.Parts[1]; p.Group != tokens.PersonKey("maya") || p.Handle != "maya" || p.Label != "Chair" {
+		t.Errorf("Maya's part = %+v, want her key, her handle and her seat's name now", p)
+	}
+	if loose := units["no unit"]; loose.TotalTokens != 3 || len(loose.Parts) != 1 ||
+		loose.Parts[0].Handle != "ana" {
+		t.Errorf("no unit = %+v, want Ana, whose seat the chart no longer holds, by her handle", loose)
+	}
+
+	bySeat := tokens.BucketDaily(cells, tokens.SeriesOptions{Group: tokens.GroupSeat, Range: r, Seats: seats})
+	bands := map[string]tokens.GroupRow{}
+	for _, row := range bySeat.ByGroup {
+		bands[row.Group] = row
+	}
+	if maya := bands[tokens.PersonKey("maya")]; maya.TotalTokens != 7 || maya.Handle != "maya" ||
+		maya.Label != "Chair" {
+		t.Errorf("Maya's band = %+v, want her own, named as the chart names her seat", maya)
+	}
+	if ana := bands[tokens.PersonKey("ana")]; ana.TotalTokens != 3 || ana.Handle != "ana" {
+		t.Errorf("Ana's band = %+v, want her own, linked by her handle", ana)
 	}
 }
 

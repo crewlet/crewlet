@@ -3,13 +3,14 @@ package statelog_test
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE FETCH WAIT IS A CEILING ON READ LATENCY, and nothing said so.
 //
-// The vendored client's batch closes when it is FULL or when its wait expires;
-// one record arriving does not end it. So a fetch of [statelog.FetchMessages]
+// A pull closes when it is FULL or when its wait expires; one record arriving
+// does not end it. So a fetch of [statelog.FetchMessages]
 // on a quiet log costs the WHOLE wait however fast the record got there —
 // measured on a three-member cluster, an append acknowledges in about 500
 // microseconds and the fetch that collects it still takes the full wait, five
@@ -43,5 +44,24 @@ func TestTheFetchWaitFitsInsideTheReadBudget(t *testing.T) {
 		t.Errorf("ApplyLinger is %v against a FetchWait of %v, so a partial "+
 			"run waits longer than an empty applier does",
 			statelog.ApplyLinger, statelog.FetchWait)
+	}
+}
+
+// A PULL CAN ALWAYS HOLD THE LARGEST RECORD A LOG CAN CARRY.
+//
+// The broker refuses a pull whose byte bound is smaller than the next record,
+// delivering nothing — so a bound below the largest payload the queue admits
+// is an applier that stops at the first record that size and never moves
+// again, on every node, with nothing wrong with the record. The margin is for
+// what the broker counts beside the payload: the subject, the
+// acknowledgement subject and the headers, which a single kilobyte covers
+// many times over.
+func TestAPullCanAlwaysHoldTheLargestRecord(t *testing.T) {
+	t.Parallel()
+	if statelog.FetchBytes < queue.MaxPayloadBytes+1<<10 {
+		t.Errorf("FetchBytes is %d and the largest record a log carries is %d "+
+			"plus its envelope — a pull bounded below it is refused with "+
+			"nothing delivered, and the applier stops at that record for ever",
+			statelog.FetchBytes, queue.MaxPayloadBytes)
 	}
 }

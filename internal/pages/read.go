@@ -42,13 +42,13 @@ import (
 // every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
 // framework's read is where that transaction now comes from.
 type Reader struct {
-	db  *store.DB
+	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
 // ReaderOptions configure a reader.
 type ReaderOptions struct {
-	DB *store.DB
+	DB store.ReplicatedReader
 
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, which is silent at every
@@ -58,7 +58,7 @@ type ReaderOptions struct {
 
 // NewReader builds the knowledge base's read side.
 func NewReader(opts ReaderOptions) (*Reader, error) {
-	if opts.DB == nil {
+	if opts.DB.IsZero() {
 		return nil, errors.New("pages: a store is required")
 	}
 	if opts.Log == nil {
@@ -107,7 +107,7 @@ type Filter struct {
 // ErrBadCursor refuses an [Filter.After] this reader did not mint.
 var ErrBadCursor = errors.New("pages: that cursor is not one this listing minted")
 
-// DefaultLimit and MaxLimit bound a listing, on [work]'s reasoning.
+// DefaultLimit and MaxLimit bound a listing.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 500
@@ -144,9 +144,9 @@ type Summary struct {
 // that drew one said "50" about both.
 //
 // THE POSITION AND THE COVERAGE TRAVEL WITH THE ROWS, because a caller cannot
-// reconstruct either afterwards: [Reader.At] answers about NOW rather than
-// about the transaction this listing was read in, and a set read that could
-// not account for everything is indistinguishable from a short one.
+// reconstruct either afterwards: a position read after the answer is about NOW
+// rather than about the transaction this listing was read in, and a set read
+// that could not account for everything is indistinguishable from a short one.
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
@@ -271,7 +271,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		after = &c
 	}
 	var out listPage
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.list(ctx, tx, listSpec{where: where, args: args}, child, limit, after)
 		return err
@@ -510,32 +510,22 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			"it reads")
 	}
 	var detail Detail
-	served, err := r.log.Read(ctx, fresh.Query(refScope(ref), false), func(tx *sql.Tx) error {
+	// THE SCOPE IS WHERE THE PAGE IS FILED, which only its rows can say: a
+	// reference is an id or an address, and neither is a path — an id
+	// names no space, and an address names a title rather than the page
+	// holding it. So the framework resolves it in the answer's own
+	// transaction ([pageReadScope]) and probes there.
+	served, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return pageReadScope(ctx, tx, ref)
+	}, false), func(tx *sql.Tx) error {
 		document, revision, id, err := r.locate(ctx, tx, ref)
-		if errors.Is(err, ErrNotFound) {
-			// AN ABSENT PAGE IS AN ANSWER ONLY WHERE NOTHING RETAINED
-			// COULD CREATE IT: a record this node cannot decode may be the
-			// one that made it, and "no such page" decided from rows that
-			// record never wrote is the stale answer a point read refuses.
-			if refused := absentRefusal(ctx, tx, fresh.Level, ref); refused != nil {
-				return refused
-			}
-		}
 		if err != nil {
 			return err
 		}
 		page, err := DecodePage([]byte(document))
 		if err != nil {
 			return err
-		}
-		// THE PAGE'S OWN SCOPE, IN THE SNAPSHOT THAT READ IT. It cannot be
-		// formed before the reference is resolved — an id says nothing of
-		// the container its object path sits under, and an address says
-		// nothing of the id — so the framework is given the reference's
-		// own term and this is what decides.
-		if refused := deferredRefusal(ctx, tx, fresh.Level,
-			ReadScope(page.Container, id), "this page"); refused != nil {
-			return refused
 		}
 		detail = Detail{Page: page, Revision: revision}
 		var skill, onboarding int
@@ -572,64 +562,69 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 	return detail, nil
 }
 
-// refScope is what a reference to one page lets a read name before the page is
-// resolved: an ADDRESS is its container's hold on that title — the term a
-// create or a rename into it is filed under — and an ID is the object in the
-// containerless space, the only place an id alone places it.
+// pageReadScope is what a point read of one page is about, resolved from the
+// reference the caller named — inside the answer's own transaction, where the
+// framework probes it ([statelog.Query.Resolve]).
 //
-// THE REFERENCE WAS ONCE PASSED AS BOTH HALVES OF A PAGE TERM — the text
-// before a slash as the container, the whole reference as the id — so an id
-// named a container that was the id itself and an address an object whose id
-// was the address, and neither matched any record's scope: a page with a
-// record this node cannot decode was served as though its rows were current.
-// This is the framework's early answer only; [Reader.Get] decides on the
-// resolved page's own scope in the snapshot that reads it.
-func refScope(ref string) statelog.ScopeSet {
-	if container, title, byAddress := strings.Cut(ref, "/"); byAddress {
-		return statelog.ScopeSet{Paths: []string{ScopeTerm{
-			Kind: TermTitle, Container: ContainerKey(container), ID: TitleToken(title),
-		}.Path()}}
+// THE PAGE'S OWN PATH, under the space it is filed in. An address adds its
+// title term as well, because a create or a rename arbitrates on the title and
+// is filed under it — a deferred rename that took this address is about this
+// read even while the page it resolved to still holds the name. The address's
+// container is canonical ([ContainerKey]), as every scope a record is filed
+// under is.
+//
+// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
+// page" is a claim about rows a deferred create has not written: an address is
+// exactly the term such a create is filed under, and an id is decided by
+// [absentPageScope].
+func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
+	query := `SELECT id, container FROM pages_heads WHERE id = ?`
+	args := []any{ref}
+	var address *ScopeTerm
+	if container, title, ok := strings.Cut(ref, "/"); ok {
+		container = ContainerKey(container)
+		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
+		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+		args = []any{container, NormalizeTitle(title)}
 	}
-	return ReadScope("", ref)
-}
-
-// deferredRefusal is a point read's refusal when a record this node retained
-// covers scope, read in tx — the transaction the answer's rows come from — or
-// nil when none does. A probe that could not be made refuses too: a point read
-// that cannot tell whether its object is stale has nothing honest to return.
-func deferredRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
-	scope statelog.ScopeSet, about string) error {
-
-	d, hit, err := statelog.DeferredIn(ctx, tx, Domain{}, scope)
+	var id, container string
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&id, &container)
 	switch {
-	case err != nil:
-		return fmt.Errorf("pages: ask whether a retained record covers %s: %w",
-			about, err)
-	case hit:
-		return &statelog.Refused{
-			Code: statelog.RefuseDeferred, Level: level,
-			Detail: fmt.Sprintf("this node holds a record at version %d it "+
-				"cannot decode, at %s, covering %s", d.Version, d.Position, about),
+	case errors.Is(err, sql.ErrNoRows):
+		if address == nil {
+			return absentPageScope(ctx, tx, ref)
 		}
+		return statelog.ScopeSet{Paths: []string{address.Path()}}, nil
+	case err != nil:
+		return statelog.ScopeSet{}, fmt.Errorf("pages: resolve %s: %w", ref, err)
 	}
-	return nil
+	paths := []string{ScopeTerm{Kind: TermObject, Container: container, ID: id}.Path()}
+	if address != nil {
+		paths = append(paths, address.Path())
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
-// absentRefusal is [deferredRefusal] for a page NO ROW holds, by the reference
-// that found none, decided in the snapshot that found none — the framework's
-// own probe runs only where the node reported a retained record before the
-// read began, so a record retained while the read waited would otherwise be
-// seen by neither.
+// absentPageScope is [pageReadScope] for an ID no row holds.
 //
-// An ADDRESS names its own term: the title a create or a rename into it is
-// filed under, and every term above it — its container's included — which is
-// [refScope]'s closure. An ID does not: the object path a create files it
-// under names a container the absent row cannot supply, so it is judged
-// against the object path for that id UNDER EVERY CONTAINER, and against every
-// term that contains such a path — the domain, the containers' root, and ANY
-// container's own term, since a scope is the complete set of objects its
-// apply may write and a container term covers every page that may come to be
-// in it. Anything that is neither names no page any record could create.
+// A MINTED ID NAMES NO SPACE: the object path a create files it under names a
+// container the absent row cannot supply. So the page is about its object path
+// UNDER EVERY CONTAINER, and every term that contains such a path — the
+// domain, the containers' root, and ANY container's own term, since a scope is
+// the complete set of objects its apply may write and a container term covers
+// every page that may come to be in it. That is not a finite list of paths, so
+// it is answered as the retained records' own paths that fall inside it
+// ([mayHoldPage]) beside the id's object path in the containerless space,
+// whose every ancestor falls inside it too: the framework's probe then matches
+// exactly the records that may create the page. The domain term, the obvious
+// answer, refused an absent id under ANY retained record — one about another
+// page in another space included — and an object path in one space alone
+// served "no such page" past a record about a whole space that may be the one
+// creating it.
+//
+// ANYTHING ELSE names no page a record could create, because every page id is
+// minted: it is the containerless object path alone, which only a record about
+// the whole domain covers.
 //
 // THE CONTAINER IS MATCHED IN GO, segment by segment, rather than by a LIKE
 // pattern: `%` spans the separator, so a pattern for "any container's own
@@ -637,54 +632,44 @@ func deferredRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 // case where a path does not. The retained set it walks is this node's
 // undecodable records, which a node holds few of and a node holding many has
 // a louder problem than this read.
-func absentRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
-	ref string) error {
-
-	if _, _, byAddress := strings.Cut(ref, "/"); byAddress {
-		return deferredRefusal(ctx, tx, level, refScope(ref), "the address "+ref)
-	}
+func absentPageScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
 	id, minted := mintedID(ref)
 	if !minted {
-		return nil
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermObject, ID: ref}.Path(),
+		}}, nil
 	}
+	paths := []string{ScopeTerm{Kind: TermObject, ID: id.String()}.Path()}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT s.path, d.position, d.version
+		SELECT DISTINCT s.path
 		  FROM pages_log_deferred_scope s
-		  JOIN pages_log_deferred d ON d.position = s.position
-		 ORDER BY d.position`)
+		  JOIN pages_log_deferred d ON d.position = s.position`)
 	if err != nil {
-		return fmt.Errorf("pages: ask whether a retained record creates page %s: %w",
-			id, err)
+		return statelog.ScopeSet{}, fmt.Errorf("pages: ask whether a retained "+
+			"record creates page %s: %w", id, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var (
-			path              string
-			position, version int64
-		)
-		if err := rows.Scan(&path, &position, &version); err != nil {
-			return fmt.Errorf("pages: read a retained record's scope: %w", err)
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return statelog.ScopeSet{}, fmt.Errorf("pages: read a retained "+
+				"record's scope: %w", err)
 		}
-		if !mayHoldPage(path, id.String()) {
-			continue
-		}
-		return &statelog.Refused{
-			Code: statelog.RefuseDeferred, Level: level,
-			Detail: fmt.Sprintf("this node holds no page %s, and a record at version "+
-				"%d it cannot decode, at %s, may be the one that creates it", id,
-				version, statelog.Unpack(Domain{}.Stream().Name, position)),
+		if mayHoldPage(path, id.String()) {
+			paths = append(paths, path)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("pages: read the retained records' scopes: %w", err)
+		return statelog.ScopeSet{}, fmt.Errorf("pages: read the retained "+
+			"records' scopes: %w", err)
 	}
-	return nil
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
 // mayHoldPage reports whether a retained record's scope path covers page id
 // in SOME container: whether path is the page's object path, or any term
 // above it, with the container segment matching whatever it names — see
-// [absentRefusal].
+// [absentPageScope].
 func mayHoldPage(path, id string) bool {
 	within := strings.Split(ScopeTerm{Kind: TermObject, Container: anyContainer,
 		ID: id}.Path(), statelog.ScopeSeparator)
@@ -796,25 +781,13 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 
 // ancestorDepth bounds the parent walk.
 //
-// Sixteen. A page tree that deep is already unnavigable, and the cap is here
-// so a cycle — which a save that set a page's parent to its own descendant
-// would create — terminates rather than hanging the read that found it.
+// Sixteen. A page tree that deep is already unnavigable, so a breadcrumb stops
+// there.
 const ancestorDepth = 16
 
 func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]Summary, error) {
 	var chain []Summary
-	seen := map[string]bool{}
 	for id := parentID; id != "" && len(chain) < ancestorDepth; {
-		if seen[id] {
-			// A CYCLE. Reported rather than looped: the chain so far is
-			// still useful for a breadcrumb, and hanging the read would
-			// take the page down with the bad parent.
-			log.WarnContext(ctx, "pages_ancestor_cycle", "page", id,
-				"detail", "a page's parent chain reaches itself; the breadcrumb "+
-					"is truncated rather than walked forever")
-			break
-		}
-		seen[id] = true
 		var s Summary
 		var skill, onboarding int
 		var updated, revision int64
@@ -875,7 +848,7 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 		return nil, errors.New("pages: this read names no level")
 	}
 	var out []ContainerListing
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), true), func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true), func(tx *sql.Tx) error {
 		containers, err := r.containers(ctx, tx)
 		if err != nil {
 			return err
@@ -980,7 +953,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 		return nil, nil
 	}
 	var out []Page
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ""), true), func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.skillPages(ctx, tx, container)
 		return err

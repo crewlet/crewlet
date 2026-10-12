@@ -333,9 +333,9 @@ type smallGatingDomain struct{ gatingDomain }
 const smallLogBytes = 4 << 20
 
 func (smallGatingDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.MaxBytes = smallLogBytes
-	return spec
+	shape := probeDomain{}.Stream()
+	shape.MaxBytes = smallLogBytes
+	return shape
 }
 
 // smallPurgingDomain is that log with a second gate beside the eviction: a

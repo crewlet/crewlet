@@ -247,6 +247,7 @@ type stubMemory struct {
 
 	seat         memread.Seat
 	conversation string
+	episode      string
 	limit        int
 	seats        []memread.Seat
 }
@@ -254,6 +255,11 @@ type stubMemory struct {
 func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, limit int) (memread.Memory, error) {
 	s.seat, s.limit = seat, limit
 	return s.memory, s.err
+}
+
+func (s *stubMemory) Episode(_ context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error) {
+	s.seat, s.episode = seat, id
+	return memread.EpisodeDetail{Handle: seat.Handle}, s.err
 }
 
 func (s *stubMemory) Threads(_ context.Context, seat memread.Seat, conversation string, limit int) (

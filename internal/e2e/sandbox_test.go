@@ -138,21 +138,30 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	// Both reach the box through role.sandbox.env, which is the ONLY way an
-	// external value gets there: the engine names no tool-specific variable
-	// of its own. That the fake agent runs at all is therefore also the
-	// proof that ${VAR} references in that block resolve.
-	t.Setenv("FAKE_AGENT_MODE", mode)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
 	// Outside the box directory, so it survives the teardown that ends the
 	// turn under test.
 	argv := filepath.Join(stateDir, "argv.txt")
-	t.Setenv("FAKE_AGENT_ARGV", argv)
+	// All three reach the box through role.sandbox.env, which is the ONLY
+	// way an external value gets there: the engine names no tool-specific
+	// variable of its own. That the fake agent runs at all is therefore also
+	// the proof that ${VAR} references in that block resolve.
+	env := fakeAgentEnv(binDir, mode)
+	env["FAKE_AGENT_ARGV"] = argv
 
 	model := newSandboxModel(t)
 	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
-	n := bootCompany(t, doc, model)
+	n := bootCompany(t, doc, model, env)
 	return &codingNode{node: n, stateDir: stateDir, binDir: binDir, argvPath: argv}
+}
+
+// fakeAgentEnv is what a coding node's environment carries for the stand-in
+// CLI installed in binDir to run in mode: where to copy it from, and how to
+// behave.
+func fakeAgentEnv(binDir, mode string) map[string]string {
+	return map[string]string{
+		"FAKE_AGENT_MODE": mode,
+		"FAKE_AGENT_PATH": filepath.Join(binDir, "claude"),
+	}
 }
 
 // installFakeAgent writes a `claude` that behaves like a headless coding CLI.
@@ -165,8 +174,10 @@ func installFakeAgent(t *testing.T) string {
 	dir := t.TempDir()
 	script := `#!/bin/sh
 # A stand-in for a headless coding CLI. Everything it touches — the findings
-# file, the ask shim, the JSON envelope — is the real protocol.
+# file, the ask shim, the stream-json messages and the result message that
+# ends them — is the real protocol.
 work="$HOME/.crewlet"
+init='{"type":"system","subtype":"init","session_id":"sess-1","tools":["Bash"]}'
 # The invocation, recorded OUTSIDE the box: the box is torn down when the
 # turn finishes, and the argv is what a test asserts about afterwards.
 if [ -n "${FAKE_AGENT_ARGV:-}" ]; then
@@ -176,12 +187,16 @@ case "${FAKE_AGENT_MODE:-succeed}" in
   succeed)
     sleep 0.1
     printf 'Outcome: succeeded\nRan the suite; all green.\nOpened https://github.com/acme/api/pull/7\n' > "$work/findings.md"
-    printf '{"result":"done","subtype":"success","session_id":"sess-1","usage":{"input_tokens":700,"output_tokens":120}}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"go test ./..."}}]},"session_id":"sess-1"}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok","is_error":false}]},"session_id":"sess-1"}'
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1","usage":{"input_tokens":700,"output_tokens":120}}'
     ;;
   ask)
     sleep 0.1
     crewlet-ask "Which branch should I target?" --to requester
-    printf '{"result":"blocked","subtype":"success"}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"blocked","session_id":"sess-1"}'
     ;;
   held)
     # RUNS UNTIL THE TEST SAYS SO, rather than for a fixed time.
@@ -202,7 +217,8 @@ case "${FAKE_AGENT_MODE:-succeed}" in
       waited=$((waited + 1))
     done
     printf 'Outcome: succeeded\nfinished after the restart\n' > "$work/findings.md"
-    printf '{"result":"done","subtype":"success"}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1"}'
     ;;
   *)
     # A MODE THIS SCRIPT DOES NOT KNOW SAYS SO. Falling through silently
@@ -221,18 +237,22 @@ esac
 	return dir
 }
 
-// bootCompany stands a node (an engine and its API) up over a company document.
+// bootCompany stands a node (an engine and its API) up over a company document,
+// with env added to its environment ([nodeEnvironment]).
 //
-// The same assembly startWith does, factored out so a suite whose subject
+// The same assembly startNode does, factored out so a suite whose subject
 // needs its own store directory — one that SURVIVES a restart — can supply it.
-func bootCompany(t *testing.T, doc string, model *scriptedModel) *node {
+func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]string) *node {
 	t.Helper()
 	dir := t.TempDir()
-	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"))
+	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
+		filepath.Join(dir, "stream"), env)
 }
 
-func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string) *node {
+func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string,
+	env map[string]string) *node {
 	t.Helper()
+	logs.attribute(t)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
@@ -241,9 +261,11 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
+	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(env),
 		// The completion poll, sped up. It is sized in production against
 		// coding jobs that run for minutes; at that cadence a test whose
 		// job finishes in a moment would wait out a real tick to see it.
@@ -339,6 +361,7 @@ func sawSandboxResult(raw []byte) bool {
 // A coding turn end to end: decide, launch, suspend, poll, collect, resume, and
 // the same turn finishing with the agent's findings in hand.
 func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "succeed")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -389,7 +412,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// row and the record are written by different processes' worth of code.
 	var launch string
 	waitFor(t, "the resumed phase's record to name its launch", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -407,6 +430,32 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	})
 	if launch == "" {
 		t.Error("the resumed sandbox phase names no launch_id")
+	}
+	// THE RUN'S STREAM REACHED ITS RECORD: the transcript the runner built
+	// from the stand-in's stream-json messages, and the spend its result
+	// line — the stream's last, copied out by the wrapper — reported.
+	// End to end because the halves are the CLI's flags, the box's shell and
+	// the record's publisher, and each compiles without the others.
+	var record map[string]any
+	waitFor(t, "the run's own phase record", func() bool {
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		if err != nil {
+			t.Fatalf("phases: %v", err)
+		}
+		for _, row := range rows {
+			var rec map[string]any
+			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "sandbox" {
+				record = rec
+				return true
+			}
+		}
+		return false
+	})
+	if transcript, _ := record["activity_transcript"].(string); transcript != "[tool] Bash: go test ./..." {
+		t.Errorf("the run's transcript is %q; want the one tool call its stream made", transcript)
+	}
+	if input, _ := record["input_tokens"].(float64); input != 700 {
+		t.Errorf("the run's input tokens are %v; want the 700 its result line reported", record["input_tokens"])
 	}
 	// The box is gone: the resumed Execute made no further run_sandbox call,
 	// so the phase was done with it.
@@ -472,6 +521,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
 func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "ask")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -655,6 +705,7 @@ func countOf(list []string, want string) int {
 // that — so the states that most need a person were the ones least likely to
 // be on screen.
 func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
+	t.Parallel()
 	n := startCoding(t, "ask")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -724,15 +775,15 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // conversation the dead process suspended.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	t.Setenv("FAKE_AGENT_MODE", "held")
+	env := fakeAgentEnv(binDir, "held")
 	// THE JOB RUNS UNTIL THIS FILE APPEARS. The restart has to happen while
 	// it is still running, and how long a second engine takes to boot is a
 	// property of the machine rather than of the design.
 	release := filepath.Join(t.TempDir(), "release")
-	t.Setenv("FAKE_AGENT_RELEASE", release)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
+	env["FAKE_AGENT_RELEASE"] = release
 
 	// ONE store and ONE stream directory across both processes, which is
 	// what makes this a restart rather than a fresh company.
@@ -743,7 +794,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	model := newSandboxModel(t)
 	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
 
-	first := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
 	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(first.engine.Node().Host().Held(), "swe")
@@ -767,7 +818,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// whole reason the row exists.
 	first.engine.Stop(context.Background())
 
-	second := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
 	secondNode := &codingNode{node: second, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the new engine to claim the seat", func() bool {
 		return slices.Contains(second.engine.Node().Host().Held(), "swe")
@@ -807,6 +858,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 // half of the gate a workstation cannot always run, and a suite that quietly
 // tested only the easy mode would report a gate it had not met.
 func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
+	t.Parallel()
 	runtime := usableContainerRuntime(t)
 	if runtime == "" {
 		t.Skip("no usable container runtime; the direct mode covers the protocol here")
@@ -890,6 +942,7 @@ func usableContainerRuntime(t *testing.T) string {
 // over: the answer can still arrive, and the work re-seeds from the branch the
 // agent pushed, which was always the durable half.
 func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
+	t.Parallel()
 	n := startCodingWithPause(t, "ask", 1)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
@@ -946,13 +999,12 @@ func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	t.Setenv("FAKE_AGENT_MODE", mode)
-	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
 
 	model := newSandboxModel(t)
 	doc := strings.Replace(
 		fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir),
 		"default_pause_ttl_seconds: 1800",
 		fmt.Sprintf("default_pause_ttl_seconds: %d", pauseTTL), 1)
-	return &codingNode{node: bootCompany(t, doc, model), stateDir: stateDir, binDir: binDir}
+	n := bootCompany(t, doc, model, fakeAgentEnv(binDir, mode))
+	return &codingNode{node: n, stateDir: stateDir, binDir: binDir}
 }

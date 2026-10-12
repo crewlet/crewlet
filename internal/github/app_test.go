@@ -52,6 +52,22 @@ func TestAnAppNameFitsGitHubsGlobalNamespace(t *testing.T) {
 	if len([]rune(long)) > 34 {
 		t.Errorf("a long name is %d runes, past GitHub's 34", len([]rune(long)))
 	}
+	// WHAT TELLS TWO APPS APART SURVIVES. A company whose name alone fills
+	// the limit gave every seat the same app name, because the seat was
+	// what the cut removed.
+	company := "Nimbus Cloud Infrastructure Holdings"
+	lead, eng := github.AppName(company, "sre-lead"), github.AppName(company, "eng-lead")
+	if lead == eng {
+		t.Errorf("two seats of one company share the app name %q", lead)
+	}
+	if !strings.Contains(lead, "sre-lead") || len([]rune(lead)) > 34 {
+		t.Errorf("AppName = %q (%d runes), want the seat whole within 34", lead, len([]rune(lead)))
+	}
+	// Two names that shorten alike still differ, by the digest.
+	longSeat := strings.Repeat("s", 40)
+	if a, b := github.AppName("Acme", longSeat+"a"), github.AppName("Acme", longSeat+"b"); a == b {
+		t.Errorf("two over-long seat names share the app name %q", a)
+	}
 	// CUT ON A RUNE BOUNDARY. A name sliced through a multi-byte character
 	// is refused by GitHub as malformed rather than as too long, which
 	// names nothing an operator can act on.

@@ -78,6 +78,7 @@ func executorPrompt(t *testing.T, n *node) string {
 }
 
 func TestASeatsOwnMemoryReachesTheExecutorsPrompt(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	remember(t, n, "always use semantic commit messages on this repository")
@@ -102,6 +103,7 @@ func TestASeatsOwnMemoryReachesTheExecutorsPrompt(t *testing.T) {
 // A FRESH SEAT gets no memory section at all — not an empty one. A heading
 // with nothing under it tells the executor it has a memory it cannot read.
 func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
@@ -121,6 +123,7 @@ func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
 // Without the suppression the first turn of every seat's life ends with the
 // executor being told to go and read the pages it has just finished reading.
 func TestASeatThatJustOnboardedIsNotToldToOnboard(t *testing.T) {
+	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
@@ -233,6 +236,7 @@ func wakeWithPointer(t *testing.T, n *node, handle string) {
 // test stands one up: with no searcher the gate and the recovery both render
 // nothing and a broken wire looks exactly like a working one.
 func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
+	t.Parallel()
 	wiki := fakeWiki(t)
 	n := startWith(t, wikiCompany(wiki.url))
 	waitForSeat(t, n, "ceo")
@@ -290,6 +294,7 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 // anyway would spend a model call and a search to produce the block the agent
 // has already read.
 func TestASubstantiveTriggerSearchesOnceAtTurnStart(t *testing.T) {
+	t.Parallel()
 	wiki := fakeWiki(t)
 	n := startWith(t, wikiCompany(wiki.url))
 	waitForSeat(t, n, "ceo")
@@ -328,7 +333,7 @@ func knowledgeReadVia(t *testing.T, n *node, via types.KnowledgeReadVia) *types.
 			return false
 		}
 		for _, row := range rows {
-			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID)
+			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID, time.Now())
 			if err != nil {
 				return false
 			}

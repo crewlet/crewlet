@@ -139,8 +139,7 @@ type IdentityChange struct {
 
 	// SeatID is the seat's handle (ADR-0013), or empty for a service
 	// account bound to none — never for a person, whose seat is moved and
-	// never cleared, unless a build before every person held a seat wrote
-	// it, which the applier still salvages as it is.
+	// never cleared.
 	SeatID string `json:"seat_id"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -175,18 +174,14 @@ type Invitation struct {
 	// presented secret is checked against, and never the secret, because
 	// the id alone is in every snapshot, backup and proxy log.
 	//
-	// AN INVITATION WITHOUT ONE IS REDEEMABLE BY NOBODY: it was issued
-	// before links carried a secret, and admitting it on its id would be
-	// admitting exactly what this field exists to close.
+	// AN INVITATION WITHOUT ONE IS REDEEMABLE BY NOBODY: admitting it on
+	// its id would be admitting exactly what this field exists to close.
 	Verifier string `json:"verifier,omitempty"`
 
 	// Seat is the HANDLE of the seat redeeming this BINDS (ADR-0013), and
 	// holds until then. Decided once by whoever issued it, on a seat the
 	// chart held as a human seat nobody held, and bound by the redemption's
-	// own record. EMPTY only on an invitation a build before every
-	// invitation named a seat issued: it is redeemable by nobody, and the
-	// applier writes it as it is rather than refuse a record every node
-	// would then stop on.
+	// own record. Every invitation names one ([Writer.Invite]).
 	Seat string `json:"seat,omitempty"`
 
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
@@ -668,9 +663,10 @@ type StatusChange struct {
 // Removal is a person the company no longer has.
 //
 // A GATE, so its record stays at the base version for every build there will
-// ever be ([MutationRecord.readByEveryBuild]) and its shape may only ever grow
-// by addition: a removal a node deferred would be somebody off-boarded still
-// signing in on that node, with no later record that corrects it.
+// ever be ([MutationRecord.readByEveryBuild]) and its shape, pinned at
+// [GateRecordVersion], may only ever grow by addition: a removal a node
+// deferred would be somebody off-boarded still signing in on that node, with
+// no later record that corrects it.
 type Removal struct {
 	V int `json:"v"`
 
@@ -745,7 +741,8 @@ type Sweep struct {
 // Invalidation ends every session in the company at once.
 //
 // A GATE, like a removal and an eviction, so its record stays at the base
-// version for every build there will ever be: a node that deferred this would
+// version for every build there will ever be and its shape is pinned at
+// [GateRecordVersion]: a node that deferred this would
 // go on honouring every bearer the company had just invalidated, and no later
 // record about any of those sessions repairs it.
 //
@@ -772,7 +769,8 @@ type Invalidation struct {
 }
 
 // Eviction gates a node's records on this log, or readmits it. The node is the
-// record's SUBJECT ([EvictionSubject]), so nothing here repeats it.
+// record's SUBJECT ([EvictionSubject]), so nothing here repeats it. A GATE, so
+// its shape is pinned at [GateRecordVersion] like a removal's.
 //
 // # The position is the record's own, and never a field
 //
@@ -798,7 +796,9 @@ type Eviction struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Generation is a reanchor's own record.
+// Generation is a reanchor's own record, its shape pinned at
+// [GateRecordVersion]: an older node retains one it cannot read, and a
+// retained generation is a transition that node never makes.
 type Generation struct {
 	V int `json:"v"`
 
@@ -1066,9 +1066,10 @@ func DecodeRemoval(data []byte) (Removal, error) {
 	if err != nil {
 		return Removal{}, fmt.Errorf("iamdomain: decode a removal: %w", err)
 	}
-	// NO VERSION CHECK: a gate's version above this build's is not a newer
-	// shape to defer — it is a record that must not exist, and the envelope
-	// pass has already refused it as a gate.
+	// NO VERSION CHECK: a gate's payload is pinned at [GateRecordVersion]
+	// for ever, so a version above this build's is not a newer shape to
+	// defer — it is a record that must not exist, and the envelope pass
+	// has already refused it as a gate.
 	r.Extra = extra
 	return r, nil
 }
@@ -1140,15 +1141,15 @@ func EncodeGeneration(g Generation) ([]byte, error) { return jsoncarry.Encode(g,
 
 // DecodeGeneration reads a reanchor's payload, keeping every field this build
 // has no home for, and refuses one written at a version above
-// [DocumentVersion].
+// [GateRecordVersion], which it is pinned at for ever.
 func DecodeGeneration(data []byte) (Generation, error) {
 	var g Generation
 	extra, err := jsoncarry.Decode(data, &g, generationFields)
 	if err != nil {
 		return Generation{}, fmt.Errorf("iamdomain: decode a generation: %w", err)
 	}
-	if err := checkVersion(g.V); err != nil {
-		return Generation{}, err
+	if g.V > GateRecordVersion {
+		return Generation{}, ErrUnknownVersion{Got: g.V, Want: GateRecordVersion}
 	}
 	g.Extra = extra
 	return g, nil

@@ -13,7 +13,9 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer, OrgProjection } from "~/protocol/index.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -70,11 +72,18 @@ const ADMIN = {
   owner: "jane",
   name: "Jane",
   kind: "human",
+  config_writer: true,
+  config_managed_by: [],
 };
 
-function mount(own: BudgetWindow | undefined, orgRefusing: boolean, viewer: unknown = ADMIN) {
+function mount(
+  own: BudgetWindow | undefined,
+  orgRefusing: boolean,
+  viewer: unknown = ADMIN,
+  budgets = BUDGETS,
+) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.setConnected(true);
   store.applyOrg(CHART_ORG as OrgProjection);
   store.applyBudget({
@@ -86,7 +95,7 @@ function mount(own: BudgetWindow | undefined, orgRefusing: boolean, viewer: unkn
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "budgets"
-      ? Promise.resolve(BUDGETS)
+      ? Promise.resolve(budgets)
       : what === "viewer"
         ? Promise.resolve(viewer)
         : new Promise(() => {});
@@ -146,6 +155,29 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
   );
 });
 
+// A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every credential
+// but its writers is refused a raise — an administrator holding every grant,
+// and a lead inside what they lead — so the control is held with the sentence
+// naming who manages it rather than offering a save the engine refuses.
+//
+// Mutation: drop the managed check on the lead path, and the lead's raise is
+// offered.
+test("on a managed document a raise is held for everybody but its writers", async () => {
+  const managed = { config_writer: false, config_managed_by: ["gitops"] };
+  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  for (const viewer of [
+    { ...ADMIN, ...managed },
+    { ...pm, ...managed },
+  ]) {
+    mount(day(), true, viewer);
+    await settle();
+    expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
+      managedSentence(["gitops"]),
+    );
+    cleanup();
+  }
+});
+
 // A LEAD'S RAISE IS COMPARED WITH THE COMPANY AS IT STANDS. The engine answers
 // a lead's check of their seat unchanged, so a warning the company already
 // carries — here a seat with no contact, which no ceiling caused — is the
@@ -203,6 +235,29 @@ test("it raises the company's when only the company's window is refusing", async
   mount(undefined, true);
   await open();
   expect(screen.getByRole("dialog", { name: "Raise the company's budget" })).toBeTruthy();
+});
+
+// "LAST REFUSED" ONLY WHERE THE WINDOW IS STILL REFUSING. A refused round is
+// counted, so a window that refused one reads past its ceiling and refusing; a
+// ceiling raised since gives it room again while its stamp stays until the
+// next admitted charge clears it, and the dialog must not call that window
+// refusing in the same breath as its state says ok.
+test("a refusal stamp is said to be refusing only while the window still refuses", async () => {
+  const stamped = (extra: Partial<BudgetWindow>) =>
+    day({ refused_at: "2026-09-29T09:00:00Z", ...extra });
+  for (const [window, refusing] of [
+    [stamped({ used: 120, limit: 100, state: "refusing" }), true],
+    [stamped({ used: 120, limit: 1000, state: "ok" }), false],
+  ] as const) {
+    mount(day(), true, ADMIN, {
+      ...BUDGETS,
+      seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [window] }],
+    });
+    await open();
+    const helper = screen.getByText(/tokens spent today/);
+    expect(/last refused/.test(helper.textContent ?? "")).toBe(refusing);
+    cleanup();
+  }
 });
 
 // ONLY WHAT WAS CHANGED: the dialog shows all three windows, and a save

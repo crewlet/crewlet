@@ -147,7 +147,19 @@ var nodeEstatePlacements = []placement{
 		Why: "The audit log of what THIS node did. A publish listener writes " +
 			"it inline on the publishing node, so there is no consumer group " +
 			"and no two nodes can write one row. A peer's copy is a different " +
-			"node's history, not a stale version of this one.",
+			"node's history, not a stale version of this one. On a data node " +
+			"it also holds the custody batches of nodes without `data` that " +
+			"this node KEEPS — taken from a group, so two nodes can write one " +
+			"batch, and a create-only claim in coordination decides the one " +
+			"that keeps it (custody_unsettled).",
+	},
+	{
+		Table: "custody_unsettled",
+		Why: "This node's record that it wrote a stateless node's batch and " +
+			"has not yet learned whether it keeps it. Which node keeps a batch " +
+			"is the company's answer and lives in coordination; this is only " +
+			"the question THIS node still has to ask about its own rows, so a " +
+			"peer's copy would be a question about rows the peer never wrote.",
 	},
 	{
 		Table: "crewlet_event_parties",
@@ -212,6 +224,14 @@ var nodeEstatePlacements = []placement{
 			"re-derives from the org chain, so a node that has not seen one " +
 			"runs the pass again rather than being wrong.",
 	},
+	{
+		Table: "memory_change_sequence",
+		Why: "The counter this node stamps its own memory rows from, so its " +
+			"memory sync can carry what changed since its last cycle. It " +
+			"orders THIS node's writes for THIS node's exports, and a peer " +
+			"stamps the rows it hydrates from its own — a shared value would " +
+			"order nothing either node exports.",
+	},
 
 	// -----------------------------------------------------------------
 	// A local cache of something coordination already decides. The
@@ -238,27 +258,7 @@ var nodeEstatePlacements = []placement{
 	// A per-node OBSERVATION about shared infrastructure. Two nodes
 	// legitimately hold different answers, which is what makes a shared
 	// copy wrong rather than merely unnecessary.
-	//
-	// `chat_thread_follows` was in this group and did not belong: two
-	// nodes holding different follows is not a legitimate difference, it
-	// is the bug. It is in coordination now — see ADR-0003 and node
-	// migration 0028 — and the table that remains is the handoff source
-	// rather than a member of this group.
 	// -----------------------------------------------------------------
-	{
-		Table: "chat_thread_follows",
-		Why: "NOT a fact this node decides — the follows are coordination's, " +
-			"and migration 0028 is why. What is left here is the one-time " +
-			"HANDOFF SOURCE: rows written before the move are carried onto " +
-			"the fleet's bucket at the next start by " +
-			"internal/notify/followsync, exactly as internal/fleetsecrets " +
-			"carries secret_values. Nothing reads it at runtime and nothing " +
-			"writes it, so its steady state is empty. It is not dropped " +
-			"because a migration runs before any Go code on every boot — so " +
-			"a drop here, or in any later numbered file a database could " +
-			"apply in the same pass, would leave the handoff an empty table " +
-			"and silently destroy every ACTIVE thread subscription.",
-	},
 	{
 		Table: "stream_identity",
 		Why: "What this node last saw of each stream's identity, which is how " +
@@ -320,7 +320,7 @@ var nodeEstatePlacements = []placement{
 // # The node estate only, and that is deliberate
 //
 // The page enumerates this estate table by table because a reader is looking
-// for one of seventeen named things. It describes the REPLICATED estate by
+// for one of a couple of dozen named things. It describes the REPLICATED estate by
 // family — "the tracker's own tables", "the knowledge base's" — because sixty
 // rows would be a schema dump rather than a map, and because a table there is
 // reached through a domain rather than named by an operator. Demanding every

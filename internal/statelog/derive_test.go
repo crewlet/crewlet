@@ -55,7 +55,7 @@ func (h *applyHarness) deriving(version int) *derivingApplier {
 func (h *applyHarness) storedDerivation() int {
 	h.t.Helper()
 	var v int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT derivation FROM statelog_cursor WHERE stream = ?`, probeStream).Scan(&v)
 	}); err != nil {
@@ -67,7 +67,7 @@ func (h *applyHarness) storedDerivation() int {
 func (h *applyHarness) derivedRows() int {
 	h.t.Helper()
 	var v int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT rows FROM probe_derived WHERE id = 1`).Scan(&v)
 	}); err != nil {
@@ -126,7 +126,7 @@ func TestADerivedColumnIsRederivedOnFirstApplyAfterUpgrade(t *testing.T) {
 
 	// ROWS FROM A NEWER BUILD — an adopted artefact — are brought DOWN to
 	// the rules this build maintains rather than extended with them.
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET derivation = 5 WHERE stream = ?`, probeStream)
 		return err
@@ -170,13 +170,15 @@ func TestAFreshCheckpointIsStampedWithTheRulesThatDerivedIt(t *testing.T) {
 	}
 
 	fetch := newProbeFetch()
+	// EVERYTHING ELSE A RUNNER NEEDS, its stream and the keyring included,
+	// so the one refusal left is the one this asks about: a runner missing
+	// either is refused first, and that refusal says nothing about a
+	// Deriver.
 	_, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{},
-		// EVERY OTHER DEP A RUNNER IS HELD TO, the keyring included, so
-		// the refusal this reads is the derivation's and nothing earlier.
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Verifier: testVerifier(t, probeDomain{}),
 		Applier:  &derivingApplier{probeApplier: newProbeApplier()},
-		Fetch:    fetch, Log: fetch, Node: h.db, DB: h.db.Replicated(),
+		Fetch:    fetch, Log: fetch, Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Generation: 1},
 	})
 	if err == nil || !strings.Contains(err.Error(), "derives at version 0") {

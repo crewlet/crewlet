@@ -143,18 +143,24 @@ async function answered(step?: () => void): Promise<void> {
  * call — it dialled before the frame had read whether the session may read
  * the company at all.
  */
-function mount() {
+async function mount() {
   const store = new Store();
   const socket = new LiveSocket(store);
   const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <App />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
+  // (`app/lazyScreen.ts`), and a synchronous act stops flushing at the first
+  // render that used a promise, settled or not — so the screen's first effects,
+  // and every answer the stubbed engine gives them, would be left unflushed.
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
   return { dial, reconnect };
 }
 
@@ -213,7 +219,7 @@ describe("signing in with a password", () => {
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     const depth = history.length;
 
     type(/login or email/i, "jane.doe");
@@ -246,7 +252,7 @@ describe("signing in with a password", () => {
         },
       },
     });
-    mount();
+    await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "wrong horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -264,7 +270,7 @@ describe("signing in with a password", () => {
       "GET /auth/session": NOBODY,
       "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
     });
-    mount();
+    await mount();
     // THE CONTROL: nothing asks for a code before the password has proved
     // itself, because only the engine knows whether this person holds one.
     expect(screen.queryByLabelText(/^code$/i)).toBeNull();
@@ -301,7 +307,7 @@ describe("signing in with a password", () => {
         headers: { "Retry-After": "16" },
       },
     });
-    mount();
+    await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -323,7 +329,7 @@ describe("signing in with a password", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
     // 401, which records that nobody is signed in. Without this the case
     // passed while the enrolment was routed straight back to this form — a
@@ -361,7 +367,7 @@ describe("signing in with the deployment's token", () => {
         body: { ...(SIGNED_IN.body as object), login: "token:ops" },
       },
     });
-    const { dial } = mount();
+    const { dial } = await mount();
     fireEvent.click(screen.getByRole("button", { name: /use an api token instead/i }));
     type("API token", "the-break-glass-token-value-long-enough");
     fireEvent.click(screen.getByRole("button", { name: "Sign in with the token" }));
@@ -395,7 +401,7 @@ describe("signing in with the deployment's token", () => {
       "GET /health": { status: 200, body: { status: "ok", identity: "unclaimed" } },
       "GET /auth/session": NOBODY,
     });
-    mount();
+    await mount();
     await answered();
     screen.getByText(/nobody has joined this deployment yet/i);
     expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
@@ -414,7 +420,7 @@ describe("signing in with the deployment's token", () => {
 
   test("a claimed deployment keeps the token behind the disclosure (the control)", async () => {
     engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
-    mount();
+    await mount();
     await answered();
     expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
     expect(screen.getByLabelText(/^password$/i)).toBeDefined();
@@ -428,7 +434,7 @@ describe("signing in with the deployment's token", () => {
       "GET /health": { status: 200, body: { status: "degraded", identity: "unknown" } },
       "GET /auth/session": NOBODY,
     });
-    mount();
+    await mount();
     await answered();
     expect(screen.queryByText(/invite or create yourself/i)).toBeNull();
     screen.getByText(/use the login or email address/i);
@@ -470,7 +476,7 @@ describe("a tab whose session ended somewhere else", () => {
   ])("%s", async (_, reader, session, told) => {
     if (reader) noteReader(reader);
     engine({ "GET /health": CLAIMED, "GET /auth/session": session as Answer });
-    mount();
+    await mount();
     await answered();
     expect(screen.queryByText("You were signed out") !== null).toBe(told);
   });
@@ -491,7 +497,7 @@ describe("a browser that is already signed in", () => {
         },
       },
     });
-    const { dial } = mount();
+    const { dial } = await mount();
     await answered();
     const carry = screen.getByRole("button", { name: "Continue as jane.doe" });
     // NOT SENT ON UNASKED: "sign in as somebody else" is a thing people mean.
@@ -525,7 +531,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     });
     noteReader("p-9");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -551,7 +557,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
       },
     });
     noteReader("p-9");
-    mount();
+    await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -570,7 +576,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     });
     noteReader("p-1");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { dial } = mount();
+    const { dial } = await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -599,7 +605,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
       localStorage.setItem(key, "[]");
     }
     localStorage.setItem("crewlet_rail_collapsed", "1");
-    mount();
+    await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -625,7 +631,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
     // ANOTHER TAB'S READER, whose session ended with no sign-out: the tab
     // that knew them is gone, and their lists are still in the browser.
     localStorage.setItem(recentsKey("p-9"), "[]");
-    mount();
+    await mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));

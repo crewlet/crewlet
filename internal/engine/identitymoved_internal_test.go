@@ -168,13 +168,14 @@ func TestAReplacedEstateNamesEveryone(t *testing.T) {
 func TestAnAdoptionNamesEveryone(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats",
+		func() bool { return e.StateLogHydrated(t.Context()) })
 	s := e.core.Load().log
 	quietHeartbeat(s)
 	running, at, last := pushBelowTheFloor(t, e, q)
 	rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
 	copyAdvancedTo(t, back, running, at, last, rows)
-	standUpDonor(t, q, rows, statelog.Position{
+	standUpDonor(t, e, q, rows, statelog.Position{
 		Stream: at.Stream, Generation: at.Generation, Seq: last,
 	}, running.runner.KeyedTo())
 

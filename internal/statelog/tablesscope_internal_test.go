@@ -53,7 +53,8 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 	// field — RowsPerInsert reads it as one row per statement, which is
 	// exactly the pre-conversion shape and therefore the control; 2 and 4
 	// and 14 straddle the collection at one, two and seven rows a
-	// statement; 2000 is the real probed limit, which takes it in one.
+	// statement; 2000 is wide enough to take all 41 in one, as the probed
+	// limit (32 766) is.
 	want := map[int][]string{}
 	for _, limit := range []int{0, 2, 4, 14, 2000} {
 		got := scopeRowsAt(ctx, t, rec, limit)
@@ -98,12 +99,7 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 // reads its scope index back in path order.
 func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []string {
 	t.Helper()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	rep := openProbeEstate(ctx, t)
 
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
@@ -181,12 +177,7 @@ func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	rep := openProbeEstate(ctx, t)
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
 		for _, stmt := range []string{
@@ -241,12 +232,7 @@ func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
 func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	rep := openProbeEstate(ctx, t)
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
 		for _, stmt := range []string{
@@ -310,4 +296,20 @@ func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
 			t.Fatalf("%s: probe: %v", tc.name, err)
 		}
 	}
+}
+
+// openProbeEstate is a fresh node with its replicated estate open, which is
+// where a domain's deferral tables live — the probe tables these cases create
+// are made there for that reason.
+func openProbeEstate(ctx context.Context, t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.OpenReplicated(ctx, 1); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
+	return db.Replicated()
 }

@@ -14,6 +14,7 @@ import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   EntryRow,
+  SeatStep,
   IN_FLIGHT,
   Reconcile,
   byConfiguredThenName,
@@ -187,10 +188,9 @@ test("the findings the phase was not derived from are still reachable", () => {
 //
 // This dropped element zero and rendered the tail, so whenever Classify's
 // winner sat anywhere else a real finding was hidden and the headline was
-// re-printed as "1 more finding". The engine promotes the winner now, but a
-// row written by a peer on an older build carries the vendor's own order and
-// a rolling upgrade puts exactly those rows on this screen.
-test("a finding list in the vendor's own order still renders correctly", () => {
+// re-printed as "1 more finding". The engine promotes the winner to the front,
+// but identity, not position, is what the screen relies on.
+test("the headline finding is matched by identity, not by position", () => {
   render(
     <Reconcile
       status={{
@@ -472,6 +472,7 @@ test("a disconnect in progress offers nothing", () => {
 import {
   actionFor,
   asSentence,
+  deliveryEvent,
   formBlocked,
   sectionsFor,
   tileMeta,
@@ -487,6 +488,7 @@ function toolState(over: Partial<SetupToolState>): SetupToolState {
     configured: true,
     enabled: true,
     satisfied: true,
+    form_complete: true,
     requirements: [],
     ...over,
   };
@@ -517,7 +519,9 @@ test("the action follows the state", () => {
   // NOTHING CONFIGURED: Connect.
   expect(kindOf(ready, [toolState({ configured: false })], false, [], false)).toBe("connect");
   // A FORM LEFT UNFINISHED: Continue.
-  expect(kindOf(ready, [toolState({ satisfied: false })], true, [], false)).toBe("continue");
+  expect(
+    kindOf(ready, [toolState({ satisfied: false, form_complete: false })], true, [], false),
+  ).toBe("continue");
   // A WORKING TOOL: Manage, which goes to its page and writes nothing.
   expect(kindOf(ready, [toolState({})], true, [], false)).toBe("manage");
   // A FAULT A NEW CREDENTIAL DOES NOT FIX is still Manage: what is wrong and
@@ -625,12 +629,24 @@ test("one unfinished surface makes the whole tool unfinished", () => {
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", ...confluence }),
   ];
-  expect(kindOf(ready, tools({ configured: true, satisfied: false }), true, [], false)).toBe(
-    "continue",
-  );
-  expect(kindOf(ready, tools({ configured: false, satisfied: false }), true, [], false)).toBe(
-    "continue",
-  );
+  expect(
+    kindOf(
+      ready,
+      tools({ configured: true, satisfied: false, form_complete: false }),
+      true,
+      [],
+      false,
+    ),
+  ).toBe("continue");
+  expect(
+    kindOf(
+      ready,
+      tools({ configured: false, satisfied: false, form_complete: false }),
+      true,
+      [],
+      false,
+    ),
+  ).toBe("continue");
   expect(kindOf(ready, tools({ configured: true, satisfied: true }), true, [], false)).toBe(
     "manage",
   );
@@ -682,6 +698,48 @@ test("a tile's foot counts agents, credentials and deliveries", () => {
   expect(tileMeta(present, roster, [], false)).toBe("2 agents");
   // AND A TOOL NOBODY CONNECTED HAS NOTHING TO COUNT.
   expect(tileMeta([], roster, [], true)).toBe("");
+});
+
+// A RELAYED DELIVERY IS COUNTED ONCE ON THE CARD. The engine counts each
+// delivery at the ingress it arrived at, so a Jira event the Forge relay
+// carried is in `forge`'s count and not in `jira`'s, and the Atlassian card —
+// which sums its surfaces — counts it once. Counted under the product as well,
+// the card drew every Cloud tenant's relayed traffic twice.
+test("an Atlassian card sums its surfaces' deliveries once each", () => {
+  const present = [
+    { surface: { key: "jira", name: "Jira" }, row: { key: "jira", configured: true, inbound: 1 } },
+    {
+      surface: { key: "confluence", name: "Confluence" },
+      row: { key: "confluence", configured: true, inbound: 0 },
+    },
+    {
+      surface: { key: "forge", name: "Forge relay" },
+      row: { key: "forge", configured: true, inbound: 2 },
+    },
+  ];
+  expect(tileMeta(present, undefined, [], true)).toBe("3 deliveries");
+});
+
+// A MATTERMOST CARD COUNTS ITS POSTS. Its socket records each post it presents
+// to a seat, so the count is a measurement like any other surface's — where it
+// used to be null, and the card drew no count at all over a busy chat.
+test("a socket surface's deliveries are counted like a webhook's", () => {
+  const present = [
+    {
+      surface: { key: "mattermost", name: "Mattermost" },
+      row: { key: "mattermost", configured: true, inbound: 5 },
+    },
+  ];
+  expect(tileMeta(present, undefined, [], true)).toBe("5 deliveries");
+});
+
+// A DELIVERY ROW SHOWS WHAT THE PROVIDER CALLED IT, whichever edge it came in
+// on: the engine files a row under its edge's prefix and the provider's own
+// event name, and the operator is matching the name against their console.
+test("a delivery's event drops the engine's filing prefix", () => {
+  expect(deliveryEvent("webhook:push")).toBe("push");
+  expect(deliveryEvent("forge:avi:jira:created:issue")).toBe("avi:jira:created:issue");
+  expect(deliveryEvent("socket:posted")).toBe("posted");
 });
 
 // --- a per-seat vendor ------------------------------------------------------ //
@@ -1175,6 +1233,38 @@ test("a connected tool offers a disconnect", () => {
   expect(asked).toEqual(["github"]);
 });
 
+// BUT NOT ON A MANAGED DOCUMENT (ADR-0030): a disconnect removes the block,
+// which the managing system would put straight back, so the control is drawn
+// and held with who manages the document — and an agent's app, which is
+// recorded on its seat, is held the same way before the host makes one.
+test("a managed document holds the disconnect and an agent's app", () => {
+  const asked: string[] = [];
+  const managed = "This company's configuration is managed by gitops — change it there.";
+  render(
+    <>
+      <EntryRow
+        entry={CATALOG.find((e) => e.key === "github")!}
+        rows={rowsOf({ key: "github", configured: true })}
+        managed={managed}
+        onDisconnect={() => asked.push("github")}
+      />
+      <SeatStep
+        app="GitHub"
+        toolKey="github"
+        seat={{ handle: "sre-lead", requirements: [], satisfied: false, step: "create_app" }}
+        managed={managed}
+      />
+    </>,
+  );
+  const disconnect = screen.getByRole("button", { name: "Disconnect" });
+  expect(disconnect.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(disconnect);
+  expect(asked).toEqual([]);
+  const create = screen.getByRole("button", { name: "Create app on GitHub" });
+  expect(create.getAttribute("aria-disabled")).toBe("true");
+  expect(document.body.textContent).toContain("managed by gitops");
+});
+
 // ALPHABETICAL, and it replaced a connected-first sort deliberately.
 //
 // Connected-first reads well the first time and badly afterwards: the order
@@ -1586,6 +1676,7 @@ test("the disconnect roster lists each agent once", () => {
     configured: true,
     enabled: true,
     satisfied: true,
+    form_complete: true,
     seats_required: true,
     manage_path: "Delete GitHub App",
     // A COMPANY BLOCK AS WELL AS SEATS, which is GitHub's real shape and
@@ -1802,10 +1893,10 @@ test("an advisory finding leaves the agent badged ready", () => {
 });
 
 // AND A FINDING WHOSE VERDICT THIS BUILD CANNOT READ IS A FAULT, not an
-// advisory. A node older than the phase field sends none, and a kind a newer
-// peer wrote is one this build has never heard of — read as advisory, either
-// would hide a broken agent behind a green badge.
-test("a finding with no verdict still un-readies the agent", () => {
+// advisory. A newer peer can write a kind this build has never heard of, under
+// a phase it has never heard of either — read as advisory, that would hide a
+// broken agent behind a green badge. Only `ready` is advisory.
+test("a finding of a kind and phase this build does not know still un-readies the agent", () => {
   render(
     <EntryRow
       entry={atlassian}
@@ -1817,7 +1908,15 @@ test("a finding with no verdict still un-readies the agent", () => {
           reconcile: {
             phase: "degraded",
             actor: "admin",
-            findings: [{ kind: "something_newer", subject: "sre-lead", detail: "unknown" }],
+            findings: [
+              {
+                kind: "something_newer",
+                phase: "something_newer",
+                actor: "admin",
+                subject: "sre-lead",
+                detail: "unknown",
+              },
+            ],
           },
         },
       )}

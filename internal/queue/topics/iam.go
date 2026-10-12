@@ -1,7 +1,5 @@
 package topics
 
-import "strings"
-
 // The identity estate's own log, and why its grammar is the strictest of the
 // five.
 //
@@ -48,38 +46,20 @@ const (
 // the engine that happens to be that word. The kinds are a typed enum in
 // internal/iamdomain, which is the package that switches on them.
 
-// IamLogSubject builds the subject for one object.
+// IamLogSubject builds the subject for one object on the identity log:
+// [LogSubject] under [IamLogPrefix], and refused wherever that is.
 //
 // An EMPTY id is legal and means a kind with exactly one object, which the
-// directory, the invalidation and the barrier all are. An empty KIND is not: it would publish
-// to the prefix itself, a real subject inside the wildcard that the applier's
-// switch has no case for, so it answers the empty string and callers must
-// treat that as "not publishable" rather than as a subject.
+// directory, the invalidation and the barrier all are.
 func IamLogSubject(kind, id string) string {
-	if kind == "" {
-		return ""
-	}
-	if id == "" {
-		return IamLogPrefix + "." + kind
-	}
-	return IamLogPrefix + "." + kind + "." + id
+	return LogSubject(IamLogPrefix, kind, id)
 }
 
-// IamLogPath recovers the kind and the id from a subject on the iam log,
-// reporting whether the subject was one.
-//
-// The exact inverse of [IamLogSubject]. The ID keeps its dots: only the FIRST
-// dot after the prefix separates the kind from the id, so an id that carries
-// one — a node id may — is recovered whole rather than cut at its first dot
-// into an id nobody published.
+// IamLogPath recovers the kind and the id from a subject on the identity log,
+// reporting whether the subject was one: [LogPath] under [IamLogPrefix], the
+// exact inverse of [IamLogSubject]. The id keeps its dots, which matters more
+// here than on any other log: a person's login REQUIRES one, so `jane.doe` is
+// what every login's subject looks like rather than an occasional awkward id.
 func IamLogPath(subject string) (kind, id string, ok bool) {
-	rest, found := strings.CutPrefix(subject, IamLogPrefix+".")
-	if !found || rest == "" {
-		return "", "", false
-	}
-	kind, id, found = strings.Cut(rest, ".")
-	if kind == "" || (found && id == "") {
-		return "", "", false
-	}
-	return kind, id, true
+	return LogPath(IamLogPrefix, subject)
 }

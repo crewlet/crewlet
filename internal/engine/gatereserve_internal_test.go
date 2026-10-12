@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -23,7 +24,15 @@ import (
 // what is under test is what a log at its ceiling takes, not how it came to be
 // there; the reserve reads the ceiling from the broker on every admission, as
 // it would after any resize.
-func fullForOrdinaryWrites(t *testing.T, identity []*runningDomain, minBytes uint64,
+//
+// A FEW PADDED BARRIERS AND A SMALL TOP-UP, because what a reserve admits is a
+// function of bytes alone ([statelog.Reservation.Ordinary],
+// [statelog.Reservation.Bytes]): filling with barriers of a few hundred bytes
+// each was a thousand appends, each one applied, for the same bytes four
+// padded ones hold. Each padded barrier leaves fillTopUp of the target, so the
+// last bytes are still small barriers and the log ends as close past minBytes
+// as it always did.
+func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64,
 	ceiling func(reservation statelog.Reservation, held uint64) uint64) map[string]uint64 {
 
 	t.Helper()
@@ -37,6 +46,10 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningDomain, minBytes uin
 			}
 			if stats.Bytes >= minBytes {
 				break
+			}
+			if left := minBytes - stats.Bytes; left > 2*fillTopUp {
+				paddedBarrierOn(t, running, int(min(left-fillTopUp, fillPad)))
+				continue
 			}
 			barrierOn(t, running)
 		}
@@ -52,6 +65,61 @@ func fullForOrdinaryWrites(t *testing.T, identity []*runningDomain, minBytes uin
 		out[name] = limit
 	}
 	return out
+}
+
+const (
+	// fillPad is the most padding one barrier carries: 32 KiB, under the
+	// largest record any identity-claiming log declares
+	// ([statelog.StreamSpec.MaxRecordBytes] — the identity estate's 128 KiB
+	// is the smallest), so the stream's own max_msg_size takes it, and four
+	// of them fill the largest target a case here sets.
+	fillPad = 32 << 10
+
+	// fillTopUp is what the padded barriers leave of a fill for small ones:
+	// past a stored record's own overhead (subject, headers, envelope — a
+	// few hundred bytes), so padding never carries a log past its target.
+	fillTopUp = 2 << 10
+)
+
+// paddedBarrierOn is [barrierOn] carrying pad bytes in a field no build
+// reads: the domain's own barrier, from its own encoder, with one member
+// added to the record's JSON object — which every record decoder here
+// tolerates, as the envelope's evolution rule requires of them — so it
+// decodes, is applied and is dropped by no gate exactly as the small one is.
+func paddedBarrierOn(t *testing.T, running *runningLog, pad int) {
+	t.Helper()
+	encode := barrierEncoder(running.domain)
+	if encode == nil {
+		t.Fatalf("%s has no barrier encoding to put a record on its log with",
+			running.domain.Name())
+	}
+	body, err := encode(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind},
+		Gen:     running.runner.Committed().Generation,
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(body, &record); err != nil {
+		t.Fatalf("%s's barrier is not a JSON object to pad: %v", running.domain.Name(), err)
+	}
+	if record["fill_padding"], err = json.Marshal(strings.Repeat("x", pad)); err != nil {
+		t.Fatalf("encode the padding: %v", err)
+	}
+	if body, err = json.Marshal(record); err != nil {
+		t.Fatalf("re-encode the padded barrier: %v", err)
+	}
+	// SIGNED, as [barrierOn]'s is: an applier refuses a frame this keyring
+	// does not open, so an unsigned padded barrier would stop the log the
+	// fill means to move rather than be applied.
+	if _, _, err := running.log.Append(t.Context(),
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
+		running.signer.Seal(body)); err != nil {
+		t.Fatalf("append a padded barrier: %v", err)
+	}
 }
 
 // ordinaryCeilingAt is the smallest ceiling whose ordinary writes are held to
@@ -70,10 +138,11 @@ func refusedFull(err error) bool {
 // requireOrdinaryRefused asserts that an ordinary append — a linearizable
 // read's barrier, admitted through the log's own reserve as the engine's read
 // index admits it — is refused `log_full` and never reaches the log.
-func requireOrdinaryRefused(t *testing.T, running *runningDomain) {
+func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 	t.Helper()
 	name := running.domain.Name()
-	index, err := statelog.NewReadIndex(running.domain, running.log, running.signer, running.reserve,
+	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log,
+		running.signer, running.reserve,
 		barrierEncoder(running.domain),
 		func() uint32 { return running.runner.Committed().Generation }, nil)
 	if err != nil {
@@ -138,7 +207,7 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 				"reserve between %d and %d", name, stats.Bytes, soft, ceilings[name])
 		}
 		waitApplied(t, running)
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}
@@ -213,8 +282,8 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 	for _, d := range r.Report(t.Context()).Domains {
 		rows[d.Domain] = d
 	}
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
+		name := running.domain.Name()
 		reservation := statelog.ReservationOf(running.domain)
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {

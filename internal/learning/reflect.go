@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -15,18 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// ReflectGroup is the dispatcher's consumer group.
-//
-// Its own group, shared with nothing: reflection is the one subsystem an
-// operator turns off on its own, and a group shared with another consumer
-// would take that consumer's traffic down with it.
-const ReflectGroup = "reflect-engine"
-
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is an executor builtin, so a call lands in the executor-scoped
-// [types.TurnCompleted.ToolSequence].
+// It is an executor builtin, so a call lands in the whole-turn
+// [types.TurnCompleted.AllToolNames], which [Turn.SelfPersisted] reads — never
+// the final-iteration [types.TurnCompleted.ToolSequence], which forgets a call
+// an earlier self_iterate attempt made.
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
@@ -38,9 +36,6 @@ const ReflectTool = "reflect_and_persist"
 // node reflecting the same turn writes a second diary row, which is the
 // bounded duplication the engine promises rather than exactly-once.
 const ReflectSeen = 1024
-
-// turnCompletedTopic is the subject completed turns arrive on.
-var turnCompletedTopic = topics.Event(types.TurnCompleted{}.EventType())
 
 // Turn is one completed turn, with the seat's role already resolved.
 //
@@ -88,6 +83,59 @@ func (t Turn) Seat() string {
 // the next redelivery's dedupe, and a fabricated key walks straight through
 // that.
 func (t Turn) WorkKey() string { return t.Event.WorkKey }
+
+// Reflecting is the attribution a reflection worker states for its model call
+// on this turn: the REFLECTION stage — the seat's learning after the turn,
+// counted on the seat's day and drawn beside the turn, never in its cost or on
+// its work item — the turn it learns from, and the worker's own purpose.
+func (t Turn) Reflecting(purpose types.AuxPurpose) auxspend.Use {
+	return auxspend.Use{Stage: types.AuxStageReflection, Purpose: purpose,
+		TurnID: t.Event.TurnID, WorkKey: t.WorkKey()}
+}
+
+// Ask is what the turn was ASKED, in the trigger's own words: its
+// interactions' bodies, in the order they spoke, or — for a wake that has no
+// interactions (a colleague's question, a schedule's task, a resumed segment)
+// — [types.TurnCompleted.Ask]. "" when the turn was told neither.
+//
+// NEVER the label ([types.TurnCompleted.TaskSummary]), which says what kind
+// of event woke the turn and nothing of what it said.
+func (t Turn) Ask() string {
+	if ask := strings.TrimSpace(t.Event.Ask); ask != "" {
+		return ask
+	}
+	parts := make([]string, 0, len(t.Event.Interactions))
+	for _, in := range t.Event.Interactions {
+		if body := strings.TrimSpace(in.Body); body != "" {
+			parts = append(parts, body)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// describeTurn writes the lines every post-turn worker's prompt opens its
+// account of a turn with: what woke it, what it was asked, and what it did —
+// each under the name of what it IS.
+//
+// They were "Task:" and "Plan:", and neither was: the first is the label of
+// the waking event ([types.TurnCompleted.TaskSummary] — "Message from Ana:
+// Slack message", "cto asked a colleague on ch-1"), which a model told it is
+// the task reads as the whole of what was asked; the second is the review's
+// account of what landed, or the final answer, which is what the turn did and
+// not what it meant to. ask is rendered on one line, quoted, and omitted when
+// empty; a worker that renders each interaction itself passes only the ask
+// the interactions do not carry.
+func describeTurn(b *strings.Builder, t Turn, ask string) {
+	b.WriteString("- Woken by: ")
+	b.WriteString(orElse(strings.TrimSpace(t.Event.TaskSummary), "(not recorded)"))
+	if ask = strings.Join(strings.Fields(ask), " "); ask != "" {
+		b.WriteString("\n- Asked: \"")
+		b.WriteString(ask)
+		b.WriteString("\"")
+	}
+	b.WriteString("\n- What it did: ")
+	b.WriteString(orElse(strings.TrimSpace(t.Event.PlanSummary), "(nothing recorded)"))
+}
 
 // DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT
 // question from [Turn.WorkKey].
@@ -141,9 +189,11 @@ func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
 // SelfPersisted reports whether the turn already wrote its own memory.
 //
-// Off the WHOLE turn's calls, never the last round's: a self_iterate loop
-// keeps only its final round in ToolSequence, and a memory written in an
-// earlier round is still written.
+// It reads EVERY executor iteration's calls. A call in an iteration the
+// reviewer sent back with self_iterate still wrote the memory, and a later
+// iteration that did not call it again does not undo that — read off the
+// final iteration alone, such a turn ran the persist decision a second time
+// over a fact the agent had already written.
 func (t Turn) SelfPersisted() bool {
 	return slices.Contains(t.Event.AllToolNames, ReflectTool)
 }
@@ -153,8 +203,8 @@ func (t Turn) SelfPersisted() bool {
 // Two routes to "it did not", and both produce phantom-directive learning if
 // they are not blocked:
 //
-//   - the turn opted out (plan_decision skip) — nobody was asking this seat
-//     to do anything, and the engine ended it silently;
+//   - the turn was skipped (review_outcome `skipped`) — nobody was asking
+//     this seat to do anything, and the engine ended it silently;
 //   - the turn engaged with nothing: it finished `done` having called no
 //     tool at all, which is what a seat that read the trigger, recognised it
 //     as somebody else's and then said so only to itself looks like.
@@ -170,7 +220,7 @@ func (t Turn) SelfPersisted() bool {
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
 func (t Turn) Engaged() bool {
-	if t.Event.PlanDecision == types.PlanDecisionSkip {
+	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
 	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
@@ -214,11 +264,6 @@ type Worker interface {
 	Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 }
 
-// Subscriber is the half of the queue the dispatcher attaches through.
-type Subscriber interface {
-	Subscribe(ctx context.Context, topic, group string, h queue.Handler) error
-}
-
 // Reflector dispatches learning workers over completed turns.
 //
 // ONE PER PROCESS, not one per config epoch, even though its org and its
@@ -229,9 +274,24 @@ type Subscriber interface {
 // apply would empty that ring, so a redelivery landing either side of a
 // config change would be classified twice, which is the one failure the ring
 // exists to prevent. So an apply calls [Reflector.Reconfigure] and the
-// subscription, and the ring, stay put.
+// ring stays put.
+//
+// # Where it runs: on the seat's holder, never a fleet-wide group
+//
+// Reflection writes the seat's memory into the store of the node that runs
+// it, and only the node HOLDING the seat carries that memory on to the next
+// holder (memsync). So the node that ran a turn puts it on the seat's own
+// reflection subject ([types.ReflectionDue] on [topics.AgentReflect]), which
+// the engine attaches [Reflector.Handle] to while it holds the seat. It ran
+// off one fleet-wide group once, and on a fleet of N nodes all but one in N
+// of a seat's reflections ran where nothing of the seat was held — what they
+// wrote was never carried and never read.
 type Reflector struct {
 	pub queue.Publisher
+
+	// spend publishes what a pass's model calls cost before its sentinel
+	// does — see [SpendFlusher]. Nil publishes nothing early.
+	spend SpendFlusher
 
 	// live is the epoch-scoped half, swapped whole by Reconfigure and
 	// never mutated — the same rule the engine's own epoch follows.
@@ -261,9 +321,29 @@ type reflectorEpoch struct {
 // answer, and an error is "the counter could not be reached", which is NOT a
 // refusal. A blip must not silently stop a company learning — the charge on
 // the way out is what keeps an unreachable counter from also being free.
+//
+// A FALSE IS A REFUSAL, not an observation: the pass asks immediately before
+// the work it gates and makes no call on false, so the engine's gate records
+// it as the budget turning that work away (the window's refusal stamp).
+// Never ask it only to look.
 type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 
-// NewReflector builds a dispatcher over an org and a publisher.
+// SpendFlusher publishes what one turn's auxiliary calls have cost on this node
+// so far — the node's auxiliary-spend ledger ([auxspend.Ledger.FlushTurn]),
+// declared here by its one caller.
+//
+// A PASS'S SENTINEL FOLLOWS ITS COST. The Turn screen asks for the turn again
+// when the sentinel lands, and draws the Reflection lane from the reflection
+// stage's spend records; left to the ledger's timer, those landed up to a
+// flush interval after the sentinel, and a page that had already asked never
+// showed them.
+type SpendFlusher interface {
+	FlushTurn(ctx context.Context, turnID string)
+}
+
+// NewReflector builds a dispatcher over an org and a publisher. spend is the
+// node's auxiliary-spend ledger, flushed for the turn before a pass's sentinel;
+// nil flushes nothing early.
 //
 // An EMPTY worker list is allowed: a company may wire the dispatcher before
 // wiring any worker, and every pass then short-circuits on the no-workers
@@ -271,7 +351,9 @@ type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 // an optional worker without checking it, and the alternative to refusing it
 // here is a nil dereference on the first completed turn, which is a stack
 // trace naming this package for a mistake made in the engine's wiring.
-func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, budget BudgetGate) (*Reflector, error) {
+func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, budget BudgetGate,
+	spend SpendFlusher,
+) (*Reflector, error) {
 	if o == nil {
 		return nil, fmt.Errorf("learning: reflection needs an organization to resolve seats against")
 	}
@@ -281,7 +363,7 @@ func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, bu
 	if err := validateWorkers(workers); err != nil {
 		return nil, err
 	}
-	r := &Reflector{pub: pub, seen: newRecentTurns(ReflectSeen)}
+	r := &Reflector{pub: pub, spend: spend, seen: newRecentTurns(ReflectSeen)}
 	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers), budget: budget})
 	return r, nil
 }
@@ -334,15 +416,6 @@ func validateWorkers(workers []Worker) error {
 	return nil
 }
 
-// Start attaches the dispatcher to the completed-turn subject.
-func (r *Reflector) Start(ctx context.Context, sub Subscriber) error {
-	if err := sub.Subscribe(ctx, turnCompletedTopic, ReflectGroup, r.Handle); err != nil {
-		return fmt.Errorf("learning: subscribe %s: %w", turnCompletedTopic, err)
-	}
-	log.InfoContext(ctx, "reflect_engine_started", "workers", r.names())
-	return nil
-}
-
 func (r *Reflector) names() []string {
 	workers := r.epoch().workers
 	out := make([]string, 0, len(workers))
@@ -352,7 +425,9 @@ func (r *Reflector) names() []string {
 	return out
 }
 
-// Handle is the queue handler for one completed turn.
+// Handle is the queue handler for one turn due its reflection: the
+// [types.ReflectionDue] wake the node that ran the turn put on the seat's own
+// reflection subject.
 //
 // It ALWAYS acks, whatever happened. Reflection is work about a turn that is
 // already over: a nak would redeliver the turn to spend another round of
@@ -375,7 +450,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", string(debug.Stack()))
 		}
 	}()
-	tc, ok := events.DataAs[*types.TurnCompleted](ev)
+	due, ok := events.DataAs[*types.ReflectionDue](ev)
 	if !ok {
 		// The subject carries one type, so this is a build that does not
 		// know it (a rolling upgrade) or a mis-routed publish. Acked
@@ -383,7 +458,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		log.DebugContext(ctx, "reflection_skipped_unreadable_event", "type", eventTypeOf(ev))
 		return queue.Ack()
 	}
-	r.Reflect(ctx, *tc, events.TraceContext{
+	r.Reflect(ctx, due.Turn, events.TraceContext{
 		TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
 	})
 	return queue.Ack()
@@ -543,13 +618,13 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
-			"agent_handle", tc.AgentHandle, "plan_decision", string(tc.PlanDecision),
+			"agent_handle", tc.AgentHandle,
 			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
 		// learn from and a turn reflection never reached look identical
 		// on every surface otherwise, and the second is a bug while the
 		// first is the gate working.
-		r.publish(ctx, turn, types.ReflectionCompleted{
+		r.closePass(ctx, turn, types.ReflectionCompleted{
 			Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
 			TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
 			WorkersRun: 0, ReviewOutcome: tc.ReviewOutcome,
@@ -590,16 +665,29 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		}
 	}
 
-	// The trailing sentinel. The auxiliary phase events workers emit keep
-	// the seat rendering as WORKING for as long as they are the newest
-	// event for that role; this is what flips it back to idle when the
-	// pass is over.
-	r.publish(ctx, turn, types.ReflectionCompleted{
+	// The trailing sentinel: what closes the pass on the turn's record —
+	// the live view extends the seat's last turn to it, and the Turn
+	// screen's Reflection lane ends at it. What each worker's model calls
+	// cost is not here and moves no seat: the auxiliary seam records it as
+	// `auxiliary_spend` of the reflection stage, which no state machine
+	// reads, because a spend record that drove the seat would reopen the
+	// turn it names.
+	r.closePass(ctx, turn, types.ReflectionCompleted{
 		Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
 		TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
 		WorkersRun: len(out.Ran), ReviewOutcome: tc.ReviewOutcome,
 	})
 	return out
+}
+
+// closePass publishes a pass's sentinel AFTER what the pass's model calls cost
+// ([SpendFlusher]): a reader that asks for the turn again when the sentinel
+// lands reads the Reflection lane whole.
+func (r *Reflector) closePass(ctx context.Context, t Turn, sentinel types.ReflectionCompleted) {
+	if r.spend != nil {
+		r.spend.FlushTurn(ctx, t.Event.TurnID)
+	}
+	r.publish(ctx, t, sentinel)
 }
 
 // dispatch runs one worker, converting a panic into an error.

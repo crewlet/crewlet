@@ -194,7 +194,9 @@ var ErrLogDiverged = errors.New("statelog: the log's record at this node's check
 
 // divergedLog is what established that a log diverged from an applier's rows:
 // the checkpoint, the broker instant of the record the checkpoint names, and
-// the instant of the record the log holds at the same sequence.
+// the instant of the record the log holds at the same sequence. The consumed
+// instant is never zero: a checkpoint that names no record is compared with
+// nothing ([Runner.VerifyCheckpoint]).
 type divergedLog struct {
 	at             Position
 	consumed, held time.Time

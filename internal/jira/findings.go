@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -43,13 +44,16 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// The public base used to be described here as absent from the
 	// integrations block, with ingress left "to the subcommand that has
-	// the URL". It is `api.external_url`, and the reconcile
-	// loop feeds it into every pass — so the silence meant a Data Center
-	// company that never set it saw Jira reported Ready.
+	// the URL". It is Tier A's webhook address — `api.public.external_url`
+	// behind a public listener, `api.external_url` otherwise — and the
+	// reconcile loop feeds it into every pass, so the silence meant a Data
+	// Center company that never set it saw Jira reported Ready. The
+	// finding names the key the address was READ from, which only the
+	// caller holding the Tier A can say ([Result.NoIngressKey]).
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "api.external_url",
+			Subject: setup.BaseKey(r.NoIngressKey),
 			Detail:  r.NoIngress,
 		})
 	}

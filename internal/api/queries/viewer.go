@@ -6,16 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
 // errNoSeat is the refusal a question about a SEAT's trail makes of a caller
-// bound to no seat who named none — a Tier A token's credential, a service
-// account bound to none, or a person recorded before every person held a seat.
+// bound to no seat who named none — a Tier A token's credential, or a service
+// account bound to none.
 // It is NOT an authorization failure — nobody was refused anything — and its
 // remedy is a row in the identity directory rather than a different
 // credential, which is why it is [ErrBadParams] and the authority refusal
@@ -36,8 +38,7 @@ var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind 
 // caller who has none and named nobody.
 //
 // RARER THAN [errNoSeat] and a different fact: every person — bound to their
-// seat, or recorded with a login before every person held one — every service
-// account and every token has a record of their own — see [iam.RecordOwner] —
+// seat — every service account and every token has a record of their own — see [iam.RecordOwner] —
 // so what reaches this is a principal the engine can name nothing for, and the
 // remedy is to name whose record to read.
 var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
@@ -53,13 +54,10 @@ var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
 // they hold is on the chart. Nothing here derives anything any more.
 //
 // A CREDENTIAL BOUND TO NO SEAT IS AN ORDINARY STATE — a Tier A token's
-// session, a service account bound to none, and a person recorded before every
-// person held a seat (`/iam/check`'s `person_without_seat`) — so this answers
-// the login with no seat rather than an error: the screen then says what to
-// bind, which is a different thing from a screen that looks broken. It is not
-// a PERSON's ordinary state any more: a person holds a human seat for as long
-// as they exist (ADR-0026), so a person reaching here unbound is the residue
-// the check names, and the screen says so rather than calling it normal.
+// session, or a service account bound to none — so this answers the login with
+// no seat rather than an error: the screen then says what to bind, which is a
+// different thing from a screen that looks broken. It is never a PERSON's: a
+// person holds a human seat for as long as they exist (ADR-0032).
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
@@ -100,6 +98,29 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// no seat, and a seat whose team, and every team above it, owns no
 		// project, whose create is refused until one is named.
 		"project": "",
+		// WHETHER THIS CALLER'S CREDENTIAL MAY CHANGE THE COMPANY DOCUMENT,
+		// and who manages it (ADR-0030), so a screen draws every editing
+		// control disabled with the reason rather than offering a save the
+		// config surface refuses. Judged on the CREDENTIAL the request came
+		// through ([iam.ActorFor]'s operator id), by
+		// [config.APIAuth.MayWriteCompany] — the one reading the config
+		// surface refuses a write with — so this answer and that refusal
+		// cannot disagree. It says nothing about AUTHORITY: the
+		// `config:write` grant, or a lead's subtree, still decides whether
+		// this caller may write at all.
+		//
+		// THE WRITERS ARE NAMED TO EVERY CALLER, which is what the config
+		// surface already does: its refusal names them to anybody whose
+		// write it turns away, and a write anybody bound to a seat may
+		// attempt reaches that refusal. Withheld here, they would hide only
+		// the reason a screen locks an edit, from exactly the lead who
+		// would otherwise press it. They are token LABELS, never values.
+		// ALWAYS AN ARRAY; empty is not managed.
+		"config_writer":     s.companyWriters().MayWriteCompany(iam.ActorFor(principal)),
+		"config_managed_by": slices.Clone(s.companyWriters().CompanyWriters),
+	}
+	if out["config_managed_by"] == nil {
+		out["config_managed_by"] = []string{}
 	}
 	if s.Acts != nil {
 		acts, err := s.Acts(ctx, principal)
@@ -145,6 +166,13 @@ func grantNames(p iam.Principal) []string {
 		out = append(out, string(g))
 	}
 	return out
+}
+
+// companyWriters is the managed-document rule as the config surface reads it:
+// Tier A's `api.auth.company_writers` ([Sources.CompanyWriters]), read through
+// [config.APIAuth] so the viewer and the write path share one reading.
+func (s Sources) companyWriters() *config.APIAuth {
+	return &config.APIAuth{CompanyWriters: s.CompanyWriters}
 }
 
 // seatOf resolves the caller's own seat on one chart reading, or nil.

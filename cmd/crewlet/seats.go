@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,13 +40,13 @@ import (
 // per gesture.
 
 // runSeats dispatches `crewlet seats`.
-func runSeats(args []string, stdout, stderr io.Writer) error {
+func runSeats(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "pause":
-		return seatsAct(rest, "pause_seat", true, stdout, stderr)
+		return seatsAct(environ, rest, "pause_seat", true, stdout, stderr)
 	case "resume":
-		return seatsAct(rest, "resume_seat", false, stdout, stderr)
+		return seatsAct(environ, rest, "resume_seat", false, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, seatsUsage)
 		return flag.ErrHelp
@@ -61,12 +62,12 @@ const seatsUsage = "usage: crewlet seats pause <handle> [-stop] [-reason TEXT] "
 	"The credential is " + apiTokenEnv + "."
 
 // seatsAct is one pause or resume.
-func seatsAct(args []string, tool string, pausing bool, stdout, stderr io.Writer) error {
+func seatsAct(environ config.Source, args []string, tool string, pausing bool, stdout, stderr io.Writer) error {
 	gesture := strings.TrimSuffix(tool, "_seat")
 	handle, rest := splitSubject(args)
 	var stop *bool
 	var reason, opID *string
-	client, err := nodeClientFor(rest, "seats "+gesture, stderr,
+	client, err := nodeClientFor(environ, rest, "seats "+gesture, stderr,
 		func(fs *flag.FlagSet) {
 			if pausing {
 				stop = fs.Bool("stop", false,

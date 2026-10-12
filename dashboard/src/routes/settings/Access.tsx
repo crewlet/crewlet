@@ -26,7 +26,10 @@
  *  - `GET /iam/seats` — every human seat of the running company and what
  *    holds it: a person, a service account, or an open invitation.
  *  - `GET /iam/node-tokens` — THIS NODE's Tier A tokens by label, each joined
- *    to the directory row its login names.
+ *    to the directory row its login names, and the tokens a MANAGED company
+ *    document names as its only writers (`api.auth.company_writers`,
+ *    ADR-0030) — drawn on that card only when the list is not empty, since
+ *    "every credential may" is the default nobody configured.
  *  - `GET /iam/check` — what the directory reports wrong, worded per kind
  *    with the engine's own detail beside it, so a kind this build does not
  *    know still reads.
@@ -94,6 +97,7 @@ import {
   KeyGlyph,
   SendGlyph,
   PlusGlyph,
+  ShieldGlyph,
   TriangleAlertGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -193,6 +197,22 @@ export interface SessionRow {
   ended_reason?: string;
   live: boolean;
   enrolment_only?: boolean;
+}
+
+/**
+ * `GET /iam/node-tokens`: this node's Tier A tokens, and the ids of those a
+ * managed company document names as its writers — empty where the document
+ * is not managed.
+ */
+export interface NodeTokens {
+  tokens: NodeToken[];
+  /**
+   * `api.auth.company_writers`: the Tier A token ids that alone may change
+   * the company document while it is managed (ADR-0030). Every other
+   * credential — a person's session, a machine token, this node's other
+   * tokens — reads it, and can still rotate a credential it names.
+   */
+  companyWriters: string[];
 }
 
 /** One of this node's Tier A tokens, by label, joined to its directory row. */
@@ -320,7 +340,6 @@ export const FINDING_WORDS: Record<(typeof FINDING_KINDS)[number], { label: stri
   {
     no_people_manage_holder: { label: "Nobody can administer", tone: "danger" },
     person_without_credential: { label: "Active, no credential", tone: "warning" },
-    person_without_seat: { label: "No seat", tone: "warning" },
     binding_dangling: { label: "Seat gone", tone: "warning" },
     grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
   };
@@ -549,6 +568,15 @@ function listOf<T>(answer: unknown, field: string): T[] {
   return Array.isArray(list) ? (list as T[]) : [];
 }
 
+/** `GET /iam/node-tokens`, read whole: the tokens and the managed document's writers. */
+async function readNodeTokens(signal: AbortSignal): Promise<NodeTokens> {
+  const answer = await rest.get("/iam/node-tokens", signal);
+  return {
+    tokens: listOf<NodeToken>(answer, "tokens"),
+    companyWriters: listOf<string>(answer, "company_writers"),
+  };
+}
+
 /** How every `/iam` read here is kept current: as every directory read is. */
 const READ = DIRECTORY_READ;
 
@@ -571,11 +599,7 @@ export function PeopleAndAccess() {
   // THE ONE READING OF THE SEATS every seat surface takes, so a gesture made
   // on a seat elsewhere on the page — or this page's own — is heard here too.
   const seats = useHumanSeats(true);
-  const tokens = useRest(
-    "/iam/node-tokens",
-    async (signal) => listOf<NodeToken>(await rest.get("/iam/node-tokens", signal), "tokens"),
-    READ,
-  );
+  const tokens = useRest("/iam/node-tokens", readNodeTokens, READ);
   const check = useRest(
     "/iam/check",
     async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
@@ -620,7 +644,8 @@ export function PeopleAndAccess() {
   // could still invite somebody onto.
   const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
   const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
-  const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
+  const tokenRows = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
+  const companyWriters = tokens.data?.companyWriters ?? [];
   const boundTokens = tokenRows.filter((t) => t.seat).length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
   // WHO IS READING, by the id the session names — never the login, which a
@@ -788,9 +813,7 @@ export function PeopleAndAccess() {
                   key: "seat",
                   header: "Seat",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => (
-                    <BoundSeat seat={p.seat} index={index} person={p.kind === "person"} />
-                  ),
+                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
@@ -923,6 +946,11 @@ export function PeopleAndAccess() {
             <Card.Header icon={<KeyGlyph size="sm" />} count={tokenRows.length}>
               API tokens on this node
             </Card.Header>
+            {companyWriters.length > 0 && (
+              <Card.Body padding="md">
+                <CompanyWriters writers={companyWriters} />
+              </Card.Body>
+            )}
             <QueryState
               error={tokens.code}
               refusal={tokens.refusal}
@@ -980,6 +1008,35 @@ export function PeopleAndAccess() {
 // ---------------------------------------------------------------------------
 // Parts
 // ---------------------------------------------------------------------------
+
+/**
+ * WHO MAY CHANGE THE COMPANY, where a managed document says (ADR-0030).
+ *
+ * Part of what a Tier A token is: the deployment's `api.auth` names the tokens
+ * that alone write a managed document, and this is the screen an operator
+ * reads that posture on. Worded for EVERY credential rather than "every other
+ * token", because a person's session and a machine token are refused
+ * `config_managed` exactly as an unlisted token is — the managed check judges
+ * the credential, whatever grants stand behind it.
+ */
+function CompanyWriters({ writers }: { writers: readonly string[] }) {
+  return (
+    <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+      <span>
+        The company document is managed: only {writers.length === 1 ? "the token" : "the tokens"}{" "}
+        {writers.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ", "}
+            <InlineCode>{id}</InlineCode>
+          </span>
+        ))}{" "}
+        may change it (<InlineCode>api.auth.company_writers</InlineCode>). Every other credential —
+        a person&rsquo;s session, a machine token, this node&rsquo;s other tokens — reads it, and
+        can still rotate a credential it names.
+      </span>
+    </Callout>
+  );
+}
 
 /**
  * Every seat's contact identities, by handle, from the company document —
@@ -1065,31 +1122,10 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
  * state the opposite of the chart on the row the report calls dangling. A seat
  * the chart does not hold has no kind, which the cell draws as its default.
  *
- * A PERSON WITH NO SEAT IS A FAULT, not a neutral blank: every person holds a
- * human seat, and one recorded before that held is what the report names
- * (`person_without_seat`). A service account bound to none is ordinary.
+ * BOUND TO NONE is a service account's or a token's row acting as itself,
+ * which is ordinary: a person always holds a human seat (ADR-0032).
  */
-function BoundSeat({
-  seat,
-  index,
-  person = false,
-}: {
-  seat?: string;
-  index: ReturnType<typeof indexOrg>;
-  /** The row is a person's. */
-  person?: boolean;
-}) {
-  if (!seat && person) {
-    return (
-      <Tag
-        size="sm"
-        variant="warning"
-        title="Every person holds a human seat: give them one with Edit login, seat and grants."
-      >
-        No seat
-      </Tag>
-    );
-  }
+function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
   if (!seat) return <EmptyValue label="Bound to no seat" />;
   const held = index.byHandle.get(seat);
   return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;

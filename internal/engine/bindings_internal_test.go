@@ -58,7 +58,7 @@ func boundService(id, seat string) iamdomain.SeatBinding {
 // table itself, and this walks every row of it.
 //
 // AND THE REMEDY IS THE BOUND PRINCIPAL'S. A person holds a human seat for as
-// long as they are here (ADR-0026), so the directory refuses to unbind one:
+// long as they are here (ADR-0032), so the directory refuses to unbind one:
 // the sentence both kinds used to share sent an administrator to exactly that
 // gesture. A person's names a move or a removal and never an unbind; a
 // service account's names the unbind its optional seat allows.
@@ -78,9 +78,8 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 		"a service account on a held human seat": {
 			chart: companyChart(), row: boundService("m1", "platform-lead"),
 		},
-		// NO BINDING IS NEVER DANGLING: a person with none is the
-		// report's own row-level finding (`person_without_seat`), decided
-		// from the row, and the seat table serves the row under its login.
+		// NO BINDING IS NEVER DANGLING: the seat table serves the row
+		// under its login, whatever kind of row carries it.
 		"no binding at all": {
 			chart: companyChart(), row: bound("p1", ""),
 		},

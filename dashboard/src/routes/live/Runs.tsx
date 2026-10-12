@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   Button,
   Callout,
@@ -62,7 +62,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
-import { fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
+import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
 import {
@@ -106,6 +106,9 @@ const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "inf
   // question survives.
   awaiting_clarification: "warning",
   reseed: "warning",
+  // A person's reply is recorded as the answer and the engine is resuming
+  // the run with it: nobody is waited on any more.
+  answered: "info",
 };
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
@@ -321,6 +324,8 @@ function doingLine(run: SandboxRun): string {
       return "The box is being provisioned. Nothing has run in it yet.";
     case "running":
       return "A box is up and the coding agent is working in it.";
+    case "answered":
+      return "A person answered its question. The answer is recorded on the run and the engine is resuming it.";
     case "resumed":
       return "An answer came back and the suspended Execute phase is running again.";
     default:
@@ -871,12 +876,22 @@ export function RunScreen({ turnId }: { turnId: string }) {
               <Card.Title>Doing now</Card.Title>
             </Card.Header>
             {RUNNING.includes(run.status) && run.launch_id ? (
-              <LiveOutput turnId={run.turn_id} launchId={run.launch_id} now={now} />
+              // KEYED BY THE JOB: the row's launch moves to a later job on the
+              // same run, and that job's view starts empty rather than with
+              // the last job's output above it. A `replaced` answer reads the
+              // board again, so the page follows the job the row holds now
+              // rather than waiting out the board's poll.
+              <LiveOutput
+                key={`${run.turn_id}|${run.launch_id}`}
+                turnId={run.turn_id}
+                launchId={run.launch_id}
+                now={now}
+                onReplaced={board.refetch}
+              />
             ) : RUNNING.includes(run.status) ? (
               <span className="t-caption">
-                {run.owner
-                  ? "This run's record names no job, so its live output cannot be asked for — it arrives on the turn when the run is collected."
-                  : "The run's durable record has not been written yet; its live output can be asked for once it has."}
+                The run&rsquo;s durable record has not been written yet; its live output can be
+                asked for once it has.
               </span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
@@ -971,7 +986,7 @@ function CollectedRun({
                 },
                 {
                   label: "Delivered",
-                  value: record.deliveredRefs.length ? record.deliveredRefs.join(", ") : "",
+                  value: deliveredLine(record),
                 },
                 {
                   label: "Tokens",
@@ -992,14 +1007,7 @@ function CollectedRun({
           </div>
         )}
         {record.transcript ? (
-          <CodeBlock
-            plain
-            selectable
-            copyable
-            maxHeight={RECORD_MAX_HEIGHT}
-            label="What the run did"
-            code={record.transcript}
-          />
+          <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
         ) : (
           <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
         )}
@@ -1111,7 +1119,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
             about this call. */}
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} arguments`}
           code={args || "(none)"}
@@ -1121,7 +1128,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
         <div className="t-label">{call.failed ? "Error" : "Result"}</div>
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} ${call.failed ? "error" : "result"}`}
           code={output || "(nothing returned)"}

@@ -24,7 +24,7 @@
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
+import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
@@ -185,6 +185,8 @@ export function refusalWords(
   switch (refusal.kind) {
     case "guarded":
       return { message: configGuardedReason(refusal.code), reload: false };
+    case "managed":
+      return { message: managedSentence(refusal.managedBy), reload: false };
     case "conflict":
       return {
         message:

@@ -48,7 +48,7 @@ import (
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
-	db  *store.DB
+	db  store.ReplicatedReader
 	log *statelog.Reader
 
 	committed func() statelog.Position
@@ -59,7 +59,7 @@ type Reader struct {
 // ReaderOptions is what a reader is built from.
 type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
-	DB *store.DB
+	DB store.ReplicatedReader
 
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, and a degradation invisible
@@ -91,7 +91,7 @@ type ReaderOptions struct {
 
 // NewReader builds the identity estate's read side.
 func NewReader(opts ReaderOptions) (*Reader, error) {
-	if opts.DB == nil {
+	if opts.DB.IsZero() {
 		return nil, errors.New("iamdomain: a reader needs the replicated estate")
 	}
 	if opts.Log == nil {
@@ -665,11 +665,11 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 //   - BEHIND. end is the identity log's last sequence, read BEFORE this call
 //     (the engine's IdentityLogEnd), and rows that have not applied through it
 //     cannot say the enrolment is not among what they are missing
-//     ([CoversLog]). Every node applies this log from boot, company or none,
-//     so a node that has just joined a fleet with people in it is exactly the
-//     node whose empty rows would otherwise tell /health and its own boot log
-//     that nobody works there — and tell an operator to invite a founder into
-//     a company that has one.
+//     ([CoversLog]). Every node holding the estate applies this log from
+//     boot, company or none, so a data node that has just joined a fleet with
+//     people in it is exactly the node whose empty rows would otherwise tell
+//     /health and its own boot log that nobody works there — and tell an
+//     operator to invite a founder into a company that has one.
 //   - RETAINED. Settled is not applied: this node's checkpoint moves past a
 //     record it RETAINS — a newer build's, one signed under a keyring key it
 //     was not restarted with — without writing its rows, so an enrolment it
@@ -824,16 +824,17 @@ func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 // withTx runs one read in one transaction, which is what makes a multi-row
 // answer a snapshot rather than a sequence.
 //
-// [store.DB.Read] AND NEVER [store.DB.Tx], and the difference is two things at
-// once. Tx takes the WRITE lock at BEGIN, so a reader using it would queue
-// behind every applier commit and hold the lock against them while it read —
-// and the replicated estate is derived state that ONLY its applier writes, so
-// a read path holding a write transaction over it is the shape a local write
-// eventually grows out of. internal/engine's applier-exclusivity walk fails
-// the build on it, which is how this line got written correctly.
+// A READ TRANSACTION, AND THE ONLY KIND THIS TYPE CAN OPEN: the reader holds a
+// [store.ReplicatedReader], which has no Tx and no Writer. A write transaction
+// takes the WRITE lock at BEGIN, so a reader using one would queue behind every
+// applier commit and hold the lock against them while it read — and the
+// replicated estate is derived state that ONLY its applier writes, so a read
+// path holding a write transaction over it is the shape a local write
+// eventually grows out of. The type rules it out before internal/store's
+// applier-exclusivity walk has anything to find.
 //
-// MARKED AS IDENTITY WORK, which is what spends the connection
-// [store.DB.reserve] holds back. Without the mark these reads draw from the
+// MARKED AS IDENTITY WORK ([store.Identity]), which is what spends the
+// connection the store holds back for it. Without the mark these reads draw from the
 // ordinary pool, where a socket storm takes every connection and the identity
 // lookup that would let those very requests be DECIDED queues behind all of
 // them — a queue that feeds itself, since the reads that are waiting are the
@@ -841,14 +842,11 @@ func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 // belongs there: a keyed lookup, never a scan, and it is only ever asked
 // before a request can decide anything.
 func (r *Reader) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	// CHAINED AND NEVER BOUND TO A VARIABLE. internal/store's
-	// applier-exclusivity walk cannot follow a handle once it is assigned
-	// out, so it reports one — correctly, because the difference between a
-	// reader and a writer holding it is exactly what it cannot see. The
-	// chain keeps the claim checkable, and it costs nothing: a nil handle
-	// answers [store.ErrNoEstate] from inside Read, which is the same
-	// three-valued answer a guard here would have produced.
-	if err := r.db.Replicated().Read(store.Identity(ctx), fn); err != nil {
+	// NO GUARD FOR A CLOSED ESTATE: the handle answers [store.ErrNoEstate]
+	// from inside Read while no file is open — an adoption between its
+	// rename and its reopen — which is the same three-valued answer a guard
+	// here would have produced.
+	if err := r.db.Read(store.Identity(ctx), fn); err != nil {
 		if errors.Is(err, store.ErrNoEstate) {
 			return fmt.Errorf("%w: the replicated estate is not open on this "+
 				"node, so nothing can be established about any identity here",
@@ -890,9 +888,8 @@ type InvitationRow struct {
 
 	// Seat is the seat redeeming this binds and the invitation holds while
 	// it is open — the COLUMN a hold is decided on ([heldByInvitation]),
-	// which the apply writes from [Invitation.Seat]. Empty only on an
-	// invitation issued before every invitation named a seat, which is
-	// redeemable by nobody ([InvitationRow.Spent]).
+	// which the apply writes from [Invitation.Seat]. Every invitation names
+	// one ([Writer.Invite]).
 	Seat string
 
 	// Vouched is [ResetRow.Vouched], for [Reader.InvitationByID]: false on a
@@ -904,9 +901,9 @@ type InvitationRow struct {
 // one its link carries.
 //
 // CONSTANT-TIME, over the verifiers, so how far a guess matched is not a
-// timing — and FALSE for an invitation with no verifier, which was issued
-// before links carried a secret and is redeemable by nobody: admitting it on
-// its id alone would be admitting exactly what the secret exists to close.
+// timing — and FALSE for an invitation with no verifier, which is redeemable
+// by nobody: admitting it on its id alone would be admitting exactly what the
+// secret exists to close.
 func (i InvitationRow) Admits(secret string) bool {
 	return invitationAdmits(i.Verifier, secret)
 }
@@ -927,9 +924,8 @@ func invitationAdmits(verifier, secret string) bool {
 // against and the listing reads as outstanding.
 //
 // ONE PREDICATE rather than fields a caller compares, because every way an
-// invitation stops working — redeemed, expired, and issued before every
-// invitation named a seat — has the same remedy and must have the same
-// answer: a surface that told them apart would say "this was already used" to
+// invitation stops working — redeemed, and expired — has the same remedy and
+// must have the same answer: a surface that told them apart would say "this was already used" to
 // somebody whose link merely aged out, and send them looking for whoever used
 // it.
 //
@@ -937,11 +933,9 @@ func invitationAdmits(verifier, secret string) bool {
 // readers had disagreed about the row that carries one — the redemption read
 // it as open for the life of the company while the hold and the listing read
 // it as closed — and the retention sweep collects it as it collects one that
-// aged out ([Applier.applySweep]). AND NO SEAT IS SPENT: the redemption refuses it
-// ([Redemption.validate]), so the screen that opens the link says so before
-// anybody chooses a password.
+// aged out ([Applier.applySweep]).
 func (i InvitationRow) Spent(now time.Time) bool {
-	return !i.RedeemedAt.IsZero() || i.Seat == "" || !now.Before(i.ExpiresAt)
+	return !i.RedeemedAt.IsZero() || !now.Before(i.ExpiresAt)
 }
 
 // InvitationByID resolves one invitation, on this file's three answers: the
@@ -985,8 +979,8 @@ type ResetRow struct {
 	Stage    iam.Stage
 
 	// Seat is the seat the person is bound to: the spend is theirs, and its
-	// record names them as everything else they do does. Empty only on a
-	// person recorded before every person held a seat.
+	// record names them as everything else they do does. A person always
+	// holds one (ADR-0032).
 	Seat string
 
 	// First says the link sets the person's FIRST password: they hold no

@@ -86,7 +86,8 @@ The registry is per node and its content is a wiki's, so each node runs one sync
 | `tool_skill_page_changed` from a peer | Reads that page itself and updates it. Webhook deliveries are a fleet-wide consumer group, so exactly one node parses each one, and this broadcast is how every other node hears about it. A node whose applied company names a different container ignores it. |
 | A Confluence page trashed or deleted | Reads it back like any other change, on the node that heard the webhook and on every peer, and drops it on the wiki's answer that the page is gone. A removal is never acted on without that read: a page restored from the trash announces nothing, and a trash delivery or a nudge that reached a node after the restore would otherwise drop a skill the wiki still serves until the next periodic walk. |
 | A single-page read fails | Walks the whole container instead (`tool_skill_page_read_failed`), which is the path that knows how to back off. |
-| On the native backend, a skill page commits in this node's page projection (created, edited into or out of a skill, trashed, restored or purged) | Walks the container, a read of the node's own store. Every node applies the page log itself, so every node hears the change without a broadcast. A node whose company moved its skills to Confluence by an apply keeps its page projection running, and a native commit there walks nothing. |
+| On the native backend, a skill page commits in this node's page projection (created, edited into or out of a skill, trashed, restored or purged) | Walks the container, a read of the node's own store, and **announces** it: `tool_skill_page_changed` with `walk: true`, since the applier knows the container moved but not which page. Every node that holds data applies the page log itself and hears the change without it; the announcement is for a node that [holds no data](../guides/fleet.md#nodes-that-hold-no-data), which runs no applier and would otherwise hear of the edit only on its periodic walk. Several data nodes announce one edit, and a hearer coalesces them into one walk. A node whose company moved its skills to Confluence by an apply keeps its page projection running, and a native commit there walks nothing. |
+| `tool_skill_page_changed` with `walk: true`, on a node that holds no data | Walks the container through a data node, which answers only once its own copy answers requests — level with its logs, or drained and close to their ends. |
 | Every 10 minutes, with a fifth of that as jitter either way | Walks the container. This bounds everything the event path misses (a broadcast a node did not hear, a webhook the wiki never delivered, and the changes no subscribed Confluence event names: a page moved into or out of the space, a page restored from the trash) at 12 minutes, the longest a jittered interval can be. |
 | A walk fails | Keeps what the registry held, logs `tool_skill_sync_failed` (with `attempt` and `retry_in`), and retries after 5 seconds, doubling per consecutive failure up to the 10-minute interval. A source that stays broken then costs one walk per interval, the same as a healthy one. |
 
@@ -104,13 +105,14 @@ Skills are authored as markdown files with YAML frontmatter — the same format 
 ---
 key: skill:code_runtime
 trigger:
-  mcp_server: gitlab
+  tool: run_sandbox
 phases: [execute]
 required: false
 title: Running code work in the sandbox
 summary: |
   For real code work, call the run_sandbox tool: a coding agent
-  implements in an isolated checkout and opens an MR.
+  implements in an isolated checkout and pushes a branch or opens a pull
+  or merge request.
 ---
 
 When a task needs you to implement or modify code, run tests, or
@@ -135,7 +137,7 @@ Exactly one of these fields:
 | Trigger | Fires when |
 |---|---|
 | `tool: <name>` | `<name>` is in the phase's tool surface |
-| `mcp_server: <server>` | `<server>` is a key in the role's `mcp_env` |
+| `mcp_server: <server>` | `<server>`'s tools reach the seat: a shared server (the default) reaches every agent seat, and a `shared: false` one only a seat that declares it under `mcp_env`, its own or its unit's |
 | `any_of: [...]` | Any sub-trigger fires (logical OR) |
 | `all_of: [...]` | Every sub-trigger fires (logical AND) |
 
@@ -205,6 +207,8 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 `skill_variables` is **company-wide** and hot-reloadable: changing a value on `PUT /config` re-renders every skill on the next turn.
 
+**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard — Tier A's [`api.external_url`](configuration.md#what-tier-a-must-state-once-the-api-is-served), the address every link a person follows is built on — so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `api.public.external_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. Where the node's Tier A states no `api.external_url` — a node that serves no API need not — it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
+
 ---
 
 ## Phase scoping (catalogue visibility)
@@ -213,7 +217,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every first-party tool plus whatever the executor has activated, and the role's MCP server names | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. |
+| **Execute** | every first-party tool plus whatever the executor has activated, and the names of the MCP servers whose tools reach the seat | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
@@ -299,7 +303,7 @@ Enforcement gates exactly the tools the trigger names:
 - The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
-An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (a "plan a sandbox Execute for code work" hint, not markup correctness), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
+An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
 
 ---
 

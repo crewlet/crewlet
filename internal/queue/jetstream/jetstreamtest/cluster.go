@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +39,40 @@ type Cluster struct {
 	forwarders []*forwarder
 }
 
+// clusterSeq numbers the clusters this process names, so no two share one.
+var clusterSeq atomic.Uint64
+
+// newClusterName is a cluster name no other cluster this harness names — in
+// this process or in another — carries. Every bring-up ATTEMPT is handed one
+// with its fresh ports ([withFreshPorts]), whether it starts the members
+// itself or hands the addressing to a caller that does
+// ([Relays.ClusterName]).
+//
+// # Why one name for every cluster was a merge waiting for a port
+//
+// A member a case shuts down for good leaves its peers dialling its route port
+// for as long as they run: nats-server retries an EXPLICIT route for ever
+// (server/route.go, connectToRoute's tryForEver), and every route this harness
+// configures is explicit. The port is free from the moment the member stops,
+// so a cluster another case is starting in the same binary can be handed it by
+// [freePorts] — and under one shared name its member is accepted into the
+// first cluster's mesh. Two clusters become one, and their server names, and
+// so their JetStream peer ids ([js.PeerIDOf] hashes the name), collide.
+// Measured: a survivor routed to another cluster's member on its dead peer's
+// port about a second after that member started. A route whose cluster name
+// does not match is refused by the server (server/route.go,
+// processRouteConnect: "cluster name ... does not match"), so a name per
+// cluster turns that merge into a refused dial.
+//
+// THE PROCESS AND A COUNTER, never a port: a port is exactly what a stopped
+// member gives back, so a cluster named after the port it was handed could
+// inherit the name of the cluster that freed it. The counter keeps the
+// clusters of one binary apart, which is where the cases run side by side;
+// the process id keeps two binaries apart as well.
+func newClusterName() string {
+	return fmt.Sprintf("crewlet-test-%d-%d", os.Getpid(), clusterSeq.Add(1))
+}
+
 // StartCluster starts an n-member embedded cluster and waits for it to form.
 //
 // Each member gets its own store directory and its own stable server name,
@@ -44,27 +80,65 @@ type Cluster struct {
 // publish is quorum-durable before Publish returns — which is the property
 // that makes "sync truth, async cache" true rather than aspirational.
 //
+// A [testing.TB] rather than a *testing.T, because a BENCHMARK stands up the
+// same topology: a measurement of what a fleet's broker costs is worth
+// nothing taken against a cluster built some other way than the one every
+// fleet test runs on.
+//
 // The cluster is shut down when the test ends.
-func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
+func StartCluster(t testing.TB, n int, base js.Config) *Cluster {
 	t.Helper()
-	if n < 1 {
-		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
+	return startCluster(t, n, base, false)
+}
+
+// startCluster is [StartCluster], optionally with a LEAF LISTENER on every
+// member — which is where a node without the `data` role joins the fleet.
+//
+// A listener per member rather than one on member 0, because that is the
+// topology [js.Config.LeafURLs] is written for: a leaf names every member and
+// NATS picks one, so a fleet whose leaves all landed on one member would be
+// measuring that member rather than the fleet. The ports are reserved WITH the
+// route ports, for [freePorts]'s reason — reserved separately, the same number
+// can be handed out twice.
+func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Cluster {
+	t.Helper()
+	if n < 2 {
+		// ONE MEMBER IS NOT A CLUSTER THAT COMES UP: a member whose only
+		// route is itself never elects a metadata leader — measured, its
+		// JetStream answers "temporarily unavailable" from ten seconds on
+		// and [js.Server.Client] never returns on it — so the wait below
+		// could only spend the whole retry budget and report a port race.
+		// A case that needs one broker starts it with [js.StartServer].
+		t.Fatalf("StartCluster(%d): a cluster needs at least two members — one "+
+			"never elects a metadata leader, so nothing could be provisioned on it", n)
 	}
 
-	return withFreshPorts(t.Context(), t, "cluster", func(ctx context.Context) (*Cluster, error) {
+	return withFreshPorts(t.Context(), t, "cluster", func(ctx context.Context, name string) (*Cluster, error) {
 		// Ports are reserved up front because every member's routes
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
 		// and rewriting routes — is a NATS reload per member.
-		ports := freePorts(ctx, t, n)
+		reserve := n
+		if leafListeners {
+			reserve = 2 * n
+		}
+		ports := freePorts(ctx, t, reserve)
 		routes := make([]string, n)
-		for i, p := range ports {
+		for i, p := range ports[:n] {
 			routes[i] = routeURL(p)
 		}
 
 		c := &Cluster{}
 		for i := range n {
-			if err := c.start(ctx, t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
+			cfg := memberConfig(base, name, i, n, ports[i], routes)
+			if leafListeners {
+				// LOOPBACK for memberConfig's reason: a listener
+				// wider than the addresses the leaves are given is
+				// reachable on a port nothing here controls.
+				cfg.LeafHost = "127.0.0.1"
+				cfg.LeafPort = ports[n+i]
+			}
+			if err := c.start(ctx, t, cfg, i); err != nil {
 				// THE PARTIAL CLUSTER GOES BACK WITH THE ERROR, so
 				// [withFreshPorts] can take it down before retrying.
 				// Discarded, the members that DID start keep their
@@ -78,13 +152,45 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 			}
 		}
 
-		// No wait here: StartServer does not return a clustered member
-		// until its JetStream is current, because a node that
-		// provisions into a leaderless metadata group blocks rather
-		// than failing, and that is a production boot hazard rather
-		// than a test one.
-		return c, nil
+		return c, c.awaitReady(ctx)
 	})
+}
+
+// awaitReady waits until every member can serve a stream at its configured
+// replica count — current, routed, and answered by the metadata leader — so a
+// cluster this harness hands back is one a metadata request is answered on.
+//
+// HERE, AFTER EVERY MEMBER HAS STARTED, because [js.StartServer] cannot wait:
+// the first member of a fresh cluster would wait for a quorum its own blocking
+// keeps from forming. Only [js.Server.Client] waited, so a test that rode a
+// member's raw connection — the coordination store's cluster cases, which open
+// buckets on [js.Server.Conn] — sent its first lookup to a group that might
+// have no leader yet. Such a request is not refused but DROPPED, so the lookup
+// sat out a whole fifteen-second ask term before it was asked again: measured
+// as four sixteen-second stalls in one run of those cases, each standing in
+// for an election that takes about a second.
+//
+// A member that never gets there fails the ATTEMPT, so [withFreshPorts] tries
+// again rather than handing back a cluster nobody can provision on.
+func (c *Cluster) awaitReady(ctx context.Context) error {
+	for i, srv := range c.Servers {
+		if err := srv.AwaitClusterReady(ctx, c.Configs[i].Replicas); err != nil {
+			return fmt.Errorf("cluster member %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// LeafURLs is every member's leaf listener, in the form [js.Config.LeafURLs]
+// takes — empty on a cluster started without them.
+func (c *Cluster) LeafURLs() []string {
+	var urls []string
+	for _, cfg := range c.Configs {
+		if cfg.LeafPort != 0 {
+			urls = append(urls, fmt.Sprintf("nats-leaf://%s", hostPort(cfg.LeafPort)))
+		}
+	}
+	return urls
 }
 
 // ClusterStartAttempts is how many times a cluster is stood up before the
@@ -163,7 +269,8 @@ const ClusterStartBudget = 3 * time.Minute
 // before any of them runs.
 //
 // Measured on this repository's own CI, which is what makes this a fix rather
-// than a tidy: `TestAFleetAgreesAboutOneCompany` failed after 181.05s with
+// than a tidy: `TestAFleetOfThree/AFleetAgreesAboutOneCompany`, then a test
+// standing up a fleet of its own, failed after 181.05s with
 // "no cluster came up within 3m0s (1 OF 4 ATTEMPTS)". Member 0's broker spent
 // the entire ceiling retrying a route to a port where nothing was listening
 // ("Error trying to connect to route (attempt 178): connection refused"), and
@@ -224,7 +331,10 @@ func listenErr(err error) error {
 	return fmt.Errorf("%w: %w", errNotRetryable, err)
 }
 
-// withFreshPorts runs start until it comes up, with fresh ports each time.
+// withFreshPorts runs start until it comes up, with fresh ports each time —
+// and a fresh cluster NAME, which it mints and hands to each attempt
+// ([newClusterName]): an attempt is a cluster of its own, so it is named as
+// one in the one place every bring-up passes through.
 //
 // # What it retries, and what it must not
 //
@@ -252,8 +362,8 @@ func listenErr(err error) error {
 // instead, the inner loop could spend the outer one's whole budget and hand
 // the outer loop's first real attempt an already-expired context — reported
 // as "no cluster came up" by a loop that had never started a member.
-func withFreshPorts(ctx context.Context, t *testing.T, what string,
-	start func(context.Context) (*Cluster, error)) *Cluster {
+func withFreshPorts(ctx context.Context, t testing.TB, what string,
+	start func(ctx context.Context, name string) (*Cluster, error)) *Cluster {
 
 	t.Helper()
 	var last error
@@ -273,7 +383,7 @@ func withFreshPorts(ctx context.Context, t *testing.T, what string,
 		// [ClusterStartTerm].
 		attemptCtx, cancelAttempt := context.WithDeadline(ctx,
 			StartAttemptEnd(time.Now(), deadline))
-		c, err := start(attemptCtx)
+		c, err := start(attemptCtx, newClusterName())
 		cancelAttempt()
 		if err == nil {
 			return c
@@ -354,12 +464,12 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 			"two members, or there is no pair to cut", n)
 	}
 
-	return withFreshPorts(t.Context(), t, "partitionable cluster", func(ctx context.Context) (*Cluster, error) {
-		return startPartitionable(ctx, t, n, base)
+	return withFreshPorts(t.Context(), t, "partitionable cluster", func(ctx context.Context, name string) (*Cluster, error) {
+		return startPartitionable(ctx, t, n, base, name)
 	})
 }
 
-func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config) (*Cluster, error) {
+func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config, name string) (*Cluster, error) {
 	t.Helper()
 	// Three port sets, reserved together for the reason freePorts exists:
 	// the members' real route ports, one relay port per ordered pair, and
@@ -410,7 +520,7 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 				routes = append(routes, routeURL(f.port))
 			}
 		}
-		cfg := memberConfig(base, i, n, routePorts[i], routes)
+		cfg := memberConfig(base, name, i, n, routePorts[i], routes)
 		// Loopback rather than every interface: the relays dial
 		// 127.0.0.1, and a member listening wider would be reachable
 		// from outside the harness on a port a partition does not cut.
@@ -420,12 +530,12 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 			return c, err
 		}
 	}
-	return c, nil
+	return c, c.awaitReady(ctx)
 }
 
 // Client connects a queue to member i. Each engine node in a fleet talks to
 // the member embedded in its own process, which is what this models.
-func (c *Cluster) Client(t *testing.T, i int) *js.Queue {
+func (c *Cluster) Client(t testing.TB, i int) *js.Queue {
 	t.Helper()
 	q, err := c.Servers[i].Client(t.Context())
 	if err != nil {
@@ -436,11 +546,11 @@ func (c *Cluster) Client(t *testing.T, i int) *js.Queue {
 }
 
 // memberConfig is member i's config: the caller's base, plus the identity and
-// membership every member of an n-node cluster needs.
-func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Config {
+// membership every member of an n-node cluster named cluster needs.
+func memberConfig(base js.Config, cluster string, i, n, clusterPort int, routes []string) js.Config {
 	cfg := base
 	cfg.ServerName = fmt.Sprintf("crewlet-test-%d", i)
-	cfg.ClusterName = "crewlet-test"
+	cfg.ClusterName = cluster
 	cfg.ClusterPort = clusterPort
 	cfg.ClusterURLs = routes
 	// LOOPBACK, because that is what the routes name: hostPort builds
@@ -468,7 +578,7 @@ func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Con
 // ctx BOUNDS THIS MEMBER'S START, and is the attempt's rather than the test's:
 // see [withFreshPorts] for why a ceiling the start cannot observe bounds
 // nothing.
-func (c *Cluster) start(ctx context.Context, t *testing.T, cfg js.Config, i int) error {
+func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int) error {
 	t.Helper()
 	cfg.StoreDir = t.TempDir()
 	// PROBED IMMEDIATELY BEFORE THE SERVER BINDS IT, because the interval
@@ -548,7 +658,7 @@ func PortFree(ctx context.Context, host string, port int) (bool, error) {
 // freePorts reserves n ports the OS is not using.
 // ctx bounds the reservation, so an attempt whose wall-clock ceiling has
 // expired does not start by asking the kernel for ports it will not use.
-func freePorts(ctx context.Context, t *testing.T, n int) []int {
+func freePorts(ctx context.Context, t testing.TB, n int) []int {
 	t.Helper()
 	// Held open together, then all released: taking and releasing one at a
 	// time can hand out the same port twice.

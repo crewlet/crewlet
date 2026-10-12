@@ -107,7 +107,7 @@ func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 	// waiting, and a Retry-After sends a client round a loop that can only
 	// end when somebody edits the routing.
 	if errors.Is(err, queries.ErrUnavailable) {
-		t.Errorf("a wiring bug was reported as transient: %v", err)
+		t.Errorf("a wiring bug was reported as unavailable: %v", err)
 	}
 	// And it says which of the two it is, or the log carries a refusal
 	// nobody can act on.
@@ -175,7 +175,7 @@ func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.
 		t.Fatalf("a question was answered while identity was unreadable: %v", data)
 	}
 	if !errors.Is(err, queries.ErrUnavailable) {
-		t.Errorf("an unreadable identity estate is not reported as transient: %v", err)
+		t.Errorf("an unreadable identity estate is not reported as unavailable: %v", err)
 	}
 	if errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("an outage was reported as the caller's credential: %v", err)

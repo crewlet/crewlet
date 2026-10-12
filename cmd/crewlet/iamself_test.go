@@ -133,7 +133,7 @@ func runSelf(t *testing.T, n *selfNode, stdin string, extra ...string) (
 		"-grants", "state:read", "-config", selfConfig(t), "-api", n.server.URL},
 		extra...)
 	var out, errs bytes.Buffer
-	err := runIAM(args, strings.NewReader(stdin), &out, &errs)
+	err := runIAM(noEnviron, args, strings.NewReader(stdin), &out, &errs)
 	return out.String(), errs.String(), err
 }
 
@@ -150,7 +150,6 @@ func runSelf(t *testing.T, n *selfNode, stdin string, extra ...string) (
 // sees no logout.
 func TestYourOwnTokenIsMintedFromYourOwnSession(t *testing.T) {
 	n := newSelfNode(t)
-	t.Setenv(apiTokenEnv, "")
 	out, errs, err := runSelf(t, n, "a long pass phrase\n")
 	if err != nil {
 		t.Fatalf("iam token -login: %v\n%s", err, errs)
@@ -253,7 +252,7 @@ func TestATokenNamesExactlyOneOwner(t *testing.T) {
 		"neither": {"token"},
 	} {
 		var out, errs bytes.Buffer
-		err := runIAM(args, strings.NewReader(""), &out, &errs)
+		err := runIAM(noEnviron, args, strings.NewReader(""), &out, &errs)
 		if err == nil || !strings.Contains(err.Error(), "-login") ||
 			!strings.Contains(err.Error(), "-person") {
 			t.Errorf("%s answered %v, want a refusal naming both flags", name, err)

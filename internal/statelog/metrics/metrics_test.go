@@ -174,6 +174,43 @@ func TestAWindowedValueForgetsAfter24Hours(t *testing.T) {
 	}
 }
 
+// AN EVENT IS FILED AT THE HOUR IT HAPPENED, when the count names one.
+//
+// A barrier applied from a log is counted when the applier reaches it and was
+// committed when the broker stored it, and a node replaying a backlog reaches
+// days of them in minutes. Filed at the hour they were counted, those days read
+// as one — a company several times past its census for the next day, on reads
+// never made in it. So an instant older than the window counts toward nothing,
+// one inside it lands in its own hour and leaves the window with that hour, and
+// one ahead of this clock lands in the current hour rather than nowhere.
+//
+// Mutation: AddAt filing at the current hour, and the replayed three days count.
+func TestAnEventIsFiledAtTheHourItHappened(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 30, 0, 0, time.UTC)
+	w := NewWindow(func() time.Time { return at })
+
+	w.AddAt("barriers", 500, at.Add(-72*time.Hour))
+	w.AddAt("barriers", 7, at.Add(-25*time.Hour))
+	if got := w.Total("barriers"); got != 0 {
+		t.Fatalf("events from before the window count %d, want none", got)
+	}
+	w.AddAt("barriers", 3, at.Add(-20*time.Hour))
+	w.AddAt("barriers", 2, at.Add(-5*time.Minute))
+	w.AddAt("barriers", 1, at.Add(3*time.Hour))
+	if got := w.Total("barriers"); got != 6 {
+		t.Fatalf("events inside the window and one ahead of this clock count %d, want 6", got)
+	}
+
+	// FIVE HOURS ON the one from twenty hours earlier has left with its
+	// own hour; the rest are still inside.
+	at = at.Add(5 * time.Hour)
+	if got := w.Total("barriers"); got != 3 {
+		t.Errorf("five hours on the window counts %d, want 3: an event leaves "+
+			"with the hour it happened in, not the hour it was counted in", got)
+	}
+}
+
 // A YOUNG WINDOW SAYS SO. A node up for ten minutes reporting no refusals in
 // a day is telling an operator something it cannot know.
 func TestAYoungWindowIsLabelledPartial(t *testing.T) {

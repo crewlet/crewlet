@@ -144,3 +144,31 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 		t.Errorf("KnownReads = %v, want the read in it", got.KnownReads)
 	}
 }
+
+// WHAT A SEAT HOLDS AND WHAT IT HAS TO GO AND FIND reach the turn too, or a
+// delivery refusal cannot tell them apart. It once could not: every refusal
+// sent the seat to `list_mcp_server_tools`, and a seat woken on the engine's
+// own tracker — whose tools no discovery call lists — went to the only MCP
+// server it held and posted in chat instead. See [turn.Remedy].
+func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	if err := reg.RegisterWith(stubTool("comment_on_work_item"), tools.OriginBuiltin,
+		tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterWith(stubTool("mattermost_post_message"), tools.Origin("mattermost"),
+		tools.Annotations{}); err != nil {
+		t.Fatal(err)
+	}
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"comment_on_work_item"})
+
+	got := describe(surface)
+	if !slices.Contains(got.Discoverable, "mattermost_post_message") {
+		t.Errorf("Discoverable = %v, want the MCP tool in it", got.Discoverable)
+	}
+	if slices.Contains(got.Discoverable, "comment_on_work_item") {
+		t.Error("a first-party tool the executor already holds was reported as one " +
+			"it has to discover")
+	}
+}

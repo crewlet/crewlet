@@ -77,7 +77,7 @@ func TestDeclarationOrderSurvivesTheStoredForm(t *testing.T) {
 
 func TestADocumentWithNoRecordedOrderIsStillDeterministic(t *testing.T) {
 	t.Parallel()
-	// Hand-written JSON, or a revision stored before the order existed. The
+	// A value built in Go, with no order recorded. The
 	// answer is arbitrary — an operator's first-listed provider is the one
 	// they think of as primary, and sorting does not know that — but
 	// arbitrary-and-stable is the only honest answer when the order was

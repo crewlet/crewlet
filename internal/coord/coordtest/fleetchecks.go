@@ -20,11 +20,11 @@ import (
 // question offline. For these three it is not, and the reason is their
 // history:
 //
-//   - The bucket expiry is the invariant a ttl PARAMETER hid for the whole
-//     life of both backends. The twin honoured the argument, the KV validated
-//     it and let the bucket decide, and no case ever travelled past a
-//     deadline — so the suite certified the divergence clean every time it
-//     ran. A check nobody can hand a lying backend is how that happens again.
+//   - A claim's lapse is the invariant a ttl PARAMETER hid for the whole life
+//     of both backends. The twin honoured the argument, the KV validated it
+//     and let its bucket decide, and no case ever travelled past a deadline —
+//     so the suite certified the divergence clean every time it ran. A check
+//     nobody can hand a lying backend is how that happens again.
 //   - The refusal of an unnamed record is the tri-state at its narrowest: the
 //     difference between "an error" and "false" is invisible in a passing
 //     suite and is a dropped delivery in production.
@@ -38,112 +38,104 @@ import (
 // wrong and asserts they are caught. The shape is [internal/statelog/statelogtest]'s,
 // for the same reason it has it.
 
-// CheckClaimExpiresWithItsBucket verifies that a delivery claim lapses on the
-// age of the bucket it was written to, and on nothing else.
+// CheckClaimLapsesAtItsOwnTTL verifies that a delivery claim lapses at the
+// deadline its own record carries — the `now` it was made at plus the ttl it
+// asked for — and that a lapsed claim is taken over by exactly one caller.
 //
-// age is what the backend under test was built with. The lapse itself is
-// [reclaimed]'s, which both travels the clock it passes and waits out the real
-// one — see there for why it takes both.
-func CheckClaimExpiresWithItsBucket(ctx context.Context, f coord.Fleet,
-	age time.Duration, at time.Time) []error {
-
-	const key = "gitlab|lapsing"
+// TWO CLAIMS OF DIFFERENT LENGTHS IN ONE STORE, because that is the shape the
+// store serves: a webhook claims for [coord.ClaimTTL] and the chat socket for
+// up to [coord.MaxClaimTTL]. A backend that held every claim for its bucket's
+// age swallows a webhook replay for the socket's window, and one that held
+// every claim for the shortest horizon it was asked for lets a reconnecting
+// seat deliver a post twice; each is caught by a different step below.
+//
+// THE LENGTHS ARE A MINUTE AND THREE, well inside any ceiling a backend
+// certified by the suite is built with: a backend may refuse a claim longer
+// than its own claims bucket keeps ([coord.Claims]), and a check that asked
+// for the contract's ceiling would be certifying that configuration rather
+// than the lapse.
+//
+// It TRAVELS THE CLOCK it passes and never waits: the deadline is the
+// record's, judged against the `now` the next caller passes, so a backend
+// that reaped a claim on a clock of its own rather than on its deadline could
+// not pass it — and the check costs nothing on a real broker.
+func CheckClaimLapsesAtItsOwnTTL(ctx context.Context, f coord.Fleet, at time.Time) []error {
+	const (
+		short = "gitlab|lapsing"
+		long  = "mattermost|alice|p1"
+	)
+	shortTTL, longTTL := time.Minute, 3*time.Minute
+	claim := func(key string, ttl time.Duration, now time.Time) (bool, error) {
+		return f.Claim(ctx, key, ttl, now)
+	}
 	var errs []error
-	first, err := f.Claim(ctx, key, at)
-	if err != nil {
-		return append(errs, fmt.Errorf("the first claim: %w", err))
+	for _, first := range []struct {
+		key string
+		ttl time.Duration
+	}{{short, shortTTL}, {long, longTTL}} {
+		if failed := landed(claim(first.key, first.ttl, at)).as(
+			fmt.Sprintf("the first Claim of %q", first.key)); len(failed) > 0 {
+			return failed
+		}
 	}
-	if !first {
-		return append(errs, fmt.Errorf("the first claim of %q was refused", key))
-	}
-	// STILL HELD before the age runs out, which is what stops this
-	// passing against a backend that claims nothing at all.
-	if again, err := f.Claim(ctx, key, at); err != nil {
-		errs = append(errs, fmt.Errorf("a claim while the first was live: %w", err))
+	// STILL HELD inside its own ttl, which is what stops this passing
+	// against a backend that claims nothing at all.
+	if again, err := claim(short, shortTTL, at.Add(shortTTL-time.Second)); err != nil {
+		errs = append(errs, fmt.Errorf("a claim of %q inside its ttl: %w", short, err))
 	} else if again {
-		errs = append(errs, fmt.Errorf("a second caller claimed %q while the first "+
-			"claim was inside the bucket's %v age", key, age))
+		errs = append(errs, fmt.Errorf("a second caller claimed %q a second before its "+
+			"%v ttl ran out", short, shortTTL))
 	}
-
-	if err := reclaimed(func(at time.Time) (bool, error) { return f.Claim(ctx, key, at) },
-		"Claim", key, age, at); err != nil {
-		errs = append(errs, err)
+	// LAPSED AT ITS OWN TTL, and taken over once.
+	past := at.Add(shortTTL + time.Second)
+	switch took, err := claim(short, shortTTL, past); {
+	case err != nil:
+		errs = append(errs, fmt.Errorf("a claim of %q past its ttl: %w", short, err))
+	case !took:
+		errs = append(errs, fmt.Errorf("%q was still claimed a second past its own %v "+
+			"ttl: a claim held for longer than it asked swallows the replay its "+
+			"ttl was sized to let through", short, shortTTL))
+	default:
+		if twice, err := claim(short, shortTTL, past); err != nil {
+			errs = append(errs, fmt.Errorf("a second takeover of %q: %w", short, err))
+		} else if twice {
+			errs = append(errs, fmt.Errorf("a lapsed claim of %q was taken over by two "+
+				"callers at one instant: a takeover that is not a compare-and-set "+
+				"delivers the duplicate the claim exists to stop", short))
+		}
+	}
+	// AND THE LONG CLAIM IS STILL HELD past the short one's horizon — it
+	// asked for longer.
+	for _, inside := range []time.Duration{shortTTL + time.Second, longTTL - time.Second} {
+		if again, err := claim(long, longTTL, at.Add(inside)); err != nil {
+			errs = append(errs, fmt.Errorf("a claim of %q %v in: %w", long, inside, err))
+		} else if again {
+			errs = append(errs, fmt.Errorf("%q, claimed for %v, was taken again %v in: a "+
+				"claim held for less than it asked lets the duplicate through", long,
+				longTTL, inside))
+		}
+	}
+	if took, err := claim(long, longTTL, at.Add(longTTL+time.Second)); err != nil {
+		errs = append(errs, fmt.Errorf("a claim of %q past its ttl: %w", long, err))
+	} else if !took {
+		errs = append(errs, fmt.Errorf("%q was still claimed a second past its own %v ttl",
+			long, longTTL))
 	}
 	return errs
 }
 
-// lapseSlack is how far past a bucket's age a record may still be readable,
-// and therefore how long [reclaimed] will wait for one to go.
-//
-// MEASURED, not chosen, and measured twice. A real broker sweeps a stream's
-// aged messages on a timer rather than removing them at the deadline, so a
-// record outlives its bucket's age by however long the next sweep is away:
-// internal/coord/kv's own broker measurements record 306ms past a one-second
-// bucket, and 208ms past a 500ms one under this suite.
-//
-// It is a CEILING RATHER THAN A WAIT — [reclaimed] polls, so a backend that
-// reaps promptly pays none of it — which is why it is set well above both
-// numbers instead of just above them. A loaded runner pushes a timer out, and
-// the failure that buys is a case that goes red for the machine it ran on
-// rather than for the backend it certifies.
-const lapseSlack = 2 * time.Second
-
-// lapsePoll is how often [reclaimed] asks while it waits.
-const lapsePoll = 20 * time.Millisecond
-
-// reclaimed waits for a first-claim-wins record to lapse with its bucket, and
-// says what it saw if it does not.
-//
-// IT TRAVELS THE CLOCK IT PASSES AND WAITS OUT THE REAL ONE, because the two
-// certified backends expire a record on two different clocks and the contract
-// is deliberately silent about which: a store of its own reaps whatever any
-// caller's clock says, while the in-process twin has no clock but the
-// caller's. Travelling alone would certify a backend that never expires
-// anything; waiting alone would fail the twin for having no store.
-func reclaimed(claim func(time.Time) (bool, error), verb, key string,
-	age time.Duration, at time.Time) error {
-
-	at = at.Add(age + lapseSlack)
-	deadline := time.Now().Add(age + lapseSlack)
-	for {
-		ok, err := claim(at)
-		switch {
-		case err != nil:
-			return fmt.Errorf("%s past the bucket's age: %w", verb, err)
-		case ok:
-			return nil
-		case time.Now().After(deadline):
-			return fmt.Errorf("%q was still claimed %v after it was recorded, and its "+
-				"bucket is %v old: a record that outlives its bucket is one whose "+
-				"horizon nobody can state — a caller asking for longer than the "+
-				"bucket holds gets the bucket, silently, which is how a "+
-				"fifteen-minute setup state lapsed on a five-minute bucket",
-				key, age+lapseSlack, age)
-		}
-		time.Sleep(lapsePoll)
-	}
-}
-
-// CheckUnnamedRecordsAreRefused verifies that every first-claim-wins verb
+// CheckUnnamedRecordsAreRefused verifies that a first-claim-wins claim
 // answers an empty key with an ERROR rather than with false.
 //
 // The three-valued rule at its narrowest. A caller that named nothing has not
-// lost a race to anybody, so "false" — which every one of these callers reads
-// as "somebody else has this" — drops the delivery or refuses the setup
-// callback. The same argument fault reaches every verb, so the check sends it
-// to every verb: a guard added to one of them and forgotten on the next is the
-// ordinary way this reappears.
+// lost a race to anybody, so "false" — which every caller of a claim reads as
+// "somebody else has this" — drops the delivery or refuses the setup callback.
 func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.Time) []error {
 	var errs []error
-	if ok, err := f.Claim(ctx, "", at); err == nil {
+	if ok, err := f.Claim(ctx, "", coord.ClaimTTL, at); err == nil {
 		errs = append(errs, fmt.Errorf("an empty key reached Claim, which answered "+
 			"%t rather than an error: a caller that named nothing has not lost a "+
 			"race to anybody, and false reads as a delivery a peer already took", ok))
-	}
-	if ok, err := f.ClaimSetup(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("an empty key reached ClaimSetup, which "+
-			"answered %t rather than an error: false there refuses a callback "+
-			"nobody has spent", ok))
 	}
 	return errs
 }
@@ -192,8 +184,7 @@ func CheckCreatesOverARemovedRecordAreRaces(ctx context.Context, f coord.Fleet,
 
 	for round := range RacedRounds {
 		for _, check := range []func(context.Context, coord.Fleet, int, time.Time) []error{
-			raceClaims, raceBudgets, raceRuns, raceFollows,
-			raceMailboxes, raceSecrets,
+			raceClaims, raceBudgets, raceRuns, raceMailboxes, raceSecrets,
 		} {
 			if errs := check(ctx, f, round, at); len(errs) > 0 {
 				return errs
@@ -249,7 +240,7 @@ func raced(verb string, errs []error) []error {
 // before it was one, and it surfaced as a create race with no winner.
 //
 // Taken as the step's own two results, so a call reads as the step it checks:
-// landed(f.Claim(ctx, key, at)).as("the first Claim").
+// landed(f.Claim(ctx, key, coord.ClaimTTL, at)).as("the first Claim").
 func landed(ok bool, err error) setUp { return setUp{ok: ok, err: err} }
 
 // setUp is one set-up step's two results, waiting for the name it is
@@ -280,13 +271,13 @@ func firstOfMany(verb string, won int) error {
 
 func raceClaims(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
 	key := fmt.Sprintf("gitlab|raced-%d", round)
-	if errs := landed(f.Claim(ctx, key, at)).as("the first Claim"); len(errs) > 0 {
+	if errs := landed(f.Claim(ctx, key, coord.ClaimTTL, at)).as("the first Claim"); len(errs) > 0 {
 		return errs
 	}
 	if err := f.Release(ctx, key); err != nil {
 		return []error{fmt.Errorf("the release: %w", err)}
 	}
-	won, errs := race(func() (bool, error) { return f.Claim(ctx, key, at) })
+	won, errs := race(func() (bool, error) { return f.Claim(ctx, key, coord.ClaimTTL, at) })
 	if len(errs) > 0 {
 		return raced("Claim", errs)
 	}
@@ -353,28 +344,6 @@ func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []erro
 	}
 	if won != 1 {
 		return []error{firstOfMany("CreateSandboxRun", won)}
-	}
-	return nil
-}
-
-func raceFollows(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
-	thread := fmt.Sprintf("t-raced-%d", round)
-	followed := landed(f.FollowIfAbsent(ctx, "slack", "agent-swe", "C1", thread, "mention", at))
-	if errs := followed.as("the first FollowIfAbsent"); len(errs) > 0 {
-		return errs
-	}
-	unfollowed := landed(f.Unfollow(ctx, "slack", "agent-swe", "C1", thread))
-	if errs := unfollowed.as("the unfollow"); len(errs) > 0 {
-		return errs
-	}
-	won, errs := race(func() (bool, error) {
-		return f.FollowIfAbsent(ctx, "slack", "agent-swe", "C1", thread, "mention", at)
-	})
-	if len(errs) > 0 {
-		return raced("FollowIfAbsent", errs)
-	}
-	if won != 1 {
-		return []error{firstOfMany("FollowIfAbsent", won)}
 	}
 	return nil
 }

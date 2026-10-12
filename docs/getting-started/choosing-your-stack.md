@@ -34,7 +34,7 @@ A useful mental model: for each integration there is usually
 
 | Option | Config | Notes |
 |---|---|---|
-| **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Required if you want Claude Code as the sandbox coding agent. |
+| **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Each request is shaped for its Claude model — adaptive thinking and an effort level on the current generation, a thinking budget only on the older models that take one (see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)). Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
 | **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field. It is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |
@@ -68,10 +68,19 @@ default and is the better answer when you want the tool log to be the
 engine's own. See
 [Subscription LLM Backends § Two modes](../concepts/subscription-llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
 
-**Embeddings** (`providers.embeddings`) power the agent-learning subsystem
-(personal diary + episode recall). Any OpenAI-compatible embeddings endpoint
-works via `base_url` — including a self-hosted one. Without an embeddings
-provider the engine still runs; learning features degrade gracefully.
+**Embeddings** (`providers.embeddings`) power the semantic half of a native
+knowledge search — the company's own pages and work items, embedded once for
+the whole fleet, and each search's query — and the agent-learning subsystem's
+similarity recall (personal diary + episode recall). Any OpenAI-compatible
+embeddings endpoint works via `base_url`, including a self-hosted one; a model
+this build does not know states its width and its limits (the tokens one input
+may hold, and the inputs and tokens one request may carry), and so do the
+request limits of `gemini-embedding-001` and `embed-v4.0`, whose compatible
+endpoints document none — see
+[Configuration](configuration.md#providers). Without an embeddings
+provider the engine still runs: search is keyword only, personal memory is
+chosen from a seat's recent notes alone, and similar-prior-work recall renders
+nothing, because a seat's recent turns are not similar work.
 
 ---
 
@@ -119,8 +128,8 @@ knowledge:
 ```
 
 That is the whole setup. Items and pages live in the fleet's own store, there
-is a board and a page browser on the dashboard, seats get nineteen tools for
-them — fourteen over the tracker and five over the pages — and your own AI
+is a board and a page browser on the dashboard, seats get twenty-three tools for
+them — eighteen over the tracker and five over the pages — and your own AI
 assistant can reach them over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 Nothing to create, nothing to provision, no per-seat accounts, no webhook.
@@ -361,12 +370,16 @@ agent-mode entry) would fall to it on a catalogue offering more than one cell
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
-Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
-OpenAI-compatible provider you already configured — no extra secret);
-**Claude Code** requires an `anthropic` provider entry, a
-[`cli-agent`](../concepts/subscription-llm-backends.md) one, or an
-`ANTHROPIC_*` credential in `role.sandbox.env` (select it per role via
-`role.llm_sandbox`).
+Coding-agent choice: **OpenCode** is provider-agnostic (reuses the key of
+any `anthropic`, `openai` or OpenAI-compatible provider you already
+configured — no extra secret — and runs an `opencode`
+[`cli-agent`](../concepts/subscription-llm-backends.md) entry);
+**Claude Code** requires an `anthropic` provider entry, a `claude-code`
+`cli-agent` one, or a Claude Code sign-in of the seat's own in
+`role.sandbox.env` (select the entry per role via `role.llm_sandbox`). A
+`cli-agent` entry's code work needs that same CLI as the seat's
+`coding_agent` — an `opencode` entry needs `coding_agent: opencode` — and
+any other pairing is [refused](../concepts/code-sandbox.md#failure-modes).
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
 reach services on your laptop (`localhost` GitLab) — in-sandbox tool

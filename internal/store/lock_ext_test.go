@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -34,7 +35,7 @@ func TestASecondProcessIsRefused(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	first, err := store.Open(t.Context(), path, store.Options{})
+	first, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestTheLockIsFreedWhenTheHolderIsGone(t *testing.T) {
 	if out, err := runHelper(t, path, "abandon"); err != nil {
 		t.Fatalf("helper: %v: %s", err, out)
 	}
-	db, err := store.Open(t.Context(), path, store.Options{})
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open after the holder exited: %v — the lock outlived its "+
 			"process and nothing can clear it", err)
@@ -81,11 +82,11 @@ func TestTwoHandlesInOneProcessShareTheLock(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	a, err := store.Open(t.Context(), path, store.Options{})
+	a, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	b, err := store.Open(t.Context(), path, store.Options{})
+	b, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("second handle in the same process was refused: %v", err)
 	}
@@ -138,10 +139,18 @@ func openInSubprocess(t *testing.T, path string) (string, error) {
 	return runHelper(t, path, "")
 }
 
+// runHelper runs the helper in mode against path and returns its output.
+//
+// With the race runtime's exit sleep switched off
+// ([procgrouptest.StandInRaceOptions]): a helper that opened the file exits 0,
+// and a race-built one would sleep a second on its way out with the case
+// waiting on it. What the lock is held to — that the kernel frees it however
+// the holder ends — does not depend on when the exit comes.
 func runHelper(t *testing.T, path, mode string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=NoSuchTest")
-	cmd.Env = append(os.Environ(), helperEnv+"="+path, helperModeEnv+"="+mode)
+	cmd.Env = append(os.Environ(), procgrouptest.GORACE+"="+procgrouptest.StandInRaceOptions(),
+		helperEnv+"="+path, helperModeEnv+"="+mode)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -149,7 +158,7 @@ func runHelper(t *testing.T, path, mode string) (string, error) {
 // runLockHelper opens the database and reports what happened. Called from
 // TestMain in store_test.go, which is this binary's single entry point.
 func runLockHelper(path, mode string) int {
-	db, err := store.Open(context.Background(), path, store.Options{})
+	db, err := store.OpenNode(context.Background(), path, store.Options{Scratch: mode == "scratch"})
 	if err != nil {
 		if errors.Is(err, store.ErrLocked) {
 			fmt.Printf("%s %v\n", lockedMarker, err)

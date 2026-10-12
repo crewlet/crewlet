@@ -79,10 +79,10 @@ func (r *Runner) rederive(ctx context.Context, w *store.Writer) error {
 		}
 		from, moved = stored, true
 		if deriver != nil {
-			opts := r.opts
-			opts.Now = r.now()
-			opts.MaxVariables = r.db.Caps().MaxVariables
-			if rows, err = deriver.Rederive(ctx, tx, opts); err != nil {
+			// THE OPTIONS EVERY BATCH APPLIES UNDER, the epoch as it stands
+			// now included ([Runner.batchOptions]): a re-derivation writes
+			// the rows an apply would have, so it reads what an apply reads.
+			if rows, err = deriver.Rederive(ctx, tx, r.batchOptions(r.now())); err != nil {
 				return fmt.Errorf("statelog: %s could not re-derive its rows from "+
 					"derivation %d to %d: %w", r.domain.Name(), stored,
 					r.tables.derivation, err)

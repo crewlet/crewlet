@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
@@ -34,10 +35,7 @@ func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
 
 func engineWithSecrets(t *testing.T) (*Engine, *store.SecretValues) {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
 	e := &Engine{backends: &Backends{Store: db}, cipher: cipher}
@@ -168,10 +166,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 		t.Error("an engine with no store reported that it loaded a snapshot")
 	}
 
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
 		t.Error("an engine with no keyring reported that it loaded a snapshot")
@@ -188,10 +183,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 // has them: its own table and the fleet's shared bucket.
 func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleetsecrets.Store) {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
 	fleet := coordmem.NewFleet()
@@ -201,8 +193,9 @@ func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleets
 
 // THE FLEET'S VALUE WINS OVER A SURVIVING LOCAL ROW.
 //
-// A node upgraded into the fleet store still has its own rows until the boot
-// migration clears them, and a rotation since then has landed on the fleet.
+// A value set with `crewlet secrets set` while this node's engine was stopped
+// is a local row until the boot migration clears it, and a rotation since then
+// may have landed on the fleet.
 // If the stale local copy shadowed it, the rotation would appear to work on
 // every node but this one.
 func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {

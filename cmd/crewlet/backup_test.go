@@ -33,10 +33,16 @@ func newBackupNode(t *testing.T) *backupNode {
 				"taken_at":    "2026-08-30T12:00:00Z",
 				"finished_at": "2026-08-30T12:00:02Z",
 				"node_id":     "node-0",
-				"store": map[string]any{
-					"file": "store.db", "source": "/data/company.db",
-					"bytes": 262144, "migrations": []string{"0001_events.sql"},
+				"stores": []map[string]any{
+					{"estate": "node", "file": "store.db", "source": "/data/company.db",
+						"bytes": 262144, "migrations": []string{"0001_events.sql"}},
+					{"estate": "replicated", "file": "store-replicated.db",
+						"source": "/data/crewlet-replicated.db", "bytes": 131072,
+						"migrations": []string{"0001_tracker.sql", "0002_pages.sql"}},
 				},
+				"objects": map[string]any{"dir": "objects", "objects": 40, "bytes": 41943040,
+					"lost": []map[string]any{{"object": "019a0000-0000-7000-8000-000000000001",
+						"named_by": "ENG/reports/q3.csv"}}},
 				"streams": []map[string]any{
 					{"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
 						"bytes": 4096, "messages": 12},
@@ -60,6 +66,7 @@ func newBackupNode(t *testing.T) *backupNode {
 // operator typed it: this is a path on the ENGINE'S host, so a command that
 // quietly rewrote it would write the company's state somewhere nobody named.
 func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	stdout, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/var/backups/tonight")
 	if err != nil {
@@ -73,7 +80,10 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 	}
 	// Both estates named, so an operator can see what they actually got
 	// rather than inferring it from an exit code.
-	for _, want := range []string{"/var/backups/tonight", "store", "CREWLET_AGENT", "12 messages"} {
+	for _, want := range []string{"/var/backups/tonight", "store (node)", "store (replicated)",
+		"2 migrations", "objects", "40 objects", "CREWLET_AGENT", "12 messages",
+		// A FILE THE BACKUP COULD NOT CARRY IS SAID, by the file.
+		"1 file(s) could not be carried", "ENG/reports/q3.csv"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
 		}
@@ -85,9 +95,35 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 	}
 }
 
+// A BACKUP WHOSE OBJECTS RIDE THE BROKER'S OWN BUCKET NAMES THE STREAM they
+// are in. It printed "objects / 0 B N chunks" — a directory that does not
+// exist and a size of nothing — for every backup on the default backend.
+func TestABackupOfObjectsInAStreamReportsTheStream(t *testing.T) {
+	t.Parallel()
+	node := newBackupNode(t)
+	node.answer = map[string]any{
+		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:02Z",
+		"node_id": "node-0",
+		"objects": map[string]any{"stream": "OBJ_crewlet_files", "objects": 7, "bytes": 9000},
+		"streams": []map[string]any{{"name": "OBJ_crewlet_files",
+			"file": "streams/OBJ_crewlet_files.snapshot", "bytes": 9500, "messages": 20}},
+	}
+	stdout, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/var/backups/tonight")
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if !strings.Contains(stdout, "in OBJ_crewlet_files") || !strings.Contains(stdout, "7 objects") {
+		t.Errorf("the report does not name the stream the objects are in:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "objects/") || strings.Contains(stdout, "could not be carried") {
+		t.Errorf("the report names a directory, or a loss, the backup does not have:\n%s", stdout)
+	}
+}
+
 // A missing -dir is refused before anything is sent: there is no sensible
 // default for "where should this company's entire durable state be written".
 func TestBackupWithoutADestinationIsRefused(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL))
 	if err == nil {
@@ -102,6 +138,7 @@ func TestBackupWithoutADestinationIsRefused(t *testing.T) {
 // for the node to reject: the operator needs to know it would have been
 // resolved on another host, which an HTTP error cannot convey as well.
 func TestBackupRefusesARelativeDestinationLocally(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "backups/tonight")
 	if err == nil {
@@ -120,6 +157,7 @@ func TestBackupRefusesARelativeDestinationLocally(t *testing.T) {
 // alone shows a dash that reads as "nothing to back up" rather than "the rest
 // of this lives on the cluster".
 func TestBackupSaysWhenTheStreamEstateIsNotInTheCopy(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	node.answer = map[string]any{
 		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:01Z",
@@ -142,6 +180,7 @@ func TestBackupSaysWhenTheStreamEstateIsNotInTheCopy(t *testing.T) {
 
 // The node refusing is reported as the node's answer, not swallowed.
 func TestBackupReportsANodeThatCannotTakeOne(t *testing.T) {
+	t.Parallel()
 	node := newBackupNode(t)
 	node.status = http.StatusServiceUnavailable
 	node.answer = map[string]any{"error": "backup_failed"}

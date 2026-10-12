@@ -436,6 +436,37 @@ func TestATagCoversEverythingBeneathIt(t *testing.T) {
 	}
 }
 
+// A FIXED-LENGTH LIST IS COVERED LIKE ANY OTHER. Redaction used to mask a
+// slice's members and copy a Go array verbatim, while [Company.UnresolvedMasks]
+// and the schema generator both treat an array's elements as covered by its
+// tag. No config field is an array today; the first tagged one would have
+// been published in clear.
+type pinned struct {
+	Keys [2]string `secret:"true"`
+	Open [1]string
+}
+
+func TestATaggedArrayIsMaskedAndRestored(t *testing.T) {
+	t.Parallel()
+	in := pinned{Keys: [2]string{"sk-one", "${KEY}"}, Open: [1]string{"visible"}}
+	out := reflect.New(reflect.TypeOf(in))
+	copyMasking(reflect.ValueOf(in), out.Elem(), false)
+	got, _ := out.Interface().(*pinned)
+
+	if want := [2]string{Redacted, "${KEY}"}; got.Keys != want {
+		t.Errorf("a tagged array = %q, want %q", got.Keys, want)
+	}
+	if got.Open != in.Open {
+		t.Errorf("an untagged array = %q, want it as stored", got.Open)
+	}
+
+	var r restorer
+	r.restore(out.Elem(), reflect.ValueOf(in), false)
+	if got.Keys != in.Keys {
+		t.Errorf("restored array = %q, want the prior's %q", got.Keys, in.Keys)
+	}
+}
+
 func TestAShortenedKeyListRefusesToGuess(t *testing.T) {
 	t.Parallel()
 	// Removing a key moves every later slot. Restoring by position would
@@ -488,14 +519,21 @@ func TestAReorderedKeyListRefusesToGuess(t *testing.T) {
 //
 // A hand-maintained list of secret PATHS is maintained by whoever remembers it
 // exists, so the day somebody adds integrations.newthing.token the read
-// surface starts publishing it and nothing fails. This walks the config type
+// surface starts publishing it and nothing fails. This walks the config types
 // and fails on a field whose name says credential and whose tag does not.
+//
+// BOTH TIERS. Tier A has no read surface to redact, but the tag is also what
+// marks a credential's position in the generated schema, and tooling that
+// renders a node's crewlet.yaml — the keyring, the API tokens — needs the
+// mark as much as tooling that renders a company does.
 func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	t.Parallel()
 	// Names that mean "this holds a credential". Deliberately broad: a
 	// false positive is one `secret:"true"` to add or one exemption to
 	// write down, and a false negative is a published credential.
-	credential := []string{"token", "secret", "apikey", "password", "credential"}
+	// "material" is key material: the keyring's, which is named for what
+	// it is rather than for what it unlocks.
+	credential := []string{"token", "secret", "apikey", "password", "credential", "material"}
 
 	// The exemptions, each of which is a NAME rather than a credential.
 	// Listed here so adding one is a decision somebody wrote down.
@@ -506,6 +544,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
 		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
 		"SandboxMinBudgetTokens": true,
+		// An embedding model's limits, counted in tokens.
+		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
 		// A path on disk, not the material at it.
@@ -516,6 +556,21 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		// it is in every manifest the operator installs.
 		"ForgeAppID": true,
 	}
+
+	// The exemptions by Type.Field, for a name that is a credential's
+	// somewhere else: a BLOCK or a LIST whose credential is tagged on the
+	// member that holds it, beside labels a tag on the whole would mask.
+	exemptFields := map[string]string{
+		"Bootstrap.Secrets": "the keyring block; its key ids are labels, and " +
+			"SecretKey.Material is tagged",
+		"APIAuth.Tokens": "a list of {id, token}; the id is the label writes " +
+			"are attributed to, and APIToken.Token is tagged",
+		"Stream.Credentials": "a PATH to a NATS credentials file, not the " +
+			"material at it",
+		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
+			"to, a number of characters, never a password",
+	}
+	usedFields := map[string]bool{}
 
 	// THE TYPE RULE, beside the name rule. A map named Env, Headers or Files
 	// is where a process's credentials are handed to it, and its NAME says
@@ -568,10 +623,15 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 						path+rt.Name(), field.Name, field.Name)
 				}
 			}
+			_, exemptField := exemptFields[rt.Name()+"."+field.Name]
 			for _, needle := range credential {
-				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] {
+				if exemptField && strings.Contains(name, needle) && !tagged {
+					usedFields[rt.Name()+"."+field.Name] = true
+				}
+				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] && !exemptField {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+
-						"secret:\"true\", so the config read surface publishes it",
+						"secret:\"true\", so the config read surface publishes it "+
+						"and the schema does not mark its position",
 						path+rt.Name(), field.Name)
 					break
 				}
@@ -580,6 +640,15 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(Company{}), "", map[reflect.Type]bool{})
+	walk(reflect.TypeOf(Bootstrap{}), "", map[reflect.Type]bool{})
+	// An exemption that excuses nothing is one that would silently excuse
+	// whatever field takes its name next.
+	for field, reason := range exemptFields {
+		if !usedFields[field] {
+			t.Errorf("exemption %s (%s) names no untagged credential-looking "+
+				"field the walk reached: delete it", field, reason)
+		}
+	}
 }
 
 // rosterDoc is two seats and two MCP servers, each holding a credential of
@@ -731,10 +800,10 @@ func TestADuplicatedIdentityIsMatchedToNothing(t *testing.T) {
 
 // AN IDENTIFIED LIST INSIDE A MEMBER NEVER FALLS BACK TO POSITION EITHER.
 //
-// Sandbox setup steps are matched by name within their list. A submitted
-// document is refused for two steps of one name, but a stored revision from
-// before that rule can still hold them, and it is the prior a write restores
-// from. A reorder must not trade their registry tokens.
+// Sandbox setup steps are matched by name within their list, and restore never
+// resolves a mask against a prior identity two members share: a prior can
+// hold two steps of one name (an admission rule an apply does not enforce),
+// and a reorder must not trade their registry tokens.
 func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
 	t.Parallel()
 	original := credentialCompany(t)
@@ -983,8 +1052,9 @@ roles:
 
 // THE DUPLICATE SIBLING PROBE: TWO UNITS OF ONE NAME NEVER TRADE CREDENTIALS.
 //
-// A stored revision a build before the name rules admitted can hold two units
-// called "Platform", each with its own team's token. Reordering them, or
+// A document can hold two units called "Platform", each with its own team's
+// token — a submitted one before validation refuses it, or a prior applied
+// under the runnable rules. Reordering them, or
 // moving and renaming one, restored through position or through either of the
 // two names hands one team the other's token with no mask left standing to
 // refuse it. The only safe outcome is a mask error on both.

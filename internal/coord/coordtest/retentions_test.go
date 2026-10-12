@@ -7,6 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The retentions have to stay consistent with the cadences they are sized
@@ -60,11 +62,11 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 	// asked.
 	//
 	// It is checked here rather than in internal/api/setupapi because the
-	// record is what enforces it: the claim that spends a state expires
-	// with its bucket, so a manifestTTL longer than this retention would
-	// be a token still validating after the record that spends it is gone
-	// — which is the replay the record exists to stop. setupapi's
-	// manifestTTL IS this constant for that reason.
+	// record is what enforces it: the claim that spends a state lapses at
+	// this TTL, so a manifestTTL longer than it would be a token still
+	// validating after the record that spends it has lapsed — which is the
+	// replay the record exists to stop. setupapi's manifestTTL IS this
+	// constant for that reason.
 	if coord.SetupOnceRetention >= time.Hour {
 		t.Errorf("coord.SetupOnceRetention %v outlives GitHub's one-hour one-time code, so "+
 			"a setup link can be completed after the code behind it is dead and the "+
@@ -75,6 +77,44 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 		t.Errorf("coord.SetupOnceRetention %v can close during the task it covers — a "+
 			"browser round trip to the vendor and two clicks — so the operator who "+
 			"did exactly what was asked is refused", coord.SetupOnceRetention)
+	}
+	// And the claims store must be able to keep it: a claim asking for
+	// longer than [coord.MaxClaimTTL] is an error, and the setup flow fails
+	// closed on every error, so a window past the ceiling would refuse
+	// every callback rather than spend one.
+	if coord.SetupOnceRetention > coord.MaxClaimTTL {
+		t.Errorf("coord.SetupOnceRetention %v is longer than the claims store keeps a "+
+			"claim (coord.MaxClaimTTL %v), so every setup callback is refused",
+			coord.SetupOnceRetention, coord.MaxClaimTTL)
+	}
+
+	// A rebase is inherited while it lies within the state log's mint
+	// horizon of the attempt reading it, and the bucket's age counts from
+	// the write, which is no earlier than the instant recorded. A bucket
+	// that ages a record out inside that horizon sends the attempt after it
+	// to mint anew — and to write a second copy of every write the attempt
+	// that recorded it made.
+	if coord.RebaseRetention <= statelog.MintHorizon {
+		t.Errorf("coord.RebaseRetention %v can age out a rebase an attempt must still "+
+			"inherit (mint horizon %v), so a retry writes its first attempt's writes twice",
+			coord.RebaseRetention, statelog.MintHorizon)
+	}
+	// And it is sized FROM the ledger's retention rather than beside it: a
+	// longer ledger lengthens the horizon, and the two must move together.
+	if coord.RebaseRetention != statelog.OpsRetention {
+		t.Errorf("coord.RebaseRetention %v has drifted from statelog.OpsRetention %v",
+			coord.RebaseRetention, statelog.OpsRetention)
+	}
+
+	// A custody record names the data node that keeps a stateless node's
+	// batch, and a node that never learned whether it kept one asks it
+	// later. Aged out while the batch's rows are still in the event log, it
+	// answers that nobody keeps the batch, and the asking node keeps a
+	// second copy of what another node holds.
+	if coord.CustodyRetention <= store.EventRetention {
+		t.Errorf("coord.CustodyRetention %v can age out the keeper of a batch whose "+
+			"rows the event log still holds (%v), so a node keeps a second copy",
+			coord.CustodyRetention, store.EventRetention)
 	}
 
 	// The thread-follow horizon is the one here that is not sized from

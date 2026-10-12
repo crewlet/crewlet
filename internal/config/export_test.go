@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/iam"
+)
 
 // TestKeyMaterial is thirty-two zero bytes in base64: a key the keyring
 // accepts, sealing nothing any case here reads back.
@@ -36,6 +40,13 @@ func Runnable(doc string) string {
 	if strings.TrimSpace(doc) == "{}" {
 		doc = ""
 	}
+	// A NULL DOCUMENT is no mapping at all, so there is nothing to add a
+	// block to without making it a different document: it is left as
+	// written, and refused for the keyring it cannot carry.
+	switch strings.TrimSpace(doc) {
+	case "~", "null":
+		return doc
+	}
 	if doc != "" && !strings.HasSuffix(doc, "\n") {
 		doc += "\n"
 	}
@@ -68,4 +79,44 @@ func RunnableBootstrap() Bootstrap {
 // ParseRunnableBootstrap is [ParseBootstrap] over [Runnable] of the document.
 func ParseRunnableBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	return ParseBootstrap([]byte(Runnable(string(data))), r)
+}
+
+// testTokenValue is a Tier A token value above the entropy floor.
+const testTokenValue = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+
+// TestServedAPIYAML is what a node SERVING the API must state beside its port
+// ([Bootstrap.ServesAPI]) — an external URL, the grant ceiling and a token —
+// as lines under an `api:` key, for a document whose subject is something else
+// to carry. The https address has its front end named, so it raises no
+// warning either.
+const TestServedAPIYAML = "  external_url: https://crewlet.example.com\n" +
+	"  trusted_proxies: [10.0.0.0/8]\n" +
+	"  auth:\n    max_grants: [config:write]\n    tokens:\n" +
+	"      - {id: founder, token: \"" + testTokenValue + "\", grants: [config:write]}\n"
+
+// Served is a Tier A document whose `api:` block carries [TestServedAPIYAML],
+// for a case about a node that serves the API and about something else. A
+// document with no `api:` key gains one.
+func Served(doc string) string {
+	if doc != "" && !strings.HasSuffix(doc, "\n") {
+		doc += "\n"
+	}
+	switch {
+	case strings.HasPrefix(doc, "api:\n"):
+		return "api:\n" + TestServedAPIYAML + strings.TrimPrefix(doc, "api:\n")
+	case strings.Contains(doc, "\napi:\n"):
+		return strings.Replace(doc, "\napi:\n", "\napi:\n"+TestServedAPIYAML, 1)
+	}
+	return doc + "api:\n" + TestServedAPIYAML
+}
+
+// ServeAPI gives b what a node serving the API must state beside its port, the
+// values [TestServedAPIYAML] writes.
+func ServeAPI(b *Bootstrap) {
+	b.API.ExternalURL = "https://crewlet.example.com"
+	b.API.TrustedProxies = []string{"10.0.0.0/8"}
+	b.API.Auth.MaxGrants = []iam.Grant{iam.GrantConfigWrite}
+	b.API.Auth.Tokens = []APIToken{{
+		ID: "founder", Token: testTokenValue, Grants: []iam.Grant{iam.GrantConfigWrite},
+	}}
 }

@@ -12,11 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// ONE SUITE OVER ALL THREE SINKS, because the contract is what the
-// provisioning CLIs depend on and a sink that honours it differently is a
-// run whose safety depends on which flag the operator passed.
 // runFor is the party a run is for: a person through their own machine token,
 // so each part of what a sealed row records is distinct.
 var runFor = secrets.Author{Name: "jane.doe", Kind: "operator",
@@ -28,11 +26,7 @@ var runFor = secrets.Author{Name: "jane.doe", Kind: "operator",
 // alone and the credential half fails.
 func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	key, err := secrets.GenerateKey()
 	if err != nil {
@@ -61,6 +55,9 @@ func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
 	}
 }
 
+// ONE SUITE OVER ALL THREE SINKS, because the contract is what the
+// provisioning CLIs depend on and a sink that honours it differently is a
+// run whose safety depends on which flag the operator passed.
 type sinkCase struct {
 	name string
 	// build returns the sink and a reader for what it holds, so the suite
@@ -73,11 +70,7 @@ func sinkCases() []sinkCase {
 		{
 			name: "the secret store",
 			build: func(t *testing.T) (provision.TokenSink, func(*testing.T) map[string]string) {
-				db, err := store.Open(t.Context(),
-					filepath.Join(t.TempDir(), "s.db"), store.Options{})
-				if err != nil {
-					t.Fatalf("store.Open: %v", err)
-				}
+				db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
 				t.Cleanup(func() { _ = db.Close() })
 				key, err := secrets.GenerateKey()
 				if err != nil {

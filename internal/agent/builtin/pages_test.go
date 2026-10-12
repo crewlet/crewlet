@@ -36,6 +36,10 @@ type fakeKB struct {
 	readErr  error
 	writeErr error
 
+	// renameErr fails a rename alone, so a save that also renames lands its
+	// edit and meets this on the half that follows.
+	renameErr error
+
 	// awaited is every position [builtin.PageDeps.Await] was handed, in
 	// order, so a tool that waited for the wrong write — or waited before
 	// making the write that needs it — is visible rather than merely
@@ -137,6 +141,9 @@ func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title stri
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
+	}
+	if f.renameErr != nil {
+		return pages.Written{}, f.renameErr
 	}
 	f.renames = append(f.renames, renamed{
 		pageID: pageID, title: title,
@@ -826,9 +833,9 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 // A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
 //
 // Every page tool answered with an id and a revision whatever the write's
-// outcome was. A comment the engine answered `unknown` WITHOUT publishing —
-// its operation minted before this node's ledger lost rows, which a seat woken
-// by a backlog trigger after a node adopted a snapshot is — came back as a
+// outcome was. A comment the engine answered `unknown` WITHOUT publishing — its
+// operation minted before this node's ledger lost rows, which a seat re-running
+// a turn whose trigger predates the ledger's sweep is — came back as a
 // comment_id and revision 0, the seat said it had commented, and nobody ever
 // saw the remark.
 func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {

@@ -7,65 +7,6 @@ import (
 	"unicode/utf8"
 )
 
-func TestElideCutsRunesNotBytes(t *testing.T) {
-	t.Parallel()
-	// The hazard a character-wise language does not have. A byte slice at
-	// limit 4 lands inside the second rune of "日本語テスト"
-	// and produces invalid UTF-8, which a JSON encoder then replaces with
-	// U+FFFD — so a truncated argument reaches the model as mojibake rather
-	// than as a short version of itself.
-	got := elide("日本語テスト", 4)
-	if !utf8.ValidString(got) {
-		t.Fatalf("elide produced invalid UTF-8: %q", got)
-	}
-	if got != "日本語テ…" {
-		t.Errorf("elide = %q, want 日本語テ…", got)
-	}
-	// And the budget counts runes, so a 6-rune string is untouched at 6
-	// even though it is 18 bytes.
-	if got := elide("日本語テスト", 6); got != "日本語テスト" {
-		t.Errorf("a string exactly at the rune budget was cut: %q", got)
-	}
-}
-
-func TestElideIsUnboundedAtZero(t *testing.T) {
-	t.Parallel()
-	// The verbatim contract Review's evidence log depends on. If zero ever
-	// starts meaning "cut everything", Review judges an empty log and
-	// passes every turn.
-	long := strings.Repeat("x", 5000)
-	if got := elide(long, 0); got != long {
-		t.Errorf("limit 0 truncated to %d chars", len(got))
-	}
-	if got := elide(long, -1); got != long {
-		t.Errorf("a negative limit truncated to %d chars", len(got))
-	}
-}
-
-func TestPerValueElisionKeepsTheDiscriminator(t *testing.T) {
-	t.Parallel()
-	// The bug this whole design exists to prevent: capping the SERIALISED
-	// object would keep whichever keys sort early and drop the rest, and
-	// the argument that says WHICH delivery fired is usually the shortest.
-	// A line that kept the message body but lost `channel` looks precise
-	// while hiding which of two posts actually happened.
-	body := strings.Repeat("prose ", 400)
-	got := FormatCalls([]Call{{
-		Name: "slack_post",
-		Args: map[string]any{"channel": "C0ENGINEERING", "text": body},
-	}}, Format(nil, nil))
-
-	if !strings.Contains(got, "C0ENGINEERING") {
-		t.Errorf("the discriminating argument was lost:\n%s", got)
-	}
-	if strings.Contains(got, body) {
-		t.Error("the full payload survived; nothing was elided")
-	}
-	if !strings.Contains(got, "…") {
-		t.Errorf("no elision marker, so a trimmed line reads as complete:\n%s", got)
-	}
-}
-
 func TestValuesThatFitKeepTheirNativeType(t *testing.T) {
 	t.Parallel()
 	// A number that survives must stay a number. Round-tripping every value
@@ -81,66 +22,6 @@ func TestValuesThatFitKeepTheirNativeType(t *testing.T) {
 	}
 	if _, isString := back["ok"].(string); isString {
 		t.Errorf("a fitting bool was stringified: %s", got)
-	}
-}
-
-func TestBlobLimitDropsWholeKeysAndSaysHowMany(t *testing.T) {
-	t.Parallel()
-	// Shortest-first admission plus an explicit remainder. Cutting the
-	// serialised string instead would drop whichever keys sort last, which
-	// is the failure per-value elision exists to prevent, one step later.
-	args := map[string]any{
-		"key":  "PROJ-1",
-		"a":    strings.Repeat("a", 300),
-		"b":    strings.Repeat("b", 300),
-		"c":    strings.Repeat("c", 300),
-		"d":    strings.Repeat("d", 300),
-		"page": "9912",
-	}
-	got := fitArguments(args, 400)
-
-	if !strings.Contains(got, "PROJ-1") || !strings.Contains(got, "9912") {
-		t.Errorf("short identifiers were dropped before long payloads:\n%s", got)
-	}
-	if !strings.Contains(got, "more") {
-		t.Errorf("a trimmed line did not report its remainder:\n%s", got)
-	}
-	// The kept object must still parse: the remainder is a suffix, never a
-	// cut into the JSON.
-	head, _, _ := strings.Cut(got, " +")
-	var back map[string]any
-	if err := json.Unmarshal([]byte(head), &back); err != nil {
-		t.Fatalf("the kept object is not valid JSON: %v (%s)", err, head)
-	}
-	if len(back) >= len(args) {
-		t.Errorf("nothing was dropped despite exceeding the budget: %s", got)
-	}
-}
-
-func TestOneOversizedArgumentStillRenders(t *testing.T) {
-	t.Parallel()
-	// The first key is admitted unconditionally. Without that, a call whose
-	// single argument blows the budget renders as "{}" — a line claiming a
-	// tool was called with nothing, which is a different and false fact.
-	got := fitArguments(map[string]any{"body": strings.Repeat("x", 5000)}, 100)
-	if !strings.Contains(got, "body") {
-		t.Errorf("a lone oversized argument vanished entirely: %s", got)
-	}
-}
-
-func TestBlobLimitIsStableAcrossRuns(t *testing.T) {
-	t.Parallel()
-	// Go map iteration is randomised, so "which key got dropped" must not
-	// come from range order. Equal-cost keys are broken by name.
-	args := map[string]any{}
-	for _, k := range []string{"aa", "bb", "cc", "dd", "ee", "ff"} {
-		args[k] = strings.Repeat(k, 100)
-	}
-	first := fitArguments(args, 300)
-	for range 40 {
-		if got := fitArguments(args, 300); got != first {
-			t.Fatalf("unstable output:\n%s\nvs\n%s", first, got)
-		}
 	}
 }
 
@@ -243,7 +124,7 @@ func TestNoIterationsRendersNothing(t *testing.T) {
 	t.Parallel()
 	// The first round of every turn. Callers drop the whole section on an
 	// empty string rather than emit a heading with nothing under it.
-	if got := RenderIterations(nil, nil); got != "" {
+	if got := RenderIterations(nil, nil, nil); got != "" {
 		t.Errorf("an empty ledger rendered %q", got)
 	}
 }
@@ -257,7 +138,7 @@ func TestARenderedIterationCarriesWhatTheNextRoundActsOn(t *testing.T) {
 		Text:          "Posted the weekly summary.",
 		ReviewNotes:   "the link was wrong, repost with the corrected one",
 		CompletedWork: "the #eng post landed",
-	}}, []string{"activate_tool"})
+	}}, []string{"activate_tool"}, nil)
 
 	for _, want := range []string{
 		"### Iteration 1",
@@ -278,7 +159,7 @@ func TestARoundThatCalledNothingSaysSo(t *testing.T) {
 	t.Parallel()
 	// A round where the executor silently made no calls is
 	// indistinguishable from a rendering bug without an explicit "(none)".
-	got := RenderIterations([]Iteration{{Iteration: 1, Intent: "triage"}}, nil)
+	got := RenderIterations([]Iteration{{Iteration: 1, Intent: "triage"}}, nil, nil)
 	if !strings.Contains(got, "Called:\n(none)") {
 		t.Errorf("a round that called nothing left no trace:\n%s", got)
 	}
@@ -291,7 +172,7 @@ func TestMetaToolsAreFilteredFromTheCallList(t *testing.T) {
 	got := RenderIterations([]Iteration{{
 		Iteration: 1,
 		Calls:     []Call{{Name: "activate_tool"}, {Name: "slack_post"}},
-	}}, []string{"activate_tool"})
+	}}, []string{"activate_tool"}, nil)
 
 	if strings.Contains(got, "activate_tool") {
 		t.Errorf("a skipped meta-tool rendered:\n%s", got)
@@ -323,7 +204,7 @@ func TestAnIterationRoundTripsThroughJSON(t *testing.T) {
 	if err := json.Unmarshal(blob, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if RenderIterations([]Iteration{got}, nil) != RenderIterations([]Iteration{want}, nil) {
+	if RenderIterations([]Iteration{got}, nil, nil) != RenderIterations([]Iteration{want}, nil, nil) {
 		t.Errorf("round-trip changed what the ledger says:\n%s", blob)
 	}
 }
@@ -348,147 +229,10 @@ func TestARowFromAnOlderEngineDecodesToLessContextNotAnError(t *testing.T) {
 	}
 }
 
-// ELIDE PAYLOADS, NEVER STRUCTURE — asserted on the write path, which is
-// where the distinction is permanent. This row is the store's only record of
-// the turn, so a field cut here is not a shortened rendering, it is the only
-// copy. Every structural field must survive whole; only a tool ARGUMENT is
-// elided, and the discriminating argument must survive that.
-func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
-	t.Parallel()
-	long := strings.Repeat("z", 6000)
-	got := BuildSession(SessionInput{
-		Trigger: long, Intent: long,
-		Reply: long, Delivered: true, CompletedWork: long,
-		Calls: []Call{{Name: "slack_post", Args: map[string]any{"text": long, "channel": "C1"}}},
-	})
-	for _, c := range []struct {
-		name  string
-		value string
-	}{
-		{"trigger", got.Trigger},
-		{"intent", got.Intent},
-		{"reply", got.Reply},
-		{"completed work", got.CompletedWork},
-	} {
-		if c.value != long {
-			t.Errorf("%s was cut at write time: %d runes of %d",
-				c.name, utf8.RuneCountInString(c.value), utf8.RuneCountInString(long))
-		}
-	}
-	// The argument payload IS elided — that is the half of the principle
-	// this package keeps — and the identifier beside it survives.
-	if utf8.RuneCountInString(got.Calls) > BlobLimit+len("- slack_post() → success")+8 {
-		t.Errorf("the argument blob was not elided:\n%s", got.Calls)
-	}
-	if !strings.Contains(got.Calls, "C1") {
-		t.Errorf("the discriminating argument was lost at write time:\n%s", got.Calls)
-	}
-	// The undelivered branch is the same row with the artifact in the other
-	// field, so it inherits the same rule: whole, not cut.
-	if un := BuildSession(SessionInput{Reply: long}); un.Unsent != long {
-		t.Errorf("unsent was cut at write time: %d runes of %d",
-			utf8.RuneCountInString(un.Unsent), utf8.RuneCountInString(long))
-	}
-}
-
-// The RENDER is bounded, the RECORD is not — and the drop is reported. A
-// silently shortened history reads as the whole conversation, and a seat that
-// believes it has seen everything it said will not go and look for the rest.
-func TestATrimmedHistorySaysHowMuchItDropped(t *testing.T) {
-	t.Parallel()
-	entries := make([]Session, 6)
-	for i := range entries {
-		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat("z", 5000)}
-	}
-	got := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars})
-	if len(got) > InjectedMaxChars+500 {
-		t.Errorf("the rendered block is %d bytes, past its bound", len(got))
-	}
-	if !strings.Contains(got, "are not shown") {
-		t.Errorf("entries were dropped silently:\n%s", got[:200])
-	}
-	// WHOLE ENTRIES. A cut inside one would leave a half-recorded reply
-	// reading as the whole of what the seat said.
-	if strings.Count(got, strings.Repeat("z", 5000)) < 1 {
-		t.Errorf("an entry was cut rather than dropped:\n%s", got[:200])
-	}
-	// The newest always survives, however long: a block trimmed to nothing
-	// tells the next turn this conversation has no history.
-	solo := RenderHistory([]Session{{Reply: strings.Repeat("d", InjectedMaxChars*2)}},
-		HistoryOptions{MaxChars: InjectedMaxChars})
-	if !strings.Contains(solo, strings.Repeat("d", InjectedMaxChars*2)) {
-		t.Error("the only entry was dropped, so the turn reads as having no history")
-	}
-}
-
-// A prior round's produced text is kept WHOLE in the record and TAIL-elided
-// when rendered — the deliverable is what the round ended with, not what it
-// opened by thinking, and Execution.Text is the whole tool loop concatenated.
-func TestAPriorRoundsOutputIsTailElidedNotHeadCut(t *testing.T) {
-	t.Parallel()
-	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
-	got := RenderIterations([]Iteration{{Iteration: 1, Text: produced}}, nil)
-	if !strings.Contains(got, "THE DRAFT ENDS HERE.") {
-		t.Error("the deliverable at the end of the round was cut away")
-	}
-	if strings.Count(got, "reasoning reasoning") > RenderedArtifactLimit {
-		t.Error("the block was not bounded at all")
-	}
-	if !strings.Contains(got, "…") {
-		t.Error("the cut is silent")
-	}
-	// And the record itself is untouched: this is a render bound.
-	whole := RenderIterations([]Iteration{{Iteration: 1, Text: "short"}}, nil)
-	if !strings.Contains(whole, "Produced: short") {
-		t.Errorf("a short round was altered: %q", whole)
-	}
-}
-
 func TestNoHistoryRendersNothing(t *testing.T) {
 	t.Parallel()
 	if got := RenderHistory(nil, HistoryOptions{}); got != "" {
 		t.Errorf("an empty history rendered %q", got)
-	}
-}
-
-func TestHistoryKeepsTheNewestEntries(t *testing.T) {
-	t.Parallel()
-	// Recency is what a follow-up turn needs: the message it is answering
-	// is the newest one, and the turn before it is the one most likely to
-	// have already answered it.
-	entries := []Session{{Reply: "first"}, {Reply: "second"}, {Reply: "third"}}
-	got := RenderHistory(entries, HistoryOptions{MaxEntries: 2})
-	if strings.Contains(got, "first") {
-		t.Errorf("MaxEntries kept the oldest:\n%s", got)
-	}
-	for _, want := range []string{"second", "third"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
-	}
-}
-
-func TestHistoryDropsFromTheOldestEndAndAlwaysKeepsOne(t *testing.T) {
-	t.Parallel()
-	entries := []Session{
-		{Reply: strings.Repeat("a", 200)},
-		{Reply: strings.Repeat("b", 200)},
-		{Reply: strings.Repeat("c", 200)},
-	}
-	got := RenderHistory(entries, HistoryOptions{MaxChars: 250})
-	if strings.Contains(got, "aaa") {
-		t.Errorf("the oldest entry survived a char budget:\n%s", got)
-	}
-	if !strings.Contains(got, "ccc") {
-		t.Errorf("the newest entry was dropped:\n%s", got)
-	}
-
-	// A single entry over budget still renders. A block trimmed to nothing
-	// tells the next turn this conversation has no history, which is the
-	// one thing it must not conclude.
-	solo := RenderHistory([]Session{{Reply: strings.Repeat("d", 900)}}, HistoryOptions{MaxChars: 10})
-	if solo == "" {
-		t.Error("an over-budget lone entry was dropped, so history read as empty")
 	}
 }
 
@@ -503,7 +247,7 @@ func TestASessionReadsAsTheSeatsOwnPast(t *testing.T) {
 		Reply:   "Reposted with the corrected link.",
 	})
 	for _, want := range []string{
-		"### 2026-08-20T09:00:00Z (turn 0189d4c2)",
+		"### 2026-08-20T09:00:00Z (turn 0189d4c2-aaaa-bbbb-cccc-ddddddddddd0)",
 		"Triggered by: @alice",
 		"You set out to: repost",
 		"You called:",
@@ -524,16 +268,6 @@ func TestAnUnremarkableEndingIsNotAnnounced(t *testing.T) {
 	}
 	if got := renderSession(Session{Reply: "hi", Decision: "failed"}); !strings.Contains(got, "Turn ended: failed") {
 		t.Errorf("a failure was not announced:\n%s", got)
-	}
-}
-
-func TestAShortTurnIDDoesNotPanic(t *testing.T) {
-	t.Parallel()
-	// The id is a string the caller supplies. Slicing [:8] blindly panics
-	// on anything shorter, and a panic here takes down the turn that was
-	// only trying to describe itself.
-	if got := renderSession(Session{TurnID: "abc"}); !strings.Contains(got, "turn abc") {
-		t.Errorf("a short id did not render: %s", got)
 	}
 }
 
@@ -569,5 +303,210 @@ func TestRenderedArgumentsAreNotEscapedForHTML(t *testing.T) {
 	var back map[string]any
 	if err := json.Unmarshal([]byte(got), &back); err != nil {
 		t.Fatalf("renderArgs produced something that is not JSON: %v", err)
+	}
+}
+
+// A PAYLOAD IS FITTED AND THE DISCRIMINATOR IS NOT. The bug the per-value
+// design prevents is still the one that matters — a line that kept the body
+// but lost `channel` hides which of two posts happened — so the identifier is
+// never a piece, and the body the caller rewrote is what renders in its place.
+func TestAPayloadIsFittedAndTheDiscriminatorIsNot(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("prose ", 400)
+	calls := []Call{{Name: "slack_post", Args: map[string]any{"channel": "C0ENGINEERING", "text": body}}}
+	opts := Format(nil, nil)
+	pieces := CallPieces(calls, opts)
+	if len(pieces) != 1 || pieces[0].Text != body || pieces[0].Kind != PieceArgument {
+		t.Fatalf("pieces = %+v, want the body alone", pieces)
+	}
+	opts.Fitted = Fitted{pieces[0]: "(condensed) a long note to the engineering channel"}
+	got := FormatCalls(calls, opts)
+	if !strings.Contains(got, "C0ENGINEERING") {
+		t.Errorf("the discriminating argument was lost:\n%s", got)
+	}
+	if !strings.Contains(got, "(condensed) a long note to the engineering channel") {
+		t.Errorf("the rewrite did not render in the body's place:\n%s", got)
+	}
+	if strings.Contains(got, body) {
+		t.Error("the whole body rendered although a rewrite was supplied")
+	}
+}
+
+// AN UNFITTED PAYLOAD RENDERS WHOLE — NEVER CUT. A caller that could not have
+// a payload rewritten gets prompt weight, not a fragment reading as the
+// payload; this is the mutation that would quietly reinstate the old trim.
+func TestAnUnfittedPayloadRendersWholeNeverCut(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("prose ", 400)
+	errDoc := "<html>" + strings.Repeat("gateway ", 200) + "missing scope chat:write</html>"
+	got := FormatCalls([]Call{
+		{Name: "slack_post", Args: map[string]any{"text": body}},
+		{Name: "slack_post", Args: map[string]any{"text": "hi"}, Failed: true, Result: errDoc},
+	}, Format(nil, nil))
+	if !strings.Contains(got, body) {
+		t.Error("an unfitted argument was cut")
+	}
+	if !strings.Contains(got, "missing scope chat:write") {
+		t.Error("an unfitted error was cut — the line naming the cause is at its end")
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("a render with nothing fitted still marked a cut:\n%s", got)
+	}
+}
+
+// AN IDENTIFIER IS JUDGED IN CHARACTERS, so a channel name in a script whose
+// characters are three bytes each is never handed to a model to paraphrase.
+func TestAMultiByteIdentifierIsNeverAPiece(t *testing.T) {
+	t.Parallel()
+	channel := strings.Repeat("営", 150) // 150 runes, 450 bytes
+	pieces := CallPieces([]Call{{Name: "post", Args: map[string]any{"channel": channel}}}, Format(nil, nil))
+	if len(pieces) != 0 {
+		t.Fatalf("a %d-rune identifier became a piece: %+v", 150, pieces)
+	}
+}
+
+// A FAILED CALL'S ERROR IS A PIECE; A SUCCESSFUL CALL'S RESULT IS NOT CARRIED
+// AT ALL, and a skipped meta-tool contributes nothing to fit.
+func TestCallPiecesNamesExactlyWhatARenderShows(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("e", 900)
+	pieces := CallPieces([]Call{
+		{Name: "activate_tool", Args: map[string]any{"name": long}},
+		{Name: "get", Result: long},
+		{Name: "post", Failed: true, Result: long},
+		{Name: "post", Failed: true, Result: long},
+	}, Format([]string{"activate_tool"}, nil))
+	if len(pieces) != 1 || pieces[0].Kind != PieceError {
+		t.Fatalf("pieces = %+v, want the one failed result, once", pieces)
+	}
+}
+
+// A NON-STRING VALUE PAST THE BUDGET IS A PIECE OVER ITS JSON; under it, it
+// keeps its native type.
+func TestALargeObjectArgumentIsFittedAsItsJSON(t *testing.T) {
+	t.Parallel()
+	big := map[string]any{"rows": strings.Split(strings.Repeat("row,", 100), ",")}
+	pieces := CallPieces([]Call{{Name: "upsert", Args: map[string]any{"payload": big, "n": 3}}}, Format(nil, nil))
+	if len(pieces) != 1 || !strings.HasPrefix(pieces[0].Text, `{"rows":`) {
+		t.Fatalf("pieces = %+v", pieces)
+	}
+}
+
+// A PRIOR ROUND'S OUTPUT IS FITTED AS A WHOLE, deliverable included — and
+// with nothing fitted it renders whole rather than from either end.
+func TestAPriorRoundsOutputIsFittedNotCut(t *testing.T) {
+	t.Parallel()
+	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
+	records := []Iteration{{Iteration: 1, Text: produced}}
+	pieces := IterationPieces(records, nil)
+	if len(pieces) != 1 || pieces[0].Kind != PieceProduced || pieces[0].Limit != RenderedArtifactLimit {
+		t.Fatalf("pieces = %+v", pieces)
+	}
+	fitted := RenderIterations(records, nil, Fitted{pieces[0]: "the draft, condensed"})
+	if !strings.Contains(fitted, "Produced: the draft, condensed") {
+		t.Errorf("the rewrite did not render:\n%s", fitted)
+	}
+	whole := RenderIterations(records, nil, nil)
+	if !strings.Contains(whole, produced) {
+		t.Error("an unfitted round output was cut")
+	}
+	if short := RenderIterations([]Iteration{{Iteration: 1, Text: "short"}}, nil, nil); !strings.Contains(short, "Produced: short") {
+		t.Errorf("a short round was altered: %q", short)
+	}
+}
+
+// THE RECORD IS VERBATIM, apart from the payloads the caller fitted — asserted
+// on the write path, where the distinction is permanent: this row is the
+// store's only record of the turn.
+func TestBuildSessionKeepsStructureWholeAndFitsOnlyPayloads(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("z", 6000)
+	in := SessionInput{
+		Trigger: long, Intent: long,
+		Reply: long, Delivered: true, CompletedWork: long,
+		Calls: []Call{{Name: "slack_post", Args: map[string]any{"text": long, "channel": "C1"}}},
+	}
+	pieces := SessionPieces(in)
+	if len(pieces) != 1 || pieces[0].Text != long {
+		t.Fatalf("pieces = %+v", pieces)
+	}
+	in.Fitted = Fitted{pieces[0]: "(condensed) a status update"}
+	got := BuildSession(in)
+	for _, c := range []struct {
+		name  string
+		value string
+	}{
+		{"trigger", got.Trigger},
+		{"intent", got.Intent},
+		{"reply", got.Reply},
+		{"completed work", got.CompletedWork},
+	} {
+		if c.value != long {
+			t.Errorf("%s was cut at write time: %d runes of %d",
+				c.name, utf8.RuneCountInString(c.value), utf8.RuneCountInString(long))
+		}
+	}
+	if !strings.Contains(got.Calls, "(condensed) a status update") || !strings.Contains(got.Calls, "C1") {
+		t.Errorf("the session row lost the rewrite or the identifier:\n%s", got.Calls)
+	}
+	if un := BuildSession(SessionInput{Reply: long}); un.Unsent != long {
+		t.Errorf("unsent was cut at write time: %d runes of %d",
+			utf8.RuneCountInString(un.Unsent), utf8.RuneCountInString(long))
+	}
+}
+
+// THE NEWEST ENTRIES VERBATIM, THE OLDER ONES CONDENSED: a history past its
+// bound keeps the turns a follow-up is answering whole, and gives the rest to
+// the caller as one block to rewrite.
+func TestSplitHistoryKeepsTheNewestWholeAndOverflowsTheOldest(t *testing.T) {
+	t.Parallel()
+	entries := make([]Session, 6)
+	for i := range entries {
+		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat(string(rune('a'+i)), 5000)}
+	}
+	overflow, kept := SplitHistory(entries, InjectedMaxChars)
+	if len(overflow) == 0 || len(kept) == 0 || len(overflow)+len(kept) != len(entries) {
+		t.Fatalf("split %d / %d of %d", len(overflow), len(kept), len(entries))
+	}
+	if kept[len(kept)-1].TurnID != "5" || overflow[0].TurnID != "0" {
+		t.Fatalf("the split is not oldest-overflow, newest-kept")
+	}
+	if len(RenderSessions(kept)) > InjectedMaxChars-InjectedMaxChars/EarlierShare {
+		t.Errorf("the verbatim half took the condensed account's share")
+	}
+	if over, all := SplitHistory(entries[:1], InjectedMaxChars); len(over) != 0 || len(all) != 1 {
+		t.Error("a history within its bound was split")
+	}
+	// The newest always survives whole, however long.
+	solo := []Session{{Reply: strings.Repeat("d", InjectedMaxChars*2)}}
+	if over, all := SplitHistory(solo, InjectedMaxChars); len(over) != 0 || len(all) != 1 {
+		t.Error("the only entry was overflowed, so the turn reads as having no history")
+	}
+}
+
+// A CONDENSED ACCOUNT IS ANNOUNCED AS ONE, and where none could be had the
+// block says how many entries it left out — never silently shorter.
+func TestRenderHistorySaysWhatItCondensedOrLeftOut(t *testing.T) {
+	t.Parallel()
+	entries := make([]Session, 6)
+	for i := range entries {
+		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat("z", 5000)}
+	}
+	overflow, _ := SplitHistory(entries, InjectedMaxChars)
+	condensed := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars, Earlier: "you posted the plan to #eng"})
+	if !strings.Contains(condensed, "Earlier in this conversation ("+itoa(len(overflow))+" turn(s), condensed)") ||
+		!strings.Contains(condensed, "you posted the plan to #eng") {
+		t.Errorf("the condensed account was not rendered as one:\n%s", condensed[:300])
+	}
+	if strings.Contains(condensed, "are not shown") {
+		t.Error("a condensed history also claimed its turns were not shown")
+	}
+	dropped := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars})
+	if !strings.Contains(dropped, itoa(len(overflow))+" earlier turn(s) in this conversation are not shown") {
+		t.Errorf("entries were left out silently:\n%s", dropped[:300])
+	}
+	// WHOLE ENTRIES: nothing inside an entry is ever cut.
+	if strings.Contains(dropped, "…") || strings.Count(dropped, strings.Repeat("z", 5000)) != len(entries)-len(overflow) {
+		t.Error("an entry was cut rather than kept whole")
 	}
 }

@@ -93,12 +93,13 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // evicted node was counted here for ever, and this log grew toward its ceiling
 // behind a machine that was never coming back.
 //
-// THROUGH THE NODE HANDLE'S REPLICATED PEER, for the reason [Fence.Evicted]
-// gives: the peer is nil while an adoption swaps the file, and
-// [store.DB.Read] answers that as [store.ErrNoEstate] rather than a panic.
-func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+// THROUGH THE REPLICATED ESTATE'S HANDLE, for the reason [Fence.Evicted]
+// gives: no file is open while an adoption swaps it, and
+// [store.ReplicatedReader.Read] answers that as [store.ErrNoEstate] rather
+// than a panic.
+func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT node_id, at, by, from_position, readmitted_position
 			FROM iam_evictions ORDER BY node_id`)
@@ -187,10 +188,11 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string,
 	if err := w.mayOperate(OpEviction); err != nil {
 		return statelog.Result{}, err
 	}
-	// A GATE STAYS AT THE BASE VERSION ([MutationRecord.readByEveryBuild]):
-	// a node must never be able to defer the record that gates it.
+	// A GATE'S PAYLOAD IS PINNED ([GateRecordVersion]) and its record stays
+	// at the base version ([MutationRecord.readByEveryBuild]): a node must
+	// never be able to defer the record that gates it.
 	mutation, err := EncodeEviction(Eviction{
-		V: DocumentVersion, Readmit: readmit, By: w.Actor,
+		V: GateRecordVersion, Readmit: readmit, By: w.Actor,
 	})
 	if err != nil {
 		return statelog.Result{}, err
@@ -270,7 +272,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	subject := GenerationSubject(f.Generation)
 	author, kind := generationActor(f)
 	mutation, err := EncodeGeneration(Generation{
-		V:                  DocumentVersion,
+		V:                  GateRecordVersion,
 		Generation:         f.Generation,
 		PrevLastSeqSeen:    f.Inputs.Highest,
 		NewStreamCreatedAt: f.Inputs.StreamCreatedAt.UTC(),
@@ -314,13 +316,12 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // records carry the PRINCIPAL's kind.
 //
 // THREE ACTOR KINDS NAME ONE PRINCIPAL KIND EACH, AND THE FOURTH DOES NOT.
-// [iam.ActorOperator] is a principal acting under its own login, which is a
-// MACHINE's — or a PERSON's recorded before every person held a seat
-// (ADR-0026), whom `iam check` reports — and the login's SHAPE is which,
-// because the two grammars are disjoint by construction ([iam.ValidLogin]
-// joins with dots, a machine handle with a colon). Mapping every operator to
-// a machine recorded such a person, reanchoring by hand, as a service
-// account.
+// [iam.ActorOperator] is a principal acting under its own login — a MACHINE's,
+// since every person acts as their seat (ADR-0032) — but it names a kind of
+// ACTOR rather than of principal, so the principal's kind is read off the
+// login's SHAPE, the two grammars being disjoint by construction
+// ([iam.ValidLogin] joins with dots, a machine handle with a colon): a login
+// in a person's grammar is never recorded as a service account's.
 //
 // NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself —
 // its id, a machine — rather than as an empty author column.

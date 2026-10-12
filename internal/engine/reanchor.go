@@ -104,7 +104,7 @@ type ReanchorRequest struct {
 //
 // Which record opens a generation on a log is the domain's
 // ([registration.Generation]), so every log in the register can be
-// re-anchored — the org chart's and the identity estate's among them. This
+// re-anchored — the identity estate's and the knowledge base's among them. This
 // build once refused every log but the tracker's, because the transition was
 // the tracker's own reset and audit row run against whichever log was named.
 //
@@ -131,6 +131,9 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}
 	c := e.core.Load()
 	s := c.log
+	if err = s.appends("a reanchor"); err != nil {
+		return statelog.ReanchorPlan{}, err
+	}
 	record, err := generationEncoder(running.domain)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
@@ -164,12 +167,13 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}
 	plan, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
 		Domain:   running.domain,
+		Spec:     running.spec,
 		Stream:   stream,
 		Record:   record,
 		Consumer: running.consumer,
 		Runner:   running.runner,
 		Evicted:  running.evicted,
-		DB:       replicatedEstate{node: s.db},
+		DB:       s.estate(),
 		// THE OPERATOR IN THE THREE COLUMNS EVERY WRITE CARRIES — the
 		// author, the kind of party and the credential — in the actor
 		// vocabulary, which every domain's generation record reads.
@@ -230,7 +234,7 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 //
 // # Both halves of the frame, because the transition does both
 //
-// Every record on every log is a signed frame (ADR-0025) and every applier
+// Every record on every log is a signed frame (ADR-0031) and every applier
 // refuses one that is not. The transition's own append — the generation
 // record — is the one record on the log no write authority publishes, so an
 // append here that passed the body through unsigned opened a generation every
@@ -246,7 +250,7 @@ type reanchorStream struct {
 
 // reanchorStreamOf is running's log as a reanchor writes and reads it, under
 // this domain's own signer and verifier.
-func reanchorStreamOf(running *runningDomain) reanchorStream {
+func reanchorStreamOf(running *runningLog) reanchorStream {
 	return reanchorStream{
 		VerifiedLog: statelog.VerifiedLog{Log: running.log, Verifier: running.verifier},
 		log:         running.log, signer: running.signer,
@@ -306,9 +310,9 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 // position row opened a generation no row names. The second value is the
 // peers that have already re-anchored, by name, for the refusal.
 func (e *Engine) reanchorInputs(ctx context.Context,
-	running *runningDomain) (statelog.ReanchorInputs, []string, error) {
+	running *runningLog) (statelog.ReanchorInputs, []string, error) {
 
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: %s could not be read, "+
@@ -319,7 +323,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
 	// transition derives from and the instant the rows are keyed to are the
 	// durable ones, and the loop that would move them is halted.
-	checkpoint, _, err := statelog.CheckpointOf(ctx, e.backends.Store.Replicated(), stream)
+	checkpoint, _, err := statelog.CheckpointOf(ctx, e.domainEstate(), stream)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
@@ -362,10 +366,10 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// the outage during which re-anchoring is most tempting and least
 	// justified, so RegisterReadable stays false and the permission refuses
 	// on it — which is why the read's error goes no further than this.
-	rows, readErr := e.backends.Fleet.Positions(ctx)
+	rows, readErr := c.log.fleet.Positions(ctx)
 	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
 	// that cannot be read leaves that number to the log's own records.
-	floors, _ := e.backends.Fleet.Floors(ctx)
+	floors, _ := c.log.fleet.Floors(ctx)
 	through := in.Generation
 	var candidates []string
 	if readErr == nil {
@@ -387,8 +391,8 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
-	openers, err := statelog.GenerationOpeners(ctx, running.domain, enc, running.standing(),
-		in.Generation, through)
+	openers, err := statelog.GenerationOpeners(ctx, running.domain, running.spec, enc,
+		running.standing(), in.Generation, through)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: which generations of %s "+
 			"are already open could not be read off its log, so the one this "+
@@ -400,7 +404,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := c.log.evictedOn(ctx, running.domain, running.standing(), candidates)
+	evicted, err := c.log.evictedOn(ctx, running.domain, running.spec, running.standing(), candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -489,7 +493,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 // it known which subject an earlier attempt of this node's would have written.
 // An unreadable log refuses, because whether the reanchor loses writes is the
 // question.
-func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *core,
+func (e *Engine) restoredTail(ctx context.Context, running *runningLog, c *core,
 	enc statelog.GenerationEncoder, in *statelog.ReanchorInputs) error {
 
 	// ONLY THE RESTORED CASE has a tail to fill — and a case that cannot be
@@ -497,10 +501,10 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *co
 	if which, _, _ := in.Case(); which != statelog.ReanchorRestored {
 		return nil
 	}
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	next := max(in.Generation, in.Abandoned) + 1
-	opened, own, err := statelog.OwnGeneration(ctx, running.domain, enc, running.standing(),
-		next, c.nodeID)
+	opened, own, err := statelog.OwnGeneration(ctx, running.domain, running.spec, enc,
+		running.standing(), next, c.nodeID)
 	if err != nil {
 		return fmt.Errorf("%w: whether an earlier reanchor of %s on this node already "+
 			"opened generation %d could not be read off the log — check the broker "+
@@ -510,8 +514,8 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *co
 	if own {
 		in.Opened, bound = opened, opened-1
 	}
-	in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
-		replicatedEstate{node: c.log.db}, running.standing(), in.Generation, in.FirstSeq, bound)
+	in.Unheld, err = statelog.UnheldTail(ctx, running.domain, running.spec,
+		c.log.estate().Reader(), running.standing(), in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+
 			"that this node's rows do not could not be read, and a restored reanchor "+
@@ -524,18 +528,21 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *co
 // sameStream reports whether a peer's position can be on the stream this node's
 // rows are keyed to.
 //
-// A NODE WITH NO CHECKPOINT is keyed to no stream, and every peer's position
-// counts as though it were on this node's: the comparison feeds the refusal that
-// keeps a node that is not the most caught-up from discarding what a peer
-// applied. A peer's row always names its stream ([statelog.Runner.KeyedTo] is
-// never zero).
+// ROWS KEYED TO NO INSTANT COUNT EVERY PEER AS ON THEIR STREAM: a domain with
+// no checkpoint row has no instant to compare ([statelog.CheckpointOf]), and
+// the comparison feeds the refusal that keeps a node that is not the most
+// caught-up from discarding what a peer applied — so a node that cannot place
+// itself weighs every peer at its generation as though it could be ahead.
+// Every peer row names its instant ([coord.DomainPosition.StreamCreatedAt]),
+// so a row that does not is placed on no stream and never counted.
 func sameStream(peer, keyed time.Time) bool {
 	return keyed.IsZero() || statelog.IdentityOf(keyed, peer, true) == statelog.StreamSame
 }
 
 // ErrUnknownStream reports a stream that is not a domain log this node runs —
-// a name mistyped, or an engine with no core runtime (one built by hand, since
-// every node [New] builds runs every domain's log from boot).
+// a name mistyped, or a node with no core runtime: one without `data`, which
+// holds no estate and reaches the logs through a data node, or an engine built
+// by hand (every data node [New] builds runs every domain's log from boot).
 //
 // A SENTINEL, because a caller answers it differently from every other failure
 // of the same calls: nothing about it is transient, while a stream that could
@@ -546,13 +553,13 @@ var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
 
 // runningStream is the running domain whose log is stream, or
 // [ErrUnknownStream] naming the streams there are.
-func (e *Engine) runningStream(stream string) (*runningDomain, error) {
+func (e *Engine) runningStream(stream string) (*runningLog, error) {
 	s, err := e.stateLogOf()
 	if err != nil {
-		return nil, fmt.Errorf("%w: this engine runs no core runtime, so %q is "+
-			"not one of its logs", ErrUnknownStream, stream)
+		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
+			"one of its logs", ErrUnknownStream, stream)
 	}
-	running := s.Domain(s.domainOf(stream))
+	running := s.logOf(stream)
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
 			ErrUnknownStream, stream, maintenanceStreams())

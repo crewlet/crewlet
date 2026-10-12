@@ -62,6 +62,7 @@ func newFakeActNode(t *testing.T) *fakeActNode {
 // the credential from the environment — so a pause from a terminal and one
 // from a profile screen are one gesture with one record.
 func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"handle": "swe", "outcome": "applied", "changed": true,
 		"paused_by": "jane.doe", "paused_by_kind": "human", "operator_id": "pat:0192",
@@ -97,6 +98,7 @@ func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
 // repeats — under the same key, so the node's ledger answers it as the first
 // attempt rather than a second gesture.
 func TestSeatsResumeRetriesUnderTheSameOperation(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"handle": "swe", "outcome": "unknown"}
 	stdout, _, err := cli(t, "seats", "resume", "swe", bootstrapForURL(t, node.server.URL))
@@ -122,6 +124,7 @@ func TestSeatsResumeRetriesUnderTheSameOperation(t *testing.T) {
 // AN UNKNOWN THE NODE ANSWERS 503 IS STILL A RETRY UNDER THE SAME KEY, never a
 // refusal to start over from: the write may have landed.
 func TestSeatsAnUnsettledRefusalNamesTheOperation(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.status = http.StatusServiceUnavailable
 	node.refusal = map[string]any{"error": "unavailable", "outcome": "unknown",
@@ -135,6 +138,7 @@ func TestSeatsAnUnsettledRefusalNamesTheOperation(t *testing.T) {
 // A GESTURE THE CALLER MAY NOT MAKE names the grant, through the shared
 // refusal: the token is fine and the authority is what is missing.
 func TestSeatsARefusalOnAuthorityNamesTheGrant(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	node.status = http.StatusForbidden
 	node.refusal = map[string]any{"error": "unauthorized", "reason": "not_lead",
@@ -149,6 +153,7 @@ func TestSeatsARefusalOnAuthorityNamesTheGrant(t *testing.T) {
 // A GESTURE A SEAT CANNOT BE NAMED FOR is refused before anything is sent —
 // and so is an operation id the node would refuse.
 func TestSeatsNeedsAHandleAndAWellFormedOperation(t *testing.T) {
+	t.Parallel()
 	node := newFakeActNode(t)
 	_, _, err := cli(t, "seats", "pause", "-url", node.server.URL)
 	if err == nil || !strings.Contains(err.Error(), "name the seat") {

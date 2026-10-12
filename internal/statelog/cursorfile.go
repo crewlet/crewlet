@@ -26,10 +26,18 @@ type FileCursor struct {
 	Position Position
 
 	// StreamCreatedAt is the broker's creation instant for the stream the
-	// applier was reading when it committed that position. Zero where the
-	// row predates the column, which is a claim about nothing rather than
-	// a claim about a stream created at the epoch.
+	// applier was reading when it committed that position. Zero only where
+	// that applier was built with no creation instant
+	// ([RunnerDeps].StreamCreatedAt's zero, which the engine never passes)
+	// — a claim about nothing rather than a claim about a stream created
+	// at the epoch.
 	StreamCreatedAt time.Time
+
+	// AppliedVersion is the highest record version the copy's rows on the
+	// stream were applied from — zero where they were applied from none.
+	// Every writer of the row sets it, so a row holding none is refused
+	// rather than read as some version.
+	AppliedVersion int
 }
 
 // CursorsInFile reads every domain's committed checkpoint out of a COPY of the
@@ -50,9 +58,9 @@ type FileCursor struct {
 // knows which records the log still has to replay. Two implementations of one
 // query is how one of them starts reading a column the other dropped.
 //
-// The file is opened as ONE ESTATE. [store.Open] would treat it as a node —
-// applying the node estate's whole migration sequence into this copy of the
-// replicated file and opening a second file beside it.
+// The file is opened as ONE ESTATE. [store.OpenNode] would treat it as a node
+// — applying the node estate's whole migration sequence into this copy of the
+// replicated estate's file.
 func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, error) {
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
@@ -62,16 +70,17 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 
 	out := map[string]FileCursor{}
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT stream, generation, seq, stream_created_at FROM statelog_cursor`)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT stream, generation, seq, stream_created_at, applied_version
+			FROM statelog_cursor`)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var stream string
-			var generation, seq, created int64
-			if err := rows.Scan(&stream, &generation, &seq, &created); err != nil {
+			var generation, seq, created, applied int64
+			if err := rows.Scan(&stream, &generation, &seq, &created, &applied); err != nil {
 				return err
 			}
 			out[stream] = FileCursor{
@@ -79,6 +88,7 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 					Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
 				},
 				StreamCreatedAt: store.DecodeTime(created),
+				AppliedVersion:  int(applied),
 			}
 		}
 		return rows.Err()
@@ -88,7 +98,7 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 	return out, nil
 }
 
-// CursorFor reads ONE stream's committed checkpoint out of a LIVE replicated
+// CursorFor reads ONE stream's committed checkpoint out of the LIVE replicated
 // estate, reporting false when this node has never committed on it.
 //
 // Two callers need it and both need the same three values: the loop resumes
@@ -97,9 +107,18 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 // separately is how one of them ends up describing a different checkpoint from
 // the other two. [CheckpointOf] is the same read with the record the
 // checkpoint names beside it.
-func CursorFor(ctx context.Context, db *store.DB, stream string) (Position, time.Time, bool, error) {
+func CursorFor(ctx context.Context, db ReadEstate, stream string) (Position, time.Time, bool, error) {
 	cp, found, err := CheckpointOf(ctx, db, stream)
 	return cp.At, cp.KeyedTo, found, err
+}
+
+// ReadEstate is the replicated estate as a caller that only reads it holds it:
+// the runtime's [store.ReplicatedReader], resolved on every call, or a copy's
+// [store.DB] a caller opened for the length of one read. A caller holding the
+// write handle hands its Reader, so that what can write the estate stays the
+// short list internal/store's applier gate reads.
+type ReadEstate interface {
+	Read(ctx context.Context, fn func(*sql.Tx) error) error
 }
 
 // Checkpoint is one stream's committed checkpoint row as a live estate holds
@@ -112,13 +131,14 @@ type Checkpoint struct {
 	StoredAt time.Time
 }
 
-// CheckpointOf reads ONE stream's committed checkpoint row, whole, out of a LIVE
-// replicated estate, reporting false when this node has never committed on it.
+// CheckpointOf reads ONE stream's committed checkpoint row, whole, out of the
+// LIVE replicated estate, reporting false when this node has never committed
+// on it.
 //
 // ONE READ for what a verification of the checkpoint's record needs
 // ([CheckpointDiverged]): a sequence from one read paired with the instant of
 // another's names no record this node ever consumed.
-func CheckpointOf(ctx context.Context, db *store.DB, stream string) (Checkpoint, bool, error) {
+func CheckpointOf(ctx context.Context, db ReadEstate, stream string) (Checkpoint, bool, error) {
 	var generation, seq, created, storedAt int64
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `

@@ -96,8 +96,9 @@ func NewTokens(deps TokensDeps) (*Tokens, error) {
 // CALLED ONCE, AT WIRING TIME, for [Guard.BindSeats]' reason. Nil is a guard
 // that resolves no machine token — what a suite stands up — and a token-shaped
 // bearer there is refused like any bearer it does not hold. A running node is
-// never that: `crewlet run` installs the arm on every node, and every node
-// applies the identity directory from boot, company or none — so a token
+// never that: `crewlet run` installs the arm on every node serving the API, and
+// each such node holds the estate (ingress requires the `data` role, ADR-0025)
+// and applies the identity directory from boot, company or none — so a token
 // minted on a peer resolves here too, and a node that has not yet applied its
 // mint answers "cannot say", a 503 rather than a 401.
 func (g *Guard) WithTokens(t *Tokens) *Guard {

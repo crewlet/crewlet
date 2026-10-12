@@ -43,10 +43,7 @@
  * redemption binds them to — and a redemption is refused when the chart no
  * longer holds it as a human seat. The view says which seat it is, or — a seat
  * with no handle — that the chart has none to name; this screen warns before
- * the form, since a warning after a password is typed is a wasted form. An
- * invitation naming no seat at all (one issued before every person held one)
- * never reaches the form: its view is the dead link's 410, like every link
- * that can no longer be used.
+ * the form, since a warning after a password is typed is a wasted form.
  *
  * # A browser already signed in is told so
  *

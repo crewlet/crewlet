@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -25,6 +27,19 @@ import (
 type Deps struct {
 	// A2A opens agent-to-agent channels. Nil omits a2a_ask.
 	A2A Asker
+
+	// Env resolves a `${VAR}` the chart's contacts carry — a person's Slack
+	// id, their operator binding — for lookup_colleague and a2a_ask: this
+	// node's own chain, the secret store and then the environment it was
+	// handed. Nil reads the process environment, which is what a registry
+	// built outside an engine has.
+	//
+	// THE NODE'S CHAIN because the notification routing that mentions these
+	// same people resolves the same fields through it: read from the process
+	// environment here, a person whose id was sealed in the store — or whose
+	// node was handed an environment of its own — was mentioned by every
+	// notification and found by no lookup.
+	Env org.EnvLookup
 
 	// Skills, Episodes, Diary and Onboarding are the learning stores. Each
 	// nil omits the tools that need it.
@@ -59,6 +74,12 @@ type Deps struct {
 	// learning.skill_refinement.max_versions_kept. Zero lets the store
 	// apply its own default.
 	SkillVersionsKept int
+
+	// Compact condenses what does not fit where a bound is genuine: here, a
+	// recalled turn's account of what it did, past
+	// [learning.EpisodeAccountBytes], in query_episodes' answer. Nil
+	// condenses nothing, and such an account is named by its size instead.
+	Compact *compact.Compactor
 
 	// Recall is the turn-start prefetch's semantic search, re-run on demand. Nil
 	// leaves query_episodes on recency and conversation and refresh_memory
@@ -143,8 +164,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		tool tools.Callable
 		on   bool
 	}{
-		{&lookupColleague{}, true},
-		{&a2aAsk{svc: deps.A2A}, deps.A2A != nil},
+		{&lookupColleague{env: deps.Env}, true},
+		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
 			skills:   deps.Refinable,
@@ -155,6 +176,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&queryEpisodes{
 			episodes: deps.Episodes,
 			recall:   deps.Recall,
+			compact:  deps.Compact,
 			limit:    orDefault(deps.EpisodeLimit, DefaultEpisodeLimit),
 		}, deps.Episodes != nil},
 		{&refreshMemory{
@@ -208,6 +230,15 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// "who moved this" or "what is waiting on me".
 		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
 		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
+		// AND THE PROJECT'S FILES, which need the object store as well as
+		// the tracker — a file is a row naming an object, and a surface
+		// holding one half could only record content it cannot store. See
+		// workfiles.go.
+		{&listProjectFiles{deps: deps.Work}, deps.Work.Files != nil},
+		{&readProjectFile{deps: deps.Work}, deps.Work.Files != nil && deps.Work.Objects != nil},
+		{&writeProjectFile{deps: deps.Work},
+			deps.Work.FileWriter != nil && deps.Work.Objects != nil},
+		{&removeProjectFile{deps: deps.Work}, deps.Work.FileWriter != nil},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages, events: deps.Events}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
@@ -336,7 +367,8 @@ func annotationsFor(name string) tools.Annotations {
 		tracker.TaskActivityTool, tracker.MyWorkTool,
 		tracker.SearchWorkItemsTool,
 		tracker.GetPersonTool, tracker.WorkInboxTool,
-		tracker.ListWorkViewsTool:
+		tracker.ListWorkViewsTool,
+		tracker.ListProjectFilesTool, tracker.ReadProjectFileTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -391,6 +423,26 @@ func annotationsFor(name string) tools.Annotations {
 		// NOT idempotent. A second fold of the same pair is refused —
 		// the duplicate is already cancelled and already linked — and a
 		// fold of a DIFFERENT pair after it is another item closed.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case tracker.WriteProjectFileTool:
+		// A WRITE EVERYBODY ON THE PROJECT SEES, so OpenWorld is Yes and
+		// [mcp.WritesToSharedSurface] reads true, which keeps it away from
+		// a sub-agent acting under its parent's name.
+		//
+		// DESTRUCTIVE: a put over an existing path REPLACES it, and the
+		// content it replaced is collected — the flag asks whether a call
+		// can undo somebody else's work, and this one can. IDEMPOTENT: the
+		// same content at the same path leaves the same file, which is
+		// what makes a retry after a lost answer safe.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case tracker.RemoveProjectFileTool:
+		// DESTRUCTIVE and shared for the put's reason: the file leaves the
+		// project and its content is collected. NOT idempotent — a second
+		// removal is refused, the file being gone.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}

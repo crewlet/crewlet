@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -66,6 +66,18 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 	return p.seen[i]
 }
 
+// wantLowEffort fails unless req caps its effort at low. EVERY LEARNING PASS
+// is extraction — a short classification or a draft the next pass refines —
+// and on a thinking model the thinking is spent out of the same cap as the
+// answer, so a pass at its entry's level comes back empty and reads as
+// "nothing to learn".
+func wantLowEffort(t *testing.T, req llm.Request) {
+	t.Helper()
+	if req.Effort != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", req.Effort)
+	}
+}
+
 // prompt returns the user prompt of the i-th request.
 func (p *auxProvider) prompt(t *testing.T, i int) string {
 	t.Helper()
@@ -102,12 +114,12 @@ type stubModels struct {
 	mu    sync.Mutex
 	p     llm.Provider
 	err   error
-	asked []phase.Phase
+	asked []auxspend.Use
 }
 
-func (m *stubModels) Head(_ *org.Role, ph phase.Phase) (chain.Member, error) {
+func (m *stubModels) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
 	m.mu.Lock()
-	m.asked = append(m.asked, ph)
+	m.asked = append(m.asked, use)
 	m.mu.Unlock()
 	if m.err != nil {
 		return chain.Member{}, m.err
@@ -404,8 +416,8 @@ func TestAMalformedResponseWritesNothingAndFailsNothing(t *testing.T) {
 func TestAnUnknownTierIsTreatedAsNothingDurable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, body string }{
-		// The shape an older three-scope prompt asked for. "org" must not
-		// be read as anything writable.
+		// A scope where a tier goes: "org" must not be read as anything
+		// writable.
 		{"a scope instead of a tier", `{"scope": "org", "content": "Anything."}`},
 		{"an invented tier", `{"kind": "UNIT", "content": "Anything."}`},
 		{"an empty tier", `{"kind": "", "content": "Anything."}`},
@@ -617,8 +629,8 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 		`- Inbound message: "please open replies with hey sam"`,
 		"- Requester: miles",
 		`- Inbound message: "and cc me"`,
-		"- Task: Help with reporting",
-		"- Plan: Summarise",
+		"- Woken by: Help with reporting",
+		"- What it did: Summarise",
 		"- Tools called: search",
 		"- Outcome: done",
 	} {
@@ -642,7 +654,7 @@ func TestAnEmptyTurnStillDescribesItself(t *testing.T) {
 	p := says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), turn)
 	prompt := p.prompt(t, 0)
-	for _, want := range []string{"- Task: (no description)", "- Plan: (no plan)", "- Tools called: (none)"} {
+	for _, want := range []string{"- Woken by: (not recorded)", "- What it did: (nothing recorded)", "- Tools called: (none)"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q:\n%s", want, prompt)
 		}
@@ -695,6 +707,7 @@ func TestTheClassifierCallIsToollessBoundedAndNearlyDeterministic(t *testing.T) 
 	if got := *req.Temperature; got != 0.2 {
 		t.Errorf("temperature = %v, want 0.2", got)
 	}
+	wantLowEffort(t, req)
 	if req.MaxTokens != learning.DefaultAuxTokens {
 		t.Errorf("max tokens = %d, want %d — a tighter cap is spent thinking and returns empty content",
 			req.MaxTokens, learning.DefaultAuxTokens)
@@ -788,8 +801,14 @@ func TestTheDeciderAsksForTheAuxiliaryModel(t *testing.T) {
 	if _, err := d.Decide(context.Background(), pdTurn()); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if len(m.asked) != 1 || m.asked[0] != phase.Auxiliary {
-		t.Errorf("asked for %v, want the cheap auxiliary model reflection is meant to run on", m.asked)
+	// THE REFLECTION STAGE, ITS OWN PURPOSE AND THE TURN IT LEARNS FROM: the
+	// seam files the call's spend under exactly this, so the seat's day
+	// counts it, the turn's page draws it in its Reflection lane, and the
+	// turn's own cost and its work item never do.
+	want := auxspend.Use{Stage: types.AuxStageReflection, Purpose: types.AuxPersistDecider,
+		TurnID: "t1"}
+	if len(m.asked) != 1 || m.asked[0] != want {
+		t.Errorf("asked for %+v, want the reflection's auxiliary call %+v", m.asked, want)
 	}
 }
 
@@ -805,15 +824,18 @@ func TestTheDeciderSkipsTheTurnsItMustNotClassify(t *testing.T) {
 	}{
 		{"mid-turn", func(x *learning.Turn) { x.Event.ReviewOutcome = "self_iterate" }, "non_terminal"},
 		{"no outcome at all", func(x *learning.Turn) { x.Event.ReviewOutcome = "" }, "non_terminal"},
-		{"already self-persisted in an earlier executor round",
-			func(x *learning.Turn) {
-				x.Event.ToolSequence = []string{"post_message"}
-				x.Event.AllToolNames = []string{"reflect_and_persist", "post_message"}
-			}, "self_persisted"},
-		{"already self-persisted in the last executor round",
+		{"already self-persisted in the final executor iteration",
 			func(x *learning.Turn) {
 				x.Event.ToolSequence = []string{"reflect_and_persist"}
 				x.Event.AllToolNames = []string{"reflect_and_persist"}
+			}, "self_persisted"},
+		// The reviewer sent the first attempt back with self_iterate after
+		// it had written the memory; the final iteration did not call the
+		// tool again, so only the whole-turn list still names it.
+		{"already self-persisted in an iteration the reviewer sent back",
+			func(x *learning.Turn) {
+				x.Event.ToolSequence = []string{"send_message"}
+				x.Event.AllToolNames = []string{"reflect_and_persist", "send_message"}
 			}, "self_persisted"},
 		{"done", func(*learning.Turn) {}, ""},
 		{"failed", func(x *learning.Turn) { x.Event.ReviewOutcome = "failed" }, ""},

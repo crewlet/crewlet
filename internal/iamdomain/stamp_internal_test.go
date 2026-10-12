@@ -90,7 +90,7 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 		{"a sweep", OpSweep, SweepSubject(bucket), BucketScope(bucket), "",
 			Sweep{V: DocumentVersion, Bucket: bucket, Expired: now()}},
 		{"an eviction", OpEviction, EvictionSubject("node-z"), RootScope(), "",
-			Eviction{V: DocumentVersion, By: "suite"}},
+			Eviction{V: GateRecordVersion, By: "suite"}},
 	}
 	covered := map[OpKind]bool{OpBarrier: true, OpGeneration: true}
 	for _, b := range builds {

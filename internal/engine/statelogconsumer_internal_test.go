@@ -36,6 +36,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -85,7 +86,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	first.Stop(context.Background())
 
 	// THE ROWS GO. The broker, and every consumer on it, stays.
-	path := back.Store.ReplicatedPath()
+	path := back.Store.ReplicatedFile()
 	if err := back.Store.CloseReplicated(); err != nil {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 			t.Fatalf("delete %s: %v", f, err)
 		}
 	}
-	if err := back.Store.ReopenReplicated(t.Context()); err != nil {
+	if _, err := back.Store.OpenReplicated(t.Context(), estateLogs()); err != nil {
 		t.Fatalf("reopen the replicated estate: %v", err)
 	}
 
@@ -112,7 +113,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	waitUntil(t, 10*time.Second, "the node whose rows went backwards to hydrate "+
 		"again — its consumers had acknowledged every record it is missing, and "+
 		"a consumer the broker was told is done never hands them over",
-		second.StateLogHydrated)
+		hydrated(t, second))
 	for name, head := range heads {
 		running := second.core.Load().log.Domain(name)
 		if got := running.runner.Committed().Seq; got < head {

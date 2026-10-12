@@ -38,31 +38,32 @@ var SpendColumns = []string{
 // with a history table, a notification table and NO TASKS, because every one
 // of its record's caps was a routing cap.
 //
-// FIVE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
-// rather than state a record reproduces: the framework's checkpoint, the
-// operation ledger, the deferred records, their scope index and the adoption
-// row. A sixth, the binary vector table, is DERIVED — a pure function of a
-// table that is itself outside the identity claim.
+// THREE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
+// rather than state a record reproduces: the operation ledger, the deferred
+// records and their scope index ([MachineryTables]). The framework's own
+// tables — the checkpoint (`statelog_cursor`), the arbitration anchors
+// (`statelog_anchor`) and the ledger's loss record (`statelog_ops_lost`) — are
+// absent for the same reason and are not this domain's to name.
 var ReproducibleTables = []string{
-	// The fourteen object tables.
+	// The object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
 	"tracker_task_keys", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_tags", "tracker_views",
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
-	"tracker_evictions",
+	"tracker_evictions", "tracker_files",
 
-	// The ten exploded child tables. Each one exists because a FILTER
-	// or a FIGURE reads it: a collection inside a document cannot be
-	// indexed, and a query that decodes every row's document is a full
-	// scan wearing an index's name.
+	// The exploded child tables. Each one exists because a FILTER or a
+	// FIGURE reads it: a collection inside a document cannot be indexed,
+	// and a query that decodes every row's document is a full scan wearing
+	// an index's name.
 	"tracker_task_closure",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
 	"tracker_relations", "tracker_task_deps", "tracker_task_dependents",
 	"tracker_references", "tracker_checklist_items",
 
-	// The three history tables.
+	// The history tables.
 	"tracker_history", "tracker_turns",
 	"tracker_notifications",
 

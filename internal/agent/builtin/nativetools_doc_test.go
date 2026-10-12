@@ -123,7 +123,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: func() *org.Organization { return company }, Actor: actor},
-		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Actor: actor},
+		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
 	}) {
 		if !slices.Contains(seat, tool.Name()) {
@@ -240,13 +240,13 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			listed++
 		}
 	}
-	if want := "The " + spelled(t, len(rows)) + " below are the item and page " +
+	if want := "The " + spelled(t, len(rows)) + " below are the item, file and page " +
 		"tools; the other " + spelled(t, total-len(rows)) + " read"; !strings.Contains(guide, want) {
 		t.Errorf("the tools guide's table does not add up: want %q (%d rows of %d "+
 			"tools)", want, len(rows), total)
 	}
 	if listed+len(pages) != len(rows) {
 		t.Errorf("the tools guide's table lists %d tools, want every page tool (%d) "+
-			"and the tracker's item tools (%d)", len(rows), len(pages), listed)
+			"and the tracker's item and file tools (%d)", len(rows), len(pages), listed)
 	}
 }

@@ -24,7 +24,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 		OperatorID: "founder"}
 	standing := func(node string) (row statelog.EvictionRow, held bool) {
 		t.Helper()
-		rows, err := pages.Domain{}.Evictions(t.Context(), r.db)
+		rows, err := pages.Domain{}.Evictions(t.Context(), r.db.Reader())
 		if err != nil {
 			t.Fatalf("read the evictions: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 	onLog := func(want bool) {
 		t.Helper()
 		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{},
-			statelog.StandingOf(r.log, r.verifier), "node-b")
+			pages.Domain{}.Stream(), statelog.StandingOf(r.log, r.verifier), "node-b")
 		if err != nil || !found || evicted != want {
 			t.Fatalf("node-b's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", evicted, found, err, want)

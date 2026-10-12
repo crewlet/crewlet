@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -40,10 +41,16 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
-			json.NewEncoder(w).Encode(map[string]string{
-				"SiteURL": inst.siteURL,
-				"TimeBetweenUserTypingUpdatesMilliseconds": inst.throttle,
-			})
+			// AS MATTERMOST ANSWERS IT: a request carrying no session gets
+			// the LIMITED client config — what a sign-in page needs, the
+			// Site URL among it — and only a signed-in one gets the rest,
+			// the typing cadence included. Which is why the instance is
+			// read on a seat's token rather than as nobody.
+			conf := map[string]string{"SiteURL": inst.siteURL}
+			if token != "" {
+				conf["TimeBetweenUserTypingUpdatesMilliseconds"] = inst.throttle
+			}
+			json.NewEncoder(w).Encode(conf)
 		case strings.HasSuffix(r.URL.Path, "/thread"):
 			inst.mu.Lock()
 			inst.reads = append(inst.reads, token)
@@ -129,6 +136,7 @@ func transport(t *testing.T, inst *instance, mutate func(*mattermost.TransportOp
 			Seats: []mattermost.SeatConfig{{Handle: "swe", Token: "tok-swe"}},
 		},
 		Publisher: &recorder{},
+		Claims:    coordmemory.NewFleet(),
 		Backoff:   fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return newSocket(), nil
@@ -272,47 +280,14 @@ func TestASiteURLMismatchIsReported(t *testing.T) {
 	}
 }
 
-// THE INSTANCE IS READ ONCE, AS NOBODY, WHICHEVER SEATS THERE ARE.
-//
-// The client config is the read a browser makes before anybody signs in, so
-// no seat's session is asked for it. It walked the seats until one answered,
-// so an instance that answers nobody cost the client's retry budget once per
-// seat: forty seconds of boot, before the API listened, for a few seats
-// against a refused connection. Mutation: walk the seats again and the read
-// is made three times, each on a seat's token.
-func TestTheInstanceIsReadOnceAsNobody(t *testing.T) {
-	var reads []string
-	var mu sync.Mutex
-	inst := newInstance(t, map[string]mattermost.User{})
-	inst.server.responds(func(w http.ResponseWriter, r *http.Request) bool {
-		if !strings.HasSuffix(r.URL.Path, "/config/client") {
-			w.WriteHeader(http.StatusUnauthorized)
-			return true
-		}
-		mu.Lock()
-		reads = append(reads, r.Header.Get("Authorization"))
-		mu.Unlock()
-		w.WriteHeader(http.StatusInternalServerError)
-		return true
-	})
-	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
-		o.Config.Seats = nil
-		for _, handle := range []string{"swe", "pm", "ceo"} {
-			o.Config.Seats = append(o.Config.Seats,
-				mattermost.SeatConfig{Handle: handle, Token: "tok-" + handle})
-		}
-	})
-	_ = tr.Start(t.Context())
-	mu.Lock()
-	defer mu.Unlock()
-	if len(reads) != 1 || reads[0] != "" {
-		t.Errorf("the instance was read %d times, carrying %q — want once, "+
-			"on no seat's session", len(reads), reads)
-	}
-}
-
 // The server ENFORCES the typing cadence: sending faster is rejected, so a
 // guessed value that is too eager produces an indicator that never appears.
+//
+// And it tells only a SIGNED-IN client what the cadence is: the config an
+// anonymous request gets is the limited one a sign-in page reads, so an
+// instance read made as nobody runs every indicator at the default. Mutation:
+// read the instance with no token and the refresh is the default rather than
+// the server's 2 s (the default is 5 s, so this value tells the two apart).
 func TestTheTypingCadenceComesFromTheServer(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
@@ -489,6 +464,172 @@ func TestSeatsStartConcurrently(t *testing.T) {
 	}
 }
 
+// wraps puts fn in front of what the stand-in answers now: a call fn does not
+// answer goes on to it, so a case changes one endpoint of a whole instance.
+func (s *server) wraps(fn func(w http.ResponseWriter, r *http.Request) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.respond
+	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+		return fn(w, r) || next != nil && next(w, r)
+	}
+}
+
+// configReads is how many times the stand-in was asked for its client config.
+func configReads(s *server) int {
+	n := 0
+	for _, call := range s.seen() {
+		if strings.Contains(call, "/config/client") {
+			n++
+		}
+	}
+	return n
+}
+
+// threeSeats is a transport mutation giving it three bots the instance knows.
+func threeSeats(o *mattermost.TransportOptions) {
+	o.Config.Seats = []mattermost.SeatConfig{
+		{Handle: "a", Token: "tok-a"}, {Handle: "b", Token: "tok-b"}, {Handle: "c", Token: "tok-c"},
+	}
+}
+
+// threeBots are the identities [threeSeats] authenticate as.
+var threeBots = map[string]mattermost.User{
+	"tok-a": {ID: "bot-a", Username: "agent-a"},
+	"tok-b": {ID: "bot-b", Username: "agent-b"},
+	"tok-c": {ID: "bot-c", Username: "agent-c"},
+}
+
+// A SERVER THAT FAILS THE INSTANCE READ IS NOT ASKED AGAIN ON THE NEXT TOKEN.
+//
+// What fails there — nothing listening, a timeout, a server error — is a fact
+// about the server, which every token shares. The next token met it again
+// after the client had spent its whole retry budget once more, so a company
+// booting against an instance that was down spent a budget per seat before a
+// seat had begun to connect: about fifty seconds for seven seats. A server
+// error is the cheap stand-in here, since the client does not retry it.
+func TestAFailedInstanceReadIsNotRetriedOnTheNextToken(t *testing.T) {
+	inst := newInstance(t, threeBots)
+	inst.server.wraps(func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/config/client") {
+			return false
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"message":"boom"}`))
+		return true
+	})
+	tr := transport(t, inst, threeSeats)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := configReads(inst.server); got != 1 {
+		t.Fatalf("the instance was asked for its config %d times, want once — "+
+			"the server's failure is not a token's", got)
+	}
+	if got := tr.StatusRefresh(); got != mattermost.DefaultTypingThrottle {
+		t.Errorf("StatusRefresh = %v with nothing read, want the default %v",
+			got, mattermost.DefaultTypingThrottle)
+	}
+}
+
+// A TOKEN THE SERVER REFUSES IS A FACT ABOUT THAT TOKEN, so the read moves on
+// to the next seat's and takes the instance's facts from the first it accepts.
+func TestARefusedTokenMovesTheInstanceReadToTheNextSeat(t *testing.T) {
+	inst := newInstance(t, threeBots)
+	inst.throttle = "3000"
+	inst.server.wraps(func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/config/client") {
+			return false
+		}
+		if r.Header.Get("Authorization") != "Bearer tok-a" {
+			return false
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message":"Invalid or expired session"}`))
+		return true
+	})
+	tr := transport(t, inst, threeSeats)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := tr.StatusRefresh(); got != 3*time.Second {
+		t.Fatalf("StatusRefresh = %v, want the 3s the second seat's token read", got)
+	}
+	if got := configReads(inst.server); got != 2 {
+		t.Errorf("the instance was asked %d times, want twice: the refused token "+
+			"and the one it took", got)
+	}
+}
+
+// THE INSTANCE IS READ BESIDE THE IDENTITIES, NOT BEFORE THEM.
+//
+// Both are calls the client retries for its whole budget against a server that
+// is down, so read one after the other an unreachable instance cost boot two
+// budgets where it can cost one. The config read here holds until an identity
+// call has arrived, which only a read made beside them can see.
+func TestTheInstanceIsReadBesideTheIdentities(t *testing.T) {
+	inst := newInstance(t, threeBots)
+	identityAsked := make(chan struct{})
+	var once sync.Once
+	var overlapped atomic.Bool
+	inst.server.wraps(func(w http.ResponseWriter, r *http.Request) bool {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me"):
+			once.Do(func() { close(identityAsked) })
+			return false
+		case strings.HasSuffix(r.URL.Path, "/config/client"):
+			select {
+			case <-identityAsked:
+				overlapped.Store(true)
+			case <-time.After(3 * time.Second):
+			}
+		}
+		return false
+	})
+	tr := transport(t, inst, threeSeats)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !overlapped.Load() {
+		t.Fatal("no identity was asked for while the instance was being read: " +
+			"the two run one after the other, and a down server costs both budgets")
+	}
+}
+
+// NO SOCKET ATTACHES BEFORE THE INSTANCE IS READ.
+//
+// The first post a socket hears can raise a typing indicator, and the server
+// enforces its cadence: sent faster than it allows, the indicator is rejected
+// and never appears. So every seat attaches under the cadence the server
+// reported, however slowly the read came back.
+func TestNoSocketAttachesBeforeTheInstanceIsRead(t *testing.T) {
+	inst := newInstance(t, threeBots)
+	inst.throttle = "4000"
+	inst.server.wraps(func(w http.ResponseWriter, r *http.Request) bool {
+		if strings.HasSuffix(r.URL.Path, "/config/client") {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return false
+	})
+	var tr atomic.Pointer[mattermost.Transport]
+	var early atomic.Int32
+	tr.Store(transport(t, inst, func(o *mattermost.TransportOptions) {
+		threeSeats(o)
+		o.Connect = func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+			if tr.Load().StatusRefresh() != 4*time.Second {
+				early.Add(1)
+			}
+			return newSocket(), nil
+		}
+	}))
+	if err := tr.Load().Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if n := early.Load(); n > 0 {
+		t.Fatalf("%d socket(s) attached before the server's typing cadence was read", n)
+	}
+}
+
 // THE THREAD IS READ AS THE SEAT, on the seat's own bot token, and the seat's
 // own posts come back MARKED.
 //
@@ -527,6 +668,12 @@ func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
 	}
 	if got.Messages[0].SenderID != "U-ana" {
 		t.Errorf("the sender id was lost: %+v", got.Messages[0])
+	}
+	// EACH CARRIES ITS POST ID — what a chat trigger's metadata names it by
+	// on this backend — so the dispatch can record which messages a turn
+	// was shown.
+	if got.Messages[0].ID != "root" || got.Messages[1].ID == "" {
+		t.Errorf("the post ids were lost: %+v", got.Messages)
 	}
 	// AND NOTHING IS CLAIMED MISSING. This endpoint answers the WHOLE
 	// thread in one response — no cursor, no page size — so a transcript

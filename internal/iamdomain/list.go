@@ -63,9 +63,8 @@ type PersonRow struct {
 
 	// Seat is the handle of the seat this person is bound to, which is
 	// immutable (ADR-0013). A person always holds one ([Writer.Create],
-	// ADR-0026); empty on a person only where they were recorded before
-	// every person did ([PersonRow.Seatless]), and on a service account
-	// that acts as itself.
+	// ADR-0032), and only a service account that acts as itself holds
+	// none.
 	Seat string
 
 	Grants []iam.Grant
@@ -80,15 +79,6 @@ type PersonRow struct {
 
 	// Version is the iam position that last wrote this row.
 	Version uint64
-}
-
-// Seatless reports a PERSON who holds no seat: one recorded before every person
-// held a human seat (ADR-0026), which nothing this build writes can produce.
-// A service account is never seatless in this sense — its seat is optional by
-// design — so the predicate is the one rule a report about the former asks,
-// stated where the row is rather than at each of its readers.
-func (p PersonRow) Seatless() bool {
-	return p.Kind == iam.KindPerson && p.Seat == ""
 }
 
 // PeopleQuery is one page of the directory.
@@ -867,7 +857,7 @@ type SeatClaims struct {
 //
 // The bindings are a walk of the people's partial seat index, bound rows only,
 // in seat order; the open invitations a walk of the invitations' OPEN index
-// (0031's `iam_invites_open_idx`, unredeemed rows only) and a sort of what it
+// (0041's `iam_invites_open_idx`, unredeemed rows only) and a sort of what it
 // finds. That index rather than the seat's: a range of the seat index above
 // the empty seat is every invitation that ever named a seat, the redeemed ones
 // included until the sweep collects them a week on, where the open index is
@@ -961,13 +951,15 @@ type SeatClaim struct {
 // it reprocesses the first — as a restore can. That node cannot say who holds
 // the seat, so another node answers.
 //
-// TWO OPEN INVITATIONS ON ONE SEAT ARE NOT. Invitations issued before every
-// invitation held its seat may name one seat twice, and both stay open until
-// they age out — a week at most; the newest is the one an administrator acted
-// on last and the one this answers, and the other stays cancellable by its id
-// from the invitation listing. Refusing the whole answer over them would take
-// the seat listing down for every seat, for a week, over a residue nothing
-// this build writes.
+// TWO OPEN INVITATIONS ON ONE SEAT ARE NOT. The same residue — a node that
+// retained the record cancelling one and applied a later one issuing the
+// other, or a restore — can leave one seat named twice, and an invitation
+// stays open until it ages out, a week at most; the newest is the one an
+// administrator acted on last and the one this answers, and the other stays
+// cancellable by its id from the invitation listing. An invitation is somebody
+// on their way to a seat rather than its holder, so nobody is mis-routed by
+// the pick, and refusing the whole answer over it would take the seat listing
+// down for every seat for as long as the older link stays open.
 func ClaimsBySeat(c SeatClaims) (map[string]SeatClaim, error) {
 	out := make(map[string]SeatClaim, len(c.Bindings)+len(c.Invitations))
 	for i := range c.Bindings {

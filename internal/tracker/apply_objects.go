@@ -67,13 +67,14 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 		}
 	} else {
 		// THE VERSION GUARD SKIPPED THIS RECORD, so it wrote no
-		// document and moved no field. [Applier.applyTask] says the
-		// same thing on its own redelivery branch: the history row is
-		// still written, because a record that produced no object
-		// change is still something that happened — and a delta
-		// computed against a document a NEWER record has already
-		// replaced would name a move this record never made.
-		moved = nil
+		// document. [Applier.applyTask] says the same thing on its own
+		// redelivery branch: the history row is still written, because
+		// a record that produced no object change is still something
+		// that happened — and a delta computed against a document a
+		// NEWER record has already replaced would name a move this
+		// record never made, so the row takes the writer's own
+		// statement instead ([statedDeltas]).
+		moved = statedDeltas(c)
 	}
 	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
 	// containing project, so both are honestly empty.
@@ -102,6 +103,8 @@ func documentTable(s Subject) (table, key string, err error) {
 		return "tracker_views", s.ID, nil
 	case KindPerson:
 		return "tracker_persons", s.ID, nil
+	case KindFile:
+		return "tracker_files", s.ID, nil
 	}
 	return "", "", fmt.Errorf("tracker: %s is not a whole-document object", s.Kind)
 }
@@ -246,6 +249,46 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
 			store.EncodeTime(person.PrioritiesSetAt), c.packed)
+	case "tracker_files":
+		var file File
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := decodePayload(c.record.Mutation, &file); err != nil {
+			return 0, fmt.Errorf("tracker: decode the file at %s: %w", c.position, err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := fileMatches(c, key, file); err != nil {
+			return 0, err
+		}
+		var removedAt any
+		if file.RemovedAt != nil {
+			removedAt = store.EncodeTime(*file.RemovedAt)
+		}
+		// NULL FOR A ROW NAMING NO OBJECT — a removal — which every
+		// statement the object store builds leaves out by name.
+		var object any
+		if !file.Object.IsZero() {
+			object = file.Object.String()
+		}
+		res, err = tx.ExecContext(ctx, `
+			INSERT INTO tracker_files
+				(id, project_key, path, content_type, hash, size, object,
+				 created_by, created_at, updated_by, updated_at,
+				 removed_by, removed_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT (id) DO UPDATE SET
+				project_key = excluded.project_key, path = excluded.path,
+				content_type = excluded.content_type, hash = excluded.hash,
+				size = excluded.size, object = excluded.object,
+				created_by = excluded.created_by, created_at = excluded.created_at,
+				updated_by = excluded.updated_by, updated_at = excluded.updated_at,
+				removed_by = excluded.removed_by, removed_at = excluded.removed_at,
+				version = excluded.version, document = excluded.document
+			WHERE excluded.version > tracker_files.version`,
+			key, file.Project, file.Path, file.ContentType, string(file.Hash),
+			file.Size, object, file.CreatedBy,
+			store.EncodeTime(file.CreatedAt), file.UpdatedBy,
+			store.EncodeTime(file.UpdatedAt), file.RemovedBy, removedAt,
+			c.packed, []byte(c.record.Mutation))
 	default:
 		return 0, fmt.Errorf("tracker: %s has no upsert", table)
 	}
@@ -281,6 +324,27 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 	return affected(res)
 }
 
+// placeTask writes one placement of a rank order.
+//
+// INTO THE MOVED TASK'S DOCUMENT, not its rank column alone ([rewriteOther]):
+// the document is what the task's own next record is merged from, and a rank
+// written only to the column was put back by it — every drag undone by the
+// next edit to the card that was dragged. And only a task in the order's
+// project: a placement is a position in one project's order, which is the
+// container the record's scope names, so a task filed elsewhere has no
+// position in it and a write to it would be outside what the record declared.
+func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
+	placement Placement) (int, error) {
+
+	return rewriteOther(ctx, tx, placement.Task, c, movedColumns{rank: true}, func(task *Task) bool {
+		if task.Project != project {
+			return false
+		}
+		task.Rank = placement.Rank
+		return true
+	})
+}
+
 // applyRankOrder writes a project's manual order.
 //
 // THE OBJECT IS THE ORDER, so the version lands on the order's own row and
@@ -313,17 +377,10 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		return 0, nil
 	}
 	for _, placement := range order.Placements {
-		moved, err := tx.ExecContext(ctx, `
-			UPDATE tracker_tasks SET rank = ?, scoped_through = ?
-			WHERE id = ? AND ? > MAX(version, scoped_through)`,
-			string(placement.Rank), c.packed, placement.Task, c.packed)
+		n, err := placeTask(ctx, tx, c, order.Project, placement)
 		if err != nil {
 			return 0, fmt.Errorf("tracker: move task %s at %s: %w",
 				placement.Task, c.position, err)
-		}
-		n, err := affected(moved)
-		if err != nil {
-			return 0, err
 		}
 		rows += n
 	}
@@ -454,10 +511,15 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContex
 // re-points every reference anybody ever wrote.
 //
 // IT WRITES NO COLLISION FLAG. `key_collision` is derived from the directory
-// on every apply of the task ([Applier.maintainKeys]) and describes the key
-// the task holds NOW: a claim on a key the task is leaving says nothing about
-// the one it is moving to, and a flag written here would be overwritten by the
-// move's own apply, which lands after this one.
+// by every apply that re-keys the task ([Applier.maintainKeys]) and describes
+// the key the task holds NOW: a claim on a key the task is leaving says
+// nothing about the one it is moving to, and a flag written here would be
+// overwritten by the move's own apply, which lands after this one. Nor does
+// the claim move anybody else's flag: its writer publishes it only for a key
+// nobody else holds ([Writer.claimAlias]).
+//
+// Its subject is the key's own address ([subjectPath]), so it is ordered
+// with every other record that claims, frees or hands that key on.
 func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var alias KeyAlias
 	if err := decodePayload(c.record.Mutation, &alias); err != nil {

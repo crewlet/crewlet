@@ -35,12 +35,12 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.core.Load().log
-	if len(s.order) == 0 {
+	if len(s.held().order) == 0 {
 		t.Fatal("the node runs no domain, so nothing below is checked")
 	}
-	for _, name := range s.order {
-		running := s.domains[name]
-		want := running.domain.Stream().Name
+	for _, running := range s.running() {
+		name := running.domain.Name()
+		want := running.spec.Name
 		in, _, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
 			t.Fatalf("read %s's inputs: %v", name, err)
@@ -98,11 +98,16 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 			Generation: own.Generation, Seq: own.Seq + 900,
 			StreamCreatedAt: running.runner.KeyedTo().Add(time.Hour),
 		}},
-		// THIS GENERATION ON THIS NODE'S STREAM, further along than it.
+		// THIS GENERATION, further along than this node, on this node's
+		// own stream. Its checkpoint names no record, so it holds history
+		// the log may not.
 		{"ahead", coord.DomainPosition{
 			Generation: own.Generation, Seq: own.Seq + 50,
 			StreamCreatedAt: running.runner.KeyedTo(),
 		}},
+		// A ROW PLACED ON NO STREAM is on none, however far along: every
+		// row this build publishes names its instant.
+		{"unplaced", coord.DomainPosition{Generation: own.Generation, Seq: own.Seq + 700}},
 	} {
 		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 			NodeID: row.node, At: time.Now().UTC(),
@@ -117,8 +122,32 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	}
 	if in.Highest != own.Seq+50 {
 		t.Fatalf("the high-water mark is %d, want %d — the peer at generation %d, "+
-			"and the one on another stream at this generation, report sequences in "+
-			"another number space", in.Highest, own.Seq+50, own.Generation+1)
+			"the one on another stream at this generation and the one on no stream "+
+			"report sequences in another number space", in.Highest, own.Seq+50,
+			own.Generation+1)
+	}
+}
+
+// A PEER IS ON THIS NODE'S STREAM ONLY WHERE ITS ROW SAYS SO — and a node whose
+// own rows name no stream (a domain with no checkpoint) counts every peer as on
+// it, because it cannot place itself and the comparison feeds a refusal.
+func TestAPeerIsOnThisStreamOnlyWhereItsRowSaysSo(t *testing.T) {
+	t.Parallel()
+	keyed := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		peer, keyed time.Time
+		want        bool
+	}{
+		"the same instant":              {keyed, keyed, true},
+		"within the stamp's resolution": {keyed.Add(400 * time.Nanosecond), keyed, true},
+		"another stream":                {keyed.Add(time.Hour), keyed, false},
+		"a row placed on no stream":     {time.Time{}, keyed, false},
+		"this node keyed to no stream":  {keyed, time.Time{}, true},
+		"neither placed on any stream":  {time.Time{}, time.Time{}, true},
+	} {
+		if got := sameStream(tc.peer, tc.keyed); got != tc.want {
+			t.Errorf("%s: sameStream(%v, %v) = %v, want %v", name, tc.peer, tc.keyed, got, tc.want)
+		}
 	}
 }
 
@@ -229,6 +258,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -237,7 +267,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 
 	// FIRST BOOT: history on the tracker's log.
 	e, back := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
@@ -245,7 +275,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	lost := readCursorRow(t, e, tracker.Domain{}.Name()).created
 	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it.
 	untouched := map[string]cursorRow{}
-	for _, name := range e.core.Load().log.order {
+	for _, name := range e.core.Load().log.held().order {
 		if name == (tracker.Domain{}).Name() {
 			continue
 		}
@@ -326,7 +356,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 		return running.runner.Stopped() == nil && running.runner.StreamIdentity() == nil &&
 			running.runner.Committed().Generation == gen
 	})
-	waitUntil(t, 20*time.Second, "the node to admit seats again", e2.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats again", hydrated(t, e2))
 	res, err := e2.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write after the reanchor: %+v, %v — the domain was re-anchored "+
@@ -368,8 +398,8 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 
 	// THIRD BOOT: every applier comes up on its own stream.
 	e3, _ := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", e3.StateLogHydrated)
-	for _, name := range e3.core.Load().log.order {
+	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", hydrated(t, e3))
+	for _, name := range e3.core.Load().log.held().order {
 		runner := e3.core.Load().log.Domain(name).runner
 		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
 		// — and zero for a log nothing was ever written to, which is every
@@ -410,6 +440,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	copyDir := filepath.Join(t.TempDir(), "copy")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -423,7 +454,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 
 	// FIRST BOOT: a project and a task — and then the copy is taken.
 	e, back := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	at := time.Now().UTC()
 	mustApply(t, "the project", func() (tracker.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-project",
@@ -454,7 +485,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 
 	// SECOND BOOT: the tail the copy never had.
 	e2, back2 := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats again", e2.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats again", hydrated(t, e2))
 	mustApply(t, "the edit after the copy", func() (tracker.WriteResult, error) {
 		title, done := "after the copy", tracker.StatusDone
 		return e2.native.Load().writer.UpdateTask(t.Context(), "op-edit-2", "t-1", "ENG",
@@ -601,7 +632,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	for i, node := range []string{"node-p", "node-q"} {
 		if res, err := e.native.Load().writer.EvictNode(t.Context(), fmt.Sprintf("op-%d", i), node); err != nil ||
 			res.Outcome != statelog.OutcomeApplied {
@@ -928,14 +959,14 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 // appendEviction puts one tracker eviction record straight onto the domain's
 // live log — around this node's own publisher, which refuses while the log is
 // not the one its rows are keyed to — and answers the sequence it landed at.
-func appendEviction(t *testing.T, running *runningDomain, opID, node string) uint64 {
+func appendEviction(t *testing.T, running *runningLog, opID, node string) uint64 {
 	t.Helper()
 	return appendEvictionAs(t, running, opID, node, 0, "")
 }
 
 // appendEvictionAs is [appendEviction] as a named writer standing in a given
 // generation publishes it: the two stamps a peer's record carries.
-func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
+func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	gen uint32, writer string) uint64 {
 
 	t.Helper()
@@ -959,7 +990,7 @@ func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
 	if err != nil {
 		t.Fatalf("encode the record: %v", err)
 	}
-	spec := running.domain.Stream()
+	spec := running.spec
 	wire := statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
 	seq, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+wire.String(),
 		opID, nil, running.signer.Seal(record))
@@ -977,7 +1008,7 @@ type cursorRow struct {
 
 func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	t.Helper()
-	stream := e.core.Load().log.Domain(domain).domain.Stream().Name
+	stream := e.core.Load().log.Domain(domain).spec.Name
 	at, created, _, err := statelog.CursorFor(t.Context(), e.backends.Store.Replicated(), stream)
 	if err != nil {
 		t.Fatalf("read %s's checkpoint: %v", domain, err)
@@ -1049,7 +1080,7 @@ func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
 	e, js := aRunningNode(t)
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
-	spec := running.domain.Stream()
+	spec := running.spec
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)

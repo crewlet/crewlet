@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
@@ -47,8 +48,12 @@ func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 			tick := events.New(types.TaskAssigned{
 				TaskID: "t-1", RoleName: "Lead", Description: "plan the week",
 			}, events.TraceContext{})
+			// THE INSTANT THE WORK BEGAN, as every dispatch hands a turn:
+			// a unit of work stated with none began at the zero instant,
+			// past every ledger, and is refused before it reaches a model.
 			_, _ = e.runTurn(t.Context(), Request{
-				Handle: "lead", WorkKey: "wk-1", Events: []*events.Event{tick},
+				Handle: "lead", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
+				Events: []*events.Event{tick},
 			})
 			system := prov.system(t)
 			if !strings.Contains(system, tc.want) {

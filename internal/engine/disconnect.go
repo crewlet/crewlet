@@ -97,12 +97,10 @@ func (d vendorDisconnect) Disconnect(
 	ctx context.Context, req integration.TeardownRequest,
 ) (provision.Removed, error) {
 	// WHOEVER ASKED, which every write below is recorded under: the loop
-	// only carries the disconnect out. A row that names nobody — asked for
-	// by a build that did not record it — is the loop's own, as it was.
+	// only carries the disconnect out. Always somebody — the one writer of
+	// the intent records who asked beside it ([integration.AskTeardown]) —
+	// so there is no name of the loop's own to fall back to.
 	by := req.By
-	if by.Name == "" {
-		by = loopActor()
-	}
 	var removed provision.Removed
 	err := d.engine.dropBlock(ctx, d.kind, by, func(ctx context.Context) error {
 		if d.pass == nil {

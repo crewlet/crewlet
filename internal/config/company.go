@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"iter"
 	"maps"
 	"regexp"
@@ -214,8 +215,8 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 //
 // It is the check for a document somebody SUBMITS: a PUT, a PATCH, a
 // per-entity write, a setup write, `crewlet config import` and `crewlet
-// validate`. A stored revision is not held to it, because the admission rules
-// were added after companies existed; see [Company.ValidateRunnable].
+// validate`. A revision being APPLIED is held to the runnable rules only; see
+// [Company.ValidateRunnable].
 //
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
@@ -230,13 +231,15 @@ func (c *Company) Validate() error {
 //
 // It is the check for a revision about to be APPLIED (a node's reconcile
 // tick, a boot from the store, a reload and a revert) and for building an
-// epoch. A stored revision was admitted under the rules of the build that
-// wrote it, and one that breaks an admission rule added since still runs
-// exactly as it did before that rule existed. Refusing to apply it would take
-// a working company down on upgrade, or on the older half of a rolling one,
-// over a rule its author never saw. Its admission violations are reported by
-// [Company.ValidateAdmission] as warnings instead, and the next write that
-// keeps them is refused.
+// epoch. A revision is admitted under the rules of the build that wrote it,
+// and the admission set is the part of the rule set a build is free to
+// change: a later build may add a rule or relax one, and during a rolling
+// upgrade this build applies the revisions a newer peer admitted. Nothing
+// about RUNNING depends on an admission rule, so applying under the runnable
+// rules only is what keeps one build of a rolling upgrade from refusing a
+// revision its peer admitted — which would split the fleet's epoch. The
+// admission violations are reported by [Company.ValidateAdmission] as
+// warnings instead, and the next write that keeps them is refused.
 func (c *Company) ValidateRunnable() error {
 	o, index := c.organization()
 	return index.locate(c.validateRunnable(o))
@@ -244,15 +247,20 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate unit keys and a unit reference on a seat
-// declared inside a unit of a different key (see
-// [org.Organization.ValidateAdmission], which also says why no NAME is held
-// unique), a unit with no id, duplicate sandbox setup step names within one
-// list, a GitHub App
-// on a human seat, and the four WHOLE-DOCUMENT rules in
-// [Company.validateFileRules] — an `mcp_env` key naming no server, two seats
-// declaring one email, a reference that is shaped like neither a handle nor a
-// key, and a unit key or a seat handle the org chart reserves.
+// Today they are the org's duplicate unit keys, a unit reference on a seat
+// declared inside a unit of a different key and a schedule's cron the grammar
+// refuses (see [org.Organization.ValidateAdmission], which also says why no
+// NAME is held unique), a unit with no id, duplicate sandbox setup step names
+// within one list, a GitHub App on a human seat, an avatar the dashboard
+// cannot draw or one on a human seat ([Company.validateAvatars]), a
+// cli-agent entry's credential configured where its CLI never reads it
+// ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
+// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
+// whose code work hands a cli-agent entry to another CLI's coding agent
+// ([Company.validateSandboxCodingAgents]), and the four WHOLE-DOCUMENT rules
+// in [Company.validateFileRules] — an `mcp_env` key naming no server, two
+// seats declaring one email, a reference that is shaped like neither a handle
+// nor a key, and a unit key or a seat handle the org chart reserves.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -262,8 +270,9 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
-		c.validateSetupStepNames(), c.validateHumanSeatApps(),
-		c.validateFileRules())
+		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
+		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
+		c.validateSandboxCodingAgents(), c.validateFileRules())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -286,11 +295,11 @@ func (c *Company) validateUnitIDs() error {
 // working setting and does nothing, which is the silence the org model's
 // human-seat rule exists to end for every other agent-only field.
 //
-// CHECKED HERE rather than beside that rule in [org.Role.Validate], because
-// the org model carries no code-host identity for a seat and so cannot see
-// the block. And an ADMISSION rule rather than a runnable one: nothing
-// refused the block before, a stored company may carry it, and that company
-// runs exactly as it did.
+// CHECKED HERE rather than beside that rule in [org.Role.Validate], although
+// the runtime seat carries the app too ([org.Role.GitHub]): that rule is a
+// RUNNABLE one, and this is an ADMISSION rule, because nothing about running
+// depends on it — every path that would act on the block skips a human seat,
+// so a stored revision carrying one runs as it did.
 func (c *Company) validateHumanSeatApps() error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -317,10 +326,10 @@ func (c *Company) validateHumanSeatApps() error {
 // on credentials nobody edited. A name is also what a setup failure and its
 // log line point at, and a duplicate points at two steps.
 //
-// An ADMISSION rule rather than a runnable one, because a stored company can
-// hold duplicate names from before the rule and its steps still apply exactly
-// as they did. Compared as the exact string the restore matches on, and a
-// blank name is skipped: the step's own rule already refuses it.
+// An ADMISSION rule rather than a runnable one, because nothing about running
+// depends on it: duplicate names still apply every step in order. Compared as
+// the exact string the restore matches on, and a blank name is skipped: the
+// step's own rule already refuses it.
 func (c *Company) validateSetupStepNames() error {
 	var p problems
 	if c.Providers.Sandbox != nil {
@@ -689,16 +698,19 @@ func (c *Company) validateKnowledgeBackend() error {
 type Knowledge struct {
 	// Backend is which knowledge base this company runs.
 	//
-	// Empty DERIVES, and the derivation is the compatible half of a rename:
-	// a company that declares integrations.confluence gets `confluence`,
-	// and one that declares nothing gets `native` — so a quickstart company
-	// has a wiki without asking for one, and an Atlassian company that has
-	// not read this note keeps the backend it had.
+	// Empty DERIVES from what the company connected: one that declares
+	// integrations.confluence gets `confluence`, and one that declares
+	// nothing gets `native`, so a quickstart company has a wiki without
+	// asking for one. Connecting Confluence already says where the pages
+	// live — a native knowledge base beside it is refused, as two places
+	// pages live with nothing keeping them in step — so requiring
+	// `backend: confluence` as well would be a second spelling of one
+	// decision, with a refusal for the company that wrote only the first.
 	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|confluence|none" desc:"Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence."`
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
-	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces."`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped."`
 
 	// SkillsContainer is where tool-skill pages live.
 	//
@@ -736,8 +748,10 @@ type KnowledgeBackend string
 
 // The knowledge backends.
 const (
-	// KnowledgeNative is the engine's own: pages held as fleet documents
-	// and projected into every node.
+	// KnowledgeNative is the engine's own knowledge base: the state log's
+	// pages domain. Every change is one record on the pages log, applied
+	// into the replicated estate every data node holds, and a node without
+	// `data` reads it through the estate router. See internal/pages.
 	KnowledgeNative KnowledgeBackend = "native"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
@@ -844,16 +858,20 @@ type TrackerBackend string
 
 // The trackers.
 const (
-	// TrackerNative is the engine's own: work items held as fleet
-	// documents and projected into every node.
+	// TrackerNative is the engine's own work tracker: the state log's
+	// first domain. Every change is one record on the tracker log, applied
+	// into the replicated estate every data node holds, and a node without
+	// `data` reads it through the estate router. See internal/tracker.
 	TrackerNative TrackerBackend = "native"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's
 	// own tools and never mirrors.
 	TrackerJira TrackerBackend = "jira"
 
-	// TrackerNone is a company with no tracker at all — schedules and chat
-	// are the only things that wake a seat.
+	// TrackerNone is a company with no tracker at all: nothing is filed or
+	// routed as a work item, and a seat is woken by everything else — chat,
+	// schedules, an A2A ask, and its connected integrations' webhooks (a
+	// GitHub or GitLab issue among them).
 	TrackerNone TrackerBackend = "none"
 )
 
@@ -1299,6 +1317,116 @@ func (c *Company) executorProvider(role *Role, fallback string) (string, LLMProv
 		}
 	}
 	return fallback, c.Providers.LLM[fallback], true
+}
+
+// SandboxProvider is the providers.llm entry a seat's CODE WORK — a
+// run_sandbox launch — runs on, resolved exactly as the phase registry
+// resolves its sandbox phase: the seat's llm_sandbox keys when it names any,
+// else its `llm` keys, the first the company configures; then the entry
+// called "default", then the first declared.
+//
+// The same second resolution [Company.ExecutorProvider] is, for the same
+// reason — validation must answer before anything is built — and held to the
+// registry by the same kind of test. False for a human seat and for a company
+// with no provider.
+func (c *Company) SandboxProvider(role *Role) (string, LLMProvider, bool) {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return "", LLMProvider{}, false
+	}
+	return c.sandboxProvider(role, fallback)
+}
+
+// sandboxProvider is [Company.SandboxProvider] over a resolved fallback.
+func (c *Company) sandboxProvider(role *Role, fallback string) (string, LLMProvider, bool) {
+	if role.Kind == org.KindHuman {
+		return "", LLMProvider{}, false
+	}
+	// The sandbox phase's own keys, from either spelling — the flat
+	// llm_sandbox wins over the mapping form's `sandbox`, as it does on the
+	// org role the registry reads. Only when it names NONE does it fall to
+	// the seat's `llm`: a seat that names keys none of which exist falls
+	// to the company's fallback, not to its own model.
+	keys := role.LLMSandbox
+	if len(keys) == 0 {
+		keys = role.LLM.Sandbox
+	}
+	if len(keys) == 0 {
+		keys = role.LLM.Default
+	}
+	for _, key := range keys {
+		if entry, ok := c.Providers.LLM[key]; ok {
+			return key, entry, true
+		}
+	}
+	return fallback, c.Providers.LLM[fallback], true
+}
+
+// codingAgent is the runner a seat's code work is driven by: its own
+// coding_agent, then the catalogue's default, then Claude Code — the order
+// the sandbox manager resolves it in at launch.
+func (c *Company) codingAgent(gate *RoleSandbox) CodingAgent {
+	if gate.CodingAgent != "" {
+		return gate.CodingAgent
+	}
+	if s := c.Providers.Sandbox; s != nil && s.DefaultCodingAgent != "" {
+		return s.DefaultCodingAgent
+	}
+	return CodingAgentClaudeCode
+}
+
+// validateSandboxCodingAgents refuses a seat whose code work would hand a
+// cli-agent entry to ANOTHER CLI's coding agent.
+//
+// A cli-agent entry's model is written in its own CLI's grammar and its
+// sign-in is that CLI's, so a different runner can read neither: Claude Code
+// was handed `--model openrouter/anthropic/claude-sonnet-5` from an OpenCode
+// entry, and OpenCode `anthropic/sonnet` from a Claude Code one. The launch
+// refuses such a run; this says so on the write instead of at the seat's
+// first coding call.
+//
+// ADMISSION rather than runnable: the company runs, and only that seat's
+// run_sandbox launches are refused, each with this same remedy. `self` is
+// exempt — its code work rides the executor's own run, which is always its
+// entry's own CLI.
+func (c *Company) validateSandboxCodingAgents() error {
+	fallback, ok := c.executorFallback()
+	if !ok || !c.Providers.Sandbox.Enabled() {
+		return nil
+	}
+	var p problems
+	for role, path := range c.EachRole() {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled || gate.RunIn == PlacementSelf {
+			continue
+		}
+		key, entry, resolved := c.sandboxProvider(role, fallback)
+		if !resolved || entry.Type != LLMCLIAgent || entry.CLI == nil {
+			continue
+		}
+		runner := c.codingAgent(gate)
+		cli := entry.CLI.Name()
+		if cli == string(runner) {
+			continue
+		}
+		p.add(at(path, "llm_sandbox"), ErrConflict, "%s", CodingAgentMismatch(string(runner), key, cli))
+	}
+	return p.err()
+}
+
+// CodingAgentMismatch is the one sentence for a coding run whose runner is not
+// the CLI its cli-agent entry drives, shared by the config rule and the
+// engine's launch refusal so the write and the run say the same thing.
+func CodingAgentMismatch(runner, key, cli string) string {
+	remedy := fmt.Sprintf("point role.llm_sandbox at an API entry (type anthropic, openai "+
+		"or openai-compatible) or at a cli-agent entry with cli.agent: %s", runner)
+	if slices.Contains(CodingAgents, CodingAgent(cli)) {
+		remedy += fmt.Sprintf(", or set role.sandbox.coding_agent: %s", cli)
+	}
+	return fmt.Sprintf("this seat's code work runs the %s coding agent on providers.llm.%s, "+
+		"a cli-agent entry driving %s: that entry's model is written for %s and its "+
+		"sign-in is %s's, so %s can read neither. To fix it, %s",
+		runner, key, cli, cli, cli, runner, remedy)
 }
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and

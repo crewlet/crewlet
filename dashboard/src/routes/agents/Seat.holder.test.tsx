@@ -18,6 +18,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { emptyDay } from "~/test/myWork.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -139,6 +140,7 @@ const ANSWERS: Record<string, unknown> = {
   work_inbox: { handle: "ana", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   seat_activity: { since: "", until: "", days: 7, seats: [], quantile_resolution: 0.06 },
   turns: { turns: [], next: null },
+  work_my_work: emptyDay("ana"),
 };
 
 /** The seat the reader holds: Ana's own unless a test names another. */

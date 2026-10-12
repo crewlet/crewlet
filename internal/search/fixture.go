@@ -116,43 +116,151 @@ type Fixture struct {
 	meanWeight float32
 
 	basis *basis
+
+	// gen is how a document's structural coefficients are drawn — the
+	// family member this fixture is, isotropic or topical.
+	gen generator
+
+	// Topics is the topic each document was drawn around, -1 throughout
+	// the isotropic member: what a gate files documents in CONTAINERS by,
+	// because a company files its documents by what they are about, and a
+	// search scoped to one container is a search over one region of the
+	// space rather than over a random sample of it.
+	Topics []int32
 }
 
-// NewFixture generates n documents.
+// NewFixture generates n documents from the ISOTROPIC member of the family:
+// low-rank structure, a shared mean, and no topics at all.
 //
 // SEEDED AND DETERMINISTIC: the same n and the same seed produce the same
 // corpus on every machine, which is what makes a recall floor a gate rather
 // than a coin flip.
 func NewFixture(n int, seed uint64) *Fixture {
 	basis := newBasis()
-	meanWeight := solveMeanWeight(basis.weights)
+	return newFixture(n, seed, basis, generator{weights: basis.weights})
+}
+
+// NewTopicalFixture generates n documents from the TOPICAL member of the
+// family: the same basis, spectrum and fitted mean, with every document drawn
+// around one of [FixtureTopics] topic centres.
+//
+// # Why the family needs a topical member now
+//
+// The isotropic member has no structure a k-means could find — it is one
+// continuous cloud — so an inverted file over it is a partition of a cloud
+// along arbitrary boundaries, and meeting the floor takes half the lists. A
+// company's corpus is not that: its documents cluster by project, by wiki
+// space and by what they are about. A gate that measured the index only on the
+// isotropic member would certify an index that is never worth installing; one
+// that measured it only here would certify recall on a corpus friendlier than
+// the worst one it must survive. So [ADR-0028]'s gate runs both, and the
+// training's own measurement is what decides, for each corpus, which one a
+// company's corpus resembles.
+func NewTopicalFixture(n int, seed uint64) *Fixture {
+	basis := newBasis()
+	return newFixture(n, seed, basis, topicalGenerator(basis.weights))
+}
+
+func newFixture(n int, seed uint64, basis *basis, gen generator) *Fixture {
+	meanWeight := solveMeanWeight(gen)
 
 	rng := rand.New(rand.NewPCG(seed, 0x5EEDC0DE))
 	f := &Fixture{
 		Codes:        make([][]uint64, n),
 		coefficients: make([][]float32, n),
 		norms:        make([]float32, n),
+		Topics:       make([]int32, n),
 		meanWeight:   meanWeight,
 		basis:        basis,
+		gen:          gen,
 	}
-	vector := make([]float32, FixtureWidth)
-	for i := range n {
-		coefficients := make([]float32, len(basis.weights)+1)
-		for k, w := range basis.weights {
-			coefficients[k] = w * float32(rng.NormFloat64())
+	// A BLOCK OF DOCUMENTS IS DRAWN, THEN COMPOSED: every draw is the
+	// stream's next, in document order, exactly as one document at a time
+	// drew them — composing consumes nothing from the stream — so the block
+	// changes how often the basis is read and never what a document is
+	// ([basis.composeInto]).
+	for at := 0; at < n; at += composeBlock {
+		block := f.coefficients[at:min(at+composeBlock, n)]
+		for j := range block {
+			coefficients := make([]float32, len(basis.weights)+1)
+			f.Topics[at+j] = gen.draw(rng, coefficients)
+			// THE MEAN IS THE SAME DISPLACEMENT IN EVERY DOCUMENT, along
+			// an axis nothing else uses — which is what makes it shared,
+			// and what makes the achieved mean pairwise cosine the number
+			// the constant declares.
+			coefficients[len(basis.weights)] = meanWeight
+			block[j] = coefficients
+			f.norms[at+j] = norm(coefficients)
 		}
-		// THE MEAN IS THE SAME DISPLACEMENT IN EVERY DOCUMENT, along an
-		// axis nothing else uses — which is what makes it shared, and
-		// what makes the achieved mean pairwise cosine the number the
-		// constant declares.
-		coefficients[len(basis.weights)] = meanWeight
-
-		basis.compose(vector, coefficients)
-		f.Codes[i] = Quantize(vector)
-		f.coefficients[i] = coefficients
-		f.norms[i] = norm(coefficients)
+		basis.composeInto(block, f.Codes[at:at+len(block)], nil)
 	}
 	return f
+}
+
+// The topical member's two parameters, CHOSEN rather than fitted, for the
+// reason the spectrum is chosen: to put the gate where it can fail.
+//
+// Swept at 120 000 sources and 1 024 lists: at a within-topic spread of 0.5
+// the index met the floor probing 1.5 % of the rows, a regime so easy no
+// regression in the training could show; at 0.8 the smallest probe count with
+// no head miss is a quarter of the lists, where a worse training has room to
+// fail the floor. Five hundred and twelve topics is the order of a company's
+// projects and wiki spaces times the subjects inside them — enough that a
+// list holds a slice of a topic rather than several whole ones at every gate
+// size.
+const (
+	FixtureTopics      = 512
+	FixtureTopicSpread = 0.8
+)
+
+// generator draws one document's structural coefficients (every coordinate
+// but the mean's).
+type generator struct {
+	weights []float32
+
+	// centres are the topics' own coefficients, nil for the isotropic
+	// member; spread is how far a document sits from its topic's centre, in
+	// units of the spectrum's own weight.
+	centres [][]float32
+	spread  float32
+}
+
+// draw fills out's structural coordinates and returns the topic it drew
+// around, -1 for the isotropic member. The isotropic member draws them
+// exactly as the fixture always did — the same stream, the same order — so
+// every recall figure measured before the family had a second member still
+// describes the first.
+func (g generator) draw(rng *rand.Rand, out []float32) int32 {
+	if g.centres == nil {
+		for k, w := range g.weights {
+			out[k] = w * float32(rng.NormFloat64())
+		}
+		return -1
+	}
+	topic := rng.IntN(len(g.centres))
+	centre := g.centres[topic]
+	for k, w := range g.weights {
+		out[k] = centre[k] + g.spread*w*float32(rng.NormFloat64())
+	}
+	return int32(topic)
+}
+
+// topicalGenerator places [FixtureTopics] centres on the spectrum.
+//
+// SEEDED BY THE BASIS'S OWN SEED, not the caller's, for the basis's reason:
+// the topics are the distribution's structure rather than one corpus's
+// content, so fixtures of two sizes are two samples of one company.
+func topicalGenerator(weights []float32) generator {
+	rng := rand.New(rand.NewPCG(fixtureSeed, 0x70D1C5))
+	centres := make([][]float32, FixtureTopics)
+	for t := range centres {
+		centre := make([]float32, len(weights))
+		for k, w := range weights {
+			centre[k] = w * float32(rng.NormFloat64())
+		}
+		centres[t] = centre
+	}
+	return generator{weights: weights, centres: centres, spread: FixtureTopicSpread}
 }
 
 // basis is the corpus's shared structure: a set of directions with power-law
@@ -216,59 +324,187 @@ func newBasis() *basis {
 	return b
 }
 
-// compose writes the full-width vector one coefficient set produces.
-func (b *basis) compose(vector []float32, coefficients []float32) {
-	// clear() rather than a loop: it compiles to one memclr, where the
-	// loop is three thousand instrumented writes per document — measured,
-	// that difference is most of the quality gate's wall clock under the
-	// race detector.
-	clear(vector)
-	for k, c := range coefficients {
-		if k >= len(b.support) || c == 0 {
+// composeBlock is how many documents [basis.composeInto] composes in one pass
+// over the basis: as many full-width float32 accumulators as fit under
+// [maxStackVarBytes] — ten at the shipped width, 120 KiB. One more and the
+// accumulator moves to the heap, where every write to it is instrumented
+// again (TestTheFixtureComposesOnItsOwnStack). Each document more in a block
+// is one share fewer of the basis's reads a document pays for, and at ten
+// the sign code's own reads of each vector are already most of what is left.
+const composeBlock = maxStackVarBytes / (FixtureWidth * 4)
+
+// maxStackVarBytes is the largest variable the compiler keeps on a function's
+// stack rather than moving it to the heap: 128 KiB, cmd/compile's
+// MaxStackVarSize for a variable a function declares.
+const maxStackVarBytes = 128 << 10
+
+// composeInto composes each coefficient set in block — at most [composeBlock]
+// of them — into the full-width vector it produces, and writes that vector's
+// sign code to codes[j] and, where vectors is not nil, the vector itself to
+// vectors[j]: what TestABlockComposesExactlyWhatOneDocumentAtATimeDoes holds
+// to [basis.vector]'s, to the bit.
+//
+// # Why the accumulators are local arrays, and what that buys
+//
+// A document is a sum of thirty-two sparse directions and the mean's: about
+// twenty-five thousand scattered `+=` into a width-3 072 vector. Into a heap
+// slice, every one of those is a read and a write the race detector
+// instruments — four calls into it per addition, a hundred thousand per
+// document — and measured, that was most of this package's wall clock under
+// `make test`: the 120 000-row gate corpus took about two minutes to generate
+// under `-race` against six seconds without it. The detector never instruments
+// a function's own stack, which no other goroutine can reach, so the sums are
+// accumulated in an array this function declares, and the instrumented
+// accesses left are the basis's own reads — made once for a whole block of
+// documents rather than once a document — and the sign code's reads of each
+// finished vector. Measured on one machine: 116 s to 15 s for that corpus
+// under `-race`, and 5.3 s to 6.0 s without it — the price of a block's
+// bookkeeping where the instrumentation it saves is absent.
+//
+// The accumulator is held COORDINATE-MAJOR — a coordinate's partial sums for
+// the whole block side by side — because a basis entry then touches one cache
+// line rather than one per document: document-major, the same block measured
+// half as slow again as one document at a time without the detector.
+//
+// # And why the codes are BIT-IDENTICAL to one document at a time
+//
+// Every coordinate of every document receives its contributions in the order
+// the one-document loop, [basis.vector], adds them — direction by direction,
+// each along its support, the mean last — because the documents are the
+// INNERMOST loop: a block changes which document's coordinate is written next
+// and never the order of the float32 additions into any one of them.
+//
+// A ZERO COEFFICIENT, which that loop skips, is added here as the zero
+// product it is, and that cannot move a bit either: an accumulator starts at
+// +0 and is never −0, since a sum is −0 only when both of its terms are and
+// +0 + −0 is +0; and adding either zero to +0 or to any finite non-zero sum
+// leaves it exactly as it was. So every corpus, every code and every recall
+// figure this package's comments quote is unchanged
+// (TestABlockComposesExactlyWhatOneDocumentAtATimeDoes).
+func (b *basis) composeInto(block [][]float32, codes [][]uint64, vectors [][]float32) {
+	if len(block) > composeBlock {
+		panic("search: a fixture block larger than its accumulator")
+	}
+	// ONE FUNCTION, NO CLOSURE, AND NO SLICE OF THESE ARRAYS IN THE LOOPS:
+	// the detector skips an address only when it can see the address is
+	// this frame's own, and an array reached through a captured pointer or
+	// a slice header is not one it can see that of.
+	var (
+		acc    [FixtureWidth][composeBlock]float32
+		weight [composeBlock]float32
+		vector [FixtureWidth]float32
+	)
+	for k := 0; k <= len(b.support); k++ {
+		// THE MEAN RIDES A DIRECTION OF ITS OWN, last, drawn like the
+		// others and carrying no noise.
+		//
+		// The obvious alternative — a constant added to every coordinate
+		// — is not a mean, it is the all-ones direction, and a sign code
+		// reads it as one particular threshold shift rather than as a
+		// corpus's own centre. Measured: the uniform form costs about
+		// five points of recall against a random direction of the same
+		// magnitude, which is the fixture reporting a property of the
+		// all-ones vector rather than of an off-centre corpus.
+		support, values := b.meanSupport, b.meanValues
+		if k < len(b.support) {
+			support, values = b.support[k], b.values[k]
+		}
+		// A row past the block keeps the zero weight it was declared
+		// with, so the fixed-length loop below adds nothing to it.
+		touched := false
+		for j, coefficients := range block {
+			weight[j] = coefficients[k]
+			touched = touched || weight[j] != 0
+		}
+		if !touched {
 			continue
 		}
-		support, values := b.support[k], b.values[k]
 		for i, d := range support {
+			v := values[i]
+			for j := range composeBlock {
+				acc[d][j] += weight[j] * v
+			}
+		}
+	}
+	for j := range block {
+		for d := range vector {
+			vector[d] = acc[d][j]
+		}
+		if codes != nil {
+			codes[j] = Quantize(vector[:])
+		}
+		if vectors != nil {
+			copy(vectors[j], vector[:])
+		}
+	}
+}
+
+// vector is the full-width vector one coefficient set produces: THE
+// ONE-DOCUMENT LOOP, which every recall figure this package's comments quote
+// was measured on — each direction in turn along its support, the mean last,
+// a zero coefficient skipped — and which [basis.composeInto] reproduces to the
+// bit for a block.
+//
+// ONE DOCUMENT IS NOT A BLOCK OF ONE. A block's accumulator is ten lanes and a
+// 120 KiB frame however few of them hold a document, so one document composed
+// as a block pays for ten: measured without the race detector, 236–256 µs a
+// call against 23–26 µs for this loop. Under the detector the block is the
+// cheaper, its sums uninstrumented — 0.56–0.60 ms against 0.81–0.96 ms — but
+// one document at a time is a query, composed a few hundred times a run,
+// where a benchmark writing a corpus's vectors into a store composes one for
+// every document it writes, and never under the detector.
+func (b *basis) vector(coefficients []float32) []float32 {
+	vector := make([]float32, FixtureWidth)
+	for k, c := range coefficients[:len(b.support)] {
+		if c == 0 {
+			continue
+		}
+		values := b.values[k]
+		for i, d := range b.support[k] {
 			vector[d] += c * values[i]
 		}
 	}
-	// THE MEAN RIDES A DIRECTION OF ITS OWN, drawn like the others and
-	// carrying no noise.
-	//
-	// The obvious alternative — a constant added to every coordinate — is
-	// not a mean, it is the all-ones direction, and a sign code reads it
-	// as one particular threshold shift rather than as a corpus's own
-	// centre. Measured: the uniform form costs about five points of
-	// recall against a random direction of the same magnitude, which is
-	// the fixture reporting a property of the all-ones vector rather than
-	// of an off-centre corpus.
 	if mean := coefficients[len(b.support)]; mean != 0 {
 		for i, d := range b.meanSupport {
 			vector[d] += mean * b.meanValues[i]
 		}
 	}
+	return vector
 }
 
 // Len is how many documents the fixture holds.
 func (f *Fixture) Len() int { return len(f.Codes) }
 
+// Vector is document i as the full-width vector it was quantized from —
+// recomposed from its coefficients, for the benchmark that writes a fixture
+// into a real store rather than scanning its codes.
+func (f *Fixture) Vector(i int) []float32 { return f.basis.vector(f.coefficients[i]) }
+
+// QueryVector is the full-width vector of the query [Fixture.Query] draws for
+// the same seed.
+func (f *Fixture) QueryVector(seed uint64) []float32 {
+	return f.basis.vector(f.queryCoefficients(seed))
+}
+
+// queryCoefficients is the draw behind a query.
+//
+// A SEPARATE STREAM from the corpus's, so adding a document does not change
+// what the queries are. A shared stream would make every recall figure a
+// function of the corpus size twice over — once through the retrieval and once
+// through the questions.
+func (f *Fixture) queryCoefficients(seed uint64) []float32 {
+	rng := rand.New(rand.NewPCG(seed, 0xC0FFEE))
+	coefficients := make([]float32, len(f.basis.weights)+1)
+	f.gen.draw(rng, coefficients)
+	coefficients[len(f.basis.weights)] = f.meanWeight
+	return coefficients
+}
+
 // Query is a held-out draw from the same distribution: its code, and the
 // coefficients an exact similarity against it is computed from.
 func (f *Fixture) Query(seed uint64) (code []uint64, similarity func(int) float64) {
-	// A SEPARATE STREAM from the corpus's, so adding a document does not
-	// change what the queries are. A shared stream would make every
-	// recall figure a function of the corpus size twice over — once
-	// through the retrieval and once through the questions.
-	rng := rand.New(rand.NewPCG(seed, 0xC0FFEE))
-	coefficients := make([]float32, len(f.basis.weights)+1)
-	for k, w := range f.basis.weights {
-		coefficients[k] = w * float32(rng.NormFloat64())
-	}
-	coefficients[len(f.basis.weights)] = f.meanWeight
-
-	vector := make([]float32, FixtureWidth)
-	f.basis.compose(vector, coefficients)
-	code = Quantize(vector)
+	coefficients := f.queryCoefficients(seed)
+	code = Quantize(f.basis.vector(coefficients))
 	queryNorm := norm(coefficients)
 	return code, func(i int) float64 {
 		dot := float32(0)
@@ -314,15 +550,19 @@ const fixtureSeed = 1
 // A bisection over a probe corpus, which is monotone in the weight and costs
 // one pass over two thousand documents' coefficients — no full-width vectors,
 // so it is a fraction of one percent of generating the corpus itself.
-func solveMeanWeight(weights []float32) float32 {
+func solveMeanWeight(gen generator) float32 {
 	noisePower := 0.0
-	for _, w := range weights {
+	for _, w := range gen.weights {
 		noisePower += float64(w) * float64(w)
 	}
+	// A TOPICAL DOCUMENT CARRIES ITS CENTRE AND ITS SPREAD, so its noise
+	// power is the spectrum's times (1 + spread²) and the bracket widens
+	// with it.
+	noisePower *= 1 + float64(gen.spread)*float64(gen.spread)
 	lo, hi := 0.0, 8*math.Sqrt(noisePower)
 	for range 40 {
 		mid := (lo + hi) / 2
-		if probeMeanCosine(weights, float32(mid)) < FixtureMeanPairCos {
+		if probeMeanCosine(gen, float32(mid)) < FixtureMeanPairCos {
 			lo = mid
 			continue
 		}
@@ -338,17 +578,15 @@ func solveMeanWeight(weights []float32) float32 {
 // not depend on how many documents the caller asked for — a generator whose
 // mean moved with n would make every recall figure a function of the corpus
 // size twice over.
-func probeMeanCosine(weights []float32, meanWeight float32) float64 {
+func probeMeanCosine(gen generator, meanWeight float32) float64 {
 	const probeDocs = 2_000
 	rng := rand.New(rand.NewPCG(0xA11CE, 0x5EEDC0DE))
 	coefficients := make([][]float32, probeDocs)
 	norms := make([]float32, probeDocs)
 	for i := range coefficients {
-		c := make([]float32, len(weights)+1)
-		for k := range weights {
-			c[k] = weights[k] * float32(rng.NormFloat64())
-		}
-		c[len(weights)] = meanWeight
+		c := make([]float32, len(gen.weights)+1)
+		gen.draw(rng, c)
+		c[len(gen.weights)] = meanWeight
 		coefficients[i] = c
 		norms[i] = norm(c)
 	}

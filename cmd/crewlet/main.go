@@ -21,7 +21,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -85,8 +84,30 @@ func main() {
 }
 
 // run is main's testable body: it takes its arguments and streams rather
-// than reaching for globals, so the CLI surface can be exercised in tests.
+// than reaching for globals, so the CLI surface can be exercised in tests —
+// and it runs the invocation against THIS PROCESS'S environment, which is
+// where an operator's credential comes from ([runIn]).
 func run(args []string, stdout, stderr io.Writer) error {
+	return runIn(config.EnvSource{}, args, stdout, stderr)
+}
+
+// runIn is [run] against an environment it is HANDED: where every command
+// that talks to a running node reads its credential ([nodeTokenOrEmpty]).
+//
+// The process's own for every run of the binary, so the rule the credential
+// follows — `CREWLET_API_TOKEN` and nothing else — is unchanged. It is a
+// parameter because the process's environment is shared by everything running
+// in it: a suite running its commands side by side could only hand each one a
+// credential by setting the process's variable, which Go refuses to a parallel
+// test, and which would hand every concurrent command whichever case set it
+// last. The engine is handed its environment for the same reason
+// ([engine.Options.Environment]).
+//
+// THE CREDENTIAL, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
+// `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
+// logger, which is the process's state rather than the invocation's, so they
+// are read from the process.
+func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		usage(stderr)
 		return errors.New("no command given")
@@ -164,29 +185,33 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "schema":
 		return emitSchema(rest, stdout, stderr)
 	case "secrets":
-		return runSecrets(rest, stdout, stderr)
+		return runSecrets(environ, rest, stdout, stderr)
 	case "config":
-		return runConfig(rest, stdout, stderr)
+		return runConfig(environ, rest, stdout, stderr)
 	case "iam":
-		return runIAM(rest, os.Stdin, stdout, stderr)
+		return runIAM(environ, rest, os.Stdin, stdout, stderr)
 	case "migrate":
 		return runMigrate(rest, stdout, stderr)
 	case "budgets":
-		return runBudgets(rest, stdout, stderr)
+		return runBudgets(environ, rest, stdout, stderr)
 	case "backup":
-		return runBackup(rest, stdout, stderr)
+		return runBackup(environ, rest, stdout, stderr)
 	case "retention":
-		return runRetention(rest, stdout, stderr)
+		return runRetention(environ, rest, stdout, stderr)
 	case "work":
-		return runWork(rest, stdout, stderr)
+		return runWork(environ, rest, stdout, stderr)
+	case "objects":
+		return runObjects(environ, rest, stdout, stderr)
+	case "fleet":
+		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
-		return runSeats(rest, stdout, stderr)
+		return runSeats(environ, rest, stdout, stderr)
 	case "llm":
-		return runLLM(rest, stdout, stderr)
+		return runLLM(environ, rest, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
-		return runIntegration(cmd, rest, stdout, stderr)
+		return runIntegration(environ, cmd, rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)
@@ -198,7 +223,7 @@ func usage(w io.Writer) {
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
-                              -roles ingress|seats|workers narrows what this node does
+                              -roles data|ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
@@ -211,6 +236,11 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet objects status      Where the company's files are kept, and what the
+                              object store's collector last found missing
+  crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
+                              and as its metadata group counts them: list, and
+                              remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it: its holder, its lead, or fleet:operate
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
@@ -219,7 +249,8 @@ Usage:
                               the human seats, invite or create a person onto
                               one, grant, move, suspend, revoke, reset a
                               password, audit
-  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
+  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
+                              doctor also checks anthropic entries against their model
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
@@ -346,6 +377,9 @@ func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
 	seed, seedErr := c.resolveSeed(set, importPath)
+	if bootErr == nil && seedErr == nil && seed.Override {
+		seedErr = refuseManagedOverride(boot, seed.Path)
+	}
 	// TIER A COMES BACK EVEN WHEN THE SEED DID NOT. The two documents fail
 	// independently, and a caller holding a valid Tier A can do something
 	// with it before reporting the other one's error — `crewlet run` opens
@@ -627,8 +661,8 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		}
 		res.Valid = true
 		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
-		// will never advance on its own, an embedded stream with nowhere
-		// to persist. Every one of them describes a correct deployment
+		// will never advance on its own, a broker member with nowhere to
+		// persist. Every one of them describes a correct deployment
 		// for somebody, so none is a refusal, and `crewlet validate` is
 		// the one moment the consequence can still change the decision.
 		//
@@ -977,15 +1011,11 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return loadErr
 	}
 	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
-	// anything. Its ancestor `debug: true` was a declared field nothing
-	// ever read: the quickstart told an operator to write it and the
-	// deployment guide said it "raises the log level to DEBUG", and for the
-	// life of the field it did nothing at all. It is retired now rather
-	// than wired up — a file still carrying it is REFUSED, and pointed at
-	// `logging.level` (see config.retiredBootstrapFields) — so this line is
-	// what keeps its replacement from repeating the bug. Lines emitted
-	// BEFORE this point came out under the flags alone, which is the best a
-	// process can do about a file it has not opened yet.
+	// anything: a declared setting nothing reads is one an operator writes
+	// and that does nothing at all, so this line is what makes
+	// `logging.level` take effect. Lines emitted BEFORE this point came out
+	// under the flags alone, which is the best a process can do about a
+	// file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// AND THE LOG FILE, the moment the document that names it has been
 	// read. Everything that can still fail below — a keyring that will not
@@ -1191,24 +1221,13 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	//
 	// Nothing about writing the company document needs an HTTP listener —
 	// the surface takes a store, a cipher, the plane and the queue, all of
-	// which exist here — so it is built unconditionally and handed to
-	// serveAPI, which shares the ONE instance with the REST routes and the
-	// socket queries.
-	configSurface, err := configapi.New(configapi.Options{
-		Store: e.Backends().Store, Cipher: cipher,
-		// THE POINTER, without which the write routes have nothing to
-		// activate against. It was missing, so every /config write on
-		// this binary reached a nil plane: the live-edit path that is the
-		// whole of Tier B.
-		Plane: e.Backends().Fleet,
-		// And the nudge, so an operator's change lands on every node in
-		// milliseconds rather than at the next reconcile poll.
-		Queue: e.Backends().Queue,
-		// THE DIRECTORY, so a write that takes away a human seat somebody
-		// is bound to is refused naming them. Every node runs the identity
-		// domain from boot, company or none.
-		Holders: configapi.DirectoryHolders(e.IAM()),
-	})
+	// which exist here — so it is built on every node that HOLDS THE
+	// ESTATE, with a port or without one, and handed to serveAPI, which
+	// shares the ONE instance with the REST routes and the socket queries.
+	// A node without `data` builds none, because nothing on it writes the
+	// document: the reconcile loop is a `workers` duty and the API an
+	// `ingress` surface, and config refuses either without `data`.
+	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1216,7 +1235,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// The surface a DISCONNECT removes a block through. Until it is set
 	// the loop refuses a disconnect rather than running the teardown at
 	// the third-party app and leaving the block behind.
-	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+	if configSurface != nil {
+		e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+	}
 
 	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
 	// and it is the only shape an API is served in. The API half is what
@@ -1307,11 +1328,19 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// stays 200 sends them to a refused connection, which is exactly what a
 	// node that died mid-drain looks like — the confusion the rest of this
 	// change exists to remove.
+	//
+	// And what the WORK ROUTES say is conditional on there being any: a node
+	// without the ingress role serves only its probes (and a bridge whose
+	// calls belong to runs already under way), so it has no route that would
+	// start new work to refuse.
 	probes := "this node binds no HTTP listener, so its drain is visible " +
 		"only in this log"
-	if surface != nil {
+	switch {
+	case surface != nil && surface.app != nil:
 		probes = "/health stays 200, /ready answers 503 and every route " +
 			"that would start new work answers 503"
+	case surface != nil:
+		probes = "/health stays 200 and /ready answers 503"
 	}
 	//
 	// AND WHAT IT WAITS FOR IS CONDITIONAL on which connection a fatal lost.
@@ -1389,14 +1418,19 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 	e.Stop(ctx)
 }
 
-// httpSurface is the HTTP listener a node binds: the whole API on a node with
-// the ingress role, or only its seats' tool bridge on a node without it. The
-// app and the projector are nil in the second shape, and the sign-in surface
-// is nil there and on a node that serves no sign-in (see
-// [api.NewHumanSurfaces]).
+// httpSurface is the HTTP listeners a node binds: the whole API on a node with
+// the ingress role — on api.port, with the routes outside parties call on a
+// public listener of their own when api.public is set — or, on a node without
+// it, its probes on api.port and its seats' tool bridge, beside them or on
+// api.public when that is set. The app and the projector are nil in the second
+// shape, and so is the public server unless the bridge has one. The sign-in
+// surface is nil there too, and on a node that serves no sign-in (see
+// [api.NewHumanSurfaces]); it is never mounted on the public listener, whose
+// routes are the ones outside parties call.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
+	public    *http.Server
 	projector *observe.Projector
 
 	// auth is the sign-in surface, held here for the work it runs after
@@ -1408,28 +1442,30 @@ type httpSurface struct {
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
 // for why it is then and not earlier.
+//
+// THE PUBLIC LISTENER FIRST, then api.port. The probes are on api.port, and
+// an orchestrator reads them for as long as the process lives: closing that
+// socket while the public one spends its grace — which an open bridge session
+// spends whole, see [apiShutdownGrace] — would fail a liveness probe on a node
+// that is doing exactly what it should. Each gets its own grace, so a bridge
+// session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	if s.public != nil {
+		shutdownListener(ctx, s.public, "public", log)
+	}
+	if s.server != nil {
+		shutdownListener(ctx, s.server, "api", log)
+	}
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
-	if err := s.server.Shutdown(grace); err != nil {
-		// The grace is over and a request is still running. It is CUT,
-		// which cancels its context, rather than left to run on into
-		// the teardown that is about to close the store and the broker
-		// it is reading.
-		log.WarnContext(ctx, "api_shutdown_failed", "error", err,
-			"detail", "requests still running after the shutdown grace were cut")
-		if closeErr := s.server.Close(); closeErr != nil {
-			log.WarnContext(ctx, "api_close_failed", "error", closeErr)
-		}
-	}
-	// After the listener, so no socket can be reading the projection while
+	// After the listeners, so no socket can be reading the projection while
 	// its feed is torn down, and after the drain, so a dashboard watching
-	// the drain saw its turns finish. Both are nil on a bridge-only node,
-	// which has neither.
+	// the drain saw its turns finish. Both are nil on a node without the
+	// ingress role, which has neither.
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
-	// Nil-safe, and nil on a bridge-only node: it has no panel to keep.
+	// Nil-safe, and nil on a node without ingress: it has no panel to keep.
 	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop()
@@ -1443,7 +1479,25 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	log.InfoContext(ctx, "api_stopped")
 }
 
-// apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS,
+// shutdownListener closes one listener, waiting at most [apiShutdownGrace] for
+// the requests it is serving.
+func shutdownListener(ctx context.Context, server *http.Server, listener string, log *slog.Logger) {
+	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
+	defer cancel()
+	if err := server.Shutdown(grace); err != nil {
+		// The grace is over and a request is still running. It is CUT,
+		// which cancels its context, rather than left to run on into
+		// the teardown that is about to close the store and the broker
+		// it is reading.
+		log.WarnContext(ctx, "api_shutdown_failed", "listener", listener, "error", err,
+			"detail", "requests still running after the shutdown grace were cut")
+		if closeErr := server.Close(); closeErr != nil {
+			log.WarnContext(ctx, "api_close_failed", "listener", listener, "error", closeErr)
+		}
+	}
+}
+
+// apiShutdownGrace bounds how long a listener waits for in-flight REQUESTS,
 // and CUTS whatever is still running when it expires.
 //
 // Requests, not turns: the turns are the drain's to wait for, and that one is
@@ -1515,20 +1569,72 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 // failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// companySurface is the config surface a node writes the company document
+// through, or nil on a node that holds no estate (see [runEngine]).
+//
+// NIL RATHER THAN BUILT OVER NOTHING: the surface refuses a write that takes
+// away a human seat somebody holds, and on a node without `data` there is no
+// identity directory to ask who holds one — so the surface it could build
+// there would be one [configapi.New] refuses, on a node none of whose roles
+// writes the document.
+func companySurface(e *engine.Engine, boot *config.Bootstrap,
+	cipher secrets.Cipher) (*configapi.Service, error) {
+
+	if !engine.HoldsEstate(boot) {
+		return nil, nil
+	}
+	return configapi.New(configapi.Options{
+		Store: e.Backends().Store, Cipher: cipher,
+		// THE POINTER, without which the write routes have nothing to
+		// activate against. It was missing, so every /config write on
+		// this binary reached a nil plane: the live-edit path that is the
+		// whole of Tier B.
+		Plane: e.Backends().Fleet,
+		// And the nudge, so an operator's change lands on every node in
+		// milliseconds rather than at the next reconcile poll.
+		Queue: e.Backends().Queue,
+		// THE DIRECTORY, so a write that takes away a human seat somebody
+		// is bound to is refused naming them. Every node holding the estate
+		// runs the identity domain from boot, company or none.
+		Holders: configapi.DirectoryHolders(e.IAM()),
+		// AND WHO ALONE MAY CHANGE A MANAGED DOCUMENT (ADR-0030): this
+		// node's Tier A writer list, the one field of Tier A this surface
+		// reads. Left out, every node served a managed company's document
+		// to every credential the authority table admits.
+		CompanyWriters: boot.API.Auth.CompanyWriters,
+	})
+}
+
 // serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, dev *auth.DevPrincipal, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
-		// A real posture: a worker-only node runs no dashboard, no REST
-		// API and no webhook endpoint. Saying so is the point — an
-		// operator who expected an integration to work should learn it
-		// here rather than from a webhook that never arrives.
-		log.WarnContext(ctx, "api_disabled",
-			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
-				"API, no webhook endpoint and no agent-mode tool bridge; every "+
-				"integration is deaf here")
+		// A real posture: a node with no listener at all. Saying so is the
+		// point — an operator who expected an integration to work, or an
+		// orchestrator's probe to answer, should learn it here rather than
+		// from a webhook that never arrives or a restart loop.
+		//
+		// A WARNING ONLY WHERE SOMETHING WAS PROMISED. A node with the
+		// ingress role is the one integrations and a dashboard expect to
+		// find, so without a port every integration is deaf here. A node
+		// without it serves only its probes and its tool bridge, and a
+		// satellite with nothing inbound is a shape an operator chooses;
+		// it is told what it gave up, at info. The roles are read off Tier A,
+		// whose answer is the presence lease's: the profile's id is the one
+		// field it does not need.
+		if boot.Profile("").RunsIngress() {
+			log.WarnContext(ctx, "api_disabled",
+				"hint", "api.port is 0, so this node serves no dashboard, no REST "+
+					"API, no webhook endpoint, no probe and no agent-mode tool "+
+					"bridge; every integration is deaf here")
+		} else {
+			log.InfoContext(ctx, "api_disabled",
+				"hint", "api.port is 0, so this node binds no listener: no "+
+					"orchestrator can probe it (/health, /ready) and an agent-mode "+
+					"seat's box finds no tool bridge here")
+		}
 		return nil, nil
 	}
 
@@ -1547,14 +1653,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// The port stays the hard off switch above; this is the role saying the
 	// same thing for a node whose file sets a port for its peers' sake.
 	//
-	// Except for the one route that is not ingress's to serve: the tool
-	// bridge. A bridged session is a live tool surface in the process that
-	// opened it, so a seats node running an agent-mode seat is the only node
-	// its box can reach. Gating the bridge on ingress as well took agent mode
-	// away from every node without that role, with the box launching and
-	// every one of its tool calls finding nothing listening.
-	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
-		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
+	// Except for the routes that are not ingress's to serve, which such a
+	// node serves on api.port and nothing beside them: its PROBES, because an
+	// orchestrator runs every node and has to be able to restart one that
+	// wedged and wait on one that has not joined, and the TOOL BRIDGE, because
+	// a bridged session is a live tool surface in the process that opened it,
+	// so a seats node running an agent-mode seat is the only node its box can
+	// reach. See [api.Probes].
+	if !boot.Profile(nodeID).RunsIngress() {
+		return serveProbes(ctx, boot, e, reconciler, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
@@ -1570,17 +1677,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	//
 	// THE IDENTITY ESTATE, which the surfaces below read — the rotation's
 	// second half here, and who holds a seat for /config and /health. It is
-	// the engine's CORE, opened on every node from boot, company or none, so
-	// an engine holding
-	// none is one engine.New did not build: refused here by name rather than
-	// handed to each surface as the nil it reads as "no directory to ask".
+	// the engine's CORE, opened from boot, company or none, on every node
+	// holding the estate — which a node serving this API always is, since
+	// `ingress` needs `data` — so an engine holding none is one engine.New
+	// did not build: refused here by name rather than handed to each surface
+	// as the nil it reads as "no directory to ask".
 	// It used to be exactly that nil on a node that had met no company, and
 	// each of those surfaces grew a third value for a node that no longer
 	// exists.
 	directory, keyring := e.IAM(), e.IdentityKeyring()
 	if directory == nil || keyring == nil {
 		return nil, errors.New("api: the engine opened no identity estate — " +
-			"engine.New opens it on every node, company or not")
+			"engine.New opens it on every node holding the estate, company or not")
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
@@ -1634,11 +1742,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// wrote one down. That gap is the silent outage the whole
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
-		// WHERE A BROWSER AND A VENDOR REACH THIS DEPLOYMENT, from Tier A
-		// rather than through the resolver above: it cannot change under
-		// a running process, so this surface can never answer two
-		// different addresses inside one request.
-		ExternalBase: boot.API.ExternalBase(),
+		// WHERE A VENDOR REACHES THIS DEPLOYMENT — the public listener's
+		// address where one is configured, `api.external_url` otherwise —
+		// from Tier A rather than through the resolver above: it cannot
+		// change under a running process, so this surface can never answer
+		// two different addresses inside one request. And the key it is
+		// read from, which every refusal about the address names.
+		WebhookBase:    boot.API.WebhookBase(),
+		WebhookBaseKey: boot.API.WebhookBaseKey(),
 		// The third-party apps this build can provision over the API, the recorder
 		// their minted credentials go through, and the fleet row a pass
 		// writes its findings to. That last one is the SAME row the
@@ -1678,9 +1789,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	backups, err := backup.New(backup.Options{
 		Store: e.Backends().Store,
+		// WHAT THIS NODE HOLDS, from the rule the engine opens it by —
+		// never whether the replicated estate happens to be open, which it
+		// is not while an adoption replaces it.
+		Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		// Nil on a node that dialled an external NATS cluster, whose
 		// streams are backed up at the cluster. See internal/backup.
 		Conn: e.Backends().Conn(),
+		API:  e.Backends().API(),
 		// The trim-hold register. A backup is not a counted node, so
 		// without this the fleet's own trim can delete exactly the records
 		// the artefact's store-to-stream gap needs to be replayable, and
@@ -1695,6 +1811,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// raw field is empty on a node named through CREWLET_NODE_ID, and
 		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
+		// Every object the store copy names, streamed from the one store
+		// the fleet shares and checked against the row naming it — or,
+		// where they ride the broker's own bucket, asked after once its
+		// stream is snapshotted.
+		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
+			Stream: e.ObjectsStream()},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.
@@ -1703,7 +1825,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	workSource, pageSource, backlinkSource, searchSource := api.NativeSources(e)
+	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1748,9 +1870,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// through.
 		AuthEvents:   e.AuthEvents(),
 		QueueBackend: e.Backends().Queue.Backend(),
-		// THIS NODE'S OWN event store, which the webhook edge writes the
-		// deliveries it accepts into.
-		EventLog: e.Backends().Store.Events(),
 		// A question the read surface has no source for comes back
 		// unknown rather than empty, which is the difference between
 		// "this node has no event log" and "the company has done
@@ -1791,9 +1910,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// and colleague lookup leave out exactly the people an
 			// inbound message would not be attributed to.
 			WithheldContacts: e.WithheldContacts,
-			Coord:            e.Backends().Coord,
-			Plane:            e.Backends().Fleet,
-			Runs:             sqlledger.New(e.Backends().Store.SQL()),
+			// AND WHAT A `${VAR}` IN A SEAT'S CONTACT IDS RESOLVES TO:
+			// this node's own chain, the one its routing resolves the
+			// same fields through. Who a caller IS is the identity
+			// directory's answer, never a field of the chart.
+			Env:   e.LookupSecret,
+			Coord: e.Backends().Coord,
+			Plane: e.Backends().Fleet,
+			// The object collector's last report, read from the store
+			// every node reads it from, for the fleet view's card.
+			Objects: e.Backends().Fleet,
+			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because
 			// the answerer it registered on every node is the other
@@ -1818,13 +1945,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
-			// WHERE A BROWSER AND A THIRD-PARTY APP REACH THIS
-			// DEPLOYMENT. A function still, because this whole value is
-			// built once and read for the life of the process, and Tier A
-			// is what it reads: `api.external_url` cannot change under a
-			// running node, so unlike the company reads around it this
-			// one can never answer twice.
-			PublicBase: func() string { return boot.API.ExternalBase() },
+			// WHERE A THIRD-PARTY APP REACHES THIS DEPLOYMENT — the
+			// public listener's `api.public.external_url` where one is
+			// configured, `api.external_url` otherwise — which is what a
+			// surface's recorded endpoint is compared with. The SAME
+			// accessor the reconcile loop and the setup surface above
+			// stamp that endpoint from, and never the person's
+			// `api.external_url` alone: behind a public listener that is
+			// another socket, and every registration read as moved.
+			//
+			// A function still, because this whole value is built once
+			// and read for the life of the process, and Tier A is what it
+			// reads: the address cannot change under a running node, so
+			// unlike the company reads around it this one can never
+			// answer twice.
+			WebhookBase: func() string { return boot.API.WebhookBase() },
 			// What the reconcile loop last found for each surface. The
 			// FLEET's record, not this node's: the loop is a worker duty,
 			// so on a split-role deployment the node answering the
@@ -1863,22 +1998,28 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			SandboxTail: sandboxTails(e),
-			// THIS NODE'S COPY of the company's own tracker and
-			// knowledge base — the same copy a seat's tools read, so an
-			// operator and an agent looking at one item see one item —
-			// and its ranked item search.
+			// THE COMPANY'S OWN TRACKER AND KNOWLEDGE BASE through the
+			// estate router, exactly as a seat's tools reach them
+			// (engine.OperatorWork), so an operator and an agent looking
+			// at one item see one item: answered from this node's copy
+			// while it serves and from another data node's while it does
+			// not.
 			//
-			// RESOLVED PER QUESTION, never captured here: the readers
-			// belong to the node's native halves, which come up with
-			// its first company — at an apply, on a node that booted
-			// with none — and a value read once here was nothing for
-			// the life of such a process. A question on a node that
-			// has not met its company answers `503
-			// no_active_revision`, and one about a half the company
+			// RESOLVED PER QUESTION, never captured here: the native
+			// halves come up with the node's first company — at an
+			// apply, on a node that booted with none — and a value read
+			// once here was nothing for the life of such a process. A
+			// question on a node that has not met its company answers
+			// `503 no_active_revision`, and one about a half the company
 			// keeps elsewhere (Jira, Confluence) is the question this
 			// node does not have. See [api.NativeSources].
 			Work:  workSource,
 			Pages: pageSource,
+			// A PROJECT'S FILES, the rows only — resolved per question
+			// for the same reason: the bytes stream from the human write
+			// surface's routes, which read them through this node's
+			// object client.
+			Files: fileSource,
 			// WHO LINKS TO A PAGE, from this node's lexical index, which
 			// derives the links from the bodies it already reads —
 			// resolved per question for the same reason, since the
@@ -1925,6 +2066,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the difference between an operator reading a procedure and an
 		// operator looking for a version mismatch.
 		Capacity: e,
+		// THE FLEET BROKER'S MEMBERSHIP: what every node advertises
+		// against what the metadata group counts, read through a member,
+		// and the removal of one gone for good through a member's system
+		// account — which is reachable only from inside a member.
+		FleetBroker: e.FleetBroker(),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -1936,23 +2082,24 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
-		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
-		// /ready. The ENGINE's own verdict rather than a second one built
-		// here: it is the same question that decides whether this node may
-		// keep the seats it holds, so a node taken out of rotation is the
-		// node that stopped running seats, and the two can never disagree
-		// about the copy they are both reading.
+		// WHETHER THIS NODE CAN ANSWER FROM THE ESTATE AT ALL, for /ready.
+		// The ENGINE's own verdict rather than a second one built here: it
+		// is the same question that decides whether this node may keep the
+		// seats it holds, so a node taken out of rotation is the node that
+		// stopped running seats, and the two can never disagree.
 		//
 		// [engine.Engine.SeatsServiceable] rather than
 		// [engine.Engine.StateLogHydrated], deliberately. Hydration is about
 		// a copy that is BEHIND, which catches up on its own — refusing
 		// traffic for the whole of a legitimate boot would take a node out
-		// of rotation at exactly the moment a fleet wants it back. This is
-		// about a copy that is WRONG: rows below a trim floor with a hole
-		// nothing will fill, an applier halted on a record it cannot
-		// decode, an eviction whose peers drop everything this node
-		// writes. An answer out of that is one somebody acts on, and
-		// "there is no such work item" is how a duplicate gets filed.
+		// of rotation at exactly the moment a fleet wants it back. And a
+		// copy that is WRONG — rows below a trim floor, an applier halted
+		// on a record it cannot decode, an eviction — is no reason either:
+		// it goes OUT OF SERVICE and answers nothing, and every request
+		// this node takes is routed to a data node whose copy is sound.
+		// What the seam refuses is a node that can no longer route: its own
+		// copy out of service and its view of the fleet too stale to name
+		// another, which no copy of its own makes up for.
 		//
 		// A METHOD VALUE, not a snapshot: every term under it moves while
 		// the process runs, and a cached answer is a node reporting ready
@@ -1963,10 +2110,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHETHER THIS COMPANY HAS ITS FIRST PERSON — the one thing an
 		// unclaimed company's dashboard can read, since /health is the
 		// probe every visitor reaches. Read off this node's own identity
-		// rows, which every node applies from boot, so a node with no
-		// company answers for the fleet's estate — and a "nobody" is proved
-		// against the log's end, so a node still catching up answers
-		// `unknown` rather than an empty company.
+		// rows, which every node holding the estate applies from boot, so a
+		// node with no company answers for the fleet's estate — and a
+		// "nobody" is proved against the log's end, so a node still catching
+		// up answers `unknown` rather than an empty company.
 		Identity: e.AnyPerson,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
@@ -2075,20 +2222,37 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	server, addr, err := listenAPI(ctx, boot, app, log)
+	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn}
+	// api.port FIRST, then the public listener: the probes are on api.port,
+	// so the moment anything is reachable an orchestrator can read it. A
+	// public bind that fails takes the admin one down with it, through the
+	// one stop every shutdown takes, rather than leaving a node serving its
+	// dashboard while every webhook finds nothing listening.
+	server, addr, err := listenAPI(ctx, boot.API.Addr(), app, log)
 	if err != nil {
-		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
-		// already running, on a broadcast subscription to the engine's
-		// queue, and nothing else holds it once this returns.
-		runs.Stop()
-		projector.Stop(context.WithoutCancel(ctx))
-		app.Stop()
+		// THROUGH THE ONE STOP, with no listener on it yet: the projector
+		// is already running, on a broadcast subscription to the engine's
+		// queue, and the sign-in surface owns work of its own — nothing
+		// else holds either once this returns.
+		surface.stop(context.WithoutCancel(ctx), log)
 		return nil, err
+	}
+	surface.server = server
+	publicAddr := ""
+	if app.Public() != nil {
+		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
+		if err != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
 	}
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"external_url", boot.API.ExternalBase(),
 		"second_factor", boot.API.Auth.SecondFactor(),
+		// WHERE THE ROUTES OUTSIDE PARTIES CALL ARE SERVED: empty is
+		// api.port itself, which is every deployment without api.public.
+		"public_addr", publicAddr,
 		"tokens", app.Guard().Tokens(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
 		// same-origin only, which is what the dashboard this process
@@ -2127,53 +2291,75 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// setter — see Engine.SetOnCompanyPublished.
 	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
 
-	return &httpSurface{app: app, server: server, projector: projector,
-		auth: humans.SignIn, runs: runs}, nil
+	return surface, nil
 }
 
-// serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
-// binds api.port for the node's own tool bridge when there is one to serve,
-// and binds nothing otherwise.
+// serveProbes is serveAPI for a node whose roles leave out ingress: it binds
+// api.port for the node's probes, and for its tool bridge where it has one —
+// api.public instead when the file sets it — and serves nothing else.
 //
 // The bridge needs a seats node and a bridge URL. A node that runs no seats
-// opens no session, so a listener there would answer every box with 401; and
-// with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either way
-// the node keeps the posture node.roles asked for, and says why.
-func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
-	bridge *mcpbridge.Bridge, nodeID string, log *slog.Logger,
+// opens no session, so the route there could only answer every box with 401;
+// and with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either
+// way the route is absent rather than refusing. Which of them a node mounts is
+// [api.EngineProbeOptions]' decision, the one the end-to-end suite probes
+// through too.
+func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
+	reconciler *engine.Reconciler, log *slog.Logger,
 ) (*httpSurface, error) {
-	if !profile.RunsSeats() || bridge == nil {
-		log.InfoContext(ctx, "api_not_started", "node", nodeID,
-			"roles", profile.Roles.Names(),
-			"hint", "node.roles does not include ingress, so this node binds no "+
-				"HTTP listener although api.port is set; a peer with the ingress "+
-				"role serves webhooks, the dashboard and the REST API, and a node "+
-				"running seats binds one only to serve its agent-mode tool bridge "+
-				"("+mcpbridge.BaseURLVar+")")
-		return nil, nil
-	}
-	server, addr, err := listenAPI(ctx, boot, api.BridgeOnly(boot, bridge), log)
+	opts, err := api.EngineProbeOptions(boot, e, reconciler)
 	if err != nil {
 		return nil, err
 	}
-	log.InfoContext(ctx, "api_bridge_listening", "addr", addr, "node", nodeID,
-		"roles", profile.Roles.Names(),
-		"hint", "node.roles does not include ingress, so this listener serves only "+
-			"the agent-mode tool bridge ("+mcpbridge.PathPrefix+"{token}) for the "+
-			"seats this node runs; webhooks, the dashboard and the REST API are a "+
-			"peer's with the ingress role")
-	return &httpSurface{server: server}, nil
+	// THE BRIDGE IS A PUBLIC ROUTE — a box outside this network calls it —
+	// so with api.public set it is served there, on every node, and api.port
+	// carries the probes alone: one file serves every role, and the bridge
+	// address follows one rule across the fleet. Without api.public it rides
+	// api.port beside the probes.
+	bridge := opts.Bridge
+	if boot.API.Public.Enabled() {
+		opts.Bridge = nil
+	}
+	handler, err := api.Probes(opts)
+	if err != nil {
+		return nil, err
+	}
+	server, addr, err := listenAPI(ctx, boot.API.Addr(), handler, log)
+	if err != nil {
+		return nil, err
+	}
+	surface := &httpSurface{server: server}
+	publicAddr := ""
+	if opts.Bridge == nil && bridge != nil {
+		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(),
+			api.BridgeOnly(boot, bridge), log)
+		if err != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
+	}
+	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", opts.NodeID,
+		"roles", opts.Roles, "tool_bridge", bridge != nil,
+		// Empty unless the bridge has a listener of its own on api.public.
+		"public_addr", publicAddr,
+		"hint", "node.roles does not include ingress, so this node serves only "+
+			"/health and /ready, and the agent-mode tool bridge ("+
+			mcpbridge.PathPrefix+"{token}) where it runs seats with "+
+			mcpbridge.BaseURLVar+" set — on api.public when the file sets one; "+
+			"webhooks, the dashboard and the REST API are a peer's with the "+
+			"ingress role")
+	return surface, nil
 }
 
-// listenAPI binds api.port and serves handler on it, in the background.
+// listenAPI binds addr and serves handler on it, in the background.
 //
-// ONE PATH for both shapes a node's listener takes, so the whole API and the
-// bridge-only surface cannot drift apart on the timeouts that bound an
-// unauthenticated client or on how a bind failure is reported.
-func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler,
+// ONE PATH for every listener a node opens — the whole API, the public
+// listener beside it, the probe surface ([api.Probes]) and the bridge's own —
+// so they cannot drift apart on the timeouts that bound an unauthenticated
+// client or on how a bind failure is reported.
+func listenAPI(ctx context.Context, addr string, handler http.Handler,
 	log *slog.Logger,
 ) (*http.Server, string, error) {
-	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
 	// Through a ListenConfig so a shutdown signal arriving while the bind
 	// is in flight aborts it, rather than leaving a listener nobody will
 	// serve from: the bind can block on a DNS lookup for the host.
@@ -2213,15 +2399,18 @@ const apiReadHeaderTimeout = 10 * time.Second
 // The reads run side by side, so the budget is the slowest of them rather than
 // their sum. On a healthy fleet each is milliseconds: indexed range scans of
 // every node's own file, stopping at the projection's own bounds (the newest
-// 400 event rows without their payloads, the newest 8 000 phase records of one
-// day, three turns a seat), plus one listing of the run record. What sizes the
-// budget is a peer that does NOT answer, which every scatter waits
+// 400 event rows without their payloads, the newest 24 000 spend records of
+// one day, three turns a seat), plus one listing of the run record. What sizes
+// the budget is a peer that does NOT answer, which every scatter waits
 // [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
-// five seconds is those two and a second of headroom. It stays a ceiling on
-// the one case that matters: a fleet that will not answer must not hold the
-// listener shut, since nothing else can accept a webhook while the bind is
-// waiting. A seed that times out costs history on a screen, never a delivery,
-// and the warning it logs says which reads it cost.
+// five seconds is those two and a second of headroom. The spend read is one
+// scatter per [eventfan.PhaseTokenPage] records, six at the cap; with a peer
+// silent each of them waits that budget, so the read stops where the budget
+// ends and seeds the window's newest records, its coverage saying it is short.
+// It stays a ceiling on the one case that matters: a fleet that will not
+// answer must not hold the listener shut, since nothing else can accept a
+// webhook while the bind is waiting. A seed that times out costs history on a
+// screen, never a delivery, and the warning it logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
@@ -2390,9 +2579,8 @@ func formatNames() []string {
 //
 // A flag carries its default whether or not anyone typed it, so applying
 // `*logLevel` unconditionally would pin every node at info and make
-// `logging.level: warn` in the file dead on arrival — the same class of bug
-// as the retired `debug:` field, which was declared in Tier A and read by
-// nothing for the whole of its life. isFlagSet is what separates "the
+// `logging.level: warn` in the file dead on arrival: a setting declared in
+// Tier A and read by nothing. isFlagSet is what separates "the
 // operator asked for info" from "nobody said anything", and it is the same
 // idiom [overrideNode] uses for the three node overrides.
 //
@@ -2463,10 +2651,8 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // Every other bad logging value in this binary resolves to a default,
 // because a misspelled log level must never be why a company will not boot.
 // A path is not one of those. An operator who configured a durable record
-// and silently did not get one has nothing anywhere pointing at why — the
-// exact shape of the retired `debug: true` field, which was declared for the
-// whole of its life and read by nothing. The error names the path and the
-// permission that has to change.
+// and silently did not get one has nothing anywhere pointing at why. The
+// error names the path and the permission that has to change.
 //
 // # Detached before it is closed, in that order
 //
@@ -2562,6 +2748,15 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 			return fmt.Errorf("-roles: %w", err)
 		}
 		boot.Node.Roles = names
+		// AND WHAT THE ROLES REQUIRE OF THE REST OF THE FILE. Whether a
+		// node holds data decides whether its store is deleted at boot
+		// and whether its broker joins as a leaf — so a flag that
+		// removed `data` from a node whose file keeps a durable store
+		// must be refused here, naming the file's setting, rather than
+		// booting a node that is neither.
+		if err := boot.ValidateRoles(); err != nil {
+			return fmt.Errorf("-roles %s: %w", strings.Join(names, ","), err)
+		}
 	}
 	if isFlagSet(fs, "api-host") {
 		boot.API.Host = apiHost
@@ -2573,7 +2768,31 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 		}
 		boot.API.Port = apiPort
 	}
+	// AND WHAT THE FILE'S LISTENERS REQUIRE OF THEM, for -roles' reason
+	// above: the file was validated with its own api.port and its own roles,
+	// and a flag that moved api.port onto the public listener's port, or to
+	// 0 beneath one on an ingress node, would otherwise bind what validation
+	// never saw. AFTER EVERY FLAG IS APPLIED, because the rule reads both: the
+	// same `-api-port 0` is the documented shape of a node that binds nothing
+	// under `-roles data,seats,workers` and a node answering no probe under
+	// `-roles ingress`.
+	if given := givenFlags(fs, "roles", "api-host", "api-port"); len(given) > 0 {
+		if err := boot.ValidateListeners(); err != nil {
+			return fmt.Errorf("%s: %w", strings.Join(given, " "), err)
+		}
+	}
 	return nil
+}
+
+// givenFlags names, as `-name`, the flags among names the command line set.
+func givenFlags(fs *flag.FlagSet, names ...string) []string {
+	var given []string
+	for _, name := range names {
+		if isFlagSet(fs, name) {
+			given = append(given, "-"+name)
+		}
+	}
+	return given
 }
 
 // splitRoles reads a comma-separated role list, ignoring blank entries so a
@@ -2670,9 +2889,9 @@ func (w engineConfigWriter) SetSeat(
 }
 
 // nodeGate is the eviction gate over every identity-claiming log — the
-// engine's core, which every node runs from boot — or an UNTYPED nil where the
-// engine holds none, which [api.New] then refuses by name. A typed nil would
-// pass its check and panic on the first press.
+// engine's core, which every node holding the estate runs from boot — or an
+// UNTYPED nil where the engine holds none, which [api.New] then refuses by
+// name. A typed nil would pass its check and panic on the first press.
 //
 // NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
 // log alone, so an eviction lifted one log's pin and left the pages and

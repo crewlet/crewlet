@@ -20,20 +20,22 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
+// openStore is a data node's two estates, opened from the binary's migrated
+// image: what is under test here is the answers, and a fresh file per case
+// replayed every migration of both estates behind one process-wide lock.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "q.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-// seedEvents writes n rows, oldest first.
+// seedEvents writes n rows, oldest first, in one transaction (see
+// [storetest.WriteEvents]).
 func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *store.EventRecord)) {
 	t.Helper()
 	// Relative to NOW, not a literal date: List filters on the store's
@@ -43,6 +45,7 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 	// what is under test. Trace has no such filter, which is exactly how
 	// this hid: the trace cases passed while the listings did not.
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, n)
 	for i := range n {
 		rec := store.EventRecord{
 			ID:       "e" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
@@ -58,10 +61,9 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 		if mutate != nil {
 			mutate(i, &rec)
 		}
-		if err := log.Append(t.Context(), rec); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
+		recs = append(recs, rec)
 	}
+	storetest.WriteEvents(t, log, recs)
 }
 
 // fleetOf is one store read as the fleet it is: a node alone, with nobody
@@ -149,9 +151,9 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// wired with.
 		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
 		{"the live projection alone", queries.Sources{State: state},
-			[]string{"agent", "tokens", "viewer"}},
+			[]string{"agent", "live_call", "tokens", "viewer"}},
 		// `turn` is what made "everything that happened in this unit of
-		// work" askable at all (see migration 0014); `turns` is the list
+		// work" askable at all (see migration 0015); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
 		// feed; `phases` is the company-wide phase record WITH its
 		// payloads, which the event listing deliberately cannot serve;
@@ -169,7 +171,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
-		}, []string{"agent", "event", "event_series", "events", "page_reads",
+		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
 			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
@@ -210,6 +212,75 @@ roles:
 		ids[handle] = id.String()
 	}
 	return cfg, ids
+}
+
+// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by its agent id: every heavy
+// field an `agents` push may leave out, and the versions they are at — what a
+// tab that missed a push asks for. A seat with nothing in flight is null, not
+// an error, and its namesake's call is never its own: the two seats share a
+// NAME, which is what the projection was keyed by when bob's tab was answered
+// ada's call.
+func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
+	t.Parallel()
+	cfg, ids := namesakes(t)
+	state := livestate.New()
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z", Category: "task",
+		Payload: map[string]any{
+			"agent_id": ids["ada"], "role": "Engineer", "turn_id": "tn-1", "phase": "execute",
+			"iteration": float64(0), "round_num": float64(-1), "prompt": "fix the build",
+			"prompt_messages": []any{map[string]any{"role": "system", "content": "you are the lead"}},
+		},
+	})
+	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
+
+	got := ask(t, r, "live_call", map[string]any{"agent_id": ids["ada"]})
+	call, _ := got["live_call"].(*livestate.LiveCall)
+	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || call == nil ||
+		call.Prompt != "fix the build" || len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
+		t.Fatalf("answer = %+v; want ada's call whole, its prompt at version 1", got)
+	}
+	namesake := ask(t, r, "live_call", map[string]any{"agent_id": ids["bob"]})
+	if namesake["live_call"] != nil || namesake["handle"] != "bob" {
+		t.Errorf("bob's answer = %+v; want his own seat, with nothing in flight", namesake)
+	}
+	if _, err := r.Answer(everyGrant(t), "live_call", map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("live_call with no seat = %v; want a bad-params refusal", err)
+	}
+}
+
+// THE ANSWER CARRIES THE SEAT'S CALL SEQUENCE, a null call included: it is what
+// the tab orders the answer by against the `agents` pushes for the same seat,
+// since the answer is computed on its own goroutine and can reach the tab after
+// a push generated later ([livestate.Overlay.LiveCallSeq]). An answer for a
+// cleared call that carried no sequence could not be told from one read before
+// the call it cleared began.
+//
+// Mutation: answer `live_call_seq` only beside a call, or not at all, and this
+// fails.
+func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	call := map[string]any{"agent_id": "a-lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z", Category: "task", Payload: call,
+	})
+	r := registryOver(t, queries.Sources{State: state})
+
+	running := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
+	seq := state.AgentOverlay("a-lead").LiveCallSeq
+	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
+		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
+	}
+
+	state.Apply(&livestate.Envelope{
+		ID: "e2", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:05Z", Category: "task", Payload: call,
+	})
+	cleared := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
+	after := state.AgentOverlay("a-lead").LiveCallSeq
+	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
+		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
+	}
 }
 
 // ONE SEAT'S LIVE STATE, and never its namesake's. The answer is asked by
@@ -278,7 +349,8 @@ func TestAgentNeedsAHandle(t *testing.T) {
 
 func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	t.Parallel()
-	state := livestate.New()
+	projected := time.Date(2026, 6, 14, 12, 30, 0, 0, time.UTC)
+	state := livestate.New(livestate.WithClock(func() time.Time { return projected }))
 	state.Apply(&livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "agent", Payload: map[string]any{
@@ -305,9 +377,14 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 		t.Errorf("window = %s .. %s (%s), want the live window %s",
 			got.Since, got.Until, width, livestate.LiveSpendWindow)
 	}
-	// The high-water mark the client folds live events onto. Without it an
-	// event that is both in this baseline and redelivered on the stream is
-	// counted twice.
+	// And it is the window the projection AGED, ending at the projection's
+	// clock — never a second read of the registry's, which here is the wall
+	// clock, months past the pinned date.
+	if want := projected.Format(time.RFC3339); got.Until != want {
+		t.Errorf("until = %s, want the projection's clock %s", got.Until, want)
+	}
+	// The rollup's own freshness: the newest record it counted. A total with
+	// no instant beside it cannot be told from a stale one.
 	if got.AggregatedThrough != "2026-06-14T12:00:00Z" {
 		t.Errorf("aggregated_through = %q", got.AggregatedThrough)
 	}
@@ -555,15 +632,15 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 	db := openStore(t)
 	log := db.Events()
 	base := time.Now().UTC().Add(-time.Hour)
+	recs := make([]store.EventRecord, 0, store.MaxTraceEvents)
 	for i := range store.MaxTraceEvents {
-		if err := log.Append(t.Context(), store.EventRecord{
+		recs = append(recs, store.EventRecord{
 			ID: fmt.Sprintf("t-%04d", i), Type: "task_assigned",
 			Time:     base.Add(time.Duration(i) * time.Second),
 			Category: "task", Actor: "PM", TraceID: "tr-exact",
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
+	storetest.WriteEvents(t, log, recs)
 	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})
@@ -873,11 +950,10 @@ token_budget: {month: 10000}
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never used >= limit alone: a refused charge
-	// increments nothing, so a seat charged in rounds stalls short of its
-	// cap and never reads as full. The stamp is what says the gate is
-	// turning turns away, so the answer carries it on the window that
-	// refused and on no other, and the window's state says `refusing`.
+	// A refused round is COUNTED, so the window that refused it reads past
+	// its ceiling by that round, and the stamp says when the gate said no.
+	// The answer carries both on the window that refused and on no other,
+	// and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -918,10 +994,11 @@ token_budget: {day: 10000}
 	if _, err := time.Parse(time.RFC3339Nano, day.RefusedAt); err != nil {
 		t.Errorf("seat's day refused_at = %q, want the refusal's instant: %v", day.RefusedAt, err)
 	}
-	// 70 of 100 is below the near mark, and still refusing: the stamp, not
-	// the arithmetic, is the gate's word.
-	if day.Used != 70 || day.State != types.BudgetRefusing {
-		t.Errorf("seat's day = %+v, want the 70 that fit and refusing", day)
+	// 110 of 100: the 70 that fit and the 40 that were refused, all of it
+	// spent — which is what an operator is shown and what every later
+	// charge is refused against.
+	if day.Used != 110 || day.State != types.BudgetRefusing {
+		t.Errorf("seat's day = %+v, want the 70 that fit and the 40 refused, refusing", day)
 	}
 	if w := window(t, got.Seats[0].Windows, period.Week); w.RefusedAt != "" || w.State != types.BudgetOK {
 		t.Errorf("seat's week = %+v, want no refusal: nothing caps it", w)

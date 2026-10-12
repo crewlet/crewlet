@@ -35,7 +35,7 @@ func TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse(t *testing.T
 	leases := openStore(t, nc, ttl)
 	s := openFleetWithTTL(t, nc, ttl)
 
-	if _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl,
 	}); err != nil {
 		t.Fatalf("TryAcquire: %v", err)
@@ -123,17 +123,18 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 // so a case can prove what did NOT expire beside something that did.
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		BucketPrefix:       fmt.Sprintf("p%d", bucketSeq.Add(1)),
-		RateWindow:         ttl,
-		ClaimTTL:           ttl,
-		SetupOnceRetention: ttl,
-		LedgerRetention:    ttl,
-		FireRetention:      ttl,
-		FollowRetention:    ttl,
-		CooldownMax:        ttl,
-		BudgetRetention:    ttl,
-		StatusFreshness:    ttl,
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		BucketPrefix:     fmt.Sprintf("p%d", bucketSeq.Add(1)),
+		RateWindow:       ttl,
+		MaxClaimTTL:      ttl,
+		LedgerRetention:  ttl,
+		FireRetention:    ttl,
+		FollowRetention:  ttl,
+		RebaseRetention:  ttl,
+		CooldownMax:      ttl,
+		BudgetRetention:  ttl,
+		StatusFreshness:  ttl,
+		CustodyRetention: ttl,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -156,6 +157,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 // class test that remains would hide the second, so the count is checked from
 // the inside of the walk rather than from the rows it produced.
 func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)
@@ -215,6 +217,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 // A walk that finds no rows and a class that has no rows are the same answer
 // at every caller, so the day that happens there is no symptom to notice.
 func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
 	store := openFleetForTest(t, nc, prefix)

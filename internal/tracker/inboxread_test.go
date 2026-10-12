@@ -272,7 +272,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 		t.Fatalf("write bob's record: %v", err)
 	}
 	r.drain()
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_persons
 			SET seen_through = ?, seen_through_stream = ? WHERE handle = 'bob'`,
 			int64(notice.LogSeq+1_000), "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE")

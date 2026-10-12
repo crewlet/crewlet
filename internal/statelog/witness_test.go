@@ -39,12 +39,13 @@ func (h *applyHarness) witnessedRunner(w statelog.Witness) {
 	h.t.Helper()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:     probeDomain{},
+		Spec:       specOf(probeDomain{}),
 		Verifier:   testVerifier(h.t, probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
 		Node:       h.db,
-		DB:         h.db.Replicated(),
+		DB:         h.estate,
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 		Witness:    w,
@@ -255,12 +256,13 @@ func (h *applyHarness) keyedRunner(ring statelog.Keyring) {
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:     probeDomain{},
+		Spec:       specOf(probeDomain{}),
 		Verifier:   verifier,
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
 		Node:       h.db,
-		DB:         h.db.Replicated(),
+		DB:         h.estate,
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 	})
@@ -275,7 +277,7 @@ func (h *applyHarness) probeRowAt(seq uint64) bool {
 	h.t.Helper()
 	var count int
 	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM probe_rows WHERE position = ?`, at.Packed()).Scan(&count)
 	}); err != nil {

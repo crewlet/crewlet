@@ -341,6 +341,7 @@ func TestTheWidestConvergenceIsPromotedFirst(t *testing.T) {
 	if !strings.Contains(prompt, "fetch -> build -> tag -> announce") {
 		t.Fatalf("the prompt is about the wrong convergence:\n%s", prompt)
 	}
+	wantLowEffort(t, aux.seen[0])
 }
 
 // A PROMOTER MISSING ANY HALF REFUSES TO BE BUILT rather than silently

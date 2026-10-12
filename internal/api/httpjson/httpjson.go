@@ -296,7 +296,7 @@ const (
 	CodeUnknownKind Code = "unknown_kind"
 	// CodeSeatRequired is a per-seat gesture that named no seat: a GitHub
 	// App connected for a seat, and — because a person holds a human seat
-	// for as long as they exist (ADR-0026) — a person's create or
+	// for as long as they exist (ADR-0032) — a person's create or
 	// invitation naming none, and an edit clearing a person's seat. ONE
 	// CODE for all of them, so a client branches on one spelling; the
 	// detail says which seat it needs and why.
@@ -396,6 +396,13 @@ const (
 	// CodeSummaryRequired is a configuration write carrying no audit
 	// summary.
 	CodeSummaryRequired Code = "summary_required"
+
+	// CodeConfigManaged is a change to a MANAGED company document
+	// (`api.auth.company_writers`, ADR-0030) through a credential that is
+	// not one of its writers. 403: the credential is valid and the request
+	// well formed, and no retry with them changes the answer. The detail
+	// names the writers (`managed_by`) and what to do instead.
+	CodeConfigManaged Code = "config_managed"
 )
 
 // The credential set: `/secrets`' refusals. There is no "no keyring" code:
@@ -618,6 +625,13 @@ const (
 	// destination the caller named is the problem, and the detail names it;
 	// 500 otherwise, with the reason in the log alone.
 	CodeBackupFailed Code = "backup_failed"
+	// CodeObjectsUnreachable is a backup whose copy named objects the
+	// object store did not answer for. 503 with a Retry-After: the node and
+	// the command are both sound, what failed is the store holding the
+	// company's files, and it clears when that store answers again. The hint
+	// says where to look; the objects themselves are the log's, never the
+	// body's.
+	CodeObjectsUnreachable Code = "objects_unreachable"
 	// CodePositionRequired is a backup acknowledgement that named no stream
 	// or no sequence: it moves the floor the trim deletes against, so
 	// neither has a default.
@@ -658,6 +672,17 @@ const (
 	// 503 — the condition is this node's, not the target's — carrying
 	// `actions`, one of which is forcing it past the leases.
 	CodeEvictionUnjudged Code = "eviction_unjudged"
+	// CodeReadmissionUnjudged is a readmission this node could not judge,
+	// because a read it is decided on — the positions register, the
+	// published floors, or a log's first surviving record on this node's
+	// own copy — failed. 503: the condition is this node's, not the
+	// target's, and the body names the log where one was being read.
+	CodeReadmissionUnjudged Code = "readmission_unjudged"
+	// CodeNotPublishing is an eviction or readmission sent to a node in a
+	// capacity window, which appends nothing to any log. 409 with nothing
+	// judged or written: the remedy is the fleet's return to normal mode,
+	// not anything about the node named.
+	CodeNotPublishing Code = "not_publishing"
 	// CodeReadmissionRefused is a readmission of a node below a trim floor
 	// it would be counted against. 409 with nothing written, carrying the
 	// numbers the refusal is about.
@@ -685,6 +710,78 @@ const (
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
 	// be read.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
+
+	// THE FLEET BROKER'S MEMBERSHIP: the removal of a voter the metadata
+	// group still counts. Each refusal sends an operator somewhere of its
+	// own, so each has its own code, and every one carries `detail` and
+	// `hint`; `crewlet fleet broker remove` and the dashboard's Nodes screen
+	// branch on them.
+
+	// CodeVoterInvalid is a removal naming a voter by a spelling no node id
+	// or peer id has. 400 with nothing changed.
+	CodeVoterInvalid Code = "voter_invalid"
+	// CodeMemberLive is a removal of a member whose node still holds a live
+	// presence lease as a member, or does not say what its broker is. 409:
+	// a running member removed from the group rejoins it as a voter at its
+	// next restart, so it is stopped first, or the removal forced.
+	CodeMemberLive Code = "member_live"
+	// CodeRemovalOutcomeUnknown is a removal whose carrying member went
+	// silent before it answered. 504: it may have been committed, so the
+	// group is read before anybody asks again.
+	CodeRemovalOutcomeUnknown Code = "outcome_unknown"
+	// CodeExternalBroker is a removal asked of a node dialling an external
+	// cluster, whose membership is its own operator's. 409.
+	CodeExternalBroker Code = "external_broker"
+	// CodeNotAMember is a removal of a voter the metadata group does not
+	// count. 404: never a member, or a removal already made it so.
+	CodeNotAMember Code = "not_a_member"
+	// CodeMembershipChanging is a removal asked while another change to the
+	// group is in flight. 409, asked again once it has been committed.
+	CodeMembershipChanging Code = "membership_changing"
+	// CodeNoLeader is a removal asked of a group with no leader, which can
+	// change nothing about itself. 503 with a Retry-After of one election.
+	CodeNoLeader Code = "no_leader"
+	// CodeNoBrokerMember is a removal no live member could carry: it is made
+	// through a member's system account. 503 with a Retry-After of one
+	// election.
+	CodeNoBrokerMember Code = "no_member"
+	// CodeBrokerRemoveFailed is a removal that failed for any other reason.
+	// 500: the reason is in the detail, and the group is read before asking
+	// again, since the removal may have been committed although its answer
+	// was lost.
+	CodeBrokerRemoveFailed Code = "broker_remove_failed"
+
+	// A PROJECT'S FILE BYTES: the streamed download, the upload and the
+	// removal under /work/files/{project}/{path}. The listing is a
+	// question and refuses as every question does.
+
+	// CodeNoProject is a file route naming a project there is none of. 404.
+	CodeNoProject Code = "no_project"
+	// CodeNoFile is a file route naming a path the project keeps no file
+	// at. 404.
+	CodeNoFile Code = "no_file"
+	// CodeBadPath is a file path that is not one a project keeps a file
+	// under — an empty segment, a dot segment, too long. 400, the detail
+	// naming what is wrong with it.
+	CodeBadPath Code = "bad_path"
+	// CodeBadIfMatch is an If-Match header that is not a file's version as
+	// its ETag carries it. 400.
+	CodeBadIfMatch Code = "bad_if_match"
+	// CodeVersionMoved is a file write whose If-Match names a version the
+	// file has moved past. 412: read it again and decide again.
+	CodeVersionMoved Code = "version_moved"
+	// CodeUploadExpired is an upload whose bytes were stored and took
+	// longer to arrive than a write may name its object after. 409: sending
+	// it again is the one thing that lands.
+	CodeUploadExpired Code = "upload_expired"
+	// CodeContentCorrupt is a file whose object the store answered with
+	// content that is not what the file records. 500: a retry reads the
+	// same bytes, so it is no 503.
+	CodeContentCorrupt Code = "content_corrupt"
+	// CodeContentUnavailable is a file whose content the object store did
+	// not answer for. 503 with a Retry-After: the file exists, and it reads
+	// once the store answers again.
+	CodeContentUnavailable Code = "content_unavailable"
 
 	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
 	// status and the Retry-After and nothing else, so what these buy is the
@@ -851,6 +948,10 @@ var codes = map[Code]string{
 		"so nothing in that directory counts as a backup. If the detail names " +
 		"the destination, choose another; otherwise the reason is in this " +
 		"node's log.",
+	CodeObjectsUnreachable: "The backup did not finish because the object " +
+		"store did not answer for some of the company's files, so nothing in " +
+		"that directory counts as a backup. The hint says where to look; take " +
+		"the backup again once the store answers.",
 	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
 		"An acknowledgement moves what the trim may delete, so neither has a " +
 		"default.",
@@ -869,6 +970,11 @@ var codes = map[Code]string{
 		"not evicted and nothing was written. The hint says what to do.",
 	CodeEvictionUnjudged: "This node could not tell whether that node is still " +
 		"running, so nothing was written. The hint says how to go on.",
+	CodeReadmissionUnjudged: "This node could not read what a readmission is " +
+		"decided on, so nothing was written. The hint says how to go on.",
+	CodeNotPublishing: "This node is in a capacity window and writes nothing " +
+		"to the logs, so nothing was judged or written. Run it again once the " +
+		"fleet is back in normal mode.",
 	CodeReadmissionRefused: "That node is too far behind to be counted again " +
 		"yet, so nothing was written. The detail gives the positions.",
 	CodeGateFailed: "The eviction or readmission was not recorded. The detail " +
@@ -884,6 +990,41 @@ var codes = map[Code]string{
 		"and names the operation already open when there is one.",
 	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
 		"read. The detail says why.",
+
+	CodeVoterInvalid: "That names no voter a removal could reach, so nothing " +
+		"changed. Name it by the node id or the peer id the broker listing shows.",
+	CodeMemberLive: "That member is still running, so it was not removed. The " +
+		"hint says what to do first.",
+	CodeRemovalOutcomeUnknown: "The member carrying the removal went silent " +
+		"before it answered, so it may or may not have been made. Read the " +
+		"broker listing before asking again.",
+	CodeExternalBroker: "This fleet dials an external broker cluster, whose " +
+		"membership is changed with that cluster's own tools.",
+	CodeNotAMember: "The broker's metadata group counts no such voter, so there " +
+		"was nothing to remove.",
+	CodeMembershipChanging: "Another change to the broker's membership is in " +
+		"flight. Ask again once it has been committed.",
+	CodeNoLeader: "The broker's metadata group has no leader, so it can change " +
+		"nothing about itself. The hint says how to bring it back.",
+	CodeNoBrokerMember: "No live broker member could carry the removal. Start " +
+		"one, or ask again once one answers.",
+	CodeBrokerRemoveFailed: "The removal failed. Read the broker listing before " +
+		"asking again: it may have been made although its answer was lost.",
+
+	CodeNoProject: "There is no project by that key.",
+	CodeNoFile:    "That project keeps no file at that path.",
+	CodeBadPath: "That is not a path a project keeps a file under. The detail " +
+		"says what is wrong with it.",
+	CodeBadIfMatch: "If-Match must carry the file's version, as its ETag does.",
+	CodeVersionMoved: "The file changed after you read it, so nothing was " +
+		"written. Read it again and decide again.",
+	CodeUploadExpired: "The upload took too long to arrive to be recorded, so " +
+		"the file was not written. Send it again.",
+	CodeContentCorrupt: "The object store holds content for this file that is " +
+		"not what the file records, so it was not sent. The reason is in this " +
+		"node's log.",
+	CodeContentUnavailable: "The file exists and its content could not be read " +
+		"just now. Ask again in a moment.",
 
 	CodeInvalidSignature: "This delivery's signature or token did not match " +
 		"what this route checks, so it was not accepted. Make the secret at the " +
@@ -948,6 +1089,9 @@ var codes = map[Code]string{
 		"so nothing was stored. The detail says why.",
 	CodeSummaryRequired: "This change needs a one-line summary for the " +
 		"configuration's history. Send it in the X-Summary header.",
+	CodeConfigManaged: "Another system manages this company's configuration " +
+		"and alone may change it, so nothing was changed here. Change it at " +
+		"its source — the detail names the credential it writes with.",
 
 	CodeInvalidName: "That is not a name a credential can be stored under. The " +
 		"detail says what a name may be.",

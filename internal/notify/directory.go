@@ -40,12 +40,15 @@ import (
 //
 // # Chart-only is the zero value, and it belongs to no running node
 //
-// Every node that runs a company runs the identity domain, whatever its roles,
-// and reads its OWN copy: a node that consumes deliveries and runs seats must
-// know who may be reached, because a chart-only registry attributes a
-// suspended person's word to their seat for every delivery it wins. The zero
-// [Standing] — exactly the routing the chart declares — is what an engine with
-// no directory at all builds from, which is `crewlet validate` and a test.
+// Every node that consumes deliveries and runs seats must know who may be
+// reached, because a chart-only registry attributes a suspended person's word
+// to their seat for every delivery it wins. A DATA node runs the identity
+// domain and reads its OWN copy; a node without the data role holds no estate
+// and reads the same fact from a data node, through the estate's identity read
+// floored on the identity log (internal/estate) — one directory, two ways to
+// reach it, and this package sees neither. The zero [Standing] — exactly the
+// routing the chart declares — is what an engine with no directory at all
+// builds from, which is `crewlet validate` and a test.
 
 // Holder is one seat binding, as the identity directory states it.
 //
@@ -70,9 +73,10 @@ type Holder struct {
 //
 // CONSUMER-DEFINED and one method wide, for the package-wide reason: the
 // registry needs this one fact and nothing else the estate knows, and a seam
-// this narrow is what lets a test hand it a directory with no store behind it.
-// The engine satisfies it over internal/iamdomain's reader, which every node
-// running a company holds.
+// this narrow is what lets a test hand it a directory with no store behind it
+// — and lets the engine hand it either source: internal/iamdomain's reader on
+// a data node, which holds the identity estate, or the estate client's
+// identity read on a node without the data role, which asks a data node.
 //
 // AN ERROR IS THE UNKNOWN ARM and never "nobody holds anything": an empty
 // answer is a real one, and reading an outage as it would hand every

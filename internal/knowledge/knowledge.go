@@ -34,9 +34,21 @@
 //     credential of its own means NO results — searching the whole instance
 //     on a shared engine credential is how one seat reads what its own
 //     account never could.
-//   - BEST EFFORT. Search never fails the caller: every failure path is an
-//     empty result and the prefetch degrades to an empty block. A turn must
-//     not die because a wiki was slow.
+//   - BEST EFFORT, NEVER SILENT. Search never fails the caller: every failure
+//     path answers no hits and serves no mode, which every reader renders as
+//     "could not be searched" rather than "nothing matched". A turn must not
+//     die because a wiki was slow, nor be told the company has written
+//     nothing down because one did not answer.
+//
+// # The rule every caller honours
+//
+// A QUERY IS BOUNDED, and the bound is declared here ([MaxQueryBytes]) for
+// both of the engine's ranked searches — this seam's and the tracker's item
+// search, which share this package's vocabulary. Every surface refuses a
+// longer one in its own words before it reaches a backend, because best effort
+// would answer "could not be searched" and send the asker back with the same
+// paste; nothing cuts one, because a search on part of a question answers a
+// different question.
 package knowledge
 
 import (
@@ -211,11 +223,14 @@ type Searcher interface {
 	// Search returns up to Limit ranked hits, and what the search
 	// actually did — see [Outcome].
 	//
-	// BEST EFFORT: it never reports an error. Every failure path is an
-	// empty result, and the prefetch degrades to an empty block rather
-	// than failing a turn because a wiki was slow. What it does NOT do is
-	// fail silently: a search that could not cover the whole corpus, or
-	// could not rank the way it was asked to, says so in the outcome.
+	// BEST EFFORT: it never reports an error. Every failure path answers
+	// no hits and, where nothing ran, no [Outcome.ServedMode] — which the
+	// prefetch and search_knowledge render as "the knowledge base could
+	// not be searched" rather than failing a turn because a wiki was slow,
+	// and rather than "nothing matched", which a seat acts on by writing a
+	// duplicate of a page that exists. What it does NOT do is fail
+	// silently: a search that could not cover the whole corpus, or could
+	// not rank the way it was asked to, says so in the outcome.
 	//
 	// AN EMPTY TEXT IS A PROBE: it runs nothing and does no I/O, and it
 	// answers the outcome a search in that mode would START from — the

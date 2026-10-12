@@ -92,33 +92,52 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 }
 
 // THE COUNTERFACTUAL, and it is what keeps the three rules above from being
-// ceremony every node pays. A worker or a seats-only node binds nothing, so it
-// needs no address, no ceiling and no credential — and the keyed default Tier
-// A is exactly that node.
+// ceremony every node pays. A node that binds nothing needs no address, no
+// ceiling and no credential — and the keyed default Tier A is exactly that
+// node. NOR DOES ONE THAT BINDS A PORT WITHOUT THE INGRESS ROLE: that port
+// carries its probes (and a seats node's tool bridge), and serving the API is a
+// port AND the ingress role together, so a worker probed on api.port is asked
+// for none of it.
+//
+// Mutation: read [Bootstrap.ServesAPI] as the port alone and the second case
+// is refused for an external URL it never needed.
 func TestANodeThatServesNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
 	b := RunnableBootstrap()
-	if b.API.Serving() {
+	if b.ServesAPI() {
 		t.Fatal("the default binds a port, so this case is not the one it names")
 	}
 	if err := b.Validate(); err != nil {
 		t.Errorf("a node serving no API was refused: %v", err)
 	}
+	probed := RunnableBootstrap()
+	probed.Node.Roles = []string{"data", "seats", "workers"}
+	probed.API.Port = DefaultAPIPort
+	if probed.ServesAPI() {
+		t.Fatal("a node without ingress reads as serving the API")
+	}
+	if err := probed.Validate(); err != nil {
+		t.Errorf("a node binding api.port for its probes alone was refused: %v", err)
+	}
 }
 
-// BUT EVERY NODE NEEDS THE KEYRING, whatever its roles and whether or not it
-// binds a port.
+// BUT EVERY NODE NEEDS THE KEYRING, whatever its roles, whatever its broker and
+// whether or not it binds a port.
 //
 // It used to be one of the rules above, required only once `api.port` was
-// set. Every node runs every state log, though — a seats-only satellite
-// included, the identity directory's too — and every record on every log is
-// signed and verified under the keyring, so the engine refused
-// the keyless satellite the moment it started its logs, after this command had
-// called its file sound. The satellite is the case, because it is the one the
-// old rule let through.
+// set. Every data node runs every state log, though — the identity
+// directory's too — and every record on every log is signed and verified under
+// the keyring; and a seats-only satellite, a LEAF holding no estate, still
+// verifies the company document's seal, mints its runs' tokens and signs what
+// it asks of a data node's estate under it — so the engine refused the keyless
+// satellite at its door, after this command had called its file sound. The
+// satellite is the case, because it is the one the old rule let through and
+// the one that holds no log of its own.
 func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
 	t.Parallel()
-	const satellite = "node:\n  roles: [seats]\napi:\n  port: 0\n"
+	const satellite = "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+		"stream:\n  leaf:\n    urls: [nats-leaf://data-a.internal:7422]\n" +
+		"coordination:\n  type: embedded-kv\napi:\n  port: 0\n"
 	_, err := ParseBootstrap([]byte(satellite), EnvOnly())
 	if err == nil {
 		t.Fatal("a seats-only node with no keyring validated, and the engine " +
@@ -250,76 +269,47 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 
 // --- the retired keys ---------------------------------------------------- //
 
-// A RETIRED KEY IS REFUSED BY NAME, never ignored, and the control is what
-// makes that matter: ignoring `allow_anonymous_read: false` runs the OPPOSITE
-// posture from the one the file asks for, and ignoring `disabled: true` runs
-// the opposite of that.
-func TestEveryRetiredAuthKeyIsANamedRefusal(t *testing.T) {
+// A RETIRED KEY IS REFUSED, never ignored, and the control is what makes that
+// matter: ignoring `allow_anonymous_read: false` runs the OPPOSITE posture
+// from the one the file asks for, and ignoring `disabled: true` runs the
+// opposite of that. No release ever shipped one of these keys, so there is no
+// named advice to keep for them: each is refused as the unknown field it is,
+// at its own line, because both tiers decode with unknown keys refused.
+//
+// Mutation: decode Tier A without KnownFields and every row is accepted.
+func TestEveryRetiredKeyIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		doc  string
-		want []string
-	}{
-		{
-			"allow_anonymous_read",
-			"api:\n  auth:\n    allow_anonymous_read: false\n",
-			[]string{"is retired with no replacement setting"},
-		},
-		{
-			"api.auth.disabled",
-			"api:\n  auth:\n    disabled: true\n",
-			[]string{"-dev-principal"},
-		},
-		{
-			// The block was in the reference, so there is no spelling
-			// of it that works any more, and "unknown field" would send
-			// the operator looking for one. Its people are invited
-			// again, each onto their own human seat — an invitation
-			// that names none is refused (ADR-0026), so a remedy
-			// without `-seat` is one the engine turns down.
-			"api.auth.oidc",
-			"api:\n  auth:\n    oidc:\n" +
-				"      issuer: https://idp.example.com\n",
-			[]string{"`api.auth.totp`", "crewlet iam invite <address> -seat <handle>"},
-		},
-		{
-			// `closed` described the posture every deployment now
-			// runs, and `open` has no route left to serve — both are
-			// told where the first person comes from instead: an
-			// invitation onto the human seat the company declares for
-			// them, which the command it names must say.
-			"api.auth.bootstrap",
-			"api:\n  auth:\n    bootstrap: closed\n",
-			[]string{"crewlet iam invite <address> -seat <handle>",
-				"`kind: human` seat", "Agents › Org chart"},
-		},
+	for _, tc := range []struct{ name, doc string }{
+		{"allow_anonymous_read", "api:\n  auth:\n    allow_anonymous_read: false\n"},
+		{"api.auth.disabled", "api:\n  auth:\n    disabled: true\n"},
+		{"api.auth.oidc", "api:\n  auth:\n    oidc:\n      issuer: https://idp.example.com\n"},
+		{"api.auth.bootstrap", "api:\n  auth:\n    bootstrap: closed\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			_, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly())
 			if err == nil {
 				t.Fatalf("`%s` was accepted, so the file asks for one posture "+
 					"and the engine runs the other", tc.name)
 			}
-			for _, want := range tc.want {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("the refusal does not say %q: %v", want, err)
-				}
+			if !errors.Is(err, ErrUnknownField) {
+				t.Errorf("err = %v, want ErrUnknownField", err)
 			}
 		})
 	}
-	t.Run("integrations.public_base_url", func(t *testing.T) {
-		t.Parallel()
-		_, err := ParseCompany([]byte(
-			"name: Acme\nintegrations:\n  public_base_url: https://x.example.com\n"))
-		if err == nil {
-			t.Fatal("the retired Tier B address key was accepted")
-		}
-		if !strings.Contains(err.Error(), "api.external_url") {
-			t.Errorf("the refusal does not name where it went: %v", err)
-		}
-	})
+	for _, key := range []string{"public_base_url", "dashboard_base_url"} {
+		t.Run("integrations."+key, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseCompany([]byte(
+				"name: Acme\nintegrations:\n  " + key + ": https://x.example.com\n"))
+			if err == nil {
+				t.Fatalf("the retired Tier B address key %s was accepted", key)
+			}
+			if !errors.Is(err, ErrUnknownField) {
+				t.Errorf("err = %v, want ErrUnknownField", err)
+			}
+		})
+	}
 }
 
 // --- the external URL ---------------------------------------------------- //

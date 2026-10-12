@@ -38,7 +38,7 @@ func insertRowsStore(t *testing.T) (*store.DB, *store.Writer) {
 	db, w := openApplierStore(t, filepath.Join(t.TempDir(), "insrows.db"))
 	t.Cleanup(func() { _ = w.Close() })
 	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	rep := replicatedOf(t, db)
 	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), rowsTable)
 		return err
@@ -58,7 +58,8 @@ func TestInsertRowsIssuesOneStatementPerChunk(t *testing.T) {
 	ctx := t.Context()
 
 	// A deliberately small limit, so the chunk boundary is exercised by a
-	// row count a test can read rather than by the probed limit's 285.
+	// row count a test can read rather than by the 1 000 rows a statement
+	// the row cap allows at the probed limit.
 	const limit, columns, rows = 10, 3, 17
 	size := store.RowsPerInsert(limit, columns) // 3
 	if size != 3 {

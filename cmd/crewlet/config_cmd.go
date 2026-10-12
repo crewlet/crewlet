@@ -81,7 +81,7 @@ var configSubcommands = []string{
 // window. An operator who wants the whole history says `-limit`.
 const defaultRevisionLimit = 20
 
-func runConfig(args []string, stdout, stderr io.Writer) error {
+func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, configUsage, defaultBootstrapPath)
@@ -171,6 +171,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			path:          subject,
 			apiURL:        apiURL,
 			summary:       summary,
+			environ:       environ,
 		}, stdout)
 	}
 
@@ -212,19 +213,15 @@ type configStore struct {
 	configs *store.Configs
 	cipher  secrets.Cipher
 
-	// events is where an erasure records that it happened.
-	//
-	// HELD HERE rather than reopened, because this handle is the one thing
-	// in this process that already owns the store file: the driver refuses
-	// a second opener, so a command that wanted an audit row and had no
-	// handle would have no way to write one.
-	events *store.EventLog
-
 	// activeKeyID is the key a fresh seal uses, carried from the same Tier
 	// A document the cipher was built from. Held rather than re-read: the
 	// two disagreeing is how a rekey comes to report moving a revision
 	// onto a key it did not use.
 	activeKeyID string
+
+	// boot is that Tier A document, for the one more thing a command asks
+	// of it: whether the company document is managed ([refuseManagedOffline]).
+	boot *config.Bootstrap
 }
 
 // openConfigStore opens this node's store under the keyring Tier A names.
@@ -238,6 +235,11 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 	if err != nil {
 		return nil, nil, err
 	}
+	if err = refuseScratchStore(boot, "crewlet config",
+		"Use the API of a node that holds data: PUT /config stores the revision "+
+			"and activates it on every node, this one included."); err != nil {
+		return nil, nil, err
+	}
 	// THE KEYRING IS NOT OPTIONAL HERE ANY MORE. It used to be — the
 	// store's revisions had a plaintext mode for a node with no keyring —
 	// and every node holds one now, so a revision this command writes is
@@ -246,7 +248,10 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
 	}
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
+	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
+	// are the node's own, and this command reads nothing a state log
+	// applies, so it opens no replicated estate.
+	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
@@ -258,8 +263,8 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 			bootstrapPath, remedy)
 	}
 	return &configStore{
-		configs: db.Configs(), cipher: cipher, events: db.Events(),
-		activeKeyID: boot.Secrets.ActiveKeyID,
+		configs: db.Configs(), cipher: cipher,
+		activeKeyID: boot.Secrets.ActiveKeyID, boot: boot,
 	}, func() { _ = db.Close() }, nil
 }
 
@@ -621,6 +626,15 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	} else if !found {
 		return fmt.Errorf("no revision %s", revisionID)
 	}
+	// RE-POINTING THE FLEET AT ANOTHER REVISION IS A CHANGE OF DOCUMENT, and
+	// this route is offline: no credential, so a managed document refuses it.
+	// Re-activating the CURRENT revision changes nothing in the company — it
+	// is the offline twin of POST /config/reload, the gesture a rotated
+	// credential needs — and stays open. AFTER the lookups, so a missing or
+	// unknown id is told that, not that the document is managed.
+	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
+		return err
+	}
 	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
 		return err
 	}
@@ -672,6 +686,10 @@ type importTarget struct {
 	path          string
 	apiURL        string
 	summary       string
+
+	// env is the invocation's environment ([runIn]), which the API route
+	// reads its credential from.
+	environ config.Source
 }
 
 // importCompany writes a company document as a new active revision, through
@@ -736,6 +754,11 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 	defer closeStore()
+	// THE OFFLINE ROUTE PRESENTS NO CREDENTIAL, so on a managed document
+	// it is refused here; the API route is judged by the node it reaches.
+	if err := refuseManagedOffline(cs.boot, "an offline `crewlet config import`"); err != nil {
+		return err
+	}
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 
@@ -743,7 +766,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
 	summary string, stdout io.Writer,
 ) error {
-	client, err := newConfigClient(boot, t.apiURL)
+	client, err := newConfigClient(t.environ, boot, t.apiURL)
 	if err != nil {
 		return err
 	}

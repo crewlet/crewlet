@@ -425,10 +425,11 @@ providers:
 //
 // A reload and a revert re-activate a stored company under the runnable rules
 // only, so theirs is the answer that can carry an admission warning: a company
-// stored before a rule, which runs and which a write keeping it would be
-// refused for. Every other write here submits a document that breaks no
-// admission rule, so its answer carries none — the control that keeps the
-// first half from passing on a surface that warned about everything.
+// a newer peer admitted under other rules, which runs and which a write
+// keeping it would be refused for. Every other write here submits a document
+// that breaks no admission rule, so its answer carries none — the control
+// that keeps the first half from passing on a surface that warned about
+// everything.
 func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)

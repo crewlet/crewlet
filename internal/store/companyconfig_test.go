@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE TWO WRITES THAT ARE NOT APPENDS, and the one thing that bounds each.
@@ -23,10 +24,7 @@ import (
 
 func configsFor(t *testing.T) *store.Configs {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db.Configs()
 }
@@ -172,8 +170,10 @@ func TestTheChainStopsAtAParentThisNodeNeverAdopted(t *testing.T) {
 	id := write(t, c, "", "adopted-alone", time.Hour, true)
 	// A PARENT NOTHING HOLDS, which is what a fetch of the active revision
 	// alone produces on a joining node.
+	now := time.Now().UTC()
 	if err := c.Adopt(t.Context(), store.Revision{
-		ID: id, ParentID: "", CreatedBy: "peer", Source: "fleet",
+		ID: id, ParentID: "", CreatedBy: "peer", CreatedByKind: iam.ActorOperator,
+		Source: "fleet", CreatedAt: now, ActivatedAt: now,
 		Payload: json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatalf("adopt: %v", err)
@@ -208,7 +208,8 @@ func TestARevisionKeepsItsAuthorAndTheCredentialApart(t *testing.T) {
 		ID: adopted, ParentID: id, Source: "fleet", Summary: "adopted",
 		CreatedBy: "sam", CreatedByKind: "human",
 		OperatorID: "session:0192f00d-0000-7000-8000-0000000000b0",
-		CreatedAt:  time.Now().UTC(), Payload: json.RawMessage(`{"name":"adopted"}`),
+		CreatedAt:  time.Now().UTC(), ActivatedAt: time.Now().UTC(),
+		Payload: json.RawMessage(`{"name":"adopted"}`),
 	}); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
@@ -276,9 +277,11 @@ func TestTheChainTerminatesOnARevisionThatIsItsOwnParent(t *testing.T) {
 	c := configsFor(t)
 
 	const id = "11111111-1111-1111-1111-111111111111"
+	now := time.Now().UTC()
 	if err := c.Adopt(t.Context(), store.Revision{
-		ID: id, ParentID: id, CreatedBy: "peer", Source: "fleet",
-		CreatedAt: time.Now().UTC(), Payload: json.RawMessage(`{}`),
+		ID: id, ParentID: id, CreatedBy: "peer", CreatedByKind: iam.ActorOperator,
+		Source: "fleet", CreatedAt: now, ActivatedAt: now,
+		Payload: json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatalf("adopt a self-parented revision: %v", err)
 	}

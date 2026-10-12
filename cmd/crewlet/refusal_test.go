@@ -68,13 +68,14 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 	clients := map[string]func(status int, raw []byte) error{
 		"node": func(status int, raw []byte) error { return nodeError(status, raw, true) },
 		"config": func(status int, raw []byte) error {
-			return config.refusal(status, raw)
+			return config.refusal(status, "application/json", raw)
 		},
 		"secrets": func(status int, raw []byte) error {
-			return secrets.refusal(status, "/secrets/X", raw)
+			return secrets.refusal(status, "/secrets/X", "application/json", raw)
 		},
 		"iam": func(status int, raw []byte) error {
-			return iamRefusal(status, map[string]any{"error": "unauthorized"}, raw, true)
+			return iamRefusal(status, "application/json",
+				map[string]any{"error": "unauthorized"}, raw, true)
 		},
 	}
 	for name, refusal := range clients {
@@ -141,5 +142,23 @@ func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
 	if err := nodeError(http.StatusUnauthorized, []byte(`{"error":"invalid_token"}`), true); err == nil ||
 		!strings.Contains(err.Error(), "did not accept") {
 		t.Errorf("a 401 = %v, want the token refusal", err)
+	}
+}
+
+// THE IAM CLIENT READS A PAGE THAT IS NOT THE ENGINE'S AS THE OTHER THREE DO —
+// its title, never its markup. It printed the whole body, so a proxy's error
+// page in front of a node reached the operator as a terminal full of HTML
+// around the one sentence it held. Mutation: print the raw body again and the
+// markup is in the refusal.
+func TestTheIamClientReadsAForeignPageForWhatItSaid(t *testing.T) {
+	t.Parallel()
+	page := "<html><head><title>502 Bad Gateway</title></head>" +
+		strings.Repeat("<div>a gateway error page</div>", 1_000) + "</html>"
+	err := iamRefusal(http.StatusBadGateway, "text/html", nil, []byte(page), true)
+	if err == nil {
+		t.Fatal("a gateway page was not reported as an error")
+	}
+	if !strings.Contains(err.Error(), "502 Bad Gateway") || strings.Contains(err.Error(), "<div>") {
+		t.Errorf("the refusal %.300q does not say what the page said", err)
 	}
 }

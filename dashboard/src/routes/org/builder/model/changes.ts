@@ -135,13 +135,16 @@ export interface ChangeSet {
   }[];
   /**
    * Where unrouted work in a tracker project or a knowledge space goes, per
-   * declaration (`project`, `space`): a unit declaring it routes to the
-   * unit's effective lead, a root seat declaring it to itself. `shared`
-   * marks a scope declared with different owners, where the engine routes to
-   * the first declaration it walks and reports the ambiguity in its own log.
+   * declaration: a unit declaring it routes to the unit's effective lead, a
+   * root seat declaring it to itself. `field` is which of the two keys
+   * declares it — `project` or `space`, on the unit or seat itself and
+   * vendor-neutral, so the same on the engine's own backends and a vendor's.
+   * `shared` marks a scope declared with different owners, where the engine
+   * routes to the first declaration it walks and reports the ambiguity in its
+   * own log.
    */
   readonly routing: readonly {
-    readonly owns: "project" | "space";
+    readonly field: "project" | "space";
     readonly scope: string;
     readonly holder: EntityRef;
     readonly before: EntityRef | null;
@@ -596,7 +599,7 @@ function routingChanges(
   ref: (side: Indexed, key: NodeKey) => EntityRef,
 ): ChangeSet["routing"][number][] {
   type Declaration = {
-    owns: "project" | "space";
+    field: "project" | "space";
     scope: string;
     holder: NodeKey;
     owner: NodeKey | undefined;
@@ -610,12 +613,12 @@ function routingChanges(
   ): Declaration[] => {
     const out: Declaration[] = [];
     for (const [key, data] of units) {
-      for (const owns of FIELDS) {
-        const scope = scopeKey(data[owns]);
+      for (const field of FIELDS) {
+        const scope = scopeKey(data[field]);
         if (scope === "") continue;
         const lead = side.unitByKey.get(key)?.lead;
         out.push({
-          owns,
+          field,
           scope,
           holder: key,
           owner: lead ? side.keyOfHandle.get(lead) : undefined,
@@ -626,9 +629,9 @@ function routingChanges(
       // Only a seat the engine keeps at the root owns a scope; a member of a
       // unit declares where it writes, and its unit's lead owns the scope.
       if (homeOf(side, key) !== COMPANY_KEY) continue;
-      for (const owns of FIELDS) {
-        const scope = scopeKey(data[owns]);
-        if (scope !== "") out.push({ owns, scope, holder: key, owner: key });
+      for (const field of FIELDS) {
+        const scope = scopeKey(data[field]);
+        if (scope !== "") out.push({ field, scope, holder: key, owner: key });
       }
     }
     return out;
@@ -636,16 +639,16 @@ function routingChanges(
 
   const before = declarations(base, baseUnits, baseSeats);
   const after = declarations(next, nextUnits, nextSeats);
-  const id = (d: Declaration) => `${d.owns}\u0000${d.scope}\u0000${d.holder}`;
+  const id = (d: Declaration) => `${d.field}\u0000${d.scope}\u0000${d.holder}`;
   const shared = (list: Declaration[]) => {
     const owners = new Map<string, Set<string>>();
     for (const d of list) {
-      const k = `${d.owns}\u0000${d.scope}`;
+      const k = `${d.field}\u0000${d.scope}`;
       const set = owners.get(k) ?? new Set<string>();
       set.add(d.owner ?? "");
       owners.set(k, set);
     }
-    return (d: Declaration) => (owners.get(`${d.owns}\u0000${d.scope}`)?.size ?? 0) > 1;
+    return (d: Declaration) => (owners.get(`${d.field}\u0000${d.scope}`)?.size ?? 0) > 1;
   };
   const sharedBefore = shared(before);
   const sharedAfter = shared(after);
@@ -659,7 +662,7 @@ function routingChanges(
     if (b && a && b.owner === a.owner) continue;
     const any = (a ?? b)!;
     out.push({
-      owns: any.owns,
+      field: any.field,
       scope: any.scope,
       holder: a ? ref(next, a.holder) : ref(base, b!.holder),
       before: b?.owner === undefined ? null : ref(base, b.owner),

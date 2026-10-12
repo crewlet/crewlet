@@ -11,8 +11,10 @@
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
 // read, the version a record is stamped at — the lowest that reads what it
-// carries, because an older build decides by it — the record that must name
-// the node that wrote it and the generation it was decided in,
+// carries, because an older build decides by it, and for a record that
+// installs a gate exactly what its own changed apply needs, because an older
+// build HALTS at a gate it cannot read rather than retaining it — the record
+// that must name the node that wrote it and the generation it was decided in,
 // the evictions a domain that claims identity must be able to list — because
 // the trim counts nodes per log, and a log whose evictions nothing reads
 // counts an evicted node for ever — and the node gate that is the domain's
@@ -73,6 +75,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // Candidate is a domain under test, with the two things a suite needs that a
@@ -86,7 +89,7 @@ type Candidate struct {
 
 	// Migrate creates this domain's own tables in a fresh replicated
 	// estate. The framework's three are already there.
-	Migrate func(ctx context.Context, db *store.DB) error
+	Migrate func(ctx context.Context, db store.ReplicatedHandle) error
 
 	// Encode builds a valid record for an object of this domain. The
 	// suite varies the version to reach the deferral contract, so a
@@ -114,22 +117,27 @@ type Candidate struct {
 	// used wherever one is needed.
 	Kinds []string
 
-	// Rows builds the domain's own read seam over an estate — the one its
-	// production publisher decides through.
-	Rows func(db *store.DB) (statelog.Rows, error)
+	// Rows builds the domain's own read seam over an estate, on the log spec
+	// names — the one its production publisher decides through.
+	Rows func(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error)
 
 	// Write performs at least one write through the domain's OWN
 	// production write path — the writer every caller reaches, not a
 	// fixture — over the publisher the suite hands it, which decides from
 	// db. It is how [Stamped] reaches the one builder that can forget the
 	// framework's stamp.
-	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
+	Write func(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error
 
 	// EncodeGate builds the record that evicts nodeID from this domain's log
 	// — or, with readmit, takes it back — as the domain's own writer
 	// publishes it. Required of a domain that claims identity, whose log the
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
+}
+
+// spec is the domain's own stream, which every case runs the candidate on.
+func (c Candidate) spec() statelog.StreamSpec {
+	return c.Domain.Stream()
 }
 
 // Factory builds a fresh candidate for one case.
@@ -148,17 +156,14 @@ func Run(t *testing.T, new Factory) {
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 }
 
-// openEstate brings up a replicated estate with the framework's tables and the
-// candidate's own.
-func openEstate(t *testing.T, c Candidate) *store.DB {
+// openEstate brings up a replicated estate with the framework's tables and
+// the candidate's own, and answers the handle the runtime would hand the
+// candidate's applier and readers.
+func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := node.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -184,10 +189,10 @@ func openEstate(t *testing.T, c Candidate) *store.DB {
 //
 // Rows are rendered as text and ordered by every column, so the comparison
 // needs no per-domain key and no knowledge of what any column means.
-func tableContents(t *testing.T, db *store.DB, tables map[string]statelog.TableClass) map[string]string {
+func tableContents(t *testing.T, db store.ReplicatedHandle, tables map[string]statelog.TableClass) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		for name := range tables {
 			rendered, err := renderTable(t.Context(), tx, name)
 			if err != nil {
@@ -271,7 +276,7 @@ func runTables(t *testing.T, new Factory) {
 	t.Helper()
 	c := new(t)
 	db := openEstate(t, c)
-	if err := statelog.CheckTables(t.Context(), db, c.Domain); err != nil {
+	if err := statelog.CheckTables(t.Context(), db, c.Domain, c.spec()); err != nil {
 		t.Fatal(err)
 	}
 }

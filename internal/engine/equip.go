@@ -45,11 +45,17 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// one produced a revision and changed nothing an operator could observe.
 	refinement := c.Config.Learning.SkillRefinement
 	deps := builtin.Deps{
-		A2A:               e.a2aFor(c),
+		A2A: e.a2aFor(c),
+		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts — what the
+		// notification routing that mentions the same people reads — and
+		// never the process environment, which an engine handed an
+		// environment of its own does not read anywhere else.
+		Env:               e.LookupSecret,
 		Sandbox:           e.sandboxLauncher(c),
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
+		Compact:           e.compactorFor(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
 		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
 		SkillBodyMax:      refinement.MaxBodyChars,
@@ -68,7 +74,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 			deps.Refinable = skills
 		}
 		deps.Episodes = learning.NewEpisodes(db)
-		deps.Diary = learning.NewDiary(db)
+		// A WRITER, so it embeds each note as it is written — read at call
+		// time, like every other embed seam (see [Engine.embedText]).
+		deps.Diary = learning.NewDiary(db, learning.WithEmbed(e.embedText))
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
 	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered

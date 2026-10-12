@@ -319,7 +319,7 @@ type identityWithoutProbe struct{ unregisteredDomain }
 
 func (identityWithoutProbe) Name() string         { return "probeless" }
 func (identityWithoutProbe) ClaimsIdentity() bool { return true }
-func (identityWithoutProbe) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (identityWithoutProbe) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return tracker.Domain{}.Evictions(ctx, db)
 }
 
@@ -465,7 +465,7 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 	for _, entry := range register() {
 		name := entry.Domain.Name()
 		runner := seamsRunner(t, s, entry)
-		seams, err := entry.NewSeams(s, nil, runner)
+		seams, err := entry.NewSeams(s, seamsSpec(entry), nil, runner)
 		if err != nil {
 			t.Errorf("%s's write authority could not be built over a migrated "+
 				"store: %v", name, err)
@@ -494,7 +494,7 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 				"readiness never asks whether this node was evicted and its "+
 				"reads go on serving rows the fleet has abandoned", name)
 		}
-		if _, _, err := s.publisherFrom(entry, noLog, nil, runner,
+		if _, _, err := s.publisherFrom(entry, seamsSpec(entry), noLog, nil, runner,
 			seamsReserve(t, entry)); err != nil {
 			t.Errorf("%s's write authority is refused at boot: %v", name, err)
 		}
@@ -525,15 +525,15 @@ func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	} {
 		short := entry
 		build := entry.NewSeams
-		short.NewSeams = func(s *stateLog, appendTo *jetstream.DomainLog,
-			runner *statelog.Runner) (writeSeams, error) {
+		short.NewSeams = func(s *stateLog, spec statelog.StreamSpec,
+			appendTo *jetstream.DomainLog, runner *statelog.Runner) (writeSeams, error) {
 
-			seams, err := build(s, appendTo, runner)
+			seams, err := build(s, spec, appendTo, runner)
 			c.drop(&seams)
 			return seams, err
 		}
-		_, _, err := s.publisherFrom(short, noLog, nil, seamsRunner(t, s, short),
-			seamsReserve(t, short))
+		_, _, err := s.publisherFrom(short, seamsSpec(short), noLog, nil,
+			seamsRunner(t, s, short), seamsReserve(t, short))
 		if err == nil || !strings.Contains(err.Error(), c.names) {
 			t.Errorf("an entry whose seams have no %s starts as %v, want a refusal "+
 				"naming it (%q)", c.field, err, c.names)
@@ -541,25 +541,34 @@ func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	}
 	// THE CONTROL: the same entry, unmodified, starts — so the refusals
 	// above are about the dropped seam and not about the rig.
-	if _, _, err := s.publisherFrom(entry, noLog, nil, seamsRunner(t, s, entry),
-		seamsReserve(t, entry)); err != nil {
+	if _, _, err := s.publisherFrom(entry, seamsSpec(entry), noLog, nil,
+		seamsRunner(t, s, entry), seamsReserve(t, entry)); err != nil {
 		t.Fatalf("the unmodified tracker entry is refused on this rig: %v", err)
 	}
 }
 
 // seamsStateLog is a state log over a migrated store, holding what a domain's
-// constructors read: this node's id, the store and a keyring to sign under.
+// constructors read: this node's id, the store — its replicated estate open,
+// as [holdEstate] opens it on a data node — and a keyring to sign under.
 func seamsStateLog(t *testing.T) *stateLog {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: len(register())})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+		store.Options{})
 	if err != nil {
 		t.Fatalf("open a store: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.OpenReplicated(t.Context(), estateLogs()); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
 	return &stateLog{nodeID: "boot-check", db: db,
 		ring: statelog.OneKey("k1", "boot-check-material")}
 }
+
+// seamsSpec is the stream spec [stateLog.start] hands a domain's seams: the
+// domain's own declaration, its ceiling being the one field a boot fills in
+// from Tier A and the broker, which nothing these cases build reads.
+func seamsSpec(entry registration) statelog.StreamSpec { return entry.Domain.Stream() }
 
 // seamsRunner is the runner [stateLog.start] builds beside a domain's write
 // authority, over the same estate, with a consumer that delivers nothing.
@@ -574,9 +583,9 @@ func seamsRunner(t *testing.T, s *stateLog, entry registration) *statelog.Runner
 		t.Fatalf("build %s's verifier: %v", entry.Domain.Name(), err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: entry.Domain, Applier: applier, Fetch: nothingToFetch{},
-		Log: nothingOnLog{}, Node: s.db,
-		DB: replicatedEstate{node: s.db}, Verifier: verifier,
+		Domain: entry.Domain, Spec: seamsSpec(entry), Applier: applier,
+		Fetch: nothingToFetch{}, Log: nothingOnLog{}, Node: s.db,
+		DB: s.estate(), Verifier: verifier,
 		Checkpoint: statelog.Position{Generation: 1},
 	})
 	if err != nil {
@@ -591,7 +600,7 @@ func seamsRunner(t *testing.T, s *stateLog, entry registration) *statelog.Runner
 // never make.
 func seamsReserve(t *testing.T, entry registration) *statelog.Reserve {
 	t.Helper()
-	reserve, err := reserveFor(entry.Domain, nil)
+	reserve, err := reserveFor(entry.Domain, seamsSpec(entry), nil)
 	if err != nil {
 		t.Fatalf("build %s's gate reserve: %v", entry.Domain.Name(), err)
 	}
@@ -725,10 +734,12 @@ func TestALedgerHorizonIsDeclaredExactlyWhereALedgerIsKept(t *testing.T) {
 // THE SWEEP IS HANDED A LEDGER ONLY WHERE ONE IS KEPT: the opsLedgers map and
 // the register agree, so no node sweeps a table its domain never created.
 func TestOnlyALedgeredDomainIsSwept(t *testing.T) {
-	s := &stateLog{domains: map[string]*runningDomain{}}
+	var runs []*runningLog
 	for _, entry := range register() {
-		s.domains[entry.Domain.Name()] = &runningDomain{runner: &statelog.Runner{}}
+		runs = append(runs, &runningLog{domain: entry.Domain,
+			spec: entry.Domain.Stream(), runner: &statelog.Runner{}})
 	}
+	s := &stateLog{logs: newLogSet(runs)}
 	swept := s.opsLedgers()
 	for _, entry := range register() {
 		_, found := swept[entry.Domain.Name()]

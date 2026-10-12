@@ -237,7 +237,7 @@ func TestAMoveLeavesASessionAnEarlierMoveEnded(t *testing.T) {
 	}
 	stale := rig.openSession(owner, expires)
 	revoke("op-first", "changed their own password")
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE iam_sessions
 			SET ended_at = 0, ended_reason = '' WHERE lineage = ?`, stale)
 		return err

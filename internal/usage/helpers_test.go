@@ -14,17 +14,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // openStore is a fresh node with both estates migrated.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -163,6 +160,7 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_tokens":        "day, node, agent_id, phase, worker, model, provider_key",
 		"usage_reads":         "day, node, agent_id, backend, page_id, via",
 		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
+		"usage_person_tokens": "day, node, person, phase, worker, model, provider_key",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {

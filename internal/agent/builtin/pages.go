@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -100,11 +101,12 @@ type PageDeps struct {
 	// the key is the turn's ([pageOpKey]), whatever the actor carries.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
-	// Await blocks until this node's projection has applied a revision.
-	// See [WorkDeps.Await]: same seam, same reason, and it matters more
-	// here — a page's SavePage takes the version it read, so a turn that
-	// writes and then re-reads through a projection that has not caught
-	// up gets a stale version and its next save is refused.
+	// Await is handed the position every page write landed at, so the next
+	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
+	// two places the wait happens — and it matters more here: a page's
+	// SavePage takes the version it read, so a turn that writes and then
+	// re-reads from a copy that has not caught up gets a stale version and
+	// its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
@@ -159,8 +161,8 @@ func pageRepeat(turn *turnctx.Turn, key, tool string) string {
 	return ""
 }
 
-// settle waits for a write to reach this node's own applied rows. Best effort;
-// see [WorkDeps.settle].
+// settle hands a page write's position to [PageDeps.Await], so the next read
+// sees it. Best effort; see [WorkDeps.settle].
 //
 // IT TAKES A POSITION rather than a revision, which is what the log answers
 // with and what a bucket revision could never be: a place on a stream that
@@ -172,9 +174,9 @@ func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "page_write_not_applied_yet",
 			"at", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"copy has not caught up, so a read in this same turn may show "+
-				"the previous version")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not caught up, so a read in this same turn "+
+				"may show the previous version")
 	}
 }
 
@@ -439,8 +441,10 @@ func (t *writePage) Parameters() map[string]any {
 				"description": "The container key. Defaults to your team's.",
 			},
 			"parent": map[string]any{
-				"type":        "string",
-				"description": "The id of the page this belongs under.",
+				"type": "string",
+				"description": "The id of the page this belongs under — a " +
+					"page in the same container that is not in the trash. " +
+					"Leave it out to file the page at the container's top.",
 			},
 			"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"message": map[string]any{
@@ -554,8 +558,13 @@ func (t *savePage) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Replaces the page. " + pageLinkHelp,
 			},
-			"title":  map[string]any{"type": "string", "description": "Renames it."},
-			"parent": map[string]any{"type": "string", "description": "Moves it under this page."},
+			"title": map[string]any{"type": "string", "description": "Renames it."},
+			"parent": map[string]any{
+				"type": "string",
+				"description": "Moves it under this page: the id of a page in " +
+					"the same container, not in the trash and not beneath " +
+					"this one. An empty string moves it to the container's top.",
+			},
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Replaces the whole label set.",
@@ -680,8 +689,14 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			// what a caller has to act on — so the cause is the rename's
 			// own, and the sentence says the edit is in.
 			refusal := pageWriteFailure(ctx, SavePageTool, err)
-			return tools.Result{Output: fmt.Sprintf("The edit was saved and the "+
-				"rename to %q was not: %s", clip(want), refusal.Output),
+			said := "The edit was saved and the rename to %q was not: %s"
+			if tools.UnknownOf(refusal) {
+				// NOT "WAS NOT": a rename nobody answered for
+				// may have landed.
+				said = "The edit was saved; whether the rename to %q " +
+					"landed is not known. %s"
+			}
+			return tools.Result{Output: fmt.Sprintf(said, clip(want), refusal.Output),
 				Failed: true, Cause: refusal.Cause}, nil
 		}
 		if renamed.Outcome.Outcome == statelog.OutcomeUnknown {
@@ -928,8 +943,22 @@ func pageUnknownText(name string, result statelog.Result, next string) string {
 // switch is a log that refused the append, which is a CONDITION
 // ([tools.RefusalUnavailable]), or a read or an encode that broke, which is a
 // FAULT ([tools.RefusalInternalError], its error in the log — [faulted]).
+//
+// AND ONE ERROR IS NEITHER: a write the estate's router sent to a data node
+// that never answered ([estate.ErrOutcomeUnknown]) — a page write naming no
+// operation of its own, which the router may not send to a second node, since
+// a second would be a second write. The node may have run it before it went
+// quiet, so it is an UNKNOWN outcome ([UnknownCause]), never "NOT made" and
+// never a fault: it was the latter, which told an operator's assistant that
+// the node had broken and to say the write could not be made.
 func pageWriteFailure(ctx context.Context, name string, err error) tools.Result {
 	switch {
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		return tools.Result{Output: fmt.Sprintf("%s: %s. It may be on the page "+
+			"and it may not — do not report it as done, and do not report it as "+
+			"failed. Read the page with get_page before writing it again: if this "+
+			"write landed, writing it again makes it twice.", name, Unanswered),
+			Failed: true, Cause: UnknownCause("", err)}
 	case errors.Is(err, pages.ErrInvalid):
 		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:
 		// a person's surface prints this class as it stands.

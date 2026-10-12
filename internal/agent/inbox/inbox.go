@@ -43,14 +43,25 @@ const (
 	// holds for minutes would spend it on a perfectly healthy event.
 	ActionDefer
 
-	// ActionPark — requeue the events, then ack. For a wait that outlasts
-	// any broker ack window.
-	ActionPark
-
 	// ActionPauseAndPark — pause the topic FIRST so the requeued copies
-	// buffer on the queue rather than looping straight back, then park.
+	// buffer on the queue rather than looping straight back, then requeue
+	// the events and ack. For a wait that outlasts any broker ack window.
 	// The hold it takes is named by [Screening.Hold].
 	ActionPauseAndPark
+
+	// ActionHoldAndDefer — make sure the hold named by [Screening.Hold] is
+	// on the topic, then defer. For a delivery that reached a seat whose
+	// inbox is SUPPOSED to be held already, by the subsystem that owns the
+	// hold: it raced the hold, or the hold was refused, and asking for it
+	// again is the retry. The deferral keeps the delivery at the head, and
+	// the hold — not the deferral's quiesce, which the seat host lifts on its
+	// next renew — is what keeps it there until the condition clears.
+	//
+	// NOT A PARK, which is what this used to be for a seat a sandbox run
+	// holds: a park REPUBLISHES onto the inbox the delivery came from, and
+	// with nothing stopping the consumer the copy was the next thing it
+	// fetched — a loop at broker speed for the length of the run.
+	ActionHoldAndDefer
 )
 
 // Hold names a pause hold on a seat's inbox — the reason
@@ -74,6 +85,14 @@ const (
 	// HoldSeatPaused is taken while a person has the seat paused, and lifted
 	// when they resume it.
 	HoldSeatPaused Hold = "seat_paused"
+
+	// HoldSandbox is taken while one of the seat's detached coding runs
+	// holds it, or a reply recorded as a parked run's answer is still owed
+	// the resume it drives — and lifted when neither is true. The sandbox
+	// coordinator takes and lifts it, at its own transitions (see
+	// sandbox.SeatHold); the screening asks for it only for a delivery that
+	// raced it ([ActionHoldAndDefer]).
+	HoldSandbox Hold = "sandbox"
 )
 
 func (a Action) String() string {
@@ -84,10 +103,10 @@ func (a Action) String() string {
 		return "drop"
 	case ActionDefer:
 		return "defer"
-	case ActionPark:
-		return "park"
 	case ActionPauseAndPark:
 		return "pause_and_park"
+	case ActionHoldAndDefer:
+		return "hold_and_defer"
 	default:
 		return "unknown"
 	}
@@ -155,13 +174,12 @@ type Screening struct {
 	Action Action
 	Reason string
 
-	// Hold is the pause hold an [ActionPauseAndPark] takes, and empty for
-	// every other action.
+	// Hold is the pause hold an [ActionPauseAndPark] takes or an
+	// [ActionHoldAndDefer] makes sure of, and empty for every other action.
 	Hold Hold
 
 	// Events are what survived. Meaningful for ActionProceed (the list to
-	// read the ledger about) and for the park actions (the list to
-	// requeue).
+	// read the ledger about) and for the park (the list to requeue).
 	Events []*events.Event
 
 	// OfferAsSandboxAnswer says this delivery must be offered to the
@@ -173,11 +191,15 @@ type Screening struct {
 	// than an action of its own. Nothing here can tell whether the delivery
 	// IS the answer — that is a store read, and this package reaches no
 	// store — so what a screening states is the pair: offer it, and if the
-	// offer does not claim it, do this. Both actions that CONSUME a delivery
-	// carry it: the park a held seat makes, and the ordinary proceed a free
-	// seat makes while one of its runs waits for a reply. A defer does not,
-	// and does not need to: it consumes nothing and stops the consumer, so
-	// the delivery is still there to be offered when the condition clears.
+	// offer does not claim it, do this. Only the ordinary proceed a free
+	// seat makes while one of its runs waits for a reply carries it. A
+	// defer does not, and does not need to: it consumes nothing and stops
+	// the consumer, so the delivery is still there to be offered when the
+	// condition clears — and a seat a run HOLDS is one such condition: its
+	// inbox is held, a person's answer to another of its runs waits there
+	// with the rest of its mail, and it is offered the moment the run stops
+	// holding the seat (see sandbox.SeatHold for why the held seat offers
+	// nothing).
 	//
 	// Named rather than inferred from Reason, which is prose for a log: a
 	// caller matching on the sentence would break silently the first time
@@ -207,10 +229,10 @@ type Screening struct {
 }
 
 // Result converts a screening to the queue's own disposition, for the actions
-// that map onto one directly. The park actions do not: they ack only after
-// their requeue succeeds, which is the caller's to sequence.
+// that map onto one directly. The park does not: it acks only after its
+// requeue succeeds, which is the caller's to sequence.
 func (s Screening) Result() queue.Result {
-	if s.Action == ActionDefer {
+	if s.Action == ActionDefer || s.Action == ActionHoldAndDefer {
 		return queue.Defer(s.Reason)
 	}
 	return queue.Ack()
@@ -250,11 +272,16 @@ func (s Screening) Result() queue.Result {
 //     requeuing without the pause loops them at whatever rate the broker will
 //     serve. The pause is the caller's to release, when a model arrives.
 //
-//  5. SEAT HELD BY A SANDBOX RUN. Park. The job outlasts any ack window.
+//  5. SEAT HELD BY A SANDBOX RUN. Hold and defer. The coordinator holds the
+//     seat's inbox for as long as a run holds the seat, so what reaches here
+//     raced that hold or found it refused: the hold is asked for again and
+//     the delivery waits at the head of the inbox, held, until the run stops
+//     holding the seat. A park would republish it onto the very inbox it
+//     came from, which the consumer — never stopped — fetched again at once.
 //
 //  6. CONFIG POSTURE. Defer. This sits AFTER the sandbox branch deliberately:
-//     a seat mid-sandbox is already parked there, so a clarification answer
-//     reaching a shedding node behaves exactly as it does on a healthy one.
+//     a seat mid-sandbox is already held there, so its mail reaching a
+//     shedding node behaves exactly as it does on a healthy one.
 //     Requeue would be wrong twice over — a shed releases this node's seats and
 //     a release is fenced, so republishing reorders the conversation for the
 //     successor; and the copy lands back on a topic this node is still attached
@@ -305,13 +332,13 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
 	case c.SeatHeldBySandbox:
-		// UNCONDITIONALLY OFFERED, without consulting the second
-		// condition: a seat can hold one run while another of its runs
-		// waits for a person, and this is the park that would otherwise
-		// requeue the reply behind the question it answers.
+		// NOT OFFERED as an answer, even when another of the seat's runs
+		// waits for a person: the held seat receives nothing, and that
+		// answer waits on the inbox with the rest of its mail — offered
+		// first when the run stops holding the seat. See sandbox.SeatHold.
 		return Screening{
-			Action: ActionPark, Reason: "a detached sandbox run holds the seat",
-			OfferAsSandboxAnswer: true, Events: evs,
+			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
+			Reason: "a detached sandbox run holds the seat",
 		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}

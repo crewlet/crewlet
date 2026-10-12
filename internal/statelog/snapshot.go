@@ -26,8 +26,8 @@ const (
 	// ONE, because the fleet is the redundancy: a snapshot is a recovery
 	// artefact for a peer, and a second copy on the same disk protects
 	// against nothing the first does not. What DOES protect against losing
-	// a donor is that every node takes its own — which is why the trim's
-	// snapshot term is the k-th highest rather than the newest.
+	// a donor is that every data node takes its own — which is why the
+	// trim's snapshot term is the k-th highest rather than the newest.
 	SnapshotsKept = 1
 
 	// SnapshotLagSlack is how far behind the log a node may be and still
@@ -41,11 +41,14 @@ const (
 	// TWO. The minimum over the counted set blocks for ever on any node
 	// that has not snapshotted yet; the maximum makes one donor's disk the
 	// whole fleet's recovery plan. Two means losing any single donor still
-	// leaves a usable artefact.
+	// leaves a usable artefact. Over the log's own counted set, so a fleet
+	// that counts one node is satisfied by construction — its recovery
+	// artefact is a backup.
 	SnapshotDonorsRequired = 2
 
 	// SnapshotFreeSpaceFactor is how much free space the snapshot volume
-	// must hold, as a multiple of the store's own size.
+	// must hold, as a multiple of the size of the replicated estate's file,
+	// which is what a take copies.
 	//
 	// The default puts a full copy on the SAME VOLUME as the live
 	// database, so a snapshot write that filled the disk would become a
@@ -89,7 +92,8 @@ const (
 	// drained node has since fallen behind is `lagging` instead.
 	SkipUnhydrated SkipReason = "unhydrated"
 
-	// SkipSoleNode — there is nobody to donate to. The recovery artefact
+	// SkipSoleNode — there is nobody to donate to: the fleet counts no
+	// node on the estate's logs but this one. The recovery artefact
 	// for a single node is a backup, which the trim's backup term already
 	// gates, and saying so here stops a reader concluding the trim's
 	// snapshot term deadlocks a solo fleet.
@@ -114,9 +118,9 @@ const (
 	// interval, and still names every domain at the generation this node
 	// stands at. One from a generation a domain has since left is not a
 	// recent snapshot of anything a joiner can adopt, whatever its age —
-	// nor is one short of a domain this node runs, taken before a role
-	// added one or by the build before a domain was added: every joiner
-	// that runs it refuses it wholesale, so it suppresses nothing, and the
+	// nor is one short of a domain this node runs, taken by the build
+	// before a domain was added: every joiner that runs it refuses it
+	// wholesale, so it suppresses nothing, and the
 	// node logs `statelog_snapshot_recent_but_short` as it takes a
 	// complete one rather than resting on an artefact nobody can adopt.
 	SkipRecent SkipReason = "recent"
@@ -171,12 +175,9 @@ var SkipReasons = []SkipReason{
 // Valid reports whether a skip reason off the wire is one this build knows.
 func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
-// ManifestVersion is the artefact format this build writes.
-//
-// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
-// from the positions, in three places independently, and an artefact whose
-// manifest does not name its file is one this build cannot find — so it is
-// refused as a version it does not read rather than resolved to an empty path.
+// ManifestVersion is the artefact format this build writes and the only one it
+// reads: a manifest of any other version is nobody's artefact here. Fields are
+// added within a version, so a later build reads what this one took.
 const ManifestVersion = 2
 
 // DomainPosition is what a manifest says about one registered domain.
@@ -202,11 +203,16 @@ type DomainPosition struct {
 	// corrupt snapshot.
 	Seq uint64 `json:"seq"`
 
-	// RecordVersion is the donor's own highest decodable version. A donor
-	// running a NEWER build has applied records an older recipient cannot
-	// read and its checkpoint sits above them — so the recipient would
-	// arrive past records it can never defer or reprocess, and once those
+	// RecordVersion is the highest record version the artefact's rows were
+	// APPLIED from, as the copy's own checkpoint row records it ([FileCursor]).
+	// A recipient whose build reads less refuses: its rows would sit past a
+	// record it could never apply, defer or reprocess — and once those
 	// sequences are trimmed it never can.
+	//
+	// WHAT THE ROWS HOLD, never what the donor's build could read. A build
+	// that reads a new version publishes nothing at it until something needs
+	// it, so the build's version refused every upgraded donor for the whole of
+	// a rolling upgrade over records that did not exist.
 	RecordVersion int `json:"record_version"`
 
 	// Replay is the protocol the donor's build declares. A recipient whose
@@ -257,10 +263,18 @@ type Manifest struct {
 	Artifact string `json:"artifact"`
 }
 
-// Registered is one domain as the framework holds it, for the surfaces that
-// walk every domain rather than serving one.
+// Registered is one domain's log as the framework holds it, for the surfaces
+// that walk every log rather than serving one.
+//
+// Domain and Spec must agree ([Registered.Check]): a manifest names a position
+// by the domain's name and reads it out of the copy by the spec's stream, so a
+// registration whose two named different logs would stamp one log's
+// checkpoint under another's key.
 type Registered struct {
 	Domain Domain
+
+	// Spec is the domain's stream as this node runs it.
+	Spec StreamSpec
 
 	// Health is this node's readiness for that domain, which is what the
 	// snapshot gate reads: how far behind, whether it has ever drained,
@@ -275,18 +289,37 @@ type Registered struct {
 	// which is exactly what a reanchor under a running node did to it.
 }
 
+// Check refuses a registration whose domain and stream are not one log.
+func (r Registered) Check() error {
+	if r.Domain == nil {
+		return fmt.Errorf("statelog: a registered log has no domain")
+	}
+	return r.Spec.Instantiates(r.Domain)
+}
+
+// checkRegistered refuses a set of registrations any one of which fails
+// [Registered.Check].
+func checkRegistered[K comparable](regs map[K]Registered) error {
+	for _, r := range regs {
+		if err := r.Check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SnapshotDeps is everything the snapshot loop needs that it does not own.
 type SnapshotDeps struct {
-	// Domains are every domain this build registers. An artefact names
-	// ALL of them or a recipient refuses it, so a snapshot taken with one
-	// missing is one nobody can use.
+	// Domains are every log this build registers. An artefact names ALL of
+	// them or a recipient refuses it, so a snapshot taken with one missing
+	// is one nobody can use.
 	Domains []Registered
 
-	// DB is the node's store. The artefact is a copy of the REPLICATED
-	// estate alone — the node's own estate holds the audit log and the
-	// secret bootstrap, which is exactly what a peer must not inherit and
-	// what would otherwise dominate the transfer.
-	DB *store.DB
+	// File is the replicated estate's file, which the artefact copies
+	// alone. The node's own estate holds the audit log and the secret
+	// bootstrap, which is exactly what a peer must not inherit and what
+	// would otherwise dominate the transfer.
+	File store.ReplicatedHandle
 
 	// Dir is where this node keeps its snapshots.
 	Dir string
@@ -295,9 +328,18 @@ type SnapshotDeps struct {
 	NodeID        string
 	EngineVersion string
 
-	// Counted is how many nodes the fleet counts, which decides whether
-	// there is anybody to donate to at all.
-	Counted func(ctx context.Context) (int, error)
+	// Recipients is how many nodes OTHER THAN THIS ONE the fleet counts on
+	// the estate's logs — the live data nodes, and every node whose row
+	// names one of them — which decides whether there is anybody to donate
+	// to at all.
+	//
+	// OTHERS, NOT A HEAD COUNT, because this node need not be one of them.
+	// A machine an eviction barred, back with its files, keeps a copy the
+	// logs its eviction gates stop counting it on once the fence window
+	// has passed, and that copy may be the fleet's only one: judged as
+	// "fewer than two counted", one joiner beside it read as nobody to
+	// donate to, so the artefact the joiner needed was never taken.
+	Recipients func(ctx context.Context) (int, error)
 
 	// Interval is how stale the newest local snapshot may be.
 	Interval time.Duration
@@ -323,16 +365,19 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 		return nil, fmt.Errorf("statelog: a snapshot with no registered domain " +
 			"names no position, and a recipient refuses an artefact that does " +
 			"not name every domain its own build registers")
-	case d.DB == nil:
-		return nil, fmt.Errorf("statelog: the snapshot loop has no store")
+	case d.File.IsZero():
+		return nil, fmt.Errorf("statelog: the snapshot loop names no estate file to copy")
 	case d.Dir == "":
 		return nil, fmt.Errorf("statelog: the snapshot loop has nowhere to write")
 	case d.NodeID == "":
 		return nil, fmt.Errorf("statelog: a snapshot names no donor")
-	case d.Counted == nil:
+	case d.Recipients == nil:
 		return nil, fmt.Errorf("statelog: the snapshot loop cannot count the fleet")
 	case d.Interval <= 0:
 		return nil, fmt.Errorf("statelog: the snapshot loop has no interval")
+	}
+	if err := checkRegistered(maps.Collect(slices.All(d.Domains))); err != nil {
+		return nil, err
 	}
 	logger := loggerOr(d.Logger)
 	now := d.Now
@@ -376,10 +421,11 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		// A SKIP IS RETURNED, NOT LOGGED. The error is an [ErrSkipped]
 		// carrying the reason AND the detail, so the caller already has
 		// everything a line here could say — and it is the caller that
-		// knows what the skip MEANS: the loop retries every thirty
-		// seconds for as long as the reason holds, so a line written
-		// here is one per attempt, for ever, on a `sole_node` skip that
-		// is the steady state of a healthy single-node company.
+		// knows what the skip MEANS: the loop retries for as long as the
+		// reason holds — every thirty seconds once its retry has settled
+		// — so a line written here is one per attempt, for ever, on a
+		// `sole_node` skip that is the steady state of a healthy
+		// single-node company.
 		//
 		// Logging in both places is how that survived being fixed once:
 		// the loop learned to report a skip only when the reason
@@ -405,7 +451,11 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	}
 	discard := func() { _ = store.RemoveCopy(part) }
 
-	info, err := s.deps.DB.Replicated().Backup(ctx, part)
+	live, err := s.deps.File.DB()
+	if err != nil {
+		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
+	}
+	info, err := live.Backup(ctx, part)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
 	}
@@ -530,7 +580,7 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 	positions := make(map[string]DomainPosition, len(s.deps.Domains))
 	for _, reg := range s.deps.Domains {
 		h := reg.Health()
-		spec := reg.Domain.Stream()
+		spec := reg.Spec
 		// EVERY CHECKPOINT FIELD OUT OF THE FILE, the identity included.
 		//
 		// The generation and the sequence were read from the copy and the
@@ -542,12 +592,15 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 		// matched the file, its identity matched the recipient's live
 		// stream, and what it carried was a dead history.
 		at := cursors[spec.Name]
+		// WHAT THE ROWS WERE APPLIED FROM, as the file records it. A
+		// domain with no row at all has applied nothing, which is the
+		// zero the missing entry reads as.
 		pos := DomainPosition{
 			Stream:          spec.Name,
 			Generation:      at.Position.Generation,
 			StreamCreatedAt: at.StreamCreatedAt,
 			Seq:             at.Position.Seq,
-			RecordVersion:   reg.Domain.RecordVersion(),
+			RecordVersion:   at.AppliedVersion,
 			Replay:          spec.Replay,
 		}
 		// The stream's own bounds at the take are ADVISORY, for the
@@ -566,15 +619,15 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 
 // gate is the five preconditions, in the order that answers cheapest first.
 func (s *Snapshotter) gate(ctx context.Context) error {
-	counted, err := s.deps.Counted(ctx)
+	recipients, err := s.deps.Recipients(ctx)
 	if err != nil {
 		return fmt.Errorf("statelog: count the fleet: %w", err)
 	}
-	if counted < 2 {
-		return &ErrSkipped{Reason: SkipSoleNode, Detail: fmt.Sprintf(
-			"the fleet counts %d node(s), so there is nobody to donate to — a "+
-				"single node's recovery artefact is a backup, which the trim's "+
-				"own backup term gates", counted)}
+	if recipients < 1 {
+		return &ErrSkipped{Reason: SkipSoleNode, Detail: "the fleet counts no node " +
+			"on the estate's logs but this one, so there is nobody to donate to — a " +
+			"single node's recovery artefact is a backup, which the trim's own " +
+			"backup term gates"}
 	}
 
 	for _, reg := range s.deps.Domains {
@@ -750,7 +803,7 @@ func missingFrom(covers []string, running []string) []string {
 	return missing
 }
 
-// current reports whether a manifest names every registered domain at the
+// current reports whether a manifest names every registered log at the
 // generation this node's own checkpoint stands at — which is the only
 // generation a joiner asking this node would accept it at.
 func (s *Snapshotter) current(m Manifest) bool {
@@ -785,7 +838,8 @@ func (s *Snapshotter) rotate(ctx context.Context, keep string) {
 	}
 }
 
-// space is the snapshot volume's free bytes and the replicated estate's size.
+// space is the snapshot volume's free bytes and the size of the replicated
+// estate's file, which is what a take copies.
 func (s *Snapshotter) space() (free, size int64, err error) {
 	dir := s.deps.Dir
 	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
@@ -799,7 +853,11 @@ func (s *Snapshotter) space() (free, size int64, err error) {
 	if statfsErr := unix.Statfs(dir, &fs); statfsErr != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, statfsErr)
 	}
-	info, err := os.Stat(s.deps.DB.ReplicatedPath())
+	live, err := s.deps.File.DB()
+	if err != nil {
+		return 0, 0, fmt.Errorf("statelog: measure the replicated estate: %w", err)
+	}
+	info, err := os.Stat(live.Path())
 	if err != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the replicated estate: %w", err)
 	}

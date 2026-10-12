@@ -20,7 +20,7 @@ type inviteBody struct {
 
 	// Seat is the human seat redeeming the invitation binds the new person
 	// to, by its handle. REQUIRED: a person holds a human seat for as long
-	// as they are here (ADR-0026), and the invitation holds this one — as
+	// as they are here (ADR-0032), and the invitation holds this one — as
 	// it holds its address — from its issue until it is redeemed,
 	// cancelled or ages out, so it must be a seat nobody holds and no
 	// other open invitation holds.
@@ -47,7 +47,7 @@ type inviteBody struct {
 // `seat` names the human seat the invitee will hold, and redeeming the
 // invitation creates them bound to it in one record. It is REQUIRED — `400
 // seat_required` before anything is minted where it names none — because a
-// person holds a human seat for as long as they are here (ADR-0026). From its
+// person holds a human seat for as long as they are here (ADR-0032). From its
 // issue until it is redeemed, cancelled or ages out the invitation HOLDS that
 // seat as it holds its address, so nothing else is bound to it or invited onto
 // it meanwhile, and a company write cannot take it away. A seat that is not a

@@ -55,19 +55,39 @@ function region(): HTMLElement {
   return all[0]!;
 }
 
-/** Moves the router the way the navigator does: `pushState` fires no `hashchange`. */
-function go(hash: string): void {
-  history.pushState(null, "", hash);
-  act(() => {
-    window.dispatchEvent(new Event("crewlet:route"));
+/**
+ * Lets every render in flight finish. AWAITED, as every act here is: a screen
+ * reads its chunk through `use`, and a synchronous act stops flushing at the
+ * first render that used a promise, settled or not, so what a case asserts
+ * would be left unrendered.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
   });
 }
 
+/** Moves the router the way the navigator does: `pushState` fires no `hashchange`. */
+async function go(hash: string): Promise<void> {
+  history.pushState(null, "", hash);
+  await act(async () => {
+    window.dispatchEvent(new Event("crewlet:route"));
+  });
+  await settle();
+}
+
 /** Says `fullscreen` is the page's fullscreen element, as a browser does. */
-function fullscreen(element: Element | null): void {
+async function fullscreen(element: Element | null): Promise<void> {
   Object.defineProperty(document, "fullscreenElement", { configurable: true, value: element });
-  act(() => {
+  await act(async () => {
     document.dispatchEvent(new Event("fullscreenchange"));
+  });
+}
+
+/** Says `text` through the package's one module-level function. */
+async function say(text: string): Promise<void> {
+  await act(async () => {
+    announce(text);
   });
 }
 
@@ -91,25 +111,27 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-test("a control's announcement is said, in the one region the application mounts", () => {
+test("a control's announcement is said, in the one region the application mounts", async () => {
   mount();
-  act(() => announce("Added SRE"));
+  await settle();
+  await say("Added SRE");
   expect(region().textContent).toBe("Added SRE");
 });
 
 // BESIDE THE FRAME, NOT IN IT. The frame swaps the shell for the sign-in
 // screens; a region inside it would be torn down by a sign-in, and the package
 // forgets its sentence when its last region goes.
-test("the region is the same one on the frame's screens and on the sign-in screens", () => {
+test("the region is the same one on the frame's screens and on the sign-in screens", async () => {
   mount();
+  await settle();
   const framed = region();
-  go("#/login");
+  await go("#/login");
   // The sign-in screen is drawn, outside the frame.
-  expect(screen.getByLabelText("Password")).toBeDefined();
+  expect(await screen.findByLabelText("Password")).toBeDefined();
   expect(region()).toBe(framed);
-  act(() => announce("Removed SRE"));
+  await say("Removed SRE");
   expect(framed.textContent).toBe("Removed SRE");
-  go("#/");
+  await go("#/");
   expect(screen.queryByLabelText("Password")).toBeNull();
   expect(region()).toBe(framed);
 });
@@ -118,17 +140,18 @@ test("the region is the same one on the frame's screens and on the sign-in scree
 // builder carries its own layer host and live region inside its container.
 // Its editor is where these announcements come from, so the one region moves
 // in while the builder is fullscreen and back out when it leaves.
-test("the region follows the fullscreen element, and comes back when it leaves", () => {
+test("the region follows the fullscreen element, and comes back when it leaves", async () => {
   mount();
+  await settle();
   const builder = document.createElement("div");
   document.body.append(builder);
   try {
-    fullscreen(builder);
+    await fullscreen(builder);
     expect(builder.contains(region())).toBe(true);
-    act(() => announce("Moved fast to position 1 of 2"));
+    await say("Moved fast to position 1 of 2");
     expect(builder.textContent).toContain("Moved fast to position 1 of 2");
 
-    fullscreen(null);
+    await fullscreen(null);
     expect(builder.contains(region())).toBe(false);
   } finally {
     builder.remove();

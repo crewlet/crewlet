@@ -135,7 +135,7 @@ func TestTheFollowsBucketCarriesTheRetentionThatAgesItsTombstones(t *testing.T) 
 	ctx := context.Background()
 	f := openFleetForTest(t, embeddedNATS(t), "followttl")
 
-	status, err := statusOf(ctx, f.follows)
+	status, err := f.follows.Status(ctx)
 	if err != nil {
 		t.Fatalf("bucket status: %v", err)
 	}

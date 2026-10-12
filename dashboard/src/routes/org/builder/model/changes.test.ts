@@ -325,9 +325,11 @@ describe("reporting, leads, channels and routing", () => {
     const changes = changesOf(s, {
       units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
     });
+    // The keys a seat and a unit write themselves, `project` and `space` —
+    // never a block under `integrations:`, which neither has.
     expect(changes.routing).toEqual([
       {
-        owns: "project",
+        field: "project",
         scope: "OPS",
         holder: { key: "unit:platform", kind: "unit", name: "Platform" },
         before: { key: "seat:sre", kind: "seat", name: "SRE" },
@@ -335,7 +337,7 @@ describe("reporting, leads, channels and routing", () => {
         shared: false,
       },
       {
-        owns: "space",
+        field: "space",
         scope: "LEAD",
         holder: { key: "seat:ceo", kind: "seat", name: "CEO" },
         before: { key: "seat:ceo", kind: "seat", name: "CEO" },
@@ -358,7 +360,7 @@ describe("reporting, leads, channels and routing", () => {
     });
     expect(changes.routing).toEqual([
       expect.objectContaining({
-        owns: "project",
+        field: "project",
         scope: "OPS",
         holder: { key: "unit:sales", kind: "unit", name: "Sales" },
         before: { key: "seat:account-executive", kind: "seat", name: "Account Executive" },

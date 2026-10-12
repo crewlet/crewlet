@@ -18,15 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "seed.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "seed.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -246,7 +244,7 @@ func (h *slowFeed) List(ctx context.Context, _ store.ListQuery) (eventfan.Listin
 	return eventfan.Listing{}, eventfan.Coverage{}, ctx.Err()
 }
 
-func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery, _ time.Time) ([]tokens.Record, eventfan.Coverage, error) {
+func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error) {
 	h.mu.Lock()
 	h.spendAsked, h.spendCtxErr = true, ctx.Err()
 	h.mu.Unlock()
@@ -259,7 +257,7 @@ func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery, _ t
 	}}, answered("node-1"), nil
 }
 
-func (h *slowFeed) Turns(context.Context, store.TurnQuery, time.Time) (eventfan.TurnPage, eventfan.Coverage, error) {
+func (h *slowFeed) Turns(context.Context, store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
 	return eventfan.TurnPage{}, answered("node-1"), nil
 }
 
@@ -275,7 +273,7 @@ func (h halfBroken) List(_ context.Context, _ store.ListQuery) (eventfan.Listing
 	}}}, answered("node-1"), nil
 }
 
-func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery, _ time.Time) ([]tokens.Record, eventfan.Coverage, error) {
+func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error) {
 	if h.spend != nil {
 		return nil, eventfan.Coverage{}, h.spend
 	}
@@ -285,7 +283,7 @@ func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery, _ ti
 	}}, answered("node-1"), nil
 }
 
-func (h halfBroken) Turns(context.Context, store.TurnQuery, time.Time) (eventfan.TurnPage, eventfan.Coverage, error) {
+func (h halfBroken) Turns(context.Context, store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
 	return eventfan.TurnPage{}, answered("node-1"), nil
 }
 
@@ -354,18 +352,18 @@ func (r *recordingHistory) List(_ context.Context, q store.ListQuery) (eventfan.
 	return eventfan.Listing{}, answered("node-1"), nil
 }
 
-func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery, at time.Time) ([]tokens.Record, eventfan.Coverage, error) {
+func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.spend, r.spendAt = q, at
+	r.spend, r.spendAt = q, q.At
 	return nil, answered("node-1"), nil
 }
 
-func (r *recordingHistory) Turns(_ context.Context, q store.TurnQuery, at time.Time) (eventfan.TurnPage, eventfan.Coverage, error) {
+func (r *recordingHistory) Turns(_ context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.turns = append(r.turns, q)
-	r.turnsAt = append(r.turnsAt, at)
+	r.turnsAt = append(r.turnsAt, q.At)
 	return eventfan.TurnPage{}, answered("node-1"), nil
 }
 
@@ -473,14 +471,14 @@ func (partialFleet) List(context.Context, store.ListQuery) (eventfan.Listing, ev
 	return eventfan.Listing{}, answered("node-1", "node-2"), nil
 }
 
-func (partialFleet) PhaseTokens(context.Context, store.PhaseTokenQuery, time.Time) ([]tokens.Record, eventfan.Coverage, error) {
+func (partialFleet) PhaseTokens(context.Context, store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error) {
 	return nil, eventfan.Coverage{Nodes: []eventfan.NodeCoverage{
 		{ID: "node-1", Answered: true},
 		{ID: "node-2", Error: "no answer within the 2s fleet read budget"},
 	}}, nil
 }
 
-func (partialFleet) Turns(context.Context, store.TurnQuery, time.Time) (eventfan.TurnPage, eventfan.Coverage, error) {
+func (partialFleet) Turns(context.Context, store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
 	return eventfan.TurnPage{}, answered("node-1", "node-2"), nil
 }
 
@@ -534,10 +532,7 @@ func TestARestartedNodesSeedIsTheFleets(t *testing.T) {
 // fanNode is one node's own event store.
 func fanNode(t *testing.T, id string) *store.EventLog {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), id+".db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open %s: %v", id, err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db.Events()
 }
@@ -621,11 +616,11 @@ type failingSeat struct {
 	seat string
 }
 
-func (f failingSeat) Turns(ctx context.Context, q store.TurnQuery, at time.Time) (eventfan.TurnPage, eventfan.Coverage, error) {
+func (f failingSeat) Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
 	if q.AgentID == f.seat {
 		return eventfan.TurnPage{}, eventfan.Coverage{}, errors.New("peer went silent")
 	}
-	return f.FleetHistory.Turns(ctx, q, at)
+	return f.FleetHistory.Turns(ctx, q)
 }
 
 // A SEAT'S ROW NAMES THE SEAT, LIVE OR SEEDED, BY THE STORE'S OWN RULE.

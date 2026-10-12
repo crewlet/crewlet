@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,26 +18,45 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// cli runs a command as an operator does, holding the fixture credential.
+//
+// THE CREDENTIAL COMES FROM THE ENVIRONMENT, exactly as it does for an
+// operator: the CLI no longer helps itself to the first entry of the Tier A
+// `api.auth.tokens` list, because that list is what a node ACCEPTS and a write
+// authored by whichever entry came first landed under a name nobody chose.
+//
+// HANDED TO THE COMMAND ([runIn]) rather than set on the process, so the cases
+// run side by side: Go refuses t.Setenv to a parallel test, and a variable set
+// on the process by one case is the credential of every command running beside
+// it. A case about another credential hands its own ([cliIn]); a case whose
+// subject IS the process's environment calls [run], which reads it.
 func cli(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
-	// THE CREDENTIAL COMES FROM THE ENVIRONMENT, exactly as it does for
-	// an operator: the CLI no longer helps itself to the first entry of
-	// the Tier A `api.auth.tokens` list, because that list is what a node
-	// ACCEPTS and a write authored by whichever entry came first landed
-	// under a name nobody chose.
-	// SET ONLY WHERE A CASE HAS NOT, so a case about the environment
-	// beating something else still controls its own.
-	if os.Getenv(apiTokenEnv) == "" {
-		t.Setenv(apiTokenEnv, cliFixtureToken)
-	}
+	return cliIn(t, tokenEnviron(cliFixtureToken), args...)
+}
+
+// cliIn is [cli] in the environment a case hands it.
+func cliIn(t *testing.T, environ config.Source, args ...string) (string, string, error) {
+	t.Helper()
 	var out, errs bytes.Buffer
-	err := run(args, &out, &errs)
+	err := runIn(environ, args, &out, &errs)
 	return out.String(), errs.String(), err
 }
+
+// tokenEnviron is an invocation environment holding exactly one credential.
+func tokenEnviron(token string) config.Source {
+	return config.MapSource{apiTokenEnv: token}
+}
+
+// noEnviron is an invocation environment holding nothing — what a case hands a
+// command it expects to need no credential, so the case cannot pass on
+// whatever the machine running the suite happens to export.
+var noEnviron config.Source = config.MapSource(nil)
 
 // -check REPORTS AND APPLIES NOTHING. A command that migrated while
 // answering "what would you migrate" could never answer it.
 func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -57,7 +77,7 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 		if perr != nil {
 			t.Fatalf("Pending: %v", perr)
 		}
-		node := estate(t, schemas, store.EstateNode)
+		node := schemaOf(t, schemas, store.EstateNode)
 		if len(node.Applied) != 0 || len(node.Pending) == 0 {
 			t.Errorf("-check applied %d migration(s)", len(node.Applied))
 		}
@@ -68,6 +88,7 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 // reimplements — a second migrator is one that can disagree with the engine
 // about what "applied" means.
 func TestMigrateAppliesAndThenIsQuiet(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -180,6 +201,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 // with `durable: false`, and printing a table of zeros for it would draw a
 // company at 0% of its budget when the truth is that nobody looked.
 func TestBudgetsShowRefusesToPrintZerosForAnUnreadableCounter(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.durable = false
 	cfg := bootstrapForNode(t, node)
@@ -227,6 +249,7 @@ func rowsFor(out, scope string) [][]string {
 }
 
 func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
@@ -262,12 +285,12 @@ func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
 	}
 }
 
-// A REFUSING WINDOW SAYS SO. A refused charge increments nothing, so a seat
-// charged in rounds stalls short of its ceiling and its row reads as headroom:
-// 497 of 500 looks nearly healthy on a table with no other column. The state is
-// the engine's word and the refusal stamp is the gate's, and the table prints
-// both.
+// A REFUSING WINDOW SAYS SO. The state is the engine's word and the refusal
+// stamp is the gate's record of when it said no, and the table prints both:
+// USED against LIMIT is a figure, and a reader should not have to work out
+// from it which windows the park is holding a seat on.
 func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	node.budgets = []byte(budgetsAnswer)
 	cfg := bootstrapForNode(t, node)
@@ -276,7 +299,7 @@ func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("budgets show: %v", err)
 	}
-	if !strings.Contains(out, "REFUSING SINCE") || !strings.Contains(out, "STATE") {
+	if !strings.Contains(out, "LAST REFUSED") || !strings.Contains(out, "STATE") {
 		t.Fatalf("the table has no state or refusal column: %q", out)
 	}
 	for _, row := range rowsFor(out, "swe") {
@@ -295,11 +318,51 @@ func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	}
 }
 
+// A RAISED CEILING IS NOT A REFUSAL. A refusal stamp is cleared only by an
+// admitted charge or by the window turning over, so a window whose ceiling was
+// raised after it refused reads ok and still carries refused_at until the
+// seat's next charge. The column prints the stamp only under a window that is
+// still refusing, as every dashboard surface does: printed beside STATE ok it
+// says the window is refusing while its state says it is not, and sends an
+// operator to raise a ceiling that has already been raised.
+func TestBudgetsShowPrintsNoRefusalUnderARaisedCeiling(t *testing.T) {
+	t.Parallel()
+	node := newFakeNode(t)
+	node.budgets = []byte(`{"durable":true,"timezone":"Europe/Berlin","near_fraction":0.9,
+  "org":{"windows":[
+    {"period":"day","window":"2026-09-23","resets_at":"2026-09-23T22:00:00Z","used":102120,"state":"ok"}]},
+  "seats":[
+    {"handle":"eng","agent_id":"a1","windows":[
+      {"period":"day","window":"2026-09-23","resets_at":"2026-09-23T22:00:00Z","used":102120,"limit":500000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"ok"},
+      {"period":"week","window":"2026-W39","resets_at":"2026-09-27T22:00:00Z","used":102120,"limit":110000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"near"},
+      {"period":"month","window":"2026-09","resets_at":"2026-09-30T22:00:00Z","used":102120,"limit":100000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"refusing"}]}]}`)
+	cfg := bootstrapForNode(t, node)
+
+	out, _, err := cli(t, "budgets", "show", "-config", cfg)
+	if err != nil {
+		t.Fatalf("budgets show: %v", err)
+	}
+	want := map[string]string{"day": "-", "week": "-", "month": "2026-09-23T07:29:51Z"}
+	rows := rowsFor(out, "eng")
+	if len(rows) != 3 {
+		t.Fatalf("eng rows = %v, want its day, week and month", rows)
+	}
+	for _, row := range rows {
+		if got := row[len(row)-1]; got != want[row[1]] {
+			t.Errorf("eng %s (state %s) ends %q under LAST REFUSED, want %q", row[1], row[5], got, want[row[1]])
+		}
+	}
+}
+
 // THERE IS NO RESET. A budget's ceilings are per calendar window and each
 // window's allowance comes back when it turns over; room before then is made
 // by raising a ceiling. A `reset` that still parsed would be a verb with no
 // route behind it, and one that reached a node would find nothing to call.
 func TestBudgetsHasNoReset(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	_, _, err := cli(t, "budgets", "reset", "-config", cfg)
@@ -315,6 +378,7 @@ func TestBudgetsHasNoReset(t *testing.T) {
 // surface, and every route there is guarded, so a command that dropped the
 // token would be refused by every node.
 func TestABudgetCommandSendsTheExportedToken(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 
@@ -331,13 +395,17 @@ func TestABudgetCommandSendsTheExportedToken(t *testing.T) {
 // ACCEPTS, and a CLI that helped itself to one of them would author an
 // operator's write under a name they had not chosen; the token sent is the
 // one exported, however the file's list reads.
+//
+// NOT PARALLEL, and through [run] rather than [cli]: its subject is the
+// PROCESS's environment, which is what every run of the binary reads.
 func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	t.Setenv(apiTokenEnv, "exported")
 
-	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
-		t.Fatalf("budgets show: %v", err)
+	var out, errs bytes.Buffer
+	if err := run([]string{"budgets", "show", "-config", cfg}, &out, &errs); err != nil {
+		t.Fatalf("budgets show: %v\n%s", err, errs.String())
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
 		t.Errorf("Authorization = %q, want the exported token", got)
@@ -348,6 +416,7 @@ func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 // alone sends an operator to the network; the actual answer is usually that
 // the engine is not running, because that is where this state lives.
 func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: 127.0.0.1\n  port: 1\n"+
@@ -373,6 +442,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 // A CONFIG THAT SERVES NO HTTP has no node to ask, and saying so beats
 // dialling port 0 and reporting whatever the network layer makes of it.
 func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
 		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
@@ -393,6 +463,7 @@ func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 // which nothing can dial — so the default has to become the loopback one,
 // which is the interface a command running beside the config is on.
 func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
+	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		got, err := nodeBaseURL(&config.Bootstrap{
 			API: config.API{Host: host, Port: 8000},
@@ -407,6 +478,7 @@ func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
 }
 
 func TestBudgetsRejectsAnUnknownSubcommand(t *testing.T) {
+	t.Parallel()
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 	if _, _, err := cli(t, "budgets", "explode", "-config", cfg); err == nil {
@@ -425,6 +497,7 @@ var _ = time.Now
 // ./crewlet.yaml — migrating, for real and without -check, a database the
 // operator never named.
 func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	other := filepath.Join(dir, "other.yaml")
@@ -457,6 +530,7 @@ func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 // rather than silently resolved — they would have to agree and nothing
 // checks that they do. `run` already had this guard; migrate did not.
 func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -472,6 +546,7 @@ func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
 // The single positional still WORKS, so the cases above are the refusal
 // firing rather than positional support being removed.
 func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -483,15 +558,15 @@ func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	node := estate(t, schemas, store.EstateNode)
+	node := schemaOf(t, schemas, store.EstateNode)
 	if len(node.Applied) == 0 || len(node.Pending) != 0 {
 		t.Errorf("applied %d, pending %d: the named document was not the one migrated",
 			len(node.Applied), len(node.Pending))
 	}
 }
 
-// estate picks one estate's report out of Pending's answer.
-func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schema {
+// schemaOf picks one estate's report out of Pending's answer.
+func schemaOf(t *testing.T, schemas []store.Schema, want store.Estate) store.Schema {
 	t.Helper()
 	for _, s := range schemas {
 		if s.Estate == want {
@@ -500,4 +575,90 @@ func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schem
 	}
 	t.Fatalf("Pending reported no %s estate: %+v", want, schemas)
 	return store.Schema{}
+}
+
+// AN OFFLINE COMMAND AGAINST A SCRATCH STORE IS REFUSED, AND CREATES NOTHING.
+// The store is deleted at the node's next boot, so a revision, a secret or a
+// migration written into it would be lost without a word — and opening it at
+// all would create the replicated estate a node without `data` must not have.
+func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	body := fmt.Sprintf("node:\n  id: agent-1\n  roles: [seats]\nstore:\n  path: %s\n"+
+		"  scratch: true\nstream:\n  leaf:\n    urls: [\"nats-leaf://data-a.example.com:7422\"]\n"+
+		"coordination:\n  type: embedded-kv\n"+fixtureKeyring,
+		filepath.Join(dir, "index.db"))
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"migrate", "-config", cfg},
+		{"config", "show", "-config", cfg},
+		{"search", "eval", "-config", cfg},
+	} {
+		_, _, err := cli(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "store.scratch") {
+			t.Errorf("%v: err = %v, want a refusal naming store.scratch", args, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "config.yaml" {
+			t.Errorf("a refused command left %s behind", entry.Name())
+		}
+	}
+}
+
+// THE OFFLINE COMMANDS TOUCH THE REPLICATED ESTATE WHERE THE CONFIG PUTS IT, OR
+// NOT AT ALL.
+//
+// store.replicated_path moves that database to another volume, and a command
+// that derived its path from store.path alone reported and migrated a fresh
+// database it had just created beside the node's own — leaving the one the
+// engine opens exactly as far behind as it found it, and a stray estate on the
+// wrong disk. `config` and `secrets` read nothing a state log applies, so they
+// must not open it at all.
+func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "estate.db")
+	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n  replicated_path: %s\n"+
+		"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: %q\n",
+		filepath.Join(dir, "index.db"), elsewhere,
+		base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))) + fixtureStream(dir)
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cli(t, "migrate", "-config", cfg); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	schema, err := store.PendingEstate(context.Background(), store.EstateReplicated,
+		elsewhere, store.Options{})
+	if err != nil {
+		t.Fatalf("read the configured replicated estate: %v", err)
+	}
+	if len(schema.Applied) == 0 || len(schema.Pending) != 0 {
+		t.Errorf("the configured replicated estate has %d applied and %d pending: "+
+			"migrate did not migrate the file the engine opens",
+			len(schema.Applied), len(schema.Pending))
+	}
+
+	stray := filepath.Join(dir, "crewlet-replicated.db")
+	for _, args := range [][]string{
+		{"config", "show", "-config", cfg},
+		{"secrets", "list", "-config", cfg},
+	} {
+		_, _, _ = cli(t, args...)
+		if _, err := os.Stat(stray); err == nil {
+			t.Errorf("%v created %s beside store.path, which "+
+				"store.replicated_path moved elsewhere", args, stray)
+			_ = store.RemoveCopy(stray)
+		}
+	}
 }

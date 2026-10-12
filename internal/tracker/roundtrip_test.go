@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -31,7 +33,8 @@ import (
 type roundTrip struct {
 	t        *testing.T
 	broker   *js.Queue
-	db       *store.DB
+	node     *store.DB
+	db       store.ReplicatedHandle
 	log      *js.DomainLog
 	writer   *tracker.Writer
 	applier  *tracker.Applier
@@ -47,8 +50,13 @@ type roundTrip struct {
 
 	// claims is the coordination the writer takes a walking sequence's
 	// claim from, so a case can hold one as ANOTHER node — a walk that is
-	// running somewhere else — and see what the duty makes of it.
-	claims *memory.Backend
+	// running somewhere else — and see what the duty makes of it. The
+	// in-memory twin unless a case moves it ([roundTrip.claimOn]).
+	claims coord.Backend
+
+	// publisher is what the harness's writer appends through, kept so a
+	// writer rebuilt over other coordination writes exactly as this one did.
+	publisher *statelog.Publisher
 
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
@@ -117,37 +125,33 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	return newRoundTripOn(t, q, log, db, "node-a")
+	return newRoundTripOn(t, q, log, dbNode, db, "node-a")
 }
 
 // newRoundTripOn is the harness's node over a broker, a log and a store it is
 // handed: the one [newRoundTripWithoutProject] opens, or a second node's
 // joining the same log — a node that adopted a snapshot, say — under its own
 // id.
-func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
-	nodeID string) *roundTrip {
+func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB,
+	db store.ReplicatedHandle, nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := tracker.NewRows(db)
+	rows, err := tracker.NewRows(db.Reader(), tracker.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
-	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday,
+	r := &roundTrip{t: t, broker: q, node: node, db: db, log: log, at: wednesday,
 		claims: memory.New(), nodeID: nodeID}
 
-	fence := tracker.NewFence(db, nodeID)
+	fence := tracker.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an empty subject. The log's own
@@ -183,10 +187,15 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	r.reserve = reserve
+	// THE VERIFIER BEFORE THE PUBLISHER, which reads the log's own
+	// records — the one it lost an acknowledgement for, the one a
+	// retry finds — through it, as every reader off the log does.
+	r.verifier = testVerifier(t, tracker.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Signer: testSigner(t, tracker.Domain{}),
-		Gates:  tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: r.verifier},
+		Signer:  testSigner(t, tracker.Domain{}), Rows: rows, Fence: fence,
+		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
@@ -195,38 +204,59 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db, NodeID: nodeID,
-		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
-		// without one and a harness that could not run them left the
-		// cross-project move — and everything it reads, including the
-		// subtree walk the trash shares — with no test at all. In-memory
-		// is the whole of what a single-node harness needs: the claim is
-		// there to exclude a SECOND node.
-		Claims: r.claims,
-		Actor:  "ana", ActorKind: tracker.AuthorHuman,
-		Now: func() time.Time { return r.at },
-	})
-	if err != nil {
-		t.Fatalf("build the writer: %v", err)
-	}
+	r.publisher = publisher
+	// A REAL CLAIM BACKEND, because the WALKING sequences refuse without
+	// one and a harness that could not run them left the cross-project
+	// move — and everything it reads, including the subtree walk the trash
+	// shares — with no test at all. In-memory is the whole of what most
+	// cases need: the claim is there to exclude a SECOND node.
+	writer := r.writerClaiming(r.claims)
 	// THE READ AUTHORITY IS LOCAL HERE, because this harness drives the
 	// applier itself rather than running a framework loop: what it is
 	// about is one record's journey from writer to row, and the barrier
 	// belongs to the cases that have a quorum to commit against.
-	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db.Replicated(),
+	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db,
 		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(db, logReader)
+	reader, err := tracker.NewReader(db.Reader(), logReader)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
 	r.writer, r.applier = writer, tracker.NewApplier(nodeID, nil)
 	r.reader, r.waiter = reader, waiter
-	r.verifier = testVerifier(t, tracker.Domain{})
 	return r
+}
+
+// writerClaiming is this harness's writer — its publisher, its estate, its
+// recorder, its actor and its authored clock — taking its walk claims from
+// claims. The recorder is the publisher's, as a node's writer and publisher
+// share the process's one, so what the writer counts is readable beside what
+// the framework does.
+func (r *roundTrip) writerClaiming(claims coord.Backend) *tracker.Writer {
+	r.t.Helper()
+	writer, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
+		Claims: claims, Metrics: r.metrics,
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		r.t.Fatalf("build the writer: %v", err)
+	}
+	return writer
+}
+
+// claimOn moves this node's coordination to claims: the writer is rebuilt to
+// take its walk claims there, and a case holding a claim as another node
+// holds it there too. The twin is what most cases need; a case about what the
+// fleet's own store will HONOUR needs that store, because the twin keeps any
+// deadline a claim asks for.
+func (r *roundTrip) claimOn(claims coord.Backend) {
+	r.t.Helper()
+	r.claims = claims
+	r.writer = r.writerClaiming(claims)
 }
 
 // holdTheAppliersPin takes the pinned writer this harness's replicated estate
@@ -235,7 +265,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 // node, and a harness that left the pin free would pass it anyway.
 func holdTheAppliersPin(t *testing.T, r *roundTrip) {
 	t.Helper()
-	w, err := r.db.Replicated().Writer(t.Context())
+	w, err := r.db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("pin the applier's writer: %v", err)
 	}
@@ -353,7 +383,7 @@ func (r *roundTrip) apply(from, last uint64) {
 			Payload:  r.open(seq, payload),
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
 			if err != nil {
 				return err
@@ -400,8 +430,8 @@ func (r *roundTrip) apply(from, last uint64) {
 			// number the harness never wrote.
 			_, err = tx.ExecContext(r.t.Context(), `
 				INSERT INTO statelog_cursor
-					(stream, generation, seq, stream_created_at, updated_at)
-				VALUES (?,?,?,0,0)
+					(stream, generation, seq, stream_created_at, updated_at, applied_version)
+				VALUES (?,?,?,0,0, 0)
 				ON CONFLICT (stream) DO UPDATE SET
 					generation = excluded.generation, seq = excluded.seq`,
 				record.Position.Stream, int64(record.Position.Generation),
@@ -473,6 +503,9 @@ func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	}
 	return answer
 }
+
+// Voided voids nothing: this harness applies by hand and never re-anchors.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // testWaiter is this node's own applier as the publisher sees it.
 type testWaiter struct {
@@ -629,7 +662,7 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	rows, err := tracker.NewRows(r.db)
+	rows, err := tracker.NewRows(r.db.Reader(), tracker.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("NewRows: %v", err)
 	}
@@ -727,7 +760,7 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	// expectation matching its subject's last message rather than a
 	// record published on another.
 	var version, scoped int64
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT version FROM tracker_rank_orders WHERE project_key = 'ENG'`).
 			Scan(&version); err != nil {
@@ -747,6 +780,87 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 			"position %d — stamping its `version` instead would make its next "+
 			"write form an expectation the broker refuses for ever",
 			scoped, moved.Position.Packed())
+	}
+}
+
+// A RANK MOVE SURVIVES THE MOVED TASK'S NEXT EDIT.
+//
+// A task's own record is merged from its stored DOCUMENT, and the move wrote
+// the rank column alone: the document kept the rank the task was created at,
+// the next edit to the card wrote that back, and every drag was undone by
+// whatever next touched the card — a title fixed, a status moved. A detail
+// read, which decodes the document, showed the old rank all along.
+func TestARankMoveSurvivesTheMovedTasksNextEdit(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	created := oneTask(t, r, "t-2").Rank
+	moved, err := tracker.KeyBetween(oneTask(t, r, "t-1").Rank, created)
+	if err != nil || moved == created {
+		t.Fatalf("a key between the two cards: %q, %v", moved, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG",
+		[]tracker.Placement{{Task: "t-2", Rank: moved}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if held := oneTask(t, r, "t-2"); held.Rank != moved {
+		t.Errorf("the moved task's document says rank %q, want %q", held.Rank, moved)
+	}
+
+	title := "edited after the move"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-2", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-2'`); len(got) != 1 ||
+		got[0] != string(moved) {
+		t.Errorf("the moved task's rank is %v after its next edit, want %q — the "+
+			"edit put back the rank the move replaced", got, moved)
+	}
+	if held := oneTask(t, r, "t-2"); held.Rank != moved || held.Title != title {
+		t.Errorf("after the edit the document says rank %q and title %q, want %q "+
+			"and %q", held.Rank, held.Title, moved, title)
+	}
+}
+
+// A PLACEMENT FOR A TASK IN ANOTHER PROJECT IS NOT WRITTEN.
+//
+// A placement is a position in ONE project's order, and that project is the
+// container the record's scope names — so a task filed elsewhere has no
+// position in it, and writing one would be a write outside what the record
+// declared, which a record deferred on that task's project would not have held
+// back.
+func TestAPlacementForATaskInAnotherProjectIsNotWritten(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+	before := oneTask(t, r, "t-1").Rank
+	elsewhere, err := tracker.KeyBetween(before, "")
+	if err != nil || elsewhere == before {
+		t.Fatalf("a key other than the task's own: %q, %v", elsewhere, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "OPS",
+		[]tracker.Placement{{Task: "t-1", Rank: elsewhere}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-1'`); len(got) != 1 ||
+		got[0] != string(before) {
+		t.Errorf("a task in ENG took rank %v from OPS's order, want its own %q", got, before)
+	}
+	if held := oneTask(t, r, "t-1"); held.Rank != before {
+		t.Errorf("a task in ENG's document took rank %q from OPS's order", held.Rank)
 	}
 }
 

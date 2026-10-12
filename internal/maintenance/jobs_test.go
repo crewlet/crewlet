@@ -8,16 +8,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // openStore is a real node estate, because the two jobs below are wired to
 // store methods and a stub would certify the wiring against itself.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -59,10 +57,11 @@ func TestEveryDomainGetsBothNodeLocalSweeps(t *testing.T) {
 			t.Errorf("no %s job", name)
 		}
 	}
-	if byName["tracker_ops"].Horizon == 0 {
-		t.Error("the ops sweep carries no horizon, so the worker has no cutoff to derive")
+	if h := byName["tracker_ops"].Horizon; h == nil || h() != 30*24*time.Hour {
+		t.Error("the ops sweep carries no horizon of the domain's, so the worker has no " +
+			"cutoff to derive")
 	}
-	if byName["tracker_anchors"].Horizon != 0 {
+	if byName["tracker_anchors"].Horizon != nil {
 		t.Error("the anchor sweep carries a horizon, which would be a second opinion " +
 			"about what the log still holds — its cutoff is the published trim floor")
 	}
@@ -78,6 +77,15 @@ func TestEveryDomainGetsBothNodeLocalSweeps(t *testing.T) {
 		t.Errorf("the jobs called PurgeOps %d time(s) and PurgeAnchors %d, want one each",
 			ledger.ops, ledger.anchors)
 	}
+}
+
+// horizonOf is what a job's horizon answers now, and zero for a job that
+// carries none.
+func horizonOf(j maintenance.Job) time.Duration {
+	if j.Horizon == nil {
+		return 0
+	}
+	return j.Horizon()
 }
 
 type countingLedger struct {
@@ -122,13 +130,12 @@ func TestASubjectKindWithItsOwnHorizonIsItsOwnSweep(t *testing.T) {
 	if !held {
 		t.Fatalf("no iam_ops_session job among %v", jobs)
 	}
-	if kind.Horizon != time.Hour || kind.Scope != maintenance.NodeLocal {
-		t.Errorf("the session sweep runs at %v scope with a %s horizon, want "+
-			"node-local and the kind's own hour", kind.Scope, kind.Horizon)
+	if kind.Horizon == nil || kind.Horizon() != time.Hour || kind.Scope != maintenance.NodeLocal {
+		t.Errorf("the session sweep runs at %v scope with horizon %v, want "+
+			"node-local and the kind's own hour", kind.Scope, horizonOf(kind))
 	}
-	if byName["iam_ops"].Horizon != 30*24*time.Hour {
-		t.Errorf("the default ops sweep's horizon is %s, want the domain's",
-			byName["iam_ops"].Horizon)
+	if h := horizonOf(byName["iam_ops"]); h != 30*24*time.Hour {
+		t.Errorf("the default ops sweep's horizon is %s, want the domain's", h)
 	}
 	if _, err := kind.Run(t.Context(), time.Now(), time.Now()); err != nil {
 		t.Fatalf("run: %v", err)
@@ -210,8 +217,8 @@ func TestTheRevisionSweepRunsOnEveryNode(t *testing.T) {
 		t.Errorf("scope = %q, want %q — every node holds its own copy of "+
 			"every revision it has ever met", job.Scope, maintenance.NodeLocal)
 	}
-	if job.Horizon != maintenance.RevisionRetention {
-		t.Errorf("horizon = %v, want %v", job.Horizon, maintenance.RevisionRetention)
+	if h := horizonOf(job); h != maintenance.RevisionRetention {
+		t.Errorf("horizon = %v, want %v", h, maintenance.RevisionRetention)
 	}
 	// AND IT ACTUALLY REACHES THE TABLE, which a job wired to the wrong
 	// store method would not: a sweep that never errors and never deletes

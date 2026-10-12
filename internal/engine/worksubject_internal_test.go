@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -253,7 +255,7 @@ func completing(t *testing.T, written []types.WorkItem, res turn.Result) (
 	for _, item := range written {
 		tel.written.Add(item)
 	}
-	e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, res, nil)
+	e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, res, nil, time.Now())
 	return *only[*types.AgentTurnCompleted](t, p, "agent_turn_completed"),
 		*only[*types.TurnCompleted](t, p, "turn_completed")
 }
@@ -359,17 +361,23 @@ func (w writingDetach) CallDetached(ctx context.Context, t *turnctx.Turn,
 // the resume re-enters — the other half of the case above, through the real
 // suspension path.
 func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
+	t.Parallel()
 	e, _ := indicatingWith(t, notify.StatusAlways, suspendingModel{})
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-code", WorkKey: "wk-code", AgentHandle: "swe", Role: "SWE",
+	// THE WORK'S OWN START, as every dispatch derives it from the inbox: a
+	// work key with none is a start nobody knows, which reads as older than
+	// the operation ledger and is refused on a node with nowhere to record a
+	// rebase (rebase.go).
+	began := time.Now().UTC()
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-code", WorkKey: "wk-code", WorkSince: began, AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	equipForCodeWith(t, e, store, writingDetach{})
 
 	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-code", RunID: "run-code",
+		Handle: "swe", WorkKey: "wk-code", WorkSince: began, RunID: "run-code",
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	})
 	if err != nil || !res.Suspended {
@@ -386,6 +394,18 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if len(state.Written) != 1 || state.Written[0] != nativeTask {
 		t.Errorf("the suspension carries %+v, want the task written before the park",
 			state.Written)
+	}
+	// AND WHAT THE TURN WAS ASKED, for the segment that finishes it to
+	// record: that segment is woken by the run's completion, whose ask is
+	// not the turn's.
+	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
+		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
+	}
+	// AND WHO ASKED IT, for a refresh_memory call in the segment that
+	// finishes the turn: that segment has no interactions to read them off.
+	if want := sendersSpoken(e.interactionsOf([]*events.Event{chatTrigger("D0ANA")})); len(want) == 0 ||
+		!slices.Equal(state.Senders, want) {
+		t.Errorf("the suspension parks the senders %+v, want %+v", state.Senders, want)
 	}
 	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
 	// chat wake names no item, so the segment that finishes the turn is the
@@ -406,9 +426,12 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))
 	company := e.Company()
-	tel := e.describeTurn(t.Context(), company, Request{
+	tel, err := e.describeTurn(t.Context(), company, Request{
 		RunID: "run-1", Handle: "swe", Events: []*events.Event{trackerWake()},
 	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
 	ctx := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context
 	if ctx.Written == nil || ctx.Written != tel.written {
 		t.Fatal("the turn context's write set is not the one the completion reads")
@@ -431,17 +454,61 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	company.Org.Roles = append(company.Org.Roles, &org.Role{Name: "CEO", DeclaredHandle: "ceo"})
 	ask := events.New(types.A2ARequest{ChannelID: "c1", Requester: "ceo", Content: "why?"},
 		events.TraceContext{})
-	tel := e.describeTurn(t.Context(), company, Request{
+	tel, err := e.describeTurn(t.Context(), company, Request{
 		RunID: "run-1", Handle: "swe", Events: []*events.Event{ask},
 	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
 	if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context.Requester; got != "ceo" {
 		t.Errorf("the turn context's requester = %q, want the asking seat", got)
 	}
-	resumed := e.describeResume(t.Context(), company, resumeInput{
-		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"},
+	// THE RESUMED TURN AS THE COORDINATOR BUILDS IT ([resumedTurn]), which
+	// is where a resume reads its identity from rather than the row.
+	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"}
+	resumed, err := e.describeResume(t.Context(), company, resumeInput{
+		Run:  run,
+		Turn: resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
 	})
+	if err != nil {
+		t.Fatalf("describeResume: %v", err)
+	}
 	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context.Requester; got != "ceo" {
 		t.Errorf("a resumed turn's requester = %q, want the one its row recorded", got)
+	}
+}
+
+// WHO ASKED REACHES THE TURN CONTEXT ON EVERY SEGMENT, which is what a
+// refresh_memory call tells the memory filter. A dispatch reads them off its
+// interactions; a resumed segment has none, so it reads the ones its turn
+// parked with — read off the interactions there, every resumed segment told
+// the filter nobody was asking, and a note about one person could be applied
+// to a turn somebody else started.
+func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	company := e.Company()
+	tel, err := e.describeTurn(t.Context(), company, Request{
+		RunID: "run-1", Handle: "swe", Events: []*events.Event{chatTrigger("D0ANA")},
+	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
+	spoke := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context.Senders
+	if len(spoke) == 0 {
+		t.Fatal("a chat turn's context names no sender, so this asserts nothing")
+	}
+	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}
+	resumed, err := e.describeResume(t.Context(), company, resumeInput{
+		Run:   run,
+		State: execstate.State{Senders: spoke},
+		Turn:  resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
+	})
+	if err != nil {
+		t.Fatalf("describeResume: %v", err)
+	}
+	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context.Senders; !slices.Equal(got, spoke) {
+		t.Errorf("a resumed segment's senders = %+v, want the %+v its turn parked with", got, spoke)
 	}
 }
 
@@ -459,9 +526,12 @@ func TestTheWakingChatSurfaceReachesTheTurnContext(t *testing.T) {
 		{chatTrigger("C0PRODUCT"), slack.Backend},
 		{trackerWake(), ""},
 	} {
-		tel := e.describeTurn(t.Context(), company, Request{
+		tel, err := e.describeTurn(t.Context(), company, Request{
 			RunID: "run-1", Handle: "swe", Events: []*events.Event{tc.wake},
 		})
+		if err != nil {
+			t.Fatalf("describeTurn: %v", err)
+		}
 		if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}, nil).Context.Transport; got != tc.want {
 			t.Errorf("a turn woken by %s carries transport %q, want %q", tc.wake.Source, got, tc.want)
 		}

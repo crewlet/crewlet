@@ -57,7 +57,6 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// THE COMMAND, as an operator types it on a fresh install: the
 	// deployment's own Tier A token, the seat the company declares for its
 	// founder, and every grant the founder will carry.
-	t.Setenv(apiTokenEnv, cliFixtureToken)
 	tierA := bootstrapWithKeyring(t, "k1")
 	appendFile(t, tierA, "api:\n  external_url: "+base+"\n")
 	var grants []string
@@ -65,7 +64,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		grants = append(grants, string(g))
 	}
 	var out, errs bytes.Buffer
-	if err := runIAM([]string{"invite", "jane@example.com", "-seat", "founder",
+	if err := runIAM(tokenEnviron(cliFixtureToken), []string{"invite", "jane@example.com", "-seat", "founder",
 		"-grants", strings.Join(grants, ","),
 		"-config", tierA, "-api", base}, nil, &out, &errs); err != nil {
 		t.Fatalf("iam invite under a Tier A token on an empty estate: %v\n%s",
@@ -149,10 +148,9 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)
 
-	t.Setenv(apiTokenEnv, cliFixtureToken)
 	tierA := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
-	if err := runIAM([]string{"create", "-email", "jane.founder@example.com",
+	if err := runIAM(tokenEnviron(cliFixtureToken), []string{"create", "-email", "jane.founder@example.com",
 		"-seat", "founder", "-name", "Jane Founder",
 		"-grants", strings.Join([]string{string(iam.GrantStateRead),
 			string(iam.GrantPeopleManage)}, ","),

@@ -65,6 +65,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// the duty and let the table grow for ever on every other.
 		"company_config",
 		"conversation_sessions",
+		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
+		// ages keeps the marker every removal leaves for the life of
+		// the deployment, and every listing that meets one reads it
+		// again from the stream leader — so without this entry a
+		// listing's cost grew with every record the company had ever
+		// removed, with nothing anywhere saying so.
+		"coordination_markers",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
 		// every cycle, and no horizon anywhere — so it grew with the
@@ -290,7 +297,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	// reading only err calls a refusal success and leaves the assertion
 	// below failing for a reason that is not the rule it is about.
 	hold := coord.WorkerResource(holdName)
-	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
+	if got, _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
 	}); err != nil || got == nil {
 		t.Fatalf("precondition: take a setup hold: (%v, %v)", got, err)

@@ -40,7 +40,7 @@ import (
 
 // DutyDeps is what the duty needs that it does not own.
 type DutyDeps struct {
-	DB     *store.DB
+	DB     store.ReplicatedHandle
 	Writer *Writer
 
 	// Logger is where the duty reports. Nil is the package's own
@@ -150,7 +150,7 @@ func (d *duty) pendingDuplicates(ctx context.Context) (bool, error) {
 
 func (d *duty) anyProject(ctx context.Context, column string) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_projects WHERE `+column+` = 1)`).
 			Scan(&found)
@@ -243,7 +243,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 		losers  []Placement
 		ceiling = map[Rank]Rank{}
 	)
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
 			WHERE t.project_key = ? AND t.removed_at IS NULL
@@ -318,7 +318,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 // recognises it from its own rows before any claim, so it costs one keyed read.
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`).
 			Scan(&found)
@@ -498,7 +498,7 @@ var mergeWaits = []struct {
 // cursor — the partial index's own order, so each page is a seek.
 func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) {
 	var ids []string
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
 			 ORDER BY id LIMIT ?`, after, WalkBatch)
@@ -623,7 +623,7 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 // is frozen, and its restore is what brings it back.
 func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM tracker_tasks
 			               WHERE moving = 1 AND removed_at IS NULL)`).
@@ -651,7 +651,7 @@ func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 // in the old project for good.
 func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error) {
 	var marked []string
-	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM tracker_tasks
 			WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
@@ -700,7 +700,7 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 // and a real root.
 //
 // THE PARTIAL INDEX'S OWN WHERE, SPELLED OUT, because this engine's planner
-// does not infer it from a query that omits it (replicated migration 0031).
+// does not infer it from a query that omits it (replicated migration 0041).
 // The root's three conditions are each a reason there is nothing to do: a root
 // in the TRASH is frozen until its restore; a MARKED root is a walk the
 // abandoned-move job owns, whose pass carries a straggler as well; and a root
@@ -715,10 +715,10 @@ const strandedFrom = `
 
 // pendingStragglers reads whether any live task sits in another project than
 // its root with nothing walking that root — see [duty.carryStragglers]. ONE
-// PROBE on the partial index replicated migration 0031 ships for it.
+// PROBE on the partial index replicated migration 0041 ships for it.
 func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 `+strandedFrom+`)`).Scan(&found)
 	})
@@ -807,7 +807,7 @@ func (d *duty) carryStragglers(ctx context.Context, now, _ time.Time) (int64, er
 // seek.
 func (d *duty) strandedAfter(ctx context.Context, after string) ([]string, error) {
 	var roots []string
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.root_id `+
 			strandedFrom+` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
 			after, WalkBatch)
@@ -846,7 +846,9 @@ type abandonedMerge struct {
 	waiting mergeWait
 
 	// reparent is the walk's own intent, carried on the task since the
-	// mark.
+	// mark, so a duty finishing a walk whose holder died does what that
+	// merge was asked to: FALSE when it was asked to leave its subtasks
+	// where they are (`move_subtasks: false`).
 	reparent bool
 
 	// merging is whether the task still carries the marker as this read
@@ -856,7 +858,7 @@ type abandonedMerge struct {
 
 func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, error) {
 	var walk abandonedMerge
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -884,7 +886,7 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		if walk.into == "" {
 			return nil
 		}
-		// THE SURVIVOR'S OWN STATE, three-valued as [absentTask]'s: in
+		// THE SURVIVOR'S OWN STATE, three-valued as [missingTask]'s: in
 		// the trash the merge waits, purged it has no target, and absent
 		// with no marker this node has not applied what named it.
 		canonical, held, err := readTask(ctx, tx, walk.into)
@@ -910,13 +912,13 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		case held:
 			return nil
 		}
-		_, purged, err := purgedTask(ctx, tx, walk.into)
-		switch {
-		case err != nil:
-			return err
-		case !purged:
-			return fmt.Errorf("tracker: task %s is mid-merge into %s, which "+
-				"is not on this node: %w", id, walk.into, statelog.ErrUnavailable)
+		missing := missingTask(ctx, tx, walk.into, "nothing can be merged into it")
+		if !errors.Is(missing, ErrNoTask) {
+			// NOT ON THIS NODE YET, or a marker this node could not
+			// read: either way nothing here may decide the merge has
+			// no target.
+			return fmt.Errorf("tracker: task %s is mid-merge into %s: %w",
+				id, walk.into, missing)
 		}
 		walk.purged, walk.into = walk.into, ""
 		return nil
@@ -927,7 +929,7 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 // tellUnblocked publishes the late notice for every dependent that became
 // workable and was never told.
 func (d *duty) tellUnblocked(ctx context.Context, now, _ time.Time) (int64, error) {
-	scan, err := ScanUnblocked(ctx, d.deps.DB, d.unblockedThrough, WalkBatch)
+	scan, err := ScanUnblocked(ctx, d.deps.DB.Reader(), d.unblockedThrough, WalkBatch)
 	if err != nil {
 		return 0, err
 	}
@@ -954,7 +956,7 @@ func (d *duty) tellUnblocked(ctx context.Context, now, _ time.Time) (int64, erro
 // projectsWith reads the projects whose own row carries a hand-off flag.
 func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error) {
 	var projects []string
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT key FROM tracker_projects WHERE `+column+` = 1 ORDER BY key`)
 		if err != nil {
@@ -1008,7 +1010,7 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // the process, so a repair asking for one of its own was refused on every
 // tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
-	return d.deps.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	return d.deps.DB.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tracker_projects SET rank_duplicate_pending = 0
 			WHERE key = ? AND NOT EXISTS (
@@ -1045,7 +1047,7 @@ func (d *duty) opID(job, subject string, now time.Time) string {
 // is the shape every job in this file is held to.
 func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 	var any int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM tracker_relations
 			               WHERE one_sided = 1 AND one_sided_final = 0)`).
@@ -1070,7 +1072,7 @@ func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 // is a dependency somebody has to resolve by hand; one number was read as the
 // first when it could be entirely the second.
 func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, error) {
-	edges, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
+	edges, err := ScanOneSided(ctx, d.deps.DB.Reader(), now.Add(-OneSidedRepairAge), WalkBatch)
 	if err != nil {
 		return 0, err
 	}

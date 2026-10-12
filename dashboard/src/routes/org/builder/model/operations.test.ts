@@ -855,11 +855,16 @@ describe("changing kind", () => {
       token_budget: { day: 10, month: 200 },
       mcp_env: { git: { TOKEN: "__redacted__" } },
       behavioral_guidelines: ["Be kind"],
-      integrations: {
-        github: { tier: "developer" },
-        slack: { channel: "C1" },
-      },
+      placement: { labels: { zone: "eu" } },
+      // A seat's tracker project and knowledge container are top-level keys,
+      // never under `integrations:` — a list naming them there stripped
+      // nothing and left a draft the engine refuses.
       project: "ENG",
+      space: "DOCS",
+      integrations: {
+        github: { tier: "review" },
+        slack: { bot_token: "${DEV_SLACK_BOT}" },
+      },
       goal: "Build",
     };
     const { op, draft, report } = run(fixture(base), {
@@ -871,8 +876,10 @@ describe("changing kind", () => {
     expect(report.stripped).toEqual([
       "llm",
       "token_budget",
+      "placement",
       "integrations.slack",
       "project",
+      "space",
       "mcp_env",
       "behavioral_guidelines",
       "integrations.github",

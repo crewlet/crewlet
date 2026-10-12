@@ -57,7 +57,7 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 // suiteWrite is one write through the identity estate's own [iamdomain.Writer]
 // — the builder every write path in the domain shares, [iamdomain.Writer.request],
 // which is where the framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: pub, DB: db, Actor: "suite", ActorKind: iam.KindMachine,
 		Grants: []iam.Grant{iam.GrantFleetOperate},
@@ -78,12 +78,11 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	}
 	return gateSuiteRecord(iamdomain.EvictionSubject(node), iamdomain.OpEviction,
 		"", "suite-peer", opID, iamdomain.RootScope(),
-		iamdomain.Eviction{V: iamdomain.DocumentVersion, Readmit: readmit, By: "suite"})
+		iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: readmit, By: "suite"})
 }
 
 // THE IDENTITY ESTATE'S GATE READER KEEPS THE RULE EVERY READER SHARES,
-// certified by the same family as the tracker's, the knowledge base's and the
-// org chart's.
+// certified by the same family as the tracker's and the knowledge base's.
 //
 // This reader answered the eviction before the removal, in two reads, until it
 // took the shared shape — and nothing noticed, because it was tested only
@@ -101,10 +100,15 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return iamdomain.NewGates(db) },
+			Reader: func(db store.ReplicatedReader) statelog.Gates { return iamdomain.NewGates(db) },
 			// A PERSON, which is what a removal takes out of the estate for
 			// ever: its tombstone is this log's deletion marker.
 			Kind: string(iamdomain.KindPerson),
+			// EVERY KIND, the applier asked rather than told which ones the
+			// tombstone covers: a directory record names its person in the
+			// payload alone, so the marker reaches it through the body,
+			// and a session about somebody else must be left alone by both.
+			SubjectKinds: suiteKinds(),
 			// AN ENROLMENT, on the directory: the record that brings a
 			// person into the estate names them in its payload alone.
 			Create: func(id, writer, opID string) ([]byte, error) {
@@ -125,17 +129,17 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			Purge: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpRemove,
 					id, writer, opID, iamdomain.PeopleScope(id),
-					iamdomain.Removal{V: iamdomain.DocumentVersion})
+					iamdomain.Removal{V: iamdomain.GateRecordVersion})
 			},
 			Evict: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.EvictionSubject(node),
 					iamdomain.OpEviction, "", writer, opID, iamdomain.RootScope(),
-					iamdomain.Eviction{V: iamdomain.DocumentVersion, By: "suite"})
+					iamdomain.Eviction{V: iamdomain.GateRecordVersion, By: "suite"})
 			},
 			Readmit: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.EvictionSubject(node),
 					iamdomain.OpEviction, "", writer, opID, iamdomain.RootScope(),
-					iamdomain.Eviction{V: iamdomain.DocumentVersion, Readmit: true,
+					iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: true,
 						By: "suite"})
 			},
 			// AN IDENTITY CHANGE: it arbitrates on the directory, and the
@@ -270,11 +274,11 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 		}, iamdomain.BucketScope(0)
 	case iamdomain.KindEviction:
 		return iamdomain.OpEviction, "", iamdomain.Eviction{
-			V: iamdomain.DocumentVersion, By: "suite",
+			V: iamdomain.GateRecordVersion, By: "suite",
 		}, iamdomain.RootScope()
 	case iamdomain.KindGeneration:
 		return iamdomain.OpGeneration, "", iamdomain.Generation{
-			V: iamdomain.DocumentVersion, Generation: 1, By: "suite",
+			V: iamdomain.GateRecordVersion, Generation: 1, By: "suite",
 		}, iamdomain.RootScope()
 	case iamdomain.KindBarrier:
 		return iamdomain.OpBarrier, "", nil, iamdomain.RootScope()

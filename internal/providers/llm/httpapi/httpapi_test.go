@@ -176,6 +176,87 @@ func TestFromStatusReadsTheHintOnlyForBenchingKinds(t *testing.T) {
 	}
 }
 
+// THE KIND IS THE CALLER'S, NOT THE STATUS'S. A failure inside a stream
+// carries the 200 the stream opened with, which [llm.KindForStatus] reads as
+// fatal; the backend that read the body's own error type has the better
+// answer, and it must survive here — hint included — rather than be
+// re-derived from a status that describes the start of the response.
+func TestFromKindKeepsTheKindItIsGiven(t *testing.T) {
+	t.Parallel()
+	h := header("Retry-After", "30")
+	for _, tc := range []struct {
+		kind llm.ErrorKind
+		hint time.Duration
+	}{
+		{llm.KindServer, 0},
+		{llm.KindTimeout, 0},
+		{llm.KindRateLimit, 30 * time.Second},
+		{llm.KindAuth, 30 * time.Second},
+		{llm.KindFatal, 0},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New("boom")
+			e := FromKind(cause, "anthropic", "claude", tc.kind, http.StatusOK, h)
+			if e.Kind != tc.kind {
+				t.Fatalf("kind = %s, want %s as given", e.Kind, tc.kind)
+			}
+			if e.Status != http.StatusOK || !errors.Is(e, cause) {
+				t.Fatalf("status %d / cause wrapped %v", e.Status, errors.Is(e, cause))
+			}
+			if e.RetryAfter != tc.hint {
+				t.Fatalf("RetryAfter = %v, want %v", e.RetryAfter, tc.hint)
+			}
+		})
+	}
+}
+
+// A STATUS FAILURE SHOWS THE ENGINE'S LINE, NEVER THE SDK'S TEXT. An SDK's
+// error is whatever its vendor chose to print — Anthropic's is the request
+// URL, userinfo and all, and the raw body — and the classified error's text is
+// what every log line, event and turn error carries. The cause is still
+// reachable, for errors.Is and errors.As.
+//
+// Mutation: put the cause on the classified error unwrapped, and the password
+// and the body are in its text.
+func TestAStatusFailureShowsTheStatusAndNeverTheSDKsText(t *testing.T) {
+	t.Parallel()
+	cause := errors.New(`POST "http://gateway:s3cretpass@llm.example.com/v1/messages": 401 ` +
+		`{"error":{"message":"invalid key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ"}}`)
+	for _, tc := range []struct {
+		name   string
+		status int
+		h      http.Header
+		want   string
+	}{
+		{"Anthropic's request id", 401, header("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy",
+			"x-request-id", "gw-1"), "HTTP 401 Unauthorized (request req_011CSHoEeqs5C35K2UUqR7Fy)"},
+		{"OpenAI's and a gateway's", 429, header("x-request-id", "req_8f2b"),
+			"HTTP 429 Too Many Requests (request req_8f2b)"},
+		{"no request id", 500, nil, "HTTP 500 Internal Server Error"},
+		{"a status with no name", 529, nil, "HTTP 529"},
+		{"a header that is not an id", 400, header("request-id", "see the body for details"),
+			"HTTP 400 Bad Request"},
+		{"a header too long to be an id", 400, header("request-id", strings.Repeat("r", maxRequestID+1)),
+			"HTTP 400 Bad Request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := FromStatus(cause, "anthropic", "claude", tc.status, tc.h)
+			if got := e.Err.Error(); got != tc.want {
+				t.Errorf("the failure says %q, want %q", got, tc.want)
+			}
+			if text := e.Error(); strings.Contains(text, "s3cretpass") || strings.Contains(text, "sk-ant-") ||
+				strings.Contains(text, "llm.example.com") {
+				t.Errorf("the SDK's text reached the classified error: %s", text)
+			}
+			if !errors.Is(e, cause) {
+				t.Error("the SDK's error is no longer behind the classified one")
+			}
+		})
+	}
+}
+
 // --- FromTransport -----------------------------------------------------
 
 type timeoutError struct{}
@@ -277,29 +358,39 @@ func TestNewHTTPClientRaisesTheIdleConnectionCeiling(t *testing.T) {
 
 // --- tool arguments ----------------------------------------------------
 
+// A CALL WHOSE ARGUMENTS DID NOT PARSE IS REPORTED, NEVER RUN EMPTY. The
+// error is what keeps the tool loop from running a call the model never
+// finished — the round the output cap cut mid-object — with no arguments at
+// all; and no input at all is a tool that takes none, not a broken call.
 func TestDecodeArgs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		raw  string
-		want map[string]any
+		name    string
+		raw     string
+		want    map[string]any
+		invalid bool
 	}{
-		{"object", `{"a":1,"b":"x"}`, map[string]any{"a": float64(1), "b": "x"}},
-		{"empty object", `{}`, map[string]any{}},
-		{"empty input", ``, map[string]any{}},
-		{"whitespace", `   `, map[string]any{}},
-		{"null", `null`, map[string]any{}},
-		{"array", `[1,2]`, map[string]any{}},
-		{"bare string", `"hello"`, map[string]any{}},
-		{"truncated", `{"a":`, map[string]any{}},
+		{"object", `{"a":1,"b":"x"}`, map[string]any{"a": float64(1), "b": "x"}, false},
+		{"empty object", `{}`, map[string]any{}, false},
+		{"empty input", ``, map[string]any{}, false},
+		{"whitespace", `   `, map[string]any{}, false},
+		{"null", `null`, map[string]any{}, false},
+		{"array", `[1,2]`, map[string]any{}, true},
+		{"bare string", `"hello"`, map[string]any{}, true},
+		{"truncated", `{"a":`, map[string]any{}, true},
+		{"cut mid-value", `{"query":"refund polic`, map[string]any{}, true},
+		{"two objects", `{"a":1}{"b":2}`, map[string]any{}, true},
 		{"nested", `{"a":{"b":[1,null,true]}}`,
-			map[string]any{"a": map[string]any{"b": []any{float64(1), nil, true}}}},
+			map[string]any{"a": map[string]any{"b": []any{float64(1), nil, true}}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := DecodeArgs([]byte(tc.raw), "some_tool")
+			got, err := DecodeArgs([]byte(tc.raw), "some_tool")
 			if got == nil {
 				t.Fatal("DecodeArgs returned a nil map; the contract's map is never nil")
+			}
+			if (err != nil) != tc.invalid {
+				t.Fatalf("DecodeArgs error = %v, want invalid=%v", err, tc.invalid)
 			}
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Fatalf("DecodeArgs = %v, want %v", got, tc.want)
@@ -309,10 +400,12 @@ func TestDecodeArgs(t *testing.T) {
 }
 
 // The named landmine: encoding/json populates what it managed BEFORE it
-// failed, so `1e1000` yields an error and a map holding +Inf — a value that
-// marshals back out as nothing at all. Keeping it would put a round-trip
-// failure in the conversation that fires a round later, on a request that has
-// nothing to do with the tool that caused it.
+// failed, so `1e1000` yields an error and a map still holding a residue under
+// the key. WHICH residue is the toolchain's business, not a contract: through
+// go1.27.0 it is +Inf, which marshals back out as nothing at all, and from
+// go1.27.2 it is 0, which marshals cleanly as a number nobody sent. Either one
+// kept would put a value in the conversation that the model never wrote — a
+// round-trip failure a round later, or a silent rewrite of the call.
 func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 	t.Parallel()
 	// The property that matters: whatever a model sends, what comes out can
@@ -321,22 +414,30 @@ func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 	// encode, and every subsequent round of the turn fails with it.
 	//
 	// 1e1000 is the case that found this. Plain unmarshalling HALF-decodes
-	// it: an error is returned but the map already holds +Inf, which
-	// json.Marshal then refuses. Decoding with UseNumber accepts it as an
-	// exact json.Number and it round-trips unchanged — so the guard is now
-	// "it survives", not "it is discarded".
+	// it: an error is returned but the map already holds a float64 under
+	// "n" that is not the number sent. Decoding with UseNumber accepts it as
+	// an exact json.Number and it round-trips unchanged — so the guard is
+	// now "it survives", not "it is discarded".
+	//
+	// The premise asks only what every toolchain agrees on: the plain decode
+	// fails, and what it leaves behind does not round-trip to the input.
+	// Pinning the residue itself (+Inf, then 0 from go1.27.2) made this test
+	// a test of encoding/json's internals that broke on a patch release.
 	var direct map[string]any
 	if err := json.Unmarshal([]byte(`{"n":1e1000}`), &direct); err == nil {
 		t.Fatal("premise broken: 1e1000 unmarshalled cleanly without UseNumber")
 	}
-	if !math.IsInf(direct["n"].(float64), 1) {
-		t.Fatalf("premise broken: the partial decode left %v, want +Inf", direct["n"])
+	if _, ok := direct["n"].(float64); !ok {
+		t.Fatalf("premise broken: the partial decode left %#v under n, want a float64 residue", direct["n"])
 	}
-	if _, err := json.Marshal(direct); err == nil {
-		t.Fatal("premise broken: the partial decode marshalled back out")
+	if blob, err := json.Marshal(direct); err == nil && string(blob) == `{"n":1e1000}` {
+		t.Fatal("premise broken: the partial decode round-tripped the value it refused")
 	}
 
-	got := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")
+	got, err := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")
+	if err != nil {
+		t.Fatalf("DecodeArgs refused an exact number: %v", err)
+	}
 	blob, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("DecodeArgs produced a map that cannot be re-serialised: %v", err)
@@ -354,7 +455,10 @@ func TestLargeIntegerArgumentsStayExact(t *testing.T) {
 	// re-encodes as 1234567890123456800. The tool call then reaches the
 	// server naming a DIFFERENT entity and succeeds against the wrong row,
 	// with nothing anywhere reporting an error.
-	got := DecodeArgs([]byte(`{"issue_id":1234567890123456789,"amount":100.50}`), "jira_get")
+	got, err := DecodeArgs([]byte(`{"issue_id":1234567890123456789,"amount":100.50}`), "jira_get")
+	if err != nil {
+		t.Fatalf("DecodeArgs: %v", err)
+	}
 	blob, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

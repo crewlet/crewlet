@@ -42,7 +42,11 @@ import {
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
-import { introducedWarnings, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import {
+  introducedWarnings,
+  managedSentence,
+  type ConfigRefusal,
+} from "~/protocol/configAnswer.ts";
 import { createEntity, dryRunCreate, dryRunPatch, getConfig } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
@@ -65,6 +69,8 @@ function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
       return configGuardedReason(refusal.code);
+    case "managed":
+      return managedSentence(refusal.managedBy);
     case "conflict":
       switch (refusal.reason) {
         case "entity_exists":

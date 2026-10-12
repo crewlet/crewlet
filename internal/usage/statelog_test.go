@@ -27,14 +27,18 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// already has them — a schema created from test code would
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE, empty while the record has only
-			// its first shape — and the record carrying each field, which
-			// fails on the first row somebody adds without a case.
+			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
+			// domain writes, a person's day included, is in the base
+			// format — and the record carrying each field fails on the
+			// first row somebody adds without a case; a kind this build's
+			// successor adds is a row keyed on the kind's value, and brings
+			// its record the same way.
 			Fields:   usage.VersionedFields(),
 			Carrying: carryingSuiteField,
-			Kinds:    []string{string(usage.KindSeat), string(usage.KindSchedule)},
-			Rows:     usage.NewRows,
-			Write:    suiteWrite,
+			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
+				string(usage.KindPerson)},
+			Rows:  usage.NewRows,
+			Write: suiteWrite,
 		}
 	})
 }
@@ -55,7 +59,7 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 // writer this domain has — over a node whose store holds one seat's day, run
 // as the suite's own node so the subject's node and the stamp's writer agree
 // as they do in production.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: oneSeatDay{}, Log: pub, NodeID: statelogtest.SuiteWriter,
 		Zone: func() *time.Location { return time.UTC },
@@ -106,6 +110,11 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		subject.ScopeType, subject.ScopeID, subject.Schedule = "role", "Dev", id
 		rec.Fires = []usage.Fire{{At: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC),
 			Target: "dev", Outcome: "fired"}}
+	case usage.KindPerson:
+		subject.Person = id
+		rec.Role = "Founder"
+		rec.Tokens = []usage.Tokens{{Phase: "auxiliary", Worker: "answer_knowledge",
+			Model: "m", Input: 40, Output: 2, Total: 42, Calls: 1}}
 	}
 	rec.Subject = subject
 	return rec.Encode()

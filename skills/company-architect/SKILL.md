@@ -74,8 +74,12 @@ Whichever rung you used, then walk the residual checklist below.
 
 None of this needs **credentials, a database, or a network** (beyond
 fetching the schema once): Tier B stores `${VAR}` references verbatim
-and resolves them at engine start, so a complete config validates before
-a single secret exists.
+and resolves each only when the engine builds the provider or transport
+that uses it, so a complete config validates before a single secret
+exists. That is also why a reference is judged as the literal text it is:
+write one only where a value is free text or a credential, never in an
+enum, a handle or a unit id (the Mattermost `username` is the one
+patterned field that takes one whole reference).
 
 **Say which rung you used.** If you validated by reading rather than
 running a validator, tell the founder that plainly — never imply a check
@@ -92,15 +96,24 @@ config — rungs 2 and 3 especially:
   incrementally). A display name there resolves to nobody.
 - **Every `manages` entry is a real seat handle or unit key.** Same class
   of silent miss.
+- **A human seat with no `contact` identity is legal and worth a look.** It
+  passes the schema and `crewlet validate` alike — a person who works only
+  through the dashboard has no chat account to declare — but `crewlet
+  validate` prints an advisory, because nothing addressed to that seat on a
+  chat surface reaches anybody. Give it one for the surface the company runs
+  unless that is the intent.
+- **Every `knowledge.*` scope list names a backend the config actually
+  configures.** A scope for a backend with no integration block narrows
+  nothing, and `crewlet validate` refuses it.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
   `Mars/Olympus`) — the company's `timezone` and any schedule's own —
   and never `Local` or `localtime`, which the validator refuses because
   each is whatever zone the host reading it happens to be set to. There
   is ONE company clock, the top-level `timezone`: no block under
   `tracker:` or `scheduling:` takes a zone of its own.
-- **Cron expressions are semantically valid.** The schema only checks
-  there are five fields — `99 * * * *` has the right shape and is still
-  nonsense.
+- **Cron expressions are valid.** The schema takes a cron as plain text,
+  so it checks neither the field count nor the values — `99 * * * *` and
+  `0 9 * *` both pass it. `crewlet validate` is what checks one.
 - **Everything under "Invariants"** below. Those are judgement calls; no
   validator will ever catch them.
 
@@ -249,7 +262,11 @@ the key its name mints.
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 `.env`. Never write a token, key, or webhook secret into a config file,
-even a draft, even one you expect to be deleted.
+even a draft, even one you expect to be deleted. The schema says where
+they go: every position that holds a credential carries
+`"x-crewlet-secret": true` (on a list's `items` and a map's
+`additionalProperties` for the members), and each of those takes a
+`${VAR}`.
 
 **Seats you will provision need a *whole-value* `${VAR}`.**
 `crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent

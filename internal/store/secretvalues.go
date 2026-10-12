@@ -37,11 +37,11 @@ import (
 // per-role MCP env is ONE credential with two readers, which keying by var
 // name keeps as one row.
 //
-// # No plaintext mode, unlike company_config
+// # No plaintext mode
 //
-// A keyring is REQUIRED to read or write a row. There is no legacy corpus to
-// stay compatible with, and a dedicated secret store that can hold
-// unencrypted secrets is a footgun with no upside.
+// A keyring is REQUIRED to read or write a row, as it is for every revision
+// company_config holds: a dedicated secret store that can hold unencrypted
+// secrets is a footgun with no upside.
 //
 // # Reads fail CLOSED
 //

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -95,8 +94,19 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 // So the CLI carries its own credential or says so. `CREWLET_API_TOKEN` is
 // where it comes from, never a flag: a token on a command line lands in shell
 // history and in `ps`.
-func nodeTokenOrEmpty() string {
-	return strings.TrimSpace(os.Getenv(apiTokenEnv))
+//
+// # Whose environment
+//
+// The INVOCATION's, which [runIn] is handed — the process's own for every run
+// of the binary ([run]), so the rule above holds exactly as written. It is a
+// parameter rather than a read of the process, because a read of the process
+// is shared by everything running in it: a suite that runs its commands side
+// by side could only hand each its credential by setting the process's
+// variable, which Go refuses to a parallel test, and setting it from each case
+// would hand every concurrent command whichever case wrote last.
+func nodeTokenOrEmpty(environ config.Source) string {
+	token, _ := environ.Lookup(apiTokenEnv)
+	return strings.TrimSpace(token)
 }
 
 // nodeAPIToken is [nodeTokenOrEmpty] for the surfaces that are always guarded.
@@ -109,8 +119,8 @@ func nodeTokenOrEmpty() string {
 // token legitimate here, and it is gone: every guarded route now needs a
 // credential on every posture, so an empty token is always the 401 this
 // message describes.
-func nodeAPIToken(surface string) (string, error) {
-	if token := nodeTokenOrEmpty(); token != "" {
+func nodeAPIToken(environ config.Source, surface string) (string, error) {
+	if token := nodeTokenOrEmpty(environ); token != "" {
 		return token, nil
 	}
 	return "", fmt.Errorf(
@@ -143,7 +153,7 @@ type seatClaims func(context.Context, time.Time) (iamdomain.SeatClaims, error)
 // unclaimedDetail is the sentence [announceUnclaimed] logs, and whether the
 // company is unclaimed at all.
 //
-// A PERSON IS ALWAYS INVITED ONTO A HUMAN SEAT (ADR-0026), so what comes next
+// A PERSON IS ALWAYS INVITED ONTO A HUMAN SEAT (ADR-0032), so what comes next
 // depends on the company this node runs: with none, or with no human seat in
 // it, there is nowhere to invite anybody, and the step before the invitation
 // is the one to name — a company, or a seat in it.

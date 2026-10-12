@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -53,6 +55,7 @@ func (p *probe) at(seq uint64) (time.Time, bool, error) {
 // got backwards — reading `min_age` as a ceiling on retention, which trims
 // exactly the records it was set to keep.
 func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	cutoff := base.Add(50 * time.Minute)
 
@@ -98,6 +101,7 @@ func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 // records the term should have permitted — the trim then never advances past
 // the hole, which is a log that grows for ever with no term reporting a block.
 func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	cutoff := base.Add(50 * time.Minute)
 
@@ -126,6 +130,7 @@ func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
 // record older than the floor, and a term that answered zero would block the
 // trim on a log that has nothing to trim.
 func TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking(t *testing.T) {
+	t.Parallel()
 	got, err := ageFloorOf(0, 0, 0, time.Now(), func(uint64) (time.Time, bool, error) {
 		t.Fatal("an empty log was probed")
 		return time.Time{}, false, nil
@@ -142,6 +147,7 @@ func TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking(t *testing.T) {
 // broker that could not answer is not a log whose records are all young, and a
 // floor guessed from a failed probe is one the trim deletes against.
 func TestAnUnreadableProbeRefusesRatherThanGuessingAFloor(t *testing.T) {
+	t.Parallel()
 	want := errors.New("broker unreachable")
 	if _, err := ageFloorOf(1, 100, 100, time.Now(),
 		(&probe{fail: want}).at); !errors.Is(err, want) {
@@ -164,6 +170,7 @@ func floorFleet(t *testing.T) *retention {
 // blocked past its `min_age` window into something that reaches a person —
 // would never be reached on a fleet whose lease flapped even once a week.
 func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	blocked := statelog.TrimDecision{
@@ -317,6 +324,7 @@ func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 // instant left on an advancing domain ages into an alarm on a healthy fleet,
 // which is the alarm nobody believes the second time.
 func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -352,6 +360,7 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 // [statelog.Trim] reports Blocked exactly when it permits removing up to zero,
 // so a blocked tick's TrimTo is always 0 and that state does not exist.
 func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -377,6 +386,7 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 // restarting the clock on each rotation hides the longest outages behind the
 // noisiest ones.
 func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -524,11 +534,12 @@ func (f *orderFleet) PutFloor(ctx context.Context, row coord.TrimFloor) error {
 // trimmedTracker is one node on a real embedded broker with its own trim
 // stopped, and three records on the tracker's log — so every purge and every
 // floor a case sees is the case's own, and a purge has something to remove.
-func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
+func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -543,7 +554,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
@@ -564,7 +575,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 // tracker-shaped barrier on the knowledge base's log is a record that log's
 // envelope decoder need not accept, and a case would be measuring that
 // instead.
-func barrierOn(t *testing.T, running *runningDomain) uint64 {
+func barrierOn(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	encode := barrierEncoder(running.domain)
 	if encode == nil {
@@ -584,7 +595,7 @@ func barrierOn(t *testing.T, running *runningDomain) uint64 {
 	// this keyring does not open, so an unsigned barrier would stop the log
 	// this case means to move.
 	seq, _, err := running.log.Append(t.Context(),
-		running.domain.Stream().SubjectPrefix+"."+statelog.BarrierKind, "", nil,
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
 		running.signer.Seal(body))
 	if err != nil {
 		t.Fatalf("append a barrier: %v", err)
@@ -695,7 +706,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	// an operator, and this case is about a different term.
 	r := &retention{fleet: back.Fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	for _, name := range e.core.Load().log.order {
+	for _, name := range e.core.Load().log.held().order {
 		running := e.core.Load().log.Domain(name)
 		t.Run(name, func(t *testing.T) {
 			group := running.domain.FeedGroup()
@@ -726,7 +737,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			}
 
 			committed := running.runner.Committed()
-			stream := running.domain.Stream().Name
+			stream := running.spec.Name
 			now := time.Now().UTC()
 			floors, err := back.Fleet.Floors(t.Context())
 			if err != nil {
@@ -755,7 +766,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 					}},
 				}},
 			}
-			if err := r.domain(t.Context(), name, shared); err != nil {
+			if err := r.domain(t.Context(), running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", name, err)
 			}
 			floors, err = back.Fleet.Floors(t.Context())
@@ -793,6 +804,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 // that a copy has. A build that counted them anyway would trim against a
 // backup the policy does not recognise.
 func TestTheBackupTermFollowsTheOperatorsOwnPolicy(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	points := []coord.BackupPoint{
 		{
@@ -831,6 +843,7 @@ func TestTheBackupTermFollowsTheOperatorsOwnPolicy(t *testing.T) {
 // a file that exists and was never opened is not a backup, and deleting the
 // log's only copy of a record against one is what the whole term prevents.
 func TestAnUnverifiedBackupSatisfiesNoPolicy(t *testing.T) {
+	t.Parallel()
 	r := &retention{}
 	_, _, _, have := r.backupTerm([]coord.BackupPoint{{
 		Owner: "node-a", At: time.Now(), Verified: false,
@@ -846,6 +859,7 @@ func TestAnUnverifiedBackupSatisfiesNoPolicy(t *testing.T) {
 // a fleet whose backup covers the tracker and not the vectors must BLOCK the
 // vector log's trim, not permit it up to sequence zero.
 func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
+	t.Parallel()
 	r := &retention{}
 	seq, _, _, have := r.backupTerm([]coord.BackupPoint{{
 		Owner: "node-a", At: time.Now(), Verified: true,
@@ -954,30 +968,71 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
-	e := &Engine{backends: &Backends{Coord: backend}}
+	lister := &countingLister{Backend: backend}
+	view, err := coord.NewLeaseView(lister, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{backends: &Backends{Coord: backend}, dataView: view}
 
 	for _, id := range []string{"node-b", "node-a"} {
-		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
 			coord.AcquireOptions{
 				Owner: id + ":1", TTL: time.Minute,
-				Meta: map[string]any{"roles": []string{"seats"}},
+				Meta: map[string]any{"roles": []string{"data", "seats"}},
 			}); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
+	// AND ONE THAT IS ALIVE AND HOLDS NOTHING. It has no index to scan
+	// and answers no slice, so a roster that counted it would hand it a
+	// range nobody scans on every search, exactly as a dead node would.
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("agent-1"),
+		coord.AcquireOptions{
+			Owner: "agent-1:1", TTL: time.Minute,
+			Meta: map[string]any{"roles": []string{"seats"}},
+		}); err != nil {
+		t.Fatalf("register the stateless node: %v", err)
+	}
 	// AND ONE THAT IS GONE. Its lease has expired, so it is not a
 	// participant — where the positions register would still name it.
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
 		coord.AcquireOptions{
 			Owner: "node-dead:1", TTL: time.Nanosecond,
-			Meta: map[string]any{"roles": []string{"seats"}},
+			Meta: map[string]any{"roles": []string{"data", "seats"}},
 		}); err != nil {
 		t.Fatalf("register the dead node: %v", err)
 	}
 
-	roster, err := e.liveNodes(t.Context())
-	if err != nil {
-		t.Fatalf("roster: %v", err)
+	// UNKNOWN UNTIL THE VIEW HAS LISTED, never an empty fleet: a search
+	// handed an empty roster would take every bucket and report complete.
+	if _, err := e.dataRoster(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a roster read before the view listed answered %v, want unknown", err)
+	}
+	e.startDataView(t.Context())
+	t.Cleanup(e.stopWatchingDataNodes)
+	var roster []string
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if roster, err = e.dataRoster(t.Context()); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("roster: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// AND EVERY LATER READ IS ANSWERED FROM MEMORY: this is asked per
+	// search and per tool call, and a listing each time is an O(fleet)
+	// read of the coordination store per request.
+	for range 50 {
+		if _, err := e.dataRoster(t.Context()); err != nil {
+			t.Fatalf("roster: %v", err)
+		}
+	}
+	if got := lister.calls.Load(); got != 1 {
+		t.Fatalf("fifty roster reads listed the fleet %d times, want once", got)
 	}
 	slices.Sort(roster)
 	if want := []string{"node-a", "node-b"}; !slices.Equal(roster, want) {
@@ -1194,9 +1249,9 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 
 	// THE PAGES LOG IS REBUILT AND RE-ANCHORED, which moves the pages domain
 	// to the next generation and leaves its published row behind it.
-	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	rebuildLog(t, js, s.Domain(pagesName).spec)
 	s.publishPositions(t.Context())
-	stream := s.Domain(pagesName).domain.Stream().Name
+	stream := s.Domain(pagesName).spec.Name
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
@@ -1262,11 +1317,7 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.core.Load().log
-	closed, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("open a second store: %v", err)
-	}
+	closed := storetest.OpenNode(t, filepath.Join(t.TempDir(), "closed.db"), store.Options{})
 	t.Cleanup(func() { _ = closed.Close() })
 	if err := closed.CloseReplicated(); err != nil {
 		t.Fatalf("close its replicated estate: %v", err)
@@ -1325,7 +1376,7 @@ func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	pagesName := pages.Domain{}.Name()
 
-	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	rebuildLog(t, js, s.Domain(pagesName).spec)
 	s.publishPositions(t.Context())
 
 	report := r.Report(t.Context())
@@ -1352,4 +1403,45 @@ func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 		return
 	}
 	t.Fatal("the report carries no pages row")
+}
+
+// countingLister counts the listings a view makes of the store.
+type countingLister struct {
+	coord.Backend
+	calls atomic.Int64
+}
+
+func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	c.calls.Add(1)
+	return c.Backend.ListLive(ctx, class)
+}
+
+// THE REPORT LISTS THE PRESENCE LEASES ONCE, and its counted mark is taken from
+// that listing: the live data nodes are both who is live and who every log's
+// counted set counts. Listed twice — once for each question — every node's
+// every tick paid a second certified listing, a round trip after the first, and
+// the two could disagree about who is there.
+func TestTheReportListsPresenceOnce(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	s := e.core.Load().log
+	e.stopRetention()
+	lister := &countingLister{Backend: e.backends.Coord}
+	if _, _, err := lister.TryAcquire(t.Context(), coord.NodeResource("node-joiner"), coord.AcquireOptions{
+		Owner: "node-joiner:1", TTL: time.Hour, Meta: map[string]any{"roles": []string{"data"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a",
+		holders: presenceHolders{leases: lister}}
+	report := r.Report(t.Context())
+	if n := lister.calls.Load(); n != 1 {
+		t.Errorf("one report listed the presence leases %d times, want once", n)
+	}
+	for _, node := range report.Nodes {
+		if node.NodeID == "node-joiner" && (!node.Counted || !node.Live) {
+			t.Errorf("a live data node with no row is marked counted %v, live %v; want both",
+				node.Counted, node.Live)
+		}
+	}
 }

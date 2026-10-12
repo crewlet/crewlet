@@ -28,6 +28,8 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,7 +53,7 @@ afterEach(() => {
 
 function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   if (org) store.applyOrg(org);
   if (agents) store.applySeats(agents);
   const socket = new LiveSocket(store);
@@ -234,7 +236,7 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
       handle: "dev-b",
       role: "Dev B",
       activity: "working",
-      live_call: { updated_at: "2031-01-01T00:00:09Z" },
+      live_call: { updated_at: "2031-01-01T00:00:09Z", versions: ZERO_VERSIONS },
     },
     {
       id: "dev-a",
@@ -242,7 +244,7 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
       handle: "dev-a",
       role: "Dev A",
       activity: "idle",
-      live_call: { updated_at: "2031-01-01T00:00:01Z" },
+      live_call: { updated_at: "2031-01-01T00:00:01Z", versions: ZERO_VERSIONS },
     },
     { id: "dee", agent_id: "dee", handle: "dee", role: "Dee", activity: "idle" },
   ]);

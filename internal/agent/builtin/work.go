@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -222,6 +221,14 @@ type WorkDeps struct {
 	// is resolved per call rather than per surface.
 	ProjectWriter func(actor Actor) ProjectWriter
 
+	// Files reads a project's files, FileWriter writes them for one actor,
+	// and Objects stores and reads their bytes. All three or no file tool:
+	// a file is a row naming an object, and a surface holding one half could
+	// only record content it cannot store, or store content nothing names.
+	Files      FileReader
+	FileWriter func(actor Actor) FileWriter
+	Objects    ObjectStore
+
 	// TrashWriter resolves the removal and restore side for one actor, and
 	// is the operator surface's alone: a removal hides a task from every
 	// list in the company, and a seat that could hide work it did not want
@@ -327,24 +334,32 @@ type WorkDeps struct {
 	Now  func() time.Time
 	Zone func() *time.Location
 
-	// Await blocks until this node's applier has consumed a write.
+	// Await is handed the position every write here landed at, so the next
+	// read sees it.
 	//
 	// THE READ-YOUR-WRITES SEAM, and it is what makes a tool loop
-	// coherent: a write goes to the fleet's LOG while every read goes to
-	// this node's own rows, so a turn that files a task and then lists its
+	// coherent: a write goes to the fleet's LOG while a read is answered
+	// from some copy's rows, so a turn that files a task and then lists its
 	// project would not see what it just filed — and a model that cannot
 	// see its own write files it again. It is applied after every write
 	// here for that reason, never before a read.
+	//
+	// WHERE THE WAIT HAPPENS is the surface's. A seat's tools hand the
+	// position to the node's session floor (the estate router's), which
+	// every later read carries to whichever copy answers it — this node's
+	// or a peer's — and that copy waits; nothing waits here. A surface
+	// that reads this node's own rows directly, as the operator's does,
+	// waits here for this node's applier instead.
 	//
 	// It takes a POSITION rather than a revision, because that is what a
 	// log write answers with: a place on a stream, comparable only against
 	// the same stream and the same generation.
 	//
-	// Nil skips the wait, which is right for a caller that has established
-	// the ordering some other way. A failure is LOGGED AND IGNORED rather
-	// than failing the tool: the write landed, and telling a model its
-	// create failed when the task exists is the one answer that produces a
-	// duplicate.
+	// Nil skips it, which is right for a caller that has established the
+	// ordering some other way. A failure — which only a surface that waits
+	// here can have — is LOGGED AND IGNORED rather than failing the tool:
+	// the write landed, and telling a model its create failed when the task
+	// exists is the one answer that produces a duplicate.
 	Await func(ctx context.Context, at statelog.Position) error
 
 	// callerOperations is whether a caller with no turn holds the id of
@@ -399,6 +414,11 @@ type Actor struct {
 	// is the instant every operation id derived from the key carries. See
 	// [Actor.OperationSince].
 	WorkSince time.Time
+
+	// RebasedTo is the instant a derived operation id carries in place of
+	// its identity's own start, zero where it carries that start — see
+	// [turnctx.Turn.RebasedTo], which is the only place it comes from.
+	RebasedTo time.Time
 
 	// Calls is the run's call log, which a derived operation id reads its
 	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
@@ -492,11 +512,22 @@ func (a Actor) keyedRequest() bool { return a.WorkKey != "" && a.TurnID == "" }
 // its call's clock is one a re-run after a loss decides a second time. See
 // [statelog.OpMintedAt].
 //
-// The zero instant where neither is known — a run parked by a build whose run
-// ids carried none — which reads as older than every loss: a node whose ledger
-// ever lost a row answers such a write `unknown`, unless it holds its row,
-// rather than risking it twice.
+// The zero instant where neither is known — a keyed turn whose trigger carried
+// no timestamp, or a turn whose id carries no instant, which the engine never
+// mints (every run id is time-ordered), so only a hand-built turn such as a
+// test's — which reads as older than every loss: a node whose ledger ever lost
+// a row answers such a write `unknown`, unless it holds its row, rather than
+// risking it twice.
+//
+// UNLESS THE TURN WAS REBASED ([Actor.RebasedTo]), which outranks both: a turn
+// whose identity started before what the ledger may have swept mints at the
+// instant the engine rebased it onto, for either seed, since a start that old
+// answers every write `unknown` on every node whichever identity it is the
+// start of.
 func (a Actor) OperationSince() time.Time {
+	if !a.RebasedTo.IsZero() {
+		return a.RebasedTo
+	}
 	if a.WorkKey != "" {
 		return a.WorkSince
 	}
@@ -504,11 +535,12 @@ func (a Actor) OperationSince() time.Time {
 	return at
 }
 
-// settle waits for a write to reach this node's projection.
+// settle hands a write's position to [WorkDeps.Await], so the next read sees
+// it.
 //
-// Best effort by design — see [WorkDeps.Await]. The wait is bounded by the
-// projector's own budget, so a wedged projection costs a tool call a couple
-// of seconds rather than the turn.
+// Best effort by design — see [WorkDeps.Await]. Where the surface waits here,
+// the wait is bounded by the applier's own budget, so a wedged copy costs a
+// tool call a couple of seconds rather than the turn.
 func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if d.Await == nil || at.Seq == 0 {
 		return
@@ -516,9 +548,9 @@ func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "work_write_not_applied_yet",
 			"position", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"applier has not consumed it, so a list in this same turn may "+
-				"not show it yet")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not applied it yet, so a list in this same "+
+				"turn may not show it")
 	}
 }
 
@@ -550,6 +582,7 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		TurnID:    turn.RunID,
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo,
 		Chain:     turn.Chain,
 		Thread:    threadOf(turn),
 		Written:   turn.Written,
@@ -641,7 +674,8 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 	if turn == nil {
 		return Actor{}
 	}
-	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince}
+	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1126,14 +1160,16 @@ func (t *getWorkItem) Parameters() map[string]any {
 			"include": map[string]any{
 				"type": "array",
 				"description": "Which parts to read beside the item itself: " +
-					"`comments`, `history`, `links`, `fields`. All four by " +
-					"default — name fewer when you only need one, and the " +
-					"answer is smaller. `fields` are the custom-field values " +
-					"with the slug, name and type that explain each, which " +
-					"is what you write back with.",
+					"`body` (its whole description), `comments`, `history`, " +
+					"`links`, `fields`. All five by default — name fewer when " +
+					"you only need one, and the answer is smaller. Every part " +
+					"comes back whole; an item too large to answer at once is " +
+					"refused with a request to name fewer, never cut. `fields` " +
+					"are the custom-field values with the slug, name and type " +
+					"that explain each, which is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"comments", "history", "links", "fields"},
+					"enum": []any{"body", "comments", "history", "links", "fields"},
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -1143,21 +1179,12 @@ func (t *getWorkItem) Parameters() map[string]any {
 			},
 			"comment": map[string]any{
 				"type": "string",
-				"description": "One comment's id, to read that comment ALONE " +
-					"with its body exactly as it was written. The thread " +
-					"page carries excerpts; this is how you open the one you " +
-					"need after seeing it end in `…`. On its own it answers " +
-					"the item and that comment and nothing else — name " +
-					"`include` as well if you also want the history, the " +
-					"links or the fields.",
-			},
-			"body": map[string]any{
-				"type": "boolean",
-				"description": "Read the item's description in full. Every " +
-					"other read carries the opening of it; this is how you " +
-					"get the rest after seeing one end in `…`. On its own it " +
-					"answers the item and its whole description and nothing " +
-					"else.",
+				"description": "One comment's id, to read that comment ALONE. " +
+					"Every comment on a thread page is already whole; this " +
+					"is for going straight to one you were pointed at. On " +
+					"its own it answers the item and that comment and " +
+					"nothing else — name `include` as well if you also want " +
+					"the history, the links or the fields.",
 			},
 		},
 		"required": []any{"item"},
@@ -1172,38 +1199,36 @@ func (t *getWorkItem) Parameters() map[string]any {
 // part: the answer is then smaller by the parts they did not ask for, rather
 // than by a cap the engine chose for them.
 //
-// `comment` AND `body` ARE THEIR OWN DEFAULTS, and that exception is what
-// keeps either escape hatch usable. Naming one says what the call is for, and
-// both arguments are new enough to have no back-compatible default to honour
-// — where a whole item at its maximum is refused by [ToolAnswerBytes], one
-// whole comment plus fifty history rows plus sixty-four links would be too,
-// so the read that exists to recover a value would meet a refusal telling it
-// to narrow. An explicit `include` still wins: a caller that asks for the
-// comment AND the fields means it.
+// THE DESCRIPTION IS A PART LIKE THE OTHERS, and that is what keeps every part
+// reachable WHOLE. A description and a comment are each capped at 32 KiB, so
+// together they are a full tool answer before anything else is said — and a
+// read that always carried the description would refuse the narrowed call the
+// refusal itself advised. With `body` a part, each part on its own fits, and
+// nothing is ever cut to make room.
 //
-// They do not COMPOSE, and the second return is what says which won: a whole
-// body and a whole comment together are 96 KiB before escaping, against a 64
-// KiB ceiling, so a call naming both would be refused for asking for exactly
-// the two things this pair exists to make reachable. `comment` takes
-// precedence because it is the narrower ask — one value out of a thread,
-// against the item's own description, which the next call gets by dropping it.
+// `comment` IS ITS OWN DEFAULT: naming one comment says what the call is for,
+// so it answers the item and that comment and no other part. An explicit
+// `include` still wins: a caller that asks for the comment AND the fields
+// means it.
 func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 	want := tracker.DetailWants{
 		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
 		Comment:       strings.TrimSpace(argString(args, "comment")),
 	}
-	wholeBody := want.Comment == "" && argBool(args, "body")
 	raw, held := args["include"]
 	if !held || raw == nil {
-		if want.Comment != "" || wholeBody {
-			return want, wholeBody, ""
+		if want.Comment != "" {
+			return want, false, ""
 		}
 		want.Comments, want.History = true, true
 		want.Links, want.Fields = true, true
-		return want, wholeBody, ""
+		return want, true, ""
 	}
+	body := false
 	for _, part := range refList(raw) {
 		switch strings.ToLower(part) {
+		case "body":
+			body = true
 		case "comments":
 			want.Comments = true
 		case "history":
@@ -1213,12 +1238,12 @@ func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 		case "fields":
 			want.Fields = true
 		default:
-			return want, wholeBody, fmt.Sprintf("get_work_item has no %q to "+
-				"include. The parts are: comments, history, links, fields.",
+			return want, false, fmt.Sprintf("get_work_item has no %q to "+
+				"include. The parts are: body, comments, history, links, fields.",
 				clip(part))
 		}
 	}
-	return want, wholeBody, ""
+	return want, body, ""
 }
 
 func (t *getWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -1238,7 +1263,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if id == "" {
 		return failed("get_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	want, wholeBody, refusal := detailWants(args)
+	want, withBody, refusal := detailWants(args)
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -1267,56 +1292,28 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case err != nil:
 		return readFailure(ctx, GetWorkItemTool, err), nil
 	}
-	// THE CUT IS TAKEN HERE, where the budget is. The tracker answers the
-	// body whole because its other reader — the dashboard — renders a task
-	// page and has no ceiling at all; this is the caller that has to fit
-	// [ToolAnswerBytes], so it is the caller that decides what to carry.
-	// The same division the config diff settled on: the differ reports
-	// everything it found and the surface answering over a wire is the one
-	// that bounds it.
-	detail.Task.Body = shownBody(detail.Task.Body, wholeBody)
-	narrow := "Ask for less with `include`: the parts are comments, history, " +
-		"links and fields."
+	// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT. It used to be cut to
+	// four kilobytes here, with a `body: true` argument to get the rest —
+	// and a model that did not think to ask acted on the opening of a spec
+	// as the spec. It is a part of `include` now, so a caller that did not
+	// ask for it is told it was left out and how large it is, rather than
+	// handed a description that reads as empty.
+	answer := map[string]any{"task": detail}
+	if !withBody && detail.Task.Body != "" {
+		answer["body_not_included"] = fmt.Sprintf("The description (%d bytes) is "+
+			"not in this answer; read it with include=[\"body\"].", len(detail.Task.Body))
+		detail.Task.Body = ""
+		answer["task"] = detail
+	}
 	if !detail.Complete {
-		return jsonAnswer(map[string]any{
-			"task": detail, "incomplete": incompleteNote(detail.Incomplete),
-		}, narrow)
+		answer["incomplete"] = incompleteNote(detail.Incomplete)
 	}
-	return jsonAnswer(detail, narrow)
-}
-
-// TaskBodyShown is how much of a task's description ONE tool answer carries
-// when the caller did not ask for the whole of it.
-//
-// 4 KiB, against [tracker.MaxBody]'s 64 KiB, and the gap is the point: a body
-// at its cap is 64 KiB before JSON escaping, which on its own is already past
-// [ToolAnswerBytes] — so a maximal item was refused by weight with no argument
-// that would narrow it, because `include` governs the collections beside the
-// task and never the task itself. Every part of a detail read is bounded now:
-// the thread is paged, the history is capped, the relation sets are capped,
-// and this was the one value that was not.
-//
-// 4 KiB is roughly a thousand tokens — enough that an ordinary description
-// arrives whole and is never marked at all, while the outliers that would
-// spend a turn's budget become a pointer to `body: true`. It is the same
-// bargain [tracker.CommentBodyShown] strikes one field over, at twice the
-// size because an item has ONE description and a page carries twenty
-// comments.
-const TaskBodyShown = 4 << 10
-
-// shownBody is the description as one tool answer carries it.
-//
-// MARKED when it is cut, which is the half a plain slice leaves out: a body
-// cut at exactly the cap and handed over unmarked reads as a description that
-// ENDED there, and the reader has no way to know there is a `body: true` call
-// worth making. [textcut.Ellipsis] is the tree's one rune-safe cut, so a
-// multi-byte character on the boundary does not reach a model as a
-// replacement character.
-func shownBody(body string, whole bool) string {
-	if whole {
-		return body
+	narrow := "Ask for less with `include`: the parts are body, comments, " +
+		"history, links and fields, and each on its own always fits."
+	if len(answer) == 1 {
+		return jsonAnswer(detail, narrow)
 	}
-	return textcut.Ellipsis(body, TaskBodyShown)
+	return jsonAnswer(answer, narrow)
 }
 
 // ---- create_work_item -------------------------------------------------- //
@@ -1828,7 +1825,7 @@ func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
 // "unknown" is read as the item's key, and the seat reports the work filed —
 // under a number that is a gap if the task step never landed. And where this
 // node's operation ledger cannot vouch for the operation (a seat re-running a
-// turn queued before its node adopted a snapshot), the create used to be
+// turn whose trigger predates the ledger's sweep), the create used to be
 // refused outright, which the default failure text renders as "the change was
 // NOT made": the seat then reworded the call and filed a duplicate of the item
 // its first run had filed.
@@ -1858,7 +1855,7 @@ func createUnknown(actor Actor, opID, id string, got tracker.WriteResult) tools.
 // version, and the seat reports the change made — when nothing may have been
 // published at all: an operation this node's ledger cannot vouch for is
 // answered `unknown` WITHOUT publishing, which is exactly the answer a seat
-// woken by a backlog trigger just after its node adopted a snapshot gets.
+// re-running a turn whose trigger predates the ledger's sweep gets.
 //
 // # Which operation it names
 //
@@ -2234,7 +2231,7 @@ func handles(all ...string) []string {
 // re-run that makes the same calls in the same order reproduces every count.
 //
 // A COUNT OF ZERO ADDS NOTHING to the identity, so a run's first call of each
-// kind — every call, before this existed — derives the id it always did.
+// kind derives the id of the call alone.
 //
 // tool is the calling tool's own name, which is what the count is kept by.
 //
@@ -4147,15 +4144,18 @@ func positionOf(at statelog.Position) any {
 // It serves these same tool implementations, and the design gives it the same
 // level for the same reason: a person deciding something about their own
 // company is not helped by a faster wrong answer. Neither surface lets the
-// caller choose — see [statelog.LevelSettable].
+// caller choose — see [statelog.SettableLevels].
 var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 
 // seatRead is [seatReadLevel] for the readers that take a whole freshness.
 //
 // NO BOUND AND NO FLOOR, deliberately: a seat reads `linearizable`, which
-// establishes the log's end itself and takes no staleness bound, and the floor
-// a wake carried was waited for before the turn opened (read-your-trigger),
-// so there is nothing left for a tool call to name.
+// establishes the log's end itself and takes no staleness bound — and the
+// position a wake carried is already in the node's floors from the turn's start
+// (the engine's runTurn), which every read of that change's domain the router
+// routes carries to whichever holder answers it, so there is nothing left for a
+// tool call to name. (The ranked searches carry no floor at all: they read an
+// index, which no log position describes.)
 var seatRead = statelog.Freshness{Level: seatReadLevel}
 
 // boardEmpty reports whether a grouped answer holds no task at all — which,

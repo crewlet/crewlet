@@ -109,7 +109,7 @@ function inkOnFill(css: string): string[] {
 
 /**
  * A MARK, ONLY. `--color-text-muted` is about 3:1 against the ground in BOTH
- * themes — #8d8d94 on the light sheet is 3.13, #5f5f68 on the dark one 3.01 —
+ * themes (#878d9f on the light sheet is 3.09, #5a6176 on the dark one 3.12),
  * which is the floor WCAG sets for a NON-TEXT mark and not the 4.5 a word
  * needs.
  *

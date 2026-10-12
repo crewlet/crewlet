@@ -31,6 +31,8 @@ import type {
   WorkItemsAnswer,
   WorkSummary,
 } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -140,14 +142,16 @@ function mount(
   location.hash = hash;
   asks = [];
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  store.applyOrg({
-    timezone: "UTC",
-    roles: [
-      { name: "CEO", handle: "ceo" },
-      { name: "SWE", handle: "swe" },
-    ],
-  });
+  store.applyHealth(healthFrame());
+  store.applyOrg(
+    withDerived({
+      timezone: "UTC",
+      roles: [
+        { name: "CEO", handle: "ceo" },
+        { name: "SWE", handle: "swe" },
+      ],
+    }),
+  );
   setup(store);
   const socket = new LiveSocket(store);
   (
@@ -265,10 +269,12 @@ test("the custom window opens on the company days a named range covers", async (
       </LayerHost>,
       { tokens: rollup(1), viewer: VIEWER },
       (store) =>
-        store.applyOrg({
-          timezone: "Europe/Berlin",
-          roles: [{ name: "SWE", handle: "swe" }],
-        }),
+        store.applyOrg(
+          withDerived({
+            timezone: "Europe/Berlin",
+            roles: [{ name: "SWE", handle: "swe" }],
+          }),
+        ),
     );
     await settle();
     fireEvent.click(screen.getByTitle("Name two company days of your own"));
@@ -384,6 +390,37 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
   await settle();
   expect(screen.getByText("No monthly budget")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Set one" })).toBeNull();
+});
+
+// A MANAGED DOCUMENT (ADR-0030) IS SET WHERE IT IS MANAGED: an operator whose
+// token is not one of its writers is told there is no ceiling and offered no
+// way to set one, which Spend › Budgets would only hold.
+test("on a managed document only a writer is offered to set a budget", async () => {
+  mount(
+    "#/spend?window=30d",
+    <Spend />,
+    {
+      tokens: rollup(1),
+      viewer: { ...VIEWER, config_writer: false, config_managed_by: ["gitops"] },
+    },
+    (store) => store.applyBudget(UNCAPPED),
+  );
+  await settle();
+  expect(screen.getByText("No monthly budget")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Set one" })).toBeNull();
+  cleanup();
+
+  mount(
+    "#/spend?window=30d",
+    <Spend />,
+    {
+      tokens: rollup(1),
+      viewer: { ...VIEWER, config_writer: true, config_managed_by: ["gitops"] },
+    },
+    (store) => store.applyBudget(UNCAPPED),
+  );
+  await settle();
+  expect(screen.getByRole("link", { name: "Set one" })).toBeTruthy();
 });
 
 // THE CACHE'S SHARE IS READ ÷ INPUT, and a window where nothing reported a
@@ -705,4 +742,49 @@ test("the expensive tasks are the engine's order, with their reopens", async () 
     limit: 50,
   });
   expect(document.body.innerHTML).not.toMatch(/[$€£]\s?\d|\bUSD\b/);
+});
+
+// A PERSON IS A ROW OF THEIR OWN, and says why it has no turns. Two people of
+// one role are two rows — keyed on the role they were one — and where a seat
+// counts its turns a person's row says a person takes none, rather than a
+// blank that reads as a seat that ended nothing.
+test("people are their own rows, and say they take no turns", async () => {
+  const person = (handle: string, total: number) => ({
+    ...bucket(total),
+    role: "Founder",
+    handle,
+    agent_id: "",
+    person: true,
+    by_phase: {},
+  });
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(900, { by_agent: [person("maya", 600), person("ana", 300)] }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
+  expect(within(grid).getByText(/maya/i)).toBeTruthy();
+  expect(within(grid).getByText(/ana/i)).toBeTruthy();
+  expect(within(grid).getAllByLabelText(/A person takes no turns/).length).toBeGreaterThan(0);
+});
+
+// THE AUXILIARY MODEL'S SPEND IS NAMED FOR WHAT IT WAS FOR, in the words the
+// turn screen uses for the same records — never as background work outside
+// the seats, which it is not: every call is inside its seat's row already.
+test("the auxiliary card names each purpose and its provider calls", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(500, {
+      by_worker: [
+        { worker: "condense_thread", ...bucket(300, { calls: 7 }) },
+        { worker: "memory_filter", ...bucket(200, { calls: 1 }) },
+      ],
+    }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const card = screen.getByText("Auxiliary model").closest(".spend-card") as HTMLElement;
+  expect(within(card).getByText("condense thread")).toBeTruthy();
+  expect(within(card).getByText("7 calls")).toBeTruthy();
+  expect(within(card).getByText("memory filter")).toBeTruthy();
+  expect(screen.queryByText("Background workers")).toBeNull();
 });

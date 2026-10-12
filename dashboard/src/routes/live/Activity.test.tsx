@@ -23,6 +23,7 @@ import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -60,7 +61,7 @@ function mount() {
         events: [
           {
             id: "e-1",
-            type: "task_created",
+            type: "task_assigned",
             category: "task",
             source: "engine",
             actor: "CEO",
@@ -268,19 +269,21 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   location.hash = "#/live/events?seat=swe";
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
-  store.applyOrg({
-    roles: [
-      { name: "SWE", handle: "swe" },
-      { name: "CTO", handle: "cto" },
-    ],
-  });
+  store.applyOrg(
+    withDerived({
+      roles: [
+        { name: "SWE", handle: "swe" },
+        { name: "CTO", handle: "cto" },
+      ],
+    }),
+  );
   store.applySeats([
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },
   ]);
   const live = (id: string, agentId: string, summary: string) => ({
     id,
-    type: "task_created",
+    type: "task_assigned",
     category: "task",
     source: "engine",
     actor: "engine",
@@ -317,6 +320,12 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   });
   expect(asked.find((a) => a.what === "events")?.params.seat).toBe("swe");
   expect(asked.find((a) => a.what === "event_series")?.params.seat).toBe("swe");
+  // AND THE FEED'S ROWS ALONE, on every page and the axis: the head of this
+  // log is the live ring, which holds no accounting row, so a page or a bar
+  // that held them would be another log than the one being scrolled.
+  for (const what of ["events", "event_series"]) {
+    expect(asked.find((a) => a.what === what)?.params.feed_only, what).toBe("true");
+  }
   expect(screen.getByText("swe opened a task")).toBeTruthy();
   expect(screen.queryByText("cto opened a task")).toBeNull();
   // THE FILTER SAYS WHOSE LOG THIS IS, by name, and takes itself off.

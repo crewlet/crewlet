@@ -13,6 +13,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
 // Snapshotting the stream estate, and why it is the wire API.
@@ -122,8 +124,8 @@ type StreamArtifact struct {
 // The snapshots land in a subdirectory of root, and each artifact's File is
 // relative to root rather than to that subdirectory, because that is the path
 // a restore reading the manifest has to join.
-func snapshotStreams(ctx context.Context, nc *nats.Conn, root string) ([]StreamArtifact, error) {
-	js, err := jetstream.New(nc)
+func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root string) ([]StreamArtifact, error) {
+	js, err := api.Client(nc)
 	if err != nil {
 		return nil, fmt.Errorf("backup: reach the JetStream API: %w", err)
 	}
@@ -137,7 +139,7 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, root string) ([]StreamA
 
 	artifacts := make([]StreamArtifact, 0, len(names))
 	for _, name := range names {
-		artifact, err := snapshotStream(ctx, nc, name, root)
+		artifact, err := snapshotStream(ctx, nc, api, name, root)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +171,7 @@ func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) 
 }
 
 // snapshotStream writes one stream's snapshot under root.
-func snapshotStream(ctx context.Context, nc *nats.Conn, name, root string) (StreamArtifact, error) {
+func snapshotStream(ctx context.Context, nc *nats.Conn, api jsapi.API, name, root string) (StreamArtifact, error) {
 	// SUBSCRIBED BEFORE THE REQUEST, and flushed. The server checks for
 	// interest on the deliver subject before it starts and waits only
 	// about two seconds for it to appear — so a subscription created after
@@ -209,10 +211,17 @@ func snapshotStream(ctx context.Context, nc *nats.Conn, name, root string) (Stre
 		return StreamArtifact{}, fmt.Errorf("backup: encode the request for %s: %w", name, err)
 	}
 
+	// IN THE API THE CLIENT SPEAKS, because this request goes past the
+	// client: the library has no snapshot call, and a raw subject formed
+	// against the account's own API is answered by nothing on a broker that
+	// serves its JetStream under a domain.
+	subject, err := api.Subject(fmt.Sprintf(server.JSApiStreamSnapshotT, name))
+	if err != nil {
+		return StreamArtifact{}, fmt.Errorf("backup: address the snapshot of %s: %w", name, err)
+	}
 	askCtx, cancel := context.WithTimeout(ctx, snapshotRequestTimeout)
 	defer cancel()
-	reply, err := nc.RequestWithContext(askCtx,
-		fmt.Sprintf(server.JSApiStreamSnapshotT, name), request)
+	reply, err := nc.RequestWithContext(askCtx, subject, request)
 	if err != nil {
 		return StreamArtifact{}, fmt.Errorf("backup: ask for a snapshot of %s: %w", name, err)
 	}

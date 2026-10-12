@@ -247,7 +247,11 @@ describe("credentials", () => {
         type: "addSeat",
         key: "new:qa",
         placement: { parent: "unit:sales", after: null },
-        data: { name: "QA", handle: "qa", integrations: { slack: { channel: "C9" } } },
+        data: {
+          name: "QA",
+          handle: "qa",
+          integrations: { slack: { bot_token: "${QA_SLACK_BOT}" } },
+        },
       },
     });
     const qa = locate(added.draft, "new:qa");

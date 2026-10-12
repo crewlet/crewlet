@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -34,6 +34,8 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 const companyYAML = `
@@ -331,11 +333,13 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	}
 }
 
-// A node whose roles leave out ingress binds nothing, even with api.port set.
-// The role was validated and advertised to peers while serveAPI read only the
-// port, so a seats-only satellite opened a listener it was placed on a private
-// host to avoid. The port is left free and the node says why.
-func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
+// A NODE WHOSE ROLES LEAVE OUT INGRESS SERVES ITS PROBES ON api.port, AND
+// NOTHING ELSE. An orchestrator runs every node and has to be able to restart
+// one that wedged and wait on one that has not joined, so /health and /ready
+// answer here; the API, the dashboard and the webhooks are a peer's, and a
+// satellite placed on a private host for exactly that reason must not serve
+// them.
+func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -344,33 +348,78 @@ func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
 	boot := bootstrapFor(t, 0)
 	boot.API.Host = "127.0.0.1"
 	boot.API.Port = freePort(t)
-	boot.Node.Roles = []string{"seats", "workers"}
+	boot.Node.Roles = []string{"data", "seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
+	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
-	if surface != nil {
-		surface.stop(context.Background(), logging.Get("test"))
-		t.Fatal("a node without the ingress role built an HTTP surface")
+	if surface == nil {
+		t.Fatalf("a node without the ingress role bound no listener, so no "+
+			"orchestrator can probe it:\n%s", logged.String())
 	}
-	if !strings.Contains(logged.String(), "api_not_started") {
-		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.app != nil || surface.projector != nil {
+		t.Error("a node without the ingress role built the whole API")
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(boot.API.Port)))
-	if err != nil {
-		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	if !strings.Contains(logged.String(), "api_probes_listening") {
+		t.Errorf("the node did not say what its listener serves:\n%s", logged.String())
 	}
-	_ = listener.Close()
+
+	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+	health := getJSON(t, base+"/health")
+	if health["node"] != e.Node().ID() || health["configured"] != true {
+		t.Errorf("/health = %v, want this node, configured", health)
+	}
+	if roles, _ := health["roles"].([]any); len(roles) != 3 {
+		t.Errorf("/health roles = %v, want the three this node runs", health["roles"])
+	}
+	if _, present := health["clients"]; present {
+		t.Errorf("/health carries the dashboard's client count on a node that "+
+			"serves no dashboard: %v", health)
+	}
+	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+	}
+	// THE PROBE SURFACE'S JUDGEMENT, over the work this node must be doing.
+	// The engine here was never started, so it holds no presence lease — a
+	// fact only that judgement reads, and the one that outranks admission —
+	// so a listener wired to the wrong runtime, or to the ingress answer,
+	// says something else.
+	if got := statusOf(t, http.MethodGet, base+"/ready"); got != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready = %d on a node holding no presence lease, want 503", got)
+	}
+	ready := getJSON(t, base+"/ready")
+	if ready["node"] != e.Node().ID() || ready["ready"] != false ||
+		ready["reason"] != api.ReasonNoPresence {
+		t.Errorf("/ready = %v, want this node, not ready, for %q", ready, api.ReasonNoPresence)
+	}
+	// REFUSED, by the router's 404 or by the guard in front of it: an
+	// always-guarded prefix (/config, /operator/) and every write answer 401
+	// to a caller with no token before any route is looked up, exactly as the
+	// full surface answers them.
+	for _, route := range [][2]string{
+		{http.MethodGet, "/"}, {http.MethodGet, "/dashboard"}, {http.MethodGet, "/agents"},
+		{http.MethodGet, "/org"}, {http.MethodGet, "/events"},
+		{http.MethodGet, "/stream/snapshot"}, {http.MethodGet, "/query/agents"},
+		{http.MethodGet, "/ws/stream"}, {http.MethodGet, "/config"},
+		{http.MethodPost, "/webhooks/github"}, {http.MethodPost, "/config"},
+		{http.MethodPost, "/backup"}, {http.MethodPost, "/operator/mcp"},
+	} {
+		if got := statusOf(t, route[0], base+route[1]); got != http.StatusNotFound &&
+			got != http.StatusUnauthorized {
+			t.Errorf("%s %s = %d on a probe listener, want it refused", route[0], route[1], got)
+		}
+	}
 }
 
-// A SEATS NODE WITHOUT INGRESS STILL SERVES ITS OWN TOOL BRIDGE, and nothing
-// else. A bridged session lives in the process that opened it, so the box of an
-// agent-mode seat can reach only the node running that seat; gating the bridge
-// on ingress with the rest of the API launched boxes whose every tool call found
-// nothing listening. The listener carries the bridge's own refusal for a bad
-// token, and no dashboard, probe or REST route.
-func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
+// A SEATS NODE WITHOUT INGRESS ALSO SERVES ITS OWN TOOL BRIDGE, beside its
+// probes. A bridged session lives in the process that opened it, so the box of
+// an agent-mode seat can reach only the node running that seat; gating the
+// bridge on ingress with the rest of the API launched boxes whose every tool
+// call found nothing listening. The listener carries the bridge's own refusal
+// for a bad token, the probes, and no dashboard or REST route.
+func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -383,7 +432,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"seats"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
+	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -398,87 +447,97 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	if !bridge.Mounted() {
 		t.Error("the listener did not mount the bridge, so no session can open")
 	}
-	if !strings.Contains(logged.String(), "api_bridge_listening") {
-		t.Errorf("the node did not say what its listener serves:\n%s", logged.String())
+	if !strings.Contains(logged.String(), "tool_bridge=true") {
+		t.Errorf("the node did not say its listener serves the bridge:\n%s", logged.String())
 	}
 
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	status := func(method, path string) int {
-		t.Helper()
-		// A POOL OF THIS TEST'S OWN rather than http.DefaultClient's: this
-		// binary holds eight httptest servers and over a hundred parallel
-		// tests, and every one of their cleanups sweeps the shared pool —
-		// see [github.com/crewlet/crewlet/internal/httpx/httpxtest].
-		probe := httpxtest.Pool(t)
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			req, reqErr := http.NewRequestWithContext(t.Context(), method, base+path,
-				strings.NewReader("{}"))
-			if reqErr != nil {
-				t.Fatal(reqErr)
-			}
-			res, doErr := probe.Do(req)
-			if doErr == nil {
-				_ = res.Body.Close()
-				return res.StatusCode
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("%s %s: %v", method, path, doErr)
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	if got := status(http.MethodPost, mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
+	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
 		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
 	}
-	// THE EXEMPT PATHS 404, because this listener mounts none of them and
-	// the guard lets them through to a mux that has nothing.
-	for _, path := range []string{"/health", "/dashboard"} {
-		if got := status(http.MethodGet, path); got != http.StatusNotFound {
-			t.Errorf("GET %s = %d on a bridge-only listener, want 404", path, got)
+	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+	}
+	// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets it
+	// through to a mux that has nothing there.
+	for _, path := range []string{"/dashboard"} {
+		if got := statusOf(t, http.MethodGet, base+path); got != http.StatusNotFound {
+			t.Errorf("GET %s = %d on a probe listener, want 404", path, got)
 		}
 	}
 	// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly what
 	// the full surface answers now that every guarded route needs a
 	// credential: the guard runs before routing, so it cannot know the
 	// route is absent, and a 404 here would have disclosed that.
-	if got := status(http.MethodGet, "/agents"); got != http.StatusUnauthorized {
-		t.Errorf("GET /agents = %d on a bridge-only listener, want the guard's 401", got)
+	if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
+		t.Errorf("GET /agents = %d on a probe listener, want the guard's 401", got)
 	}
 }
 
-// A NODE THAT RUNS NO SEATS BINDS NOTHING FOR A BRIDGE, whatever its
-// environment says. It opens no session, so a listener there could only answer
-// every box with 401, and a workers node placed on a private host would open a
-// port for nothing.
-func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
+// A NODE THAT RUNS NO SEATS SERVES NO BRIDGE, whatever its environment says.
+// It opens no session, so the route there could only answer every box with
+// 401: its listener carries its probes alone, and the bridge route is absent.
+func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	e := testEngineWithBridge(t, bridgeFor(t, mcpbridge.Options{
+	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	}))
+	})
+	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"workers"}
+	boot.Node.Roles = []string{"data", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
+	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
-	if surface != nil {
-		surface.stop(context.Background(), logging.Get("test"))
-		t.Fatal("a node that runs no seats bound a listener for a bridge it never uses")
+	if surface == nil {
+		t.Fatalf("a workers node bound no listener for its probes:\n%s", logged.String())
 	}
-	if !strings.Contains(logged.String(), "api_not_started") {
-		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if bridge.Mounted() {
+		t.Error("a node that runs no seats mounted a tool bridge it never uses")
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	if !strings.Contains(logged.String(), "tool_bridge=false") {
+		t.Errorf("the node did not say its listener serves no bridge:\n%s", logged.String())
 	}
-	_ = listener.Close()
+	base := "http://127.0.0.1:" + strconv.Itoa(port)
+	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusNotFound {
+		t.Errorf("POST %snot-a-token = %d on a node running no seats, want 404", mcpbridge.PathPrefix, got)
+	}
+	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+	}
+}
+
+// statusOf is the status one request answers, retried while the listener is
+// still coming up.
+func statusOf(t *testing.T, method, url string) int {
+	t.Helper()
+	// A POOL OF THIS TEST'S OWN rather than http.DefaultClient's: this
+	// binary holds eight httptest servers and over a hundred parallel tests,
+	// and every one of their cleanups sweeps the shared pool — see
+	// [github.com/crewlet/crewlet/internal/httpx/httpxtest].
+	probe := httpxtest.Pool(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := probe.Do(req)
+		if err == nil {
+			_ = res.Body.Close()
+			return res.StatusCode
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s %s: %v", method, url, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
@@ -658,12 +717,31 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 // reconciler that owns the posture, then the listener.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
+	return serveNodeLogged(t, boot, e, logging.Get("test"))
+}
+
+// serveNodeLogged is [serveNode] logging to log, for a case that asserts what
+// the node said about its listener.
+func serveNodeLogged(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	log *slog.Logger,
+) (*httpSurface, error) {
+	t.Helper()
+	surface, _, err := serveNodeWith(t, boot, e, log)
+	return surface, err
+}
+
+// serveNodeWith is [serveNodeLogged] handing back the reconciler too, for a
+// case that runs the reconcile loop the way runEngine does rather than serving
+// a node whose epoch never moves.
+func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	log *slog.Logger,
+) (*httpSurface, *engine.Reconciler, error) {
+	t.Helper()
 	cipher := e.Cipher()
-	configSurface, err := configapi.New(configapi.Options{
-		Store: e.Backends().Store, Cipher: cipher,
-		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
-		Holders: configapi.DirectoryHolders(e.IAM()),
-	})
+	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
+	// config surface exactly where a running one would — and none on a node
+	// holding no estate.
+	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
 		t.Fatalf("config surface: %v", err)
 	}
@@ -678,8 +756,8 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
-		nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, log)
+	return surface, reconciler, err
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.
@@ -692,17 +770,47 @@ func testEngine(t *testing.T) *engine.Engine {
 // the bridge from the environment, as a node does.
 func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
 	t.Helper()
-	boot := bootstrapFor(t, 0)
-	company, err := config.ParseCompany([]byte(companyYAML))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	return testEngineWith(t, engine.Options{Bridge: bridge})
+}
+
+// testEngineWith is testEngine built from opts, on a bootstrap of its own and
+// the [companyYAML] company where opts names none.
+func testEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
+	t.Helper()
+	opts.Bootstrap = bootstrapFor(t, 0)
+	seedEngineStore(t, opts.Bootstrap)
+	if opts.Company == nil {
+		company, err := config.ParseCompany([]byte(companyYAML))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		opts.Company = company
 	}
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company, Bridge: bridge})
+	e, err := engine.New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	return e
+}
+
+// seedEngineStore writes the binary's migrated store image wherever boot's
+// engine will open an estate, so the boot finds every migration applied rather
+// than running the whole sequence on a fresh file — none of these cases is
+// about migrating. The rule is internal/engine's SeedStore: the node estate
+// always, the replicated one only where the node holds it
+// ([engine.HoldsEstate]), and nothing for a scratch store, which a boot
+// discards.
+func seedEngineStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 func freePort(t *testing.T) int {
@@ -756,11 +864,12 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		args  []string
+		file  func(*config.Bootstrap)
 		check func(*testing.T, *config.Bootstrap)
 	}{
 		{
 			name: "roles narrow what this node does",
-			args: []string{"-roles", "ingress,workers"},
+			args: []string{"-roles", "data,ingress,workers"},
 			check: func(t *testing.T, b *config.Bootstrap) {
 				roles, err := b.Node.RoleSet()
 				if err != nil {
@@ -776,14 +885,33 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 		},
 		{
 			name: "whitespace and a trailing comma are not roles",
-			args: []string{"-roles", " seats , "},
+			args: []string{"-roles", " data , "},
 			check: func(t *testing.T, b *config.Bootstrap) {
 				roles, err := b.Node.RoleSet()
 				if err != nil {
 					t.Fatalf("RoleSet: %v", err)
 				}
-				if len(roles) != 1 || !roles.Has(placement.RoleSeats) {
-					t.Errorf("roles = %v, want only seats", roles)
+				if len(roles) != 1 || !roles.Has(placement.RoleData) {
+					t.Errorf("roles = %v, want only data", roles)
+				}
+			},
+		},
+		{
+			// A FILE THAT ALREADY SAYS STATELESS takes a stateless role
+			// set from the flag, which is how one image runs as either.
+			name: "a stateless file takes a stateless role set",
+			args: []string{"-roles", "seats"},
+			file: func(b *config.Bootstrap) {
+				b.Store.Scratch = true
+				b.Stream.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
+			},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				roles, err := b.Node.RoleSet()
+				if err != nil {
+					t.Fatalf("RoleSet: %v", err)
+				}
+				if roles.Has(placement.RoleData) || !roles.Has(placement.RoleSeats) {
+					t.Errorf("roles = %v, want seats alone", roles)
 				}
 			},
 		},
@@ -811,12 +939,100 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
-			boot.Node.Roles = []string{"seats"}
+			if tc.file != nil {
+				tc.file(boot)
+			}
 			fs, roles, host, port := parseOverrides(t, tc.args)
 			if err := overrideNode(boot, fs, roles, host, port); err != nil {
 				t.Fatalf("overrideNode: %v", err)
 			}
 			tc.check(t, boot)
+		})
+	}
+}
+
+// A FLAG CANNOT TAKE `data` AWAY FROM A NODE WHOSE FILE KEEPS A DURABLE STORE.
+// The flag is applied after the file validated, so without the role rules
+// re-run here it would boot a node whose roles say stateless on a store that
+// was never marked scratch — neither a data node nor a disposable one.
+func TestARolesFlagThatDropsDataFromADurableNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
+	fs, roles, host, port := parseOverrides(t, []string{"-roles", "seats"})
+	err := overrideNode(boot, fs, roles, host, port)
+	if err == nil {
+		t.Fatal("-roles seats on a durable node was accepted")
+	}
+	if !strings.Contains(err.Error(), "store.scratch") {
+		t.Errorf("the refusal does not name the setting to change: %v", err)
+	}
+}
+
+// A FLAG CANNOT PUT THE API ON THE PUBLIC LISTENER'S SOCKET, NOR TURN IT OFF
+// BENEATH ONE. The file validated with its own api.port, so without the
+// listener rules re-run here `-api-port 8443` would bind the admin API on the
+// socket the deployment publishes, and `-api-port 0` would leave a public
+// listener that no probe stands beside.
+func TestAnAPIFlagThatContradictsThePublicListenerIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"the public listener's port", []string{"-api-port", "8443"}},
+		{"no HTTP surface", []string{"-api-port", "0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080,
+				Public: config.APIPublic{Port: 8443}}}
+			fs, roles, host, port := parseOverrides(t, tc.args)
+			err := overrideNode(boot, fs, roles, host, port)
+			if err == nil {
+				t.Fatalf("%v was accepted beside api.public.port 8443", tc.args)
+			}
+			if !strings.Contains(err.Error(), "api.public.port") {
+				t.Errorf("the refusal does not name the setting it contradicts: %v", err)
+			}
+		})
+	}
+}
+
+// THE PUBLIC LISTENER'S api.port RULE IS AN INGRESS NODE'S. The shared file sets
+// api.public for its ingress peer, and the satellite the deployment guide
+// starts with `-roles data,seats,workers -api-port 0` serves no probe on any
+// port — so it is accepted, while the same flag under `-roles data,ingress` is
+// the node answering no probe the rule exists to refuse. Both flags are read
+// together, whichever order the rule would otherwise have seen them in.
+func TestThePublicListenersAPIPortRuleReadsTheRolesFlag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		refuse bool
+	}{
+		{"a satellite with no HTTP surface", []string{"-roles", "data,seats,workers", "-api-port", "0"}, false},
+		{"an ingress node with no HTTP surface", []string{"-roles", "data,ingress", "-api-port", "0"}, true},
+		{"the roles alone, on a file with no API port", []string{"-roles", "data,ingress"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080,
+				Public: config.APIPublic{Port: 8443}}}
+			if !slices.Contains(tc.args, "-api-port") {
+				boot.API.Port = 0
+				boot.Node.Roles = []string{"data", "seats"}
+			}
+			fs, roles, host, port := parseOverrides(t, tc.args)
+			err := overrideNode(boot, fs, roles, host, port)
+			switch {
+			case tc.refuse && err == nil:
+				t.Fatalf("%v was accepted beside api.public", tc.args)
+			case tc.refuse && !strings.Contains(err.Error(), "api.public.port"):
+				t.Errorf("the refusal does not name the setting it contradicts: %v", err)
+			case !tc.refuse && err != nil:
+				t.Fatalf("%v was refused: %v", tc.args, err)
+			}
 		})
 	}
 }
@@ -881,7 +1097,7 @@ func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string,
 
 // EVERY COMMAND THE BINARY DISPATCHES IS ADVERTISED BY ITS USAGE.
 //
-// Nothing connects the switch in run() to the text in usage(), so a command
+// Nothing connects the switch in runIn() to the text in usage(), so a command
 // added to one and not the other works perfectly and is discoverable only by
 // reading the source. A vendor CLI shipped that way for the whole of the
 // rewrite: provisioning, import and resync all worked, and the only list of
@@ -974,10 +1190,11 @@ func advertisedWords(t *testing.T, help, prefix, end string) []string {
 	return out
 }
 
-// dispatchedCommands returns the case values of the command switch in run().
+// dispatchedCommands returns the case values of the command switch in runIn(),
+// which [run] wraps.
 func dispatchedCommands(t *testing.T) []string {
 	t.Helper()
-	return switchCases(t, "main.go", "run", "cmd")
+	return switchCases(t, "main.go", "runIn", "cmd")
 }
 
 // switchCases returns the string case values of the switch on the variable
@@ -1584,6 +1801,9 @@ func TestUsageNamesBothTierBFlags(t *testing.T) {
 // and a 401 had two sources to send an operator to. The flag is refused as
 // unknown now, the variable is the token whatever else is on the line, and
 // the help names the variable because nothing else does.
+//
+// NOT PARALLEL, and handed the PROCESS's environment: that is its subject, and
+// it is what every run of the binary reads ([run]).
 func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 	t.Setenv(apiTokenEnv, "from-the-environment")
 
@@ -1595,12 +1815,12 @@ func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	if _, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1", "-token", "typed"},
+	if _, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1", "-token", "typed"},
 		"budgets show", &stderr, nil); err == nil {
 		t.Error("-token was accepted: a credential typed on the command line " +
 			"is in the shell history and in ps")
 	}
-	client, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1"},
+	client, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1"},
 		"budgets show", &stderr, nil)
 	if err != nil {
 		t.Fatalf("nodeClientFor: %v", err)
@@ -1854,4 +2074,42 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 		t.Fatalf("mcpbridge.New: %v", err)
 	}
 	return bridge
+}
+
+// A CLI-AGENT ENTRY'S PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE
+// EPOCH BUILD — so the refusal is located at the field to change. Built-only,
+// an unloadable profile came back with an empty path and an `engine:` prefix,
+// and a key with no variable to go in validated clean.
+func TestValidateLocatesACLIAgentProfileRefusal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, entry, path string }{
+		{"an unloadable profile", "      cli: {agent: custom}\n", "providers.llm.sub.cli.overrides"},
+		{"an api key with nowhere to go",
+			"      api_keys: [\"${OPENROUTER_API_KEY}\"]\n      cli: {agent: hermes, auth: {mode: api-key}}\n",
+			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag",
+			"      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: m\n" + tc.entry
+			path := writeYAML(t, "company.yaml", doc)
+			var out, errOut bytes.Buffer
+			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {
+				t.Fatalf("the entry validated: %s", out.String())
+			}
+			var report struct {
+				Problems []struct {
+					Path string `json:"path"`
+				} `json:"problems"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("decode: %v (%s)", err, out.String())
+			}
+			if len(report.Problems) == 0 || report.Problems[0].Path != tc.path {
+				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
+			}
+		})
+	}
 }

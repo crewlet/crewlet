@@ -11,12 +11,13 @@
 //
 //	go test ./internal/coord/kv/ -run TestBrokerBehavior -v
 //
-// Measured on nats-server 2.14.5 / nats.go 1.53.1, embedded in-process with
-// file storage:
+// Measured on nats-server 2.15.0 / nats.go 1.54.0, embedded in-process with
+// file storage (a run prints the versions it ran on as its first row, read
+// from the binary rather than from here):
 //
 //	bucket TTL (MaxAge) under test                1s
 //	renewed through Update, held for              3x the bucket TTL, no lapse
-//	unrenewed key reaped after                    1.306s — TTL + 306 ms
+//	unrenewed key reaped after                    1.298s — TTL + 298 ms
 //	Get on a reaped key                           jetstream.ErrKeyNotFound
 //	Create on the reaped key                      succeeds
 //	epoch record after the lease key was reaped   still there, value intact
@@ -24,9 +25,9 @@
 //	Update at a stale revision                    jetstream.ErrKeyRevisionMismatch
 //	per-key TTL (KeyTTL), never renewed           expires
 //	per-key TTL (KeyTTL), renewed through Update  IMMORTAL — the trap
-//	Get                                           40 µs
-//	Update                                        40 µs
-//	WatchAll over 21 keys                         720 µs
+//	Get                                           20 µs
+//	Update                                        30 µs
+//	WatchAll over 21 keys                         710 µs
 //
 // Three of these decide something.
 //
@@ -54,6 +55,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -68,6 +70,20 @@ import (
 // 100 ms floor on a stream MaxAge by an order of magnitude, so the reap lag
 // being measured is the broker's own and not a rounding artefact.
 const behaviorTTL = time.Second
+
+// behaviorRenew is how long these measurements wait between the writes that
+// keep a key alive.
+//
+// A QUARTER OF THE TTL, so a renew that wakes up to three quarters of a TTL
+// late still lands before the broker can reap the key. These cases run beside
+// the package's others, under the race detector on a shared runner, where a
+// sleeper can wake hundreds of milliseconds late; at the half TTL the renewal
+// case used to wait, a wake more than 500 ms late could let the broker reap the
+// key — how much later it actually does depends on where its expiry sweep
+// stands — and fail the case on the scheduler rather than on the broker. What
+// is measured, that a write restarts an entry's age, does not depend on how
+// soon before the TTL the write comes, only on its coming before it.
+const behaviorRenew = behaviorTTL / 4
 
 // reapPoll is how often the harness asks whether an expired key is gone. It
 // bounds the resolution of the reap-lag number, so it is well below the lag
@@ -105,7 +121,15 @@ func (r *results) print(t *testing.T) {
 	t.Log(b.String())
 }
 
+// TestBrokerBehavior runs BESIDE the package's other cases, on a broker of its
+// own. What it asserts has the room for that — every write that keeps a key
+// alive comes a [behaviorRenew] after the last, three quarters of a TTL short
+// of the reap — and what it only prints does not: a round trip measured while
+// the runner is busy is a busy runner's number. The numbers the design is
+// tuned to are the ones the command in this file's doc prints, which runs it
+// alone.
 func TestBrokerBehavior(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	nc := embeddedNATS(t)
 	js, err := jetstream.New(nc)
@@ -114,7 +138,7 @@ func TestBrokerBehavior(t *testing.T) {
 	}
 	out := &results{}
 	t.Cleanup(func() { out.print(t) })
-	out.record("nats-server / nats.go", "2.14.5 / 1.53.1 (see go.mod)")
+	out.record("nats-server / nats.go", brokerVersions(t))
 	out.record("bucket TTL (MaxAge) under test", behaviorTTL)
 
 	leases := newBucket(ctx, t, js, "beh_leases", jetstream.KeyValueConfig{TTL: behaviorTTL})
@@ -163,15 +187,18 @@ func TestBrokerBehavior(t *testing.T) {
 		// TTL: because every write restarts an entry's age, a heartbeat that
 		// Updates is a renew, with no second mechanism and nothing to keep
 		// in sync.
+		//
+		// Renewed every [behaviorRenew], and twelve of those hold the key
+		// for three TTLs, which is what is measured.
 		key := "renewed"
 		rev, err := leases.Create(ctx, key, []byte("held"))
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		const renewals = 6
+		const renewals = 12
 		start := time.Now()
 		for i := range renewals {
-			time.Sleep(behaviorTTL / 2)
+			time.Sleep(behaviorRenew)
 			rev, err = leases.Update(ctx, key, []byte("held"), rev)
 			if err != nil {
 				t.Fatalf("renew %d at %v: %v — Update does not refresh the entry's age, so a "+
@@ -191,10 +218,19 @@ func TestBrokerBehavior(t *testing.T) {
 		// not a peer, and not anybody's wall clock — decides the seat is
 		// free. This is the arbiter Postgres now() used to be.
 		key := "abandoned"
+		// THE CLOCK IS READ BEFORE THE WRITE, never after it. The broker
+		// stamps the message somewhere inside the Create's round trip, so
+		// the instant before the call is the one bound that is never later
+		// than the stamp. Read after the call returns, an acknowledgement
+		// that came back late — a scheduler that woke this goroutine a few
+		// hundred milliseconds after the broker answered — was taken off
+		// the key's measured age, and a broker reaping exactly on time read
+		// as one reaping early: the "sooner than its TTL" failure below,
+		// raised against a broker that had done nothing wrong.
+		written := time.Now()
 		if _, err := leases.Create(ctx, key, []byte("held")); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		written := time.Now()
 		deadline := written.Add(behaviorTTL + 10*time.Second)
 		var gone time.Duration
 		for {
@@ -291,8 +327,10 @@ func TestBrokerBehavior(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create with a per-key TTL: %v", err)
 		}
-		// One renew, well inside the TTL — exactly what a heartbeat does.
-		time.Sleep(behaviorTTL / 3)
+		// One renew, well inside the TTL — exactly what a heartbeat does —
+		// and at [behaviorRenew] for that constant's reason: a renew that
+		// woke too late to land would fail this case on the scheduler.
+		time.Sleep(behaviorRenew)
 		if _, err := marked.Update(ctx, "renewed", []byte("v"), rev); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -355,6 +393,39 @@ func TestBrokerBehavior(t *testing.T) {
 			return errors.New("watcher closed before the initial values ended")
 		}))
 	})
+}
+
+// brokerVersions names the nats-server and nats.go these measurements ran on,
+// read from this test binary's own build information.
+//
+// READ, NEVER WRITTEN DOWN, because a version spelled beside a measurement is
+// one the next go.mod bump leaves behind: this row printed "2.14.5 / 1.53.1
+// (see go.mod)" for as long as go.mod said 2.15.0 / 1.54.0, so every table it
+// headed attributed its numbers to a broker the binary did not contain. A
+// replaced module reports its replacement, since that is the code that ran.
+func brokerVersions(t *testing.T) string {
+	t.Helper()
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("this test binary carries no build information, so the broker " +
+			"its measurements ran on cannot be named")
+	}
+	version := func(path string) string {
+		for _, dep := range info.Deps {
+			if dep.Path != path {
+				continue
+			}
+			if dep.Replace != nil {
+				return dep.Replace.Path + " " + dep.Replace.Version
+			}
+			return dep.Version
+		}
+		t.Fatalf("%s is not in this binary's build information, so the "+
+			"measurements cannot say which one they ran on", path)
+		return ""
+	}
+	return version("github.com/nats-io/nats-server/v2") + " / " +
+		version("github.com/nats-io/nats.go")
 }
 
 func newBucket(ctx context.Context, t *testing.T, js jetstream.JetStream, name string, cfg jetstream.KeyValueConfig) jetstream.KeyValue {

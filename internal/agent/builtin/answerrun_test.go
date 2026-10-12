@@ -82,12 +82,15 @@ func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 	t.Helper()
 	return sandbox.PendingRun{TurnID: turnID, AgentHandle: "agent-cto",
 		AgentID: ctoSeat(t).String(), Requester: "founder", Status: status,
-		Question: "which branch?"}
+		Question: "which branch?", LaunchID: "launch-" + turnID}
 }
 
-// AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, and the
-// caller is told `pending`: the node holding the seat resumes the run, and this
-// one cannot say what that became.
+// AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, naming the
+// question it answers, and the caller is told `pending`: the node holding the
+// seat resumes the run, and this one cannot say what that became. The question
+// — the job the run held when it asked — is what keeps an answer
+// that reaches the seat late from resuming the run as the answer to a later
+// question.
 func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
@@ -101,7 +104,7 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	want := types.SandboxAnswerGiven{
 		TurnID: "t1", Agent: ctoSeat(t).String(), AgentHandle: "agent-cto",
 		Answer: "use main", AnsweredBy: "ops", AnsweredByKind: "human",
-		OperatorID: "session:ops-1",
+		OperatorID: "session:ops-1", LaunchID: "launch-t1",
 	}
 	if len(desk.delivered) != 1 || desk.delivered[0] != want {
 		t.Fatalf("delivered %+v, want %+v", desk.delivered, want)

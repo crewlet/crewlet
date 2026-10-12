@@ -73,12 +73,21 @@ const (
 	hashedJS   = "/static/dashboard/assets/index-Cndv8LWe.js"
 )
 
-// fetch runs one request and returns the whole response.
 // fetch runs one GET as the fixture's credential, with any extra headers a
 // case names. A header the case supplies wins, which is how a case asks for a
 // different credential — or, by naming an empty Authorization, for none.
 func fetch(t *testing.T, a *api.App, path string, headers map[string]string) *http.Response {
 	t.Helper()
+	return serve(a, path, headers)
+}
+
+// serve is fetch for a caller with no test to report through — the crawl the
+// suite makes once, before any case runs ([embeddedDashboard]). A request
+// served in memory has nothing to fail on but the answer it gets, which the
+// caller reads.
+func serve(a *api.App, path string, headers map[string]string) *http.Response {
+	// CREDENTIALLED, as every request here is: the shell is exempt, and the
+	// crawl reaches routes that are not.
 	req := authed(httptest.NewRequest(http.MethodGet, path, nil))
 	for k, v := range headers {
 		req.Header.Set(k, v)

@@ -32,7 +32,7 @@ func peopleInBuckets(n int) []string {
 // enrolMachine creates one active service account through the node's own
 // writer, so a row under its login exists for a retained record to cover.
 //
-// A SERVICE ACCOUNT, BOUND TO NO SEAT: its seat is optional (ADR-0026), so the
+// A SERVICE ACCOUNT, BOUND TO NO SEAT: its seat is optional (ADR-0032), so the
 // row needs no company declaring a human seat — and the id is the caller's,
 // because which bucket each principal falls in is what the cases are about.
 // The operation id is MINTED, carrying its instant, for the reason

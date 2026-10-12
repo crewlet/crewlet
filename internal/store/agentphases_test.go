@@ -41,7 +41,7 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 		}
 	}
 
-	got, _, err := log.AgentPhases(t.Context(), "a-lead", nil)
+	got, _, err := log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 
 	// And the company-wide read agrees, which is the point: the two answers
 	// disagreeing about where history stops is what an operator sees.
-	company, _, err := log.Phases(t.Context(), "a-lead", 0, nil)
+	company, _, err := log.Phases(t.Context(), "a-lead", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
@@ -65,13 +65,16 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 // TWO SEATS THAT SHARE A NAME HAVE TWO HISTORIES.
 //
 // A seat's phases are matched on its agent id and never on the role name
-// beside it. The read used to take the name as well, OR'd with the id, so a
-// seat's page and a seat-filtered Model screen listed its namesake's calls
-// among its own: a name is prose, and two "Engineer"s is an ordinary company
-// — two unit seats stamped from one template share one as a matter of course,
-// and the Live screen's `seat=` handed over as a role listed the twin's rounds.
+// beside it — on its own page ([store.EventLog.AgentPhases]) and when the
+// company's phases are narrowed to it ([store.EventLog.Phases]). The read used
+// to take the name as well, OR'd with the id, so a seat's page and a
+// seat-filtered Model screen listed its namesake's calls among its own: a name
+// is prose, and two "Engineer"s is an ordinary company — two unit seats
+// stamped from one template share one as a matter of course, and the Live
+// screen's `seat=` handed over as a role listed the twin's rounds.
 //
-// Mutation: filter on `agent_role` again, and the twin's phase is listed.
+// Mutation: filter on `agent_role` again, in either read, and the twin's phase
+// is listed.
 func TestASeatsPhasesAreItsOwnWhenItsNameIsShared(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -90,24 +93,24 @@ func TestASeatsPhasesAreItsOwnWhenItsNameIsShared(t *testing.T) {
 		}
 	}
 
-	seat, more, err := log.AgentPhases(t.Context(), "a-ada", nil)
+	seat, more, err := log.AgentPhases(t.Context(), "a-ada", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
 	if len(seat) != 1 || seat[0].ID != "phase-a-ada" || more {
 		t.Errorf("a-ada's phases = %v (more=%v), want only its own", idsOf(seat), more)
 	}
-	company, more, err := log.Phases(t.Context(), "a-bob", 0, nil)
+	company, more, err := log.Phases(t.Context(), "a-bob", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
 	if len(company) != 1 || company[0].ID != "phase-a-bob" || more {
 		t.Errorf("a-bob's phases = %v (more=%v), want only its own", idsOf(company), more)
 	}
-	if all, _, err := log.Phases(t.Context(), "", 0, nil); err != nil || len(all) != 2 {
+	if all, _, err := log.Phases(t.Context(), "", 0, nil, time.Now()); err != nil || len(all) != 2 {
 		t.Errorf("the company's phases = %d (err %v), want both", len(all), err)
 	}
-	if none, more, err := log.AgentPhases(t.Context(), "", nil); err != nil || len(none) != 0 || more {
+	if none, more, err := log.AgentPhases(t.Context(), "", nil, time.Now()); err != nil || len(none) != 0 || more {
 		t.Errorf("no id = %v (more=%v), %v; want nothing rather than every row that carries none",
 			idsOf(none), more, err)
 	}
@@ -142,7 +145,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		add(i)
 	}
 
-	seat, more, err := log.AgentPhases(t.Context(), "a-lead", nil)
+	seat, more, err := log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -150,7 +153,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		t.Errorf("a seat with exactly a page of phases: %d rows, more=%v; want %d and false",
 			len(seat), more, store.AgentPhaseLimit)
 	}
-	company, more, err := log.Phases(t.Context(), "", store.AgentPhaseLimit, nil)
+	company, more, err := log.Phases(t.Context(), "", store.AgentPhaseLimit, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
@@ -158,7 +161,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		t.Errorf("a company page of exactly the phases there are: %d rows, more=%v; want %d and false",
 			len(company), more, store.AgentPhaseLimit)
 	}
-	turns, more, err := log.TurnPartials(t.Context(), store.TurnQuery{Limit: store.AgentPhaseLimit}, time.Now())
+	turns, more, err := log.TurnPartials(t.Context(), store.TurnQuery{Limit: store.AgentPhaseLimit})
 	if err != nil {
 		t.Fatalf("TurnPartials: %v", err)
 	}
@@ -169,17 +172,17 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 
 	// ONE MORE, and every read says so — and still answers only its page.
 	add(store.AgentPhaseLimit)
-	seat, more, err = log.AgentPhases(t.Context(), "a-lead", nil)
+	seat, more, err = log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
 	if err != nil || len(seat) != store.AgentPhaseLimit || !more {
 		t.Errorf("a seat with a page and one: %d rows, more=%v, err %v; want %d and true",
 			len(seat), more, err, store.AgentPhaseLimit)
 	}
-	company, more, err = log.Phases(t.Context(), "", store.AgentPhaseLimit, nil)
+	company, more, err = log.Phases(t.Context(), "", store.AgentPhaseLimit, nil, time.Now())
 	if err != nil || len(company) != store.AgentPhaseLimit || !more {
 		t.Errorf("a company page short of one: %d rows, more=%v, err %v; want %d and true",
 			len(company), more, err, store.AgentPhaseLimit)
 	}
-	turns, more, err = log.TurnPartials(t.Context(), store.TurnQuery{Limit: store.AgentPhaseLimit}, time.Now())
+	turns, more, err = log.TurnPartials(t.Context(), store.TurnQuery{Limit: store.AgentPhaseLimit})
 	if err != nil || len(turns) != store.AgentPhaseLimit || !more {
 		t.Errorf("a turn page short of one: %d rows, more=%v, err %v; want %d and true",
 			len(turns), more, err, store.AgentPhaseLimit)
@@ -187,7 +190,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 
 	// A SHARE IS NOT A PAGE: every turn it names, and never more.
 	ids := []string{"p-000", "p-001"}
-	share, more, err := log.TurnPartials(t.Context(), store.TurnQuery{IDs: ids, Limit: 1}, time.Now())
+	share, more, err := log.TurnPartials(t.Context(), store.TurnQuery{IDs: ids, Limit: 1})
 	if err != nil || len(share) != len(ids) || more {
 		t.Errorf("a share of two named turns: %d, more=%v, err %v; want 2 and false", len(share), more, err)
 	}

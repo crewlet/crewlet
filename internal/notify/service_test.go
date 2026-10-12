@@ -145,12 +145,17 @@ func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	return h.settled(t, inbox(handle))
 }
 
-// quiet asserts a topic stays empty, which needs a real wait: "nothing
-// arrived" and "nothing has arrived YET" are the same observation until
-// enough time has passed.
+// quiet asserts a topic carried nothing, read the moment Handle has returned.
+//
+// NO WAIT, because nothing is left in flight to wait for. Handle publishes
+// everything it will before it returns — a wake's own publish failure IS its
+// result ([TestAFailedWakeIsRetried]), which a publish from a goroutine could
+// never be — and the memory twin hands a publish to every subscription, these
+// collectors among them, before Publish returns. "Nothing has arrived yet" is
+// therefore "nothing arrived"; the fifty-millisecond sleep this held before
+// every read guarded nothing.
 func (h *harness) quiet(t *testing.T, topic string) {
 	t.Helper()
-	time.Sleep(50 * time.Millisecond)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if got := h.seen[topic]; len(got) != 0 {
@@ -158,11 +163,20 @@ func (h *harness) quiet(t *testing.T, topic string) {
 	}
 }
 
+// skips is every skip the service recorded — each one held, as it is read, to
+// a reason [notify.SkipReason] declares, whole. A reader tells which gate
+// dropped a delivery by comparing that word, so a record whose reason carries
+// anything more is one no reader can place; every reason the service records
+// passes through here in some case, so each is held by one.
 func (h *harness) skips(t *testing.T) []types.NotificationSkipped {
 	t.Helper()
 	var out []types.NotificationSkipped
 	for _, ev := range h.settled(t, skipTopic) {
 		if s, ok := events.DataAs[*types.NotificationSkipped](ev); ok {
+			if !notify.SkipReason(s.Reason).Valid() {
+				t.Errorf("a skip was recorded with reason %q, which is not one "+
+					"notify.SkipReason declares", s.Reason)
+			}
 			out = append(out, *s)
 		}
 	}
@@ -308,13 +322,48 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	// THE SECOND COPY IS WHAT THE LEDGER KEYS ON. The regression above
 	// shipped once with one copy of one key; there are two keys and two
 	// copies now, and a stamp that wrote only the partition would leave
-	// every ledger entry filed on the fallback of the partition field.
+	// every ledger entry filed on its own event's fallback.
 	if got := notify.ConversationIdentityOf(woken[0]); got != "tracker:u-1" {
 		t.Errorf("the ledger would key this turn on %q", got)
 	}
 	if _, present := woken[0].Payload[notify.ConversationField]; !present {
-		t.Error("the identity reached the envelope only through the partition fallback, " +
-			"so a producer that stopped stamping it would look correct")
+		t.Error("the identity is not on the envelope: the wake names no " +
+			"conversation for the ledger to file it under")
+	}
+}
+
+// A FIRST-PARTY WAKE CARRIES WHERE ITS CHANGE WAS COMMITTED, on the envelope
+// the turn reads it from and on the metadata a person reads — and a vendor's
+// delivery, which carries none, wakes a seat with none rather than a position
+// that names nothing.
+func TestAWakeCarriesItsChangesPositionOnTheEnvelope(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	native := events.New(types.RawWebhook{
+		Body: map[string]any{"issue": "ENG-42"}, Trigger: "CREWLET_TRACKER_LOG@3:42",
+	}, events.NewTrace())
+	native.Source = "tracker"
+	if got := h.svc.Handle(t.Context(), native); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	if got := notify.TriggerOf(woken[0]); got != "CREWLET_TRACKER_LOG@3:42" {
+		t.Errorf("the wake's envelope carries trigger %q", got)
+	}
+	n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+	if n == nil || n.Metadata[notify.TriggerField] != "CREWLET_TRACKER_LOG@3:42" {
+		t.Errorf("the wake's metadata does not carry the trigger: %+v", n)
+	}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	vendor := h.settledN(t, inbox("engineering-lead"), 2)[1]
+	if got := notify.TriggerOf(vendor); got != "" {
+		t.Errorf("a delivery carrying no trigger woke a seat with %q", got)
 	}
 }
 
@@ -411,6 +460,39 @@ func TestASelfContainedTriggerDoesNotAskForRecon(t *testing.T) {
 	}
 }
 
+// WHETHER A SUBJECT IS WHAT WAS SENT IS THE SOURCE'S ANSWER, stamped on the
+// wake: a chat backend's subject names the surface and is the same on every
+// message, while a tracker's names the item. The turn's ask is built from the
+// stamp, so a service that answered for the source would either lead every
+// chat turn's ask with "Chat message" or drop the item a comment is about.
+func TestTheWakeSaysWhetherItsSubjectIsTheSurfacesLabel(t *testing.T) {
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = o.Prompts.With(notify.ChatPrompt{Backend: "chat", Label: "Chat"})
+	})
+	chat := to(notify.Recipient{Handle: "engineering-lead"}, "ok, go ahead")
+	chat.Inbound.Source, chat.Inbound.EventType, chat.Inbound.Subject = "chat", "message", "Chat message"
+	item := to(notify.Recipient{Handle: "engineering-lead"}, "Can you look today?")
+	item.Inbound.Subject = "ENG-42 comment: Fix the login redirect"
+	for _, r := range []notify.Routed{chat, item} {
+		h.parser.out = []notify.Routed{r}
+		if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 2 {
+		t.Fatalf("the seat was woken %d times, want twice", len(woken))
+	}
+	for i, want := range []bool{true, false} {
+		n, _ := events.DataAs[*types.ExternalNotification](woken[i])
+		if n.SubjectIsLabel != want {
+			t.Errorf("wake %d (%s, subject %q): SubjectIsLabel = %v, want %v",
+				i, n.NotificationSource, n.Subject, n.SubjectIsLabel, want)
+		}
+	}
+}
+
 func TestADeliveryThatConcernsNobodyIsQuiet(t *testing.T) {
 	h := newService(t, nil)
 	h.parser.out = nil
@@ -432,11 +514,30 @@ func TestAnUnparsedSourceIsRecorded(t *testing.T) {
 		t.Fatalf("Handle = %+v, want an ack — a redelivery finds no parser either", got)
 	}
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "parser") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonUnparsed {
 		t.Fatalf("skips = %+v", skips)
 	}
 	if skips[0].NotificationSource != "mystery" {
 		t.Fatalf("the skip names source %q", skips[0].NotificationSource)
+	}
+}
+
+// A delivery from a surface this company DISCONNECTED is a webhook still
+// registered at the third-party app, and its record says so rather than
+// reading as an integration nothing ever parsed — the two send an operator to
+// opposite places.
+func TestADisconnectedSourceIsRecordedAsDisconnected(t *testing.T) {
+	h := newService(t, nil)
+	if !h.svc.Unregister("tracker") {
+		t.Fatal("the tracker's parser was not registered to take away")
+	}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack — a redelivery finds the source gone too", got)
+	}
+	skips := h.skips(t)
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonRetired {
+		t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonRetired)
 	}
 }
 
@@ -448,7 +549,7 @@ func TestARecipientNobodyMatchesIsRecorded(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "no seat") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonNoSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -522,7 +623,7 @@ func TestTheServiceRefusesToWakeASeatForItsOwnAction(t *testing.T) {
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, inbox("engineering-lead"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "self-action") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonSelfAction {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -535,7 +636,31 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, inbox("dana-founder"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
+		t.Fatalf("skips = %+v", skips)
+	}
+}
+
+// A SEAT WITH NO ID IS SKIPPED, NOT RETRIED. Its mailbox is named by the agent
+// id derived from the org's name and its handle, so a company whose name
+// derives nothing has a seat nothing can publish to — a permanent fact a nak
+// would retry for ever. Mutation: drop the guard and the wake is published to
+// the empty id's subject instead of being recorded as a skip.
+func TestASeatWithNoIDIsSkippedAsUnaddressable(t *testing.T) {
+	nameless := company()
+	nameless.Name = ""
+	nameless.Normalize()
+	h := newService(t, func(_ *notify.Options, h *harness) {
+		h.reg = notify.NewRegistry(nameless, nil)
+	})
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "hi")}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack: an unaddressable seat is skipped, not retried", got)
+	}
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonUnaddressable {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -567,7 +692,8 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 		t.Fatalf("the valve was consulted %d times", h.valve.seen())
 	}
 	h.quiet(t, inbox("engineering-lead"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "rate limit") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonRateLimited {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -623,7 +749,8 @@ func TestAnUnreadablePayloadIsNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), ev); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "unreadable") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonUnreadable {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -637,8 +764,15 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "parse failed") {
-		t.Fatalf("skips = %+v", skips)
+	// The parser's own words ride along as the record's detail — which
+	// payload it could not read is the whole of what an operator needs to
+	// fix it — and apart from the reason, which stays the one word a reader
+	// compares.
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonParseFailed ||
+		skips[0].Detail != "no issue in the payload" {
+		t.Fatalf("skips = %+v, want one %q with the parser's error as its detail",
+			skips, notify.ReasonParseFailed)
 	}
 }
 
@@ -720,7 +854,8 @@ func TestOneFailedWakeAmongSeveralStillRetries(t *testing.T) {
 		t.Fatalf("Handle = %+v", got)
 	}
 	// The human seat was decided, not attempted, so its skip still lands.
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }

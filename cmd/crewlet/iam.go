@@ -166,7 +166,7 @@ pat:<credential id>.
 //
 // STDIN IS AN ARGUMENT for the one subcommand that reads it — `token -login`,
 // whose password is never a flag — so a suite can pipe one in.
-func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
@@ -306,7 +306,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			strings.TrimSpace(*login), iamTokenBody(*grants, *label, *days),
 			stdin, stderr))
 	}
-	client, err := newIAMClient(boot, *apiURL)
+	client, err := newIAMClient(environ, boot, *apiURL)
 	if err != nil {
 		return err
 	}
@@ -494,7 +494,7 @@ var iamSubjects = subjectTable{
 // sent: the seat a person will hold, the address that finds them, and the
 // login a service account is found by.
 //
-// A PERSON HOLDS A HUMAN SEAT for as long as they are here (ADR-0026), so an
+// A PERSON HOLDS A HUMAN SEAT for as long as they are here (ADR-0032), so an
 // invitation and a person's create each name one; a SERVICE ACCOUNT's is
 // optional, bound only to act as it. A person's login may be left out — the
 // node proposes it from their address — and a service account's may not,
@@ -675,12 +675,12 @@ type iamClient struct {
 	keyed bool
 }
 
-func newIAMClient(boot *config.Bootstrap, override string) (*iamClient, error) {
+func newIAMClient(environ config.Source, boot *config.Bootstrap, override string) (*iamClient, error) {
 	base, err := nodeBaseURL(boot, override, "the company's identity directory")
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken("/iam")
+	token, err := nodeAPIToken(environ, "/iam")
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +757,8 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	var answer map[string]any
 	_ = json.Unmarshal(raw, &answer)
 	if resp.StatusCode >= 400 {
-		return answer, iamRefusal(resp.StatusCode, answer, raw, c.keyed)
+		return answer, iamRefusal(resp.StatusCode, resp.Header.Get("Content-Type"),
+			answer, raw, c.keyed)
 	}
 	return answer, nil
 }
@@ -842,7 +843,13 @@ const iamMaxAnswer = 8 << 20
 // keyed is whether the command's route reads a key. One that does not — a
 // mint — is retried as a new write, which the node's own sentence says, so
 // the op id is named for the trail and no -idempotency-key is prescribed.
-func iamRefusal(status int, answer map[string]any, raw []byte, keyed bool) error {
+//
+// contentType is the answer's, for a body that carries no engine code: what
+// stood in front of the node is read through [foreignAnswer], as the other
+// three clients read it, rather than printed whole.
+func iamRefusal(status int, contentType string, answer map[string]any, raw []byte,
+	keyed bool) error {
+
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
 	}
@@ -857,11 +864,12 @@ func iamRefusal(status int, answer map[string]any, raw []byte, keyed bool) error
 		said = code + ": " + detail
 	case code != "":
 		said = code
-	case len(raw) > 0:
-		said = fmt.Sprintf("the node answered %d: %s", status,
-			strings.TrimSpace(string(raw)))
 	default:
-		said = fmt.Sprintf("the node answered %d", status)
+		// NOT THE ENGINE'S ANSWER — no code of its own — so what it says is
+		// read the way every other client here reads a proxy's page: its
+		// title or its text, bounded, never the markup dumped whole.
+		said = fmt.Sprintf("the node answered %d: %s", status,
+			foreignAnswer(contentType, raw))
 	}
 	if outcome, _ := answer["outcome"].(string); outcome == string(statelog.OutcomeUnknown) {
 		said = "the node could not establish whether this landed: " + said

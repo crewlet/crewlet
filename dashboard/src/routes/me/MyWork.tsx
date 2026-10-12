@@ -215,7 +215,7 @@ export function MyWork({ section }: { section: MeSection }) {
   const holds = dayHolds({
     ownDay,
     name: whoseName,
-    lead: ownDay ? null : leadsInLine(index, viewer.handle, whose),
+    lead: !ownDay && leadsInLine(index, viewer.handle, whose),
   });
 
   // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
@@ -421,9 +421,8 @@ export function MyWork({ section }: { section: MeSection }) {
       {/* THREE STATES, and they are not one empty state. A reader nobody has
           signed in, a reader the directory binds to no seat, and a reader who
           simply has not chosen somebody need three different sentences. The
-          unbound reader — a service account, a Tier A token's session, or a
-          person recorded before every person held a seat — is not an EMPTY
-          state: they have a day of their own, kept under their login, and
+          unbound reader — a service account or a Tier A token's session,
+          never a person — is not an EMPTY state: it has a day of its own, kept under their login, and
           what they lack is the work the chart addresses to a seat — which is
           what the note says (`UnboundRemedy`), above the day rather than
           instead of it. */}
@@ -497,7 +496,7 @@ export function MyWork({ section }: { section: MeSection }) {
                     whose={whose}
                     they={they}
                     theirs={ownDay ? undefined : whoseName}
-                    total={mine.totals?.priorities.total}
+                    total={mine.totals.priorities.total}
                     now={now}
                     chrome={chrome}
                     hrefOf={workHref}
@@ -518,7 +517,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "unblocked" && (
                 <Block
                   rows={mine.unblocked_recent}
-                  total={mine.totals?.unblocked_recent}
+                  total={mine.totals.unblocked_recent}
                   now={now}
                   chrome={chrome}
                   hint="Work whose blockers have all finished — the one section about a change rather than a state."
@@ -528,7 +527,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "collaborating" && (
                 <Block
                   rows={mine.collaborating}
-                  total={mine.totals?.collaborating}
+                  total={mine.totals.collaborating}
                   now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
@@ -538,7 +537,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "watching" && (
                 <Block
                   rows={mine.watching_recent}
-                  total={mine.totals?.watching_recent}
+                  total={mine.totals.watching_recent}
                   now={now}
                   chrome={chrome}
                   hint="Followed, and changed recently."
@@ -560,7 +559,7 @@ export function MyWork({ section }: { section: MeSection }) {
                     />
                     <PageFoot
                       shown={mine.checklist_items.length}
-                      claim={mine.totals?.checklist_items}
+                      claim={mine.totals.checklist_items}
                       order="by-task"
                     />
                   </>
@@ -583,9 +582,7 @@ export function MyWork({ section }: { section: MeSection }) {
  * put to them are theirs to answer, which the engine enforces, and their work
  * is changed from the work screens — except the reorder a lead may make. A lead
  * is anybody above them in the chart (`leadsInLine`), which is the tracker's
- * own reading of "somebody in their line"; where the engine did not report its
- * hierarchy that is unknown, and the sentence says so rather than telling a
- * reader who may well lead the person that they do not.
+ * own reading of "somebody in their line".
  */
 export function dayHolds({
   ownDay,
@@ -594,19 +591,13 @@ export function dayHolds({
 }: {
   ownDay: boolean;
   name: string;
-  /** Whether the reader leads the person in the chart, or null for unknown. */
-  lead: boolean | null;
+  /** Whether the reader leads the person in the chart. */
+  lead: boolean;
 }): { all: string | null; reorder: string | null } {
   if (ownDay) return { all: null, reorder: null };
   const all = `This is ${name}’s day — what is asked of them is theirs to answer, and their work is changed from the work screens.`;
-  if (lead === true) return { all, reorder: null };
-  return {
-    all,
-    reorder:
-      lead === null
-        ? `Only somebody in ${name}’s line reorders their queue, and this engine did not report who reports to whom.`
-        : `Only ${name}, or somebody they report to, reorders their queue.`,
-  };
+  if (lead) return { all, reorder: null };
+  return { all, reorder: `Only ${name}, or somebody they report to, reorders their queue.` };
 }
 
 /**
@@ -670,7 +661,13 @@ function WhoseDay({
             gets one: the name falls back to the handle, which is what the
             seat page resolves on too. */}
         {!login && (
-          <SeatChip name={seat?.name ?? handle} handle={handle} kind={seat?.kind} size="md" />
+          <SeatChip
+            name={seat?.name ?? handle}
+            handle={handle}
+            kind={seat?.kind}
+            avatar={seat?.avatar}
+            size="md"
+          />
         )}
         <span className="mono t-caption">{handle}</span>
         <Tag>{ownDay ? "yours" : "their day"}</Tag>
@@ -719,13 +716,6 @@ function WhoseDay({
  * where the answer is COMPLETE and did not stop at its handle cap. Short of
  * that the row says nothing at all rather than claiming an empty desk.
  *
- * # The line is UNKNOWN without the engine's own hierarchy
- *
- * `OrgIndex.hierarchy` false means every reporting line is unknown rather than
- * absent — an older engine sends no `derived` block — so the group is not
- * drawn at all there. An empty "Your line" would say this reader leads nobody,
- * which is a claim this client cannot make.
- *
  * # And the empty row is only for a reader with no day of their own
  *
  * `setHandle("")` writes the parameter's own fallback, which the router
@@ -751,11 +741,6 @@ export function whoseDayOptions(
     return `${handle} · ${held === 0 ? "nothing open" : plural(held, "open item")}`;
   };
 
-  // A SEAT WITH NO HANDLE CANNOT BE PICKED. The engine reports one for every
-  // seat it runs; a projection with no derived block reports none, and such a
-  // row used to be offered with an empty value — which is the SAME value as
-  // the empty row below, so picking a colleague landed on "nobody chosen".
-  const named = index.seats.filter((s) => s.handle);
   const byName = (a: Seat, b: Seat) => a.name.localeCompare(b.name);
   const row = (seat: Seat, group: string): SelectOption => ({
     value: seat.handle,
@@ -768,10 +753,7 @@ export function whoseDayOptions(
   });
 
   const mine = viewer.handle ? index.byHandle.get(viewer.handle) : undefined;
-  const line =
-    index.hierarchy && mine
-      ? mine.reports.filter((s) => s.handle && s.handle !== mine.handle).sort(byName)
-      : [];
+  const line = mine ? mine.reports.filter((s) => s.handle !== mine.handle).sort(byName) : [];
   const inLine = new Set(line.map((s) => s.handle));
 
   const out: SelectOption[] = [];
@@ -787,7 +769,7 @@ export function whoseDayOptions(
     });
   } else out.push({ value: "", label: "Pick somebody" });
   for (const seat of line) out.push(row(seat, "Your line"));
-  for (const seat of named.sort(byName)) {
+  for (const seat of [...index.seats].sort(byName)) {
     if (seat.handle === mine?.handle || inLine.has(seat.handle)) continue;
     out.push(row(seat, "Anybody"));
   }
@@ -821,18 +803,15 @@ function countFor(
   mine: WorkMyWork,
   listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
 ): string {
-  // `totals` is optional on the wire: a node from before the engine counted
-  // the blocks answers without it, and a tab with no count is honest where a
-  // page length would be a ceiling read as a total.
   const totals = mine.totals;
   const claim: WorkClaimTotal | undefined = {
     assigned: listed.assigned,
     "asked-by-me": listed.askedBy,
-    "asked-of-me": totals?.asked_of_me,
-    unblocked: totals?.unblocked_recent,
-    collaborating: totals?.collaborating,
-    watching: totals?.watching_recent,
-    checklist: totals?.checklist_items,
+    "asked-of-me": totals.asked_of_me,
+    unblocked: totals.unblocked_recent,
+    collaborating: totals.collaborating,
+    watching: totals.watching_recent,
+    checklist: totals.checklist_items,
   }[tab];
   if (claim === undefined) return "";
   return pageCount(claim.total, claim.capped === true);
@@ -959,7 +938,7 @@ function AskedOfMe({
       />
     );
   }
-  const claim = mine.totals?.asked_of_me;
+  const claim = mine.totals.asked_of_me;
   return (
     <div className="col gap-2">
       {/* WHY THE ANSWERS DO NOT PRESS, said once above them — each button

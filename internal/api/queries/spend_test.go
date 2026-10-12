@@ -65,7 +65,10 @@ func newSpendFixture(t *testing.T) *spendFixture {
 
 func (f *spendFixture) sources() queries.Sources {
 	return queries.Sources{
-		State:   livestate.New(),
+		// On the registry's clock: the live window is aged and labelled
+		// on the projection's own, and on the wall clock a record stamped
+		// beside spendNow left it long ago.
+		State:   livestate.New(livestate.WithClock(func() time.Time { return spendNow })),
 		Usage:   f.db.Replicated(),
 		Company: companySource(f.t, f.company),
 		Now:     func() time.Time { return spendNow },
@@ -351,7 +354,6 @@ func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
 			"phase": "execute", "total_tokens": 9,
 		},
 	})
-	sources.Now = time.Now
 	got := rollupOf(t, registryOver(t, sources), nil)
 	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "sre" {
 		t.Errorf("by_agent = %+v, want the unit seat under its handle sre", got.ByAgent)
@@ -386,18 +388,23 @@ func TestASeatIsAskedByItsHandle(t *testing.T) {
 	if got.Seat != "ceo" {
 		t.Errorf("the rollup names the seat %q, want its handle", got.Seat)
 	}
-	// A PERSON'S SEAT IS REFUSED rather than matched: the engine runs no
-	// turn for a human, so an empty answer would read as one who did
-	// nothing.
+	// A PERSON'S SEAT NARROWS TO THE PERSON'S SPEND, never to every agent
+	// seat's: a person takes no turn, but what was spent for them is filed
+	// under their human seat's handle — and an empty agent id asks for
+	// every seat, so a person's window read through it held the company's.
 	people := f.sources()
 	cfg, err := config.ParseCompany([]byte(viewerCompany))
 	if err != nil {
 		t.Fatal(err)
 	}
 	people.Company = companySource(t, cfg)
-	if _, err := registryOver(t, people).Answer(everyGrant(t), "tokens",
-		map[string]any{"days": 7, "seat": "ana"}); !errors.Is(err, queries.ErrBadParams) {
-		t.Errorf("seat=ana, a person, answered %v, want bad params", err)
+	f.person("node-a", "2026-09-25", "ana", usage.Tokens{Phase: "auxiliary",
+		Worker: "answer_knowledge", Model: "haiku", Input: 5, Output: 2, Total: 7, Calls: 1})
+	hers := rollupOf(t, registryOver(t, people), map[string]any{"days": 7, "seat": "ana"})
+	if hers.Totals.TotalTokens != 7 || len(hers.ByAgent) != 1 || !hers.ByAgent[0].Person ||
+		hers.AgentID != "" || hers.Seat != "ana" {
+		t.Errorf("seat=ana, a person, answered %+v; want her 7 tokens alone, named by "+
+			"her seat and by no agent id", hers)
 	}
 }
 
@@ -423,4 +430,77 @@ func mustZone(t *testing.T, name string) *time.Location {
 		t.Fatal(err)
 	}
 	return loc
+}
+
+// person publishes one node's person-day through the shipped applier.
+func (f *spendFixture) person(node, day, handle string, cells ...usage.Tokens) {
+	f.t.Helper()
+	f.seq++
+	r := usage.Record{
+		RecordEnvelope: usage.RecordEnvelope{Writer: node, Subject: usage.Subject{
+			Kind: usage.KindPerson, Node: node, Day: day, Person: handle}},
+		Role: "Founder", Tokens: cells,
+	}
+	body, err := r.Encode()
+	if err != nil {
+		f.t.Fatalf("encode: %v", err)
+	}
+	env, err := usage.Domain{}.Envelope(body)
+	if err != nil {
+		f.t.Fatalf("envelope: %v", err)
+	}
+	rec := statelog.Record{Envelope: env, Payload: body, Position: statelog.Position{
+		Stream: usage.Domain{}.Stream().Name, Generation: 1, Seq: f.seq}}
+	if err := f.db.Replicated().Tx(f.t.Context(), func(tx *sql.Tx) error {
+		_, err := usage.NewApplier().Apply(f.t.Context(), tx, rec, statelog.ApplyOptions{
+			MaxVariables: f.db.Replicated().Caps().MaxVariables})
+		return err
+	}); err != nil {
+		f.t.Fatalf("apply %s %s %s: %v", node, day, handle, err)
+	}
+}
+
+// A NAMED WINDOW HOLDS WHAT THE COMPANY'S PEOPLE COST, as their own rows.
+//
+// A question answered on the operator surface is charged to the company's
+// windows, and it named no agent — so it was in no seat's day and no named
+// spend window held it, while the counter it was charged to did. It is the
+// person's row: marked as one, named by their seat's handle, with no turn
+// counts since a person takes none — and a window narrowed to that handle is
+// theirs alone.
+func TestANamedWindowHoldsWhatPeopleCost(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	f.day("node-a", "2026-09-24", "lead", 1, 0, spent("execute", "sonnet", 100))
+	answer := usage.Tokens{Phase: "auxiliary", Worker: "answer_knowledge", Model: "haiku",
+		ProviderKey: "zulu", Input: 40, Total: 42, Output: 2, Calls: 1}
+	f.person("node-a", "2026-09-24", "maya", answer)
+	f.person("node-b", "2026-09-25", "maya", answer)
+
+	r := registryOver(t, f.sources())
+	got := rollupOf(t, r, map[string]any{"days": 7})
+	if got.Totals.TotalTokens != 184 {
+		t.Fatalf("totals = %+v, want the seat's 100 and maya's 84", got.Totals)
+	}
+	var maya *tokens.AgentRow
+	for i, a := range got.ByAgent {
+		if a.Handle == "maya" {
+			maya = &got.ByAgent[i]
+		}
+	}
+	if maya == nil || !maya.Person || maya.TotalTokens != 84 || maya.Turns != nil ||
+		maya.AgentID != "" || maya.Role != "Founder" {
+		t.Fatalf("maya's row = %+v, want a person's row of 84 tokens and no turns", maya)
+	}
+	var answered bool
+	for _, w := range got.ByWorker {
+		answered = answered || (w.Worker == "answer_knowledge" && w.TotalTokens == 84)
+	}
+	if !answered {
+		t.Errorf("by_worker = %+v, want answer_knowledge's 84", got.ByWorker)
+	}
+	hers := rollupOf(t, r, map[string]any{"days": 7, "seat": "maya"})
+	if hers.Totals.TotalTokens != 84 || len(hers.ByAgent) != 1 {
+		t.Fatalf("maya's own window = %+v, want her 84 alone", hers)
+	}
 }

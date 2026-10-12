@@ -1,10 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -162,8 +162,9 @@ func constsOf(t *testing.T, dir, typeName string) []string {
 // module root is one the go command does not build, but the root is wherever
 // somebody cloned it, and judged by that rule a checkout at `~/.crewlet` was
 // skipped whole — so every gate above reported every value as unpublished.
-// sourcetree.Walk never hands its start to the callback, which is what keeps
-// the rule below from reaching it; this pins that for the rule it would hit.
+// The rule judges only the directories below the root (see publishes), and
+// this pins that for the rule the root's own name would hit — through the
+// read, the prefilter and the line split the gates above use.
 func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), ".crewlet")
@@ -187,41 +188,53 @@ func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
 
 // sourceMatches is every first submatch of pattern in the module's non-test Go
 // files outside the payloads' own package.
+//
+// Each pattern opens with `\b` or an alternation, which leaves the regexp
+// package no literal prefix to jump to, so over the whole module each ran at
+// the race detector's megabyte a second — sixteen to twenty-eight seconds a
+// gate. A file reaches the pattern only if it holds what a match needs
+// (sourcetree.Required), and where no match can cross a line
+// (sourcetree.LineLocal), only its lines that do; both are exact, so the
+// submatches are the ones a scan of every byte finds.
 func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
+	need, perLine := sourcetree.Required(pattern), sourcetree.LineLocal(pattern)
 	found := map[string]bool{}
-	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir():
-			// The payloads' OWN package is skipped: a literal there is
-			// a test fixture or a summary's receiver, not a publisher,
-			// and a dot-directory is one the go command does not build.
-			// The root never arrives here — sourcetree.Walk walks its
-			// start without handing it over — so a checkout at
-			// `~/.crewlet` is read rather than skipped whole.
-			if d.Name() == "testdata" || d.Name() == "types" ||
-				strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
+	for _, f := range moduleFiles(t, root) {
+		if !publishes(f.rel) || !need.Admits(f.body) {
+			continue
+		}
+		texts := [][]byte{f.body}
+		if perLine {
+			texts = bytes.Split(f.body, []byte("\n"))
+		}
+		for _, text := range texts {
+			if !need.Admits(text) {
+				continue
 			}
-			return nil
-		case !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
-			return nil
+			for _, m := range pattern.FindAllSubmatch(text, -1) {
+				found[string(m[1])] = true
+			}
 		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range pattern.FindAllStringSubmatch(string(body), -1) {
-			found[m[1]] = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the module: %v", err)
 	}
 	return found
+}
+
+// publishes reports whether a file below the module root is one a publisher
+// can live in. The payloads' OWN package is not: a literal there is a test
+// fixture or a summary's receiver, not a publisher. Nor is testdata, nor a
+// dot-directory, which the go command does not build. Every directory BELOW
+// the root is judged and the root itself never is — its name is wherever
+// somebody cloned it, and judged by that rule a checkout at `~/.crewlet`
+// was skipped whole.
+func publishes(rel string) bool {
+	dirs := strings.Split(rel, "/")
+	for _, dir := range dirs[:len(dirs)-1] {
+		if dir == "testdata" || dir == "types" || strings.HasPrefix(dir, ".") {
+			return false
+		}
+	}
+	return true
 }
 
 // payloadLiterals is every `types.X{` a non-test file in this module writes.

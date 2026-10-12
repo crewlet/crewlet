@@ -25,10 +25,10 @@ import (
 )
 
 // evictionLog is one identity-claiming log's eviction table, as its domain
-// reads it: through the NODE handle, whose replicated peer it reaches itself.
+// reads it: through the node's replicated estate, which every log applies to.
 type evictionLog interface {
 	Name() string
-	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
 // AN EVICTION IS WRITTEN AS WHOEVER PRESSED IT, ON EVERY LOG THE TRIM COUNTS
@@ -98,7 +98,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	}
 	for _, log := range logs {
 		for deadline := time.Now().Add(10 * time.Second); ; {
-			rows, err := log.Evictions(t.Context(), e.Backends().Store)
+			rows, err := log.Evictions(t.Context(), e.Backends().Store.Replicated().Reader())
 			if err != nil {
 				t.Fatalf("read %s's evictions: %v", log.Name(), err)
 			}

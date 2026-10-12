@@ -136,7 +136,7 @@ providers:
   llm:
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys:
         - "${ANTHROPIC_API_KEY}"
   embeddings:
@@ -257,7 +257,7 @@ providers:
     # Anthropic (official SDK)
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
     # OpenAI (official SDK)
@@ -282,6 +282,7 @@ providers:
     subscription:
       type: cli-agent
       model: sonnet                   # whatever the CLI's --model accepts
+                                      #   (opencode: <provider>/<model>)
       cli:
         agent: claude-code            # or codex | gemini-cli | opencode
                                       #    | muse-code | kimi-code | hermes
@@ -292,7 +293,7 @@ A `cli-agent` entry is authenticated once, on the engine host, and then
 verified:
 
 ```bash
-crewlet llm login subscription --capture-token   # or plain `login` for the
+crewlet llm login subscription -capture-token    # or plain `login` for the
                                                  # vendor's browser flow
 crewlet llm doctor subscription
 ```
@@ -301,9 +302,16 @@ Each seat gets its own isolated CLI home, so agents never inherit one
 another's sessions or memory — that and the auth options are covered in
 [Subscription LLM Backends](../concepts/subscription-llm-backends.md).
 
-Useful knobs on every entry: `api_keys` accepts **multiple** keys (the
-provider rotates on rate-limit/auth errors), `reasoning: true` enables
-extended thinking / reasoning where the model supports it, and different
+Useful knobs: on an API entry (`anthropic`, `openai`, `openai-compatible`)
+`api_keys` accepts **multiple** keys (the provider rotates on
+rate-limit/auth errors) — a `cli-agent` entry takes one, and only under
+`cli.auth.mode: api-key` (see [what a cli-agent entry
+refuses](../concepts/subscription-llm-backends.md#configuration-reference)) —
+`reasoning_effort` sets how
+hard the model thinks (`low` to `max`; an `anthropic` entry thinks on every
+call and defaults to `high`, an `openai` one sends it once `reasoning: true`
+— see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)
+for what each Claude model accepts), and different
 roles can use different entries (e.g. executives on a frontier model, junior
 agents on a cheaper one). A role's `llm` also accepts a **list** — 
 `llm: [subscription, default]` runs on the flat-rate CLI and falls through
@@ -530,6 +538,12 @@ greeting.
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
+While an agent is working, the Live row counts the seats at work and a
+**Running** group under the sidebar's shortcuts (after Projects, Pinned and
+Starred) lists up to four running turns. Press one to watch it — its
+transcript, with the phase it is on open, or the coding run it is parked on
+drawn live above its phases. `g r` does the same for the one running turn, and
+opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
@@ -598,7 +612,7 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker and knowledge-base tools a seat holds — fourteen over
+It gets the same tracker and knowledge-base tools a seat holds — eighteen over
 the tracker and five over the pages — and eleven more that no seat is given:
 the saved views, the catalogue write, a person's own queue, inbox and pins, the
 trash, and the board drag. Each is decided by the same authority table a seat's
@@ -683,16 +697,69 @@ work that waited runs.
 
 ## Split deployment (optional)
 
-Run ingress as its own node when you want webhooks to keep arriving while
-you restart the agents, or the two on different hosts. Same command, given
-different roles:
+Run the agents as their own node when you want webhooks to keep arriving
+while you restart them, or the agents on a host of their own. The API, the
+duties and the company's data stay on the node you already have; the agents
+move to a node that **holds no data** — it keeps nothing that has to outlive
+it, and restarts in seconds whatever the company's size.
 
-```bash
-crewlet run -roles seats,workers -api-port 0   # terminal 1
-crewlet run -roles ingress -api-port 8000      # terminal 2
+Two changes to the `crewlet.yaml` above make it the data node: it becomes a
+member other nodes can join, and its leases become the fleet's rather than its
+own.
+
+```yaml
+# crewlet.yaml — the data node, as above plus:
+node:
+  id: data-1
+  roles: [data, ingress, workers]   # everything but the agents
+stream:
+  store_dir: "./acme-data/stream"
+  leaf:
+    host: 127.0.0.1
+    port: 7422                      # where the agents node joins
+coordination:
+  type: embedded-kv                 # leases the agents node can see
 ```
 
-The ingress node exposes the same REST endpoints, webhook handlers
+The agents node gets a Tier A of its own. It needs no `company.yaml`, no API
+port and no stream directory — it fetches the company from the data node, and
+its store is deleted every time it starts:
+
+```yaml
+# agents.yaml — the agents node
+node:
+  id: agents-1
+  roles: [seats]
+store:
+  path: "./acme-agents/agents.db"
+  scratch: true
+stream:
+  leaf:
+    urls: ["nats-leaf://127.0.0.1:7422"]
+coordination:
+  type: embedded-kv
+# and the same `secrets:` block as crewlet.yaml, if you configured one:
+# this node decrypts the company document and the secret store itself
+```
+
+```bash
+crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
+crewlet run -config agents.yaml -api-port 0       # terminal 2
+```
+
+`-api-port 0` binds nothing on the agents node. Give it a port of its own
+instead (`-api-port 8001`) when something should probe it: without the
+`ingress` role it serves `/health` and `/ready` there and nothing else, and its
+`/ready` turns `200` once it has joined the fleet and been admitted — see
+[Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+
+The agents node claims the seats once the data node answers that its copy of
+the company's records is level with its logs, and its seats' tracker and knowledge
+tools read and write through it. See
+[Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
+node without data can and cannot do.
+
+The data node exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
 `/webhooks/gitlab`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see

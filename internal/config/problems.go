@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // Problem is one validation failure, located in the document and classified:
@@ -402,7 +403,7 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 //
 // "dangling_reference" is a name that resolves to nothing, with Ref naming
 // what carries it (lead, unit, manages, or gitlab_access_level). "admission"
-// is a rule a stored revision breaks that a new write would be refused for.
+// is a rule an applied revision breaks that a new write would be refused for.
 // "advisory" is a setting that is valid and carries a consequence, and it is
 // the one kind either tier can raise. Ref is empty on the last two, because
 // neither names a reference. From and To are display text: what holds the
@@ -422,7 +423,7 @@ type Warning struct {
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that
 // resolves to nothing. WarningAdmission is the kind of one about an admission
-// rule a stored revision breaks. WarningAdvisory is the kind of one about a
+// rule an applied revision breaks. WarningAdvisory is the kind of one about a
 // setting that is valid and carries a consequence its author should hear
 // before production tells them.
 const (
@@ -451,8 +452,8 @@ func advisory(path Path, message string) Warning {
 //
 // A document that passed [Company.Validate] carries no admission warning, so
 // on a write that was admitted this is its references and its advisories. The
-// admission half is what a revision re-activated under the runnable rules
-// still says: a reload or a revert of a company stored before a rule existed.
+// admission half is what a revision applied under the runnable rules still
+// says: one a newer peer admitted under rules this build does not share.
 func (c *Company) Warnings() []Warning {
 	out := append(c.ReferenceWarnings(), c.AdmissionWarnings()...)
 	return append(out, c.AdvisoryWarnings()...)
@@ -536,6 +537,10 @@ func (c *Company) ReferenceWarnings() []Warning {
 // company its agents run alone and a surprise for one somebody meant to sign
 // in to.
 //
+// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]),
+// and an LLM entry worth a second look ([Providers.llmWarnings]): an anthropic
+// model the capability table does not know, named with no claude_model.
+//
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
 	out := []Warning{}
@@ -554,14 +559,15 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	}
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
-	return append(out, c.budgetWarnings()...)
+	out = append(out, c.budgetWarnings()...)
+	return append(out, c.Providers.llmWarnings()...)
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat
 // carries: nobody can be invited into it or created in it.
 //
 // EVERY PERSON HOLDS A HUMAN SEAT for as long as they are here
-// (internal/iamdomain, ADR-0026) — an invitation and an administrator's create
+// (internal/iamdomain, ADR-0032) — an invitation and an administrator's create
 // each name the seat the person will hold, and both are refused without one —
 // so a company with none is a company nobody can join. Said HERE, before an
 // operator meets the refusal at their first invitation, because `crewlet
@@ -641,7 +647,25 @@ func (b *Bootstrap) Warnings() []Warning {
 	// trim until somebody tells it, and the log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
-	if b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
+	//
+	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
+	// readers decide which backups count under it, and both are armed with
+	// the state log, so only on a `data` node: the trim itself, a fleet
+	// singleton that only a data node with `workers` may claim, and the
+	// `backup_age` alarm, evaluated on EVERY data node whether or not it
+	// ever holds the trim — so a [data, seats] node still reads the floor
+	// for the alarm it raises. That is why the gate is
+	// [placement.NodeProfile.HoldsData] and not
+	// [placement.NodeProfile.RunsWorkers]: tightening it would drop the
+	// warning on a node whose alarm still depends on the value. Every other
+	// reader of `stream.tracker_retention` — the snapshot cadence, the
+	// retention report, the API's backup surface — is a data node's too. On
+	// a stateless node the block is read by nothing, so a warning about what
+	// it does to the trim described the members' trim from a value they
+	// never see. (`retention.backup_owner`, below, is not gated: who owns
+	// the deployment's backups is a question every node's operator answers.)
+	if b.Profile("").HoldsData() &&
+		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
 			"`operator` means the trim advances only as far as somebody "+
 				"has acknowledged a backup. Until the first acknowledgement the log "+
@@ -665,9 +689,104 @@ func (b *Bootstrap) Warnings() []Warning {
 	// NOT HERE: an embedded stream with no `store_dir`. It was two
 	// advisories — everything lost on a restart, and a `store_max_bytes`
 	// that bounds nothing on a broker holding its streams in memory — and
-	// it is a REFUSAL now ([Stream.Durable]), because every node keeps its
-	// state logs on the stream from boot, so no deployment is left standing
-	// for either to describe.
+	// it is a REFUSAL now ([Stream.Durable]) on every broker MEMBER, solo
+	// included, because every member keeps its state logs on the stream from
+	// boot, so no deployment is left standing for either to describe. A
+	// LEAF runs no JetStream and is refused a store directory outright
+	// ([StreamLeaf.validate]), and a CLIENT's streams are its external
+	// cluster's, so neither has a store for either advisory to be about.
+
+	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
+	// rule that counts members ([StreamCluster.members]) — and that is a
+	// decision the operator should see, because it is the difference between
+	// the count they wrote and the count the quorum and replica rules used.
+	// An alias of this host this file cannot recognise is the case the
+	// warning cannot catch, so it says so.
+	if b.Stream.Type != StreamNATS {
+		for _, d := range b.Stream.Cluster.members().Discounted {
+			where := idx(field("stream.cluster.peers"), d.Index)
+			if d.Self {
+				out = append(out, advisory(where, fmt.Sprintf(
+					"%q is this node's own route (it matches %s), so it is not "+
+						"counted as a member: stream.cluster.peers names the OTHER "+
+						"members, and the quorum and replica rules count this node "+
+						"once. Remove it. Another name for this host that this file "+
+						"cannot recognise — a DNS alias, `localhost` — would be "+
+						"counted as a member it is not", d.Raw, d.Matches)))
+				continue
+			}
+			out = append(out, advisory(where, fmt.Sprintf(
+				"%q repeats peers[%d], and one member listed twice is counted "+
+					"once. Remove it", d.Raw, d.RepeatOf)))
+		}
+	}
+
+	// TOO MANY VOTERS. No stream keeps more than [MaxStreamReplicas] copies,
+	// so a member past the fifth holds no copy anybody can ask for and adds
+	// only a voter to the metadata group — one more member every election
+	// and every stream or consumer created waits on. The fleet's broker is a
+	// fixed few members; a fleet that grows past them adds leaves.
+	//
+	// A WARNING RATHER THAN A REFUSAL: the fleet works, it only pays for
+	// consensus nothing is bought with. And a node that holds data is always
+	// a member, so a fleet of more than five data nodes has no other shape —
+	// the warning says so rather than recommending one this build refuses.
+	if kind := b.BrokerKind(); kind == placement.BrokerMember {
+		if others := len(b.Stream.Cluster.members().Others); others > MaxStreamReplicas-1 {
+			out = append(out, advisory(field("stream.cluster.peers"), fmt.Sprintf(
+				"names %d other members, so this fleet's broker has %d, and no stream "+
+					"keeps more than %d copies: every member past the %dth is a voter "+
+					"in the metadata group — one more member every election and every "+
+					"stream or consumer created waits on — holding no copy anybody "+
+					"asked for. Beyond %d a fleet adds LEAVES, not members (a node that "+
+					"holds data is always a member)",
+				others, others+1, MaxStreamReplicas, MaxStreamReplicas,
+				MaxStreamReplicas)))
+		}
+	}
+
+	// UNDECLARED ROLES IN A FLEET. Omitting node.roles is every role, which
+	// is the right default for the one process a company starts as and
+	// rarely what each node of a fleet should do: it keeps a copy of the
+	// company's state on this disk (`data`) and claims agents here (`seats`)
+	// whether or not the operator meant this node to. A fleet is a leaf, or
+	// a member with peers — a solo member is the single-process deployment
+	// the default exists for.
+	if b.Node.Roles == nil {
+		if b.declaresFleet() {
+			out = append(out, advisory(field("node.roles"), fmt.Sprintf(
+				"is not declared, so this fleet node runs every role — %s — "+
+					"including %q, which keeps a copy of the company's state on "+
+					"this disk, and %q, which runs agents here. Name the roles "+
+					"this node is for", strings.Join(nodeRoleNames, ", "),
+				placement.RoleData, placement.RoleSeats)))
+		}
+	}
+
+	// THE INGRESS ROLE WITH NO LISTENER. `api.port` is the one listener a
+	// node binds, and its roles decide what it carries: the API, the
+	// dashboard, the webhooks and the probes with `ingress`, the probes
+	// alone without it. A node told to run ingress is the one integrations,
+	// a browser and an orchestrator all look for, and a port of 0 binds
+	// nothing for any of them.
+	//
+	// DECLARED ROLES ONLY. An omitted node.roles is every role, which is also
+	// the single-process shape before anybody has chosen a port, and a fleet
+	// node that left them out is warned about that already.
+	//
+	// A WARNING RATHER THAN A REFUSAL, because `crewlet run -api-port` sets
+	// the port at run time and no file can show it: a file that leaves the
+	// port to the flag is valid, and only this file's half of the pair is
+	// visible here.
+	if b.Node.Roles != nil && b.API.Port == 0 && b.Profile("").RunsIngress() {
+		out = append(out, advisory(field("api.port"), fmt.Sprintf(
+			"is 0, so this node binds no listener although node.roles names %q: "+
+				"no webhook reaches it, it serves no dashboard and no REST API, "+
+				"and no orchestrator can probe it. Set a port, or drop %q",
+			placement.RoleIngress, placement.RoleIngress)))
+	}
+
+	out = append(out, b.API.Auth.writerWarnings(field("api.auth"))...)
 
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
@@ -684,8 +803,18 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`-debug` to `crewlet run`"))
 	}
 
-	out = append(out, b.API.warnings()...)
+	out = append(out, b.API.warnings(b.ServesAPI())...)
 	return out
+}
+
+// declaresFleet reports whether this document says its node is one of several:
+// a leaf, or a member with peers. A solo member is the single-process
+// deployment, and a client of an external cluster says nothing either way —
+// the cluster's other clients are in no file this one can see.
+func (b *Bootstrap) declaresFleet() bool {
+	kind := b.BrokerKind()
+	return kind == placement.BrokerLeaf ||
+		(kind == placement.BrokerMember && len(b.Stream.Cluster.members().Others) > 0)
 }
 
 // logsAtDebug reports whether ANY destination this document INSTALLS would
@@ -730,4 +859,45 @@ func (b *Bootstrap) loggingLevelName() string {
 		return "`info` (unset)"
 	}
 	return "`" + string(b.Logging.Level) + "`"
+}
+
+// writerWarnings are the company_writers settings that are valid and almost
+// certainly not what their author meant.
+//
+// WARNINGS RATHER THAN REFUSALS, because each is a posture somebody can
+// choose: a list naming no configured token is a document nobody may change
+// through the API — frozen, until Tier A changes — and a token may be listed
+// here before it is issued, on a node whose file is rolled out ahead of the
+// credential. What makes them worth saying is that the commonest way to reach
+// either is a typo, and the symptom is a 403 on the one system that was
+// supposed to be able to write.
+func (a *APIAuth) writerWarnings(path Path) []Warning {
+	if !a.CompanyManaged() {
+		return nil
+	}
+	var out []Warning
+	writers := at(path, "company_writers")
+	configured := make(map[string]struct{}, len(a.Tokens))
+	for _, t := range a.Tokens {
+		configured[t.ID] = struct{}{}
+	}
+	named := 0
+	for i, id := range a.CompanyWriters {
+		if _, ok := configured[id]; ok {
+			named++
+			continue
+		}
+		out = append(out, advisory(idx(writers, i), fmt.Sprintf(
+			"%q names no token in api.auth.tokens, so it lets nobody write: "+
+				"add the token, or correct the id to the one the managing "+
+				"system presents", id)))
+	}
+	if named == 0 {
+		out = append(out, advisory(writers,
+			"no writer names a configured token, so nothing may change the "+
+				"company document through the API: every PUT, PATCH, entity "+
+				"write, revert and /setup connect is refused. That freezes the "+
+				"document; if a system was meant to manage it, list its token id"))
+	}
+	return out
 }

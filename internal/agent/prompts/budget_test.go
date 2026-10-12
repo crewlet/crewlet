@@ -63,7 +63,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // measured by TestTheWholeTurnStaysUnderBudget below.
 func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: bigCatalogue()})
+	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: bigCatalogue()}).Text
 	withinBudget(t, "executor", p, 2200)
 }
 
@@ -104,12 +104,24 @@ func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 //
 // The roster allowance does not reach this prompt and the number is unmoved
 // by it: review renders [BuildIdentityLine], which names the reviewer's
-// manager and not one of its reports, so a lead of 500 measures the same 771
+// manager and not one of its reports, so a lead of 500 measures the same 772
 // as the reference lead. That is why the whole turn's raise below is the
 // allowance exactly, with nothing added for a second copy of the roster.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 800)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}).Text, 800)
+}
+
+// sectionText is sections rendered as one prompt renders them: their lines
+// joined by a newline. It is what [BuildExecutor]'s [Builder] produces for the
+// same parts — the outline never changes a byte of the text — so a section
+// measured or matched here is the section the prompt carries.
+func sectionText(sections ...[]string) string {
+	var lines []string
+	for _, section := range sections {
+		lines = append(lines, section...)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // bigCatalogue is the 100-tool catalogue the budgets are measured against:
@@ -144,8 +156,8 @@ func bigCatalogue() string {
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
-	whole := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()}) +
-		BuildReview(seat, ReviewInput{})
+	whole := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()}).Text +
+		BuildReview(seat, ReviewInput{}).Text
 	withinBudget(t, "turn", whole, 4000)
 
 	// THE CONTROL. The same 500 reports with the allowance taken off: every
@@ -153,7 +165,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	// and what no budget could hold. Without it the assertion above passes on
 	// a fixture that was never big enough to test anything.
 	uncapped := planRoster(seat, newRosterAllowance(1<<20))
-	control := joinSections(BuildIdentitySection(seat, uncapped), BuildRosterSection(seat, uncapped))
+	control := sectionText(BuildIdentitySection(seat, uncapped), BuildRosterSection(seat, uncapped))
 	if got := approxTokens(control); got < 4000 {
 		t.Fatalf("the uncapped roster measures ~%d tokens — under the whole "+
 			"turn's own budget, so this fixture does not exercise the allowance", got)
@@ -189,7 +201,7 @@ func TestTheRosterLadderReachesEveryRungInOrder(t *testing.T) {
 		t.Errorf("the ladder accounts for %d of 500 reports", got)
 	}
 
-	section := joinSections(BuildRosterSection(seat, r))
+	section := sectionText(BuildRosterSection(seat, r))
 	order(t, section,
 		"  - Background: ",            // rung 1: the first full profile
 		rosterHead(r.handles[0]),      // rung 2: the first handle-only line
@@ -286,7 +298,7 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	// until its own budget runs out — and leave the roster with the thousand
 	// it already has.
 	two := approxTokens(namesUnderTheirOwnCap(seat, rosterAllowanceTokens)) +
-		approxTokens(joinSections(BuildRosterSection(seat, r)))
+		approxTokens(sectionText(BuildRosterSection(seat, r)))
 	if two <= rosterAllowanceTokens {
 		t.Fatalf("two independent caps measured ~%d tokens, inside a single "+
 			"allowance of %d — the control proves nothing", two, rosterAllowanceTokens)
@@ -312,9 +324,9 @@ func TestTheAllowanceIsOneCounterNotTwo(t *testing.T) {
 	// And the prompt itself is built from ONE plan. Two counters inside
 	// BuildExecutor would leave these two sections naming different sets of
 	// colleagues, each within a budget of its own.
-	p := BuildExecutor(seat, ExecutorInput{})
+	p := BuildExecutor(seat, ExecutorInput{}).Text
 	if !strings.Contains(p, "**Direct reports:** "+reportsLabel(r)) ||
-		!strings.Contains(p, joinSections(BuildRosterSection(seat, r))) {
+		!strings.Contains(p, sectionText(BuildRosterSection(seat, r))) {
 		t.Errorf("the executor's two roster renderings are not the plan this one "+
 			"allowance made (%d full, %d handle-only, %d omitted)",
 			len(r.full), len(r.handles), r.omitted)
@@ -357,7 +369,7 @@ func TestCappingTheRosterDoesNotCapManages(t *testing.T) {
 	t.Parallel()
 	o := profiledReports(500)
 	seat := seatIn(o, "lead")
-	p := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()})
+	p := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()}).Text
 
 	if got := len(seat.Role.Manages); got != 500 {
 		t.Errorf("the chart says this seat manages %d reports, want 500", got)

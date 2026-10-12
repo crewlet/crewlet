@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,7 +86,10 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		// NO LEASE READ YET, which claims no seat is unplaced.
 		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
 	}
-	s, err := stream.NewService(livestate.New(), opts)
+	// The projection on the SAME clock, as in production where both read
+	// the wall clock: the envelopes here are stamped on it, and a live
+	// spend window aged on the wall clock would hold none of them.
+	s, err := stream.NewService(livestate.New(livestate.WithClock(opts.Now)), opts)
 	if err != nil {
 		t.Fatalf("stream.NewService: %v", err)
 	}
@@ -406,7 +410,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	if len(rollup.ByPhase) != 1 || rollup.ByPhase[0].Phase != "plan" {
 		t.Errorf("by_phase = %+v", rollup.ByPhase)
 	}
-	// The window, which the client prints beside the numbers. Two instants
+	// The window, which a reader prints beside the numbers. Two instants
 	// an hour apart at least — the projection's own rolling window — rather
 	// than a day count that could not name a window ending in the past.
 	at, err := time.Parse(time.RFC3339, rollup.Since)
@@ -420,6 +424,63 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	if !till.After(at) {
 		t.Errorf("window = %s .. %s, want a half-open one with something in it",
 			rollup.Since, rollup.Until)
+	}
+}
+
+// A RECORD AGEING OUT PUSHES THE ROLLUP, with nothing arriving.
+//
+// The tick folds the rollup only when it moved, and a record leaving the live
+// window publishes nothing — so pushed on arrivals alone, every open screen
+// kept the company's last busy day under the heading of the day it was in, for
+// as long as the company stayed quiet.
+func TestARecordAgeingOutPushesTheRollupOnTheTick(t *testing.T) {
+	t.Parallel()
+	var now atomic.Int64
+	now.Store(clock.UnixNano())
+	s, c := newService(t, stream.Options{
+		Now:            func() time.Time { return time.Unix(0, now.Load()).UTC() },
+		HealthInterval: 10 * time.Millisecond,
+	})
+	s.Ingest(envelope("agent_phase_completed", map[string]any{
+		"agent_id": "a-lead", "role": "Lead", "phase": "plan", "model": "m-1",
+		"total_tokens": 10,
+	}))
+	s.StartHealthTicks(t.Context())
+	if rollup := awaitRollup(t, c); rollup.Totals.TotalTokens != 10 {
+		t.Fatalf("totals = %+v, want the one phase folded", rollup.Totals)
+	}
+
+	now.Store(clock.Add(livestate.LiveSpendWindow + time.Minute).UnixNano())
+	rollup := awaitRollup(t, c)
+	if rollup.Totals.TotalTokens != 0 || rollup.Totals.Calls != 0 {
+		t.Errorf("totals = %+v, want an empty window a day after its only record", rollup.Totals)
+	}
+	if want := clock.Add(time.Minute).Format(time.RFC3339); rollup.Since != want {
+		t.Errorf("since = %s, want the window cut a day before the clock, at %s", rollup.Since, want)
+	}
+}
+
+// awaitRollup is the next spend rollup pushed to c, failing the test when none
+// arrives within two seconds — two hundred of the cases' ten-millisecond ticks.
+// Decoded off the frame's bytes, as the client reads it: the client's store
+// takes `.totals` off the data, so a frame whose data did not decode as the
+// rollup is a failure here rather than a figure nobody can read.
+func awaitRollup(t *testing.T, c *stream.Client) tokens.Rollup {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case frame := <-c.Out():
+			if frame.Kind() != stream.KindTokens {
+				continue
+			}
+			var rollup tokens.Rollup
+			decodeData(t, frame, &rollup)
+			return rollup
+		case <-deadline:
+			t.Fatal("no tokens push arrived")
+			return tokens.Rollup{}
+		}
 	}
 }
 
@@ -457,8 +518,14 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// ONE timer for the whole service. What it keeps honest is the same
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
+	//
+	// On an injected interval, as Options.HealthInterval exists for: a case
+	// waiting out the production five seconds measures nothing more, and
+	// that the default IS the production value is
+	// TestAnUnsetIntervalTicksAtTheProductionCadence's.
 	s := buildService(t, stream.Options{
-		Health: func() stream.Health { return health{Status: "ok", InFlight: 3} },
+		Health:         func() stream.Health { return health{Status: "ok", InFlight: 3} },
+		HealthInterval: 20 * time.Millisecond,
 	})
 
 	a, b := stream.NewClient(reader), stream.NewClient(reader)
@@ -479,7 +546,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 			if got.InFlight != 3 {
 				t.Errorf("%s health = %#v", name, got)
 			}
-		case <-time.After(3 * stream.HealthInterval):
+		case <-time.After(2 * time.Second): // a hundred ticks
 			t.Fatalf("%s never received a health tick", name)
 		}
 	}

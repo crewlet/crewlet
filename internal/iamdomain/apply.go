@@ -160,11 +160,13 @@ var _ statelog.Deriver = (*Applier)(nil)
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
-// 1 is an invitation's `seat_id` (replicated migration 0032): the column is
-// written by the apply from the record and, on a row an older build applied
-// before the column existed, by [Applier.Rederive] — the bump from the zero an
-// older build's checkpoint carries is what runs it, once, on a node upgraded
-// in place. Bumped by any change to what a derived column holds.
+// 1 is an invitation's `seat_id` (replicated migration 0042): written by the
+// apply from the record, and recomputed by [Applier.Rederive] from the row's
+// own document whenever the checkpoint's rule set differs from this build's —
+// a checkpoint a reanchor created (derivation 0), or rows adopted from a build
+// whose rules differ ([statelog.Deriver]). On rows this build applied it
+// writes nothing. Bumped by any change to what a derived column holds, so a
+// node holding rows derived under another rule set converges on this one.
 const DerivationVersion = 1
 
 // DerivationVersion implements [statelog.Deriver].
@@ -205,11 +207,11 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 			return 0, fmt.Errorf("iamdomain: read an invitation to re-derive "+
 				"its seat: %w", err)
 		}
-		invitation, err := DecodeInvitation(document)
-		if err != nil {
+		invitation, decodeErr := DecodeInvitation(document)
+		if decodeErr != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("iamdomain: open invitation %s to re-derive "+
-				"its seat: %w", id, err)
+				"its seat: %w", id, decodeErr)
 		}
 		if invitation.Seat != held {
 			repair = append(repair, stale{id: id, seat: invitation.Seat})
@@ -284,7 +286,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	// gated: that is correct and deliberate, because such a record is
 	// DEFERRED rather than applied, and the deferral is reprocessed by a
 	// build that can read it, at which point this gate runs properly.
-	person, ok := a.gatedPerson(rec)
+	person, ok := markedPerson(rec.Subject, rec.Payload)
 	if !ok {
 		return "", false, nil
 	}
@@ -310,22 +312,51 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	return statelog.ReasonDeleted, true, nil
 }
 
-// gatedPerson is the person a record is ABOUT, for the removal gate.
+// markedPerson is the person whose tombstone gates a record on subj with the
+// body given, and false for a record no tombstone covers.
 //
-// IT DECODES THE PAYLOAD, which no sibling's gate does, and the reason is this
-// domain's own shape: a record about a person routinely arbitrates on the
-// DIRECTORY or a session lineage, so a gate that read only the subject would
-// drop the records on the person's own subject and let every directory record
-// through — writing a removed person back onto a row nothing will ever correct.
+// # Which records, decided by the kind
+//
+// Only a kind [ObjectKind.GatedByRemoval] names can be about a person. On the
+// person's own subject the subject names them; on the directory and a session
+// the subject names nobody and a lineage, so this DECODES THE PAYLOAD, which
+// no sibling's gate does — a gate that read only the subject would drop the
+// records on the person's own subject and let every directory record through,
+// writing a removed person back onto a row nothing will ever correct. Every
+// other kind is about nobody, whatever its body carries.
+//
+// # One function, asked by both sides of the gate
+//
+// [Applier.Gated] drops what this covers and [Gates.GatedAt] reports why, and
+// [statelog.Gates] holds the two to one answer — so the rule is stated once.
+// It was two functions that looked alike, one per side, and nothing but their
+// resemblance kept them agreeing about which kinds a tombstone reaches. The
+// publisher hands the body of the record it appended
+// ([statelog.Gates.GatedAt]), so a removal landing between a write's decide and
+// its apply is named on that side as the gate that dropped it — without the
+// body, the publisher read its own acknowledged append as a ledger contract
+// violation.
 //
 // A RECORD IT CANNOT DECODE IS NOT GATED, and that is safe rather than a hole:
-// such a record is DEFERRED rather than applied, and the deferral is
-// reprocessed by a build that can read it, at which point this runs properly.
-func (a *Applier) gatedPerson(rec statelog.Record) (string, bool) {
-	if ObjectKind(rec.Subject.Kind) == KindPerson && rec.Subject.ID != "" {
-		return rec.Subject.ID, true
+// on the applier's side such a record is DEFERRED rather than applied, and the
+// deferral is reprocessed by a build that can read it, at which point this
+// runs properly. With NO BODY — a record the publisher merely found above its
+// anchor, whose it is being the open question — a record on the directory or
+// a session is answered "not gated", and the re-decide that answer leads to
+// meets the tombstone in its own snapshot ([Writer.request] refuses a write
+// about a removed person before it publishes).
+func markedPerson(subj statelog.Subject, body []byte) (string, bool) {
+	kind := ObjectKind(subj.Kind)
+	if !kind.GatedByRemoval() {
+		return "", false
 	}
-	record, err := Decode(rec.Payload)
+	if kind == KindPerson && subj.ID != "" {
+		return subj.ID, true
+	}
+	if body == nil {
+		return "", false
+	}
+	record, err := Decode(body)
 	if err != nil || record.Person == "" {
 		return "", false
 	}

@@ -44,7 +44,7 @@ secrets:
 
 stream:
   type: embedded              # a JetStream server inside this process
-  store_dir: "/var/lib/crewlet/stream"   # required: every node keeps its state logs here
+  store_dir: "/var/lib/crewlet/stream"   # required on a broker member: every data node keeps its state logs here
 
 store:
   path: "/var/lib/crewlet/company.db"    # ONE file, this process only
@@ -58,19 +58,22 @@ crewlet run -config crewlet.yaml -company company.yaml
 ```
 
 That is the deployment. Point a reverse proxy at the API port for inbound
-webhooks and the dashboard, and there is nothing else to operate.
+webhooks and the dashboard, and there is nothing else to operate. When the
+webhooks have to come from the internet and the dashboard must not, give them
+a listener of their own instead: see
+[Exposing webhooks without the admin API](#exposing-webhooks-without-the-admin-api).
 
-Give that proxy a **read timeout above 135 seconds** on the API port. Nearly
-every request is answered in well under a second, but a node eviction or
-readmission ([Retention](retention.md#eviction)) may take up to two minutes
-past its judgement to write every log — one gate record per identity-claiming
-log, each allowed two five-second resolutions at a margin of three — and
-`crewlet retention evict` and the dashboard's evict dialog both wait fifteen
-seconds past that for its answer. nginx's `proxy_read_timeout` defaults to
-sixty, which cuts exactly those off with a 504. Nothing is lost when it does — the node finishes the gesture
-whatever happens to the connection, and both clients read an answer the engine
-did not write as one that never arrived, keeping the operation id to finish it
-with — but the operator then has to finish it to see what it did.
+Give that proxy a **read timeout above fifty seconds** on the API port.
+Nearly every request is answered in well under a second, but a node eviction
+or readmission ([Retention](retention.md#eviction)) may take up to fifty
+seconds — twenty to judge it and thirty to write every log — and `crewlet
+retention evict` and the dashboard's evict dialog both wait a minute for its
+answer. nginx's `proxy_read_timeout` defaults to sixty, which is enough; a
+proxy set below fifty cuts those answers off with a 504. Nothing is lost when
+it does — the node finishes the gesture whatever happens to the connection,
+and both clients read an answer the engine did not write as one that never
+arrived, keeping the operation id to finish it with — but the operator then
+has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
@@ -100,15 +103,16 @@ for — so:
   node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
-- **More room buys longer logs, up to a point.** Unset, the mutation log asks
-  for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, and the vector changelog for 16 GiB capped by the same
-  quarter. They are scaled down together whenever they ask for more than that
-  half, which on a first boot is every volume with less than 256 GiB free;
-  from there up each log gets what it asked for. The identity estate's
-  default is a flat 512 MiB and the usage log's a flat 1 GiB — its size is a
-  count of node-days rather than a rate, so more disk buys it nothing — and
-  neither is derived from the disk at all.
+- **More room buys longer logs, up to a point.** Unset, the mutation log and
+  the vector changelog each ask for a quarter of the free space (4..64 GiB),
+  the knowledge base's log for a quarter of the mutation log's, the identity
+  estate's log for a flat 512 MiB and the usage log for a flat 1 GiB — neither
+  of the last two is derived from the disk at all, because the identity log
+  grows with headcount and the usage log's size is a count of node-days rather
+  than a rate, so more disk buys either nothing. They are scaled down together
+  whenever they ask for more than half the free space, which on a first boot
+  is every volume with less than about 290 GiB free (at their clamps the five
+  ask for about 145 GiB); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
@@ -258,12 +262,19 @@ same precedence as everything else that identifies this node — `node.id` in
 the file, then `CREWLET_NODE_ID`, then the default — so an orchestrator
 injecting a pod name needs no `node:` block at all. Writing
 `node.id: "${CREWLET_NODE_ID}"` (or `"${HOSTNAME}"`) works too, and means the
-same thing: Tier A expands `${VAR}` references before it decodes.
+same thing: Tier A expands `${VAR}` references before it decodes. Into a text
+field like this one a reference expands anywhere in the value; into a number or
+a boolean — a port, `stream.replicas` — it must be the whole value, and what it
+resolves to is read as if it were written there (see [Environment Variable References](../getting-started/configuration.md#environment-variable-references)).
 
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either restarts —
 and a rolling upgrade restarts them one at a time, which makes the outage
-certain rather than unlucky. Tier A refuses a two-member config by name.
+certain rather than unlucky. Tier A refuses a two-member config by name,
+counting this node and the **other** members its `stream.cluster.peers`
+names: an entry recognisably this node's own route, or a repeat, is left out
+of the count with a warning, and an alias of this host it cannot recognise
+is counted as a member — see [Running a Fleet](fleet.md#what-a-fleet-needs).
 
 **A fresh cluster takes seconds to form, and the engine waits it out rather
 than hanging.** Accepting connections is not the same as being able to serve
@@ -298,16 +309,20 @@ Ctrl-C returns immediately. Every other error is returned at once: a bad subject
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 
-**`store_dir` is required, and the engine refuses to boot without one.**
-Empty selects an in-memory member: a restart loses that member's replicas, and
-the same server holds the KV buckets carrying the fleet's shared records — the
-token counters, the completion ledger, open agent-to-agent asks, claimed
-scheduled fires, detached (and billed) sandbox runs. No node is an exception
-for its roles, an ingress-only one included: every node runs the engine, and
-an in-memory member creates every stream it provisions in memory.
+**`store_dir` is required on every member, and the engine refuses to boot
+one without it.** Empty selects an in-memory member: a restart loses that
+member's replicas, and the same server holds the KV buckets carrying the
+fleet's shared records — the token counters, the completion ledger, open
+agent-to-agent asks, claimed scheduled fires, detached (and billed) sandbox
+runs. The rule is asked of the broker, not of the roles: every **member** —
+every `data` node on the embedded broker — sets `store_dir` whatever else it
+does, a single node included, because an in-memory member creates every
+stream it provisions in memory. A leaf and a client of an external cluster
+hold no streams of their own, so both are refused a `store_dir`; see
+[Satellite nodes](satellite-nodes.md).
 
 **And the company's own records live there, whatever backends it names.**
-Every node keeps the company's **identity estate** — its people, their
+Every data node keeps the company's **identity estate** — its people, their
 credentials and sessions — on a state log, and a domain's log is a stream. With
 `tracker.backend: native` or `knowledge.backend: native` (the defaults), its
 work items and its pages are there too. An unset `store_dir` means the first restart recreates those logs
@@ -500,38 +515,63 @@ down still serves its own company, so that connection closing never stops the
 node — the donor [dials again](retention.md) by itself.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the six engine streams
+uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the five state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG` — every one on every node, including a log its roles do
-not apply), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and sixteen in the fleet store holding the
-shared records. A credential
+leases and the fencing epochs, and eighteen in the fleet store holding the
+shared records — the object store's backend record and its collector's report
+among them — and, on the default `nats` object store, the `crewlet_files`
+object store bucket (its stream is `OBJ_crewlet_files`). A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
-**A coordination read asks the bucket's leader, and an account needs the
-consumer API and the message-get API.** A node lists coordination records
-constantly — several fifteen-second duty loops on every tick, and the
-state-log write fence, which lists the published trim floors on every write at
-an expectation of zero, a subject's first write among them — and each of those
-is one pass over a temporary consumer, which on a replicated bucket is two
-metadata-raft proposals, followed by one `$JS.API.STREAM.MSG.GET` to the
-bucket's stream leader asking whether the pass missed anything. A single key is
-read with that same request. The engine deliberately does **not** use the
-direct get the client defaults to, nor the batched one that would avoid the
-consumer: both are served by any replica, so a member that had not yet applied
-an acknowledged write answered from before it — see [Coordination § Every read
-is the leader's](../concepts/coordination.md#every-read-is-the-leaders). So a
-credential scoped only to publishing and consuming is not enough; the account
-needs the consumer and message-get APIs alongside the rest of `$JS.API`. If the
-broker's own debug logging is on, that consumer churn is what produces a steady
-stream of `JetStream connection closed: Client Closed` lines — see
-`stream.debug`, which is off by default for exactly this reason.
+**A coordination read costs one ordered pass certified against the stream's
+key index, and an account needs the consumer, stream-info, message-get and
+purge APIs.** A node lists coordination records constantly — several
+fifteen-second duty loops on every tick, and the state-log write fence, which
+lists the published trim floors on every write at an expectation of zero, a
+subject's first write among them. Each listing is one pass over a temporary
+consumer, which on a replicated bucket is two metadata-raft proposals, and
+beside it one stream-info request narrowed to the listing's keys, which names
+every key that has a message. A pass alone cannot tell that it is complete — a
+key rewritten under it can land behind the marker that ends it, and every renew
+is such a rewrite — so a key the index names that the pass missed, or delivered
+only as a delete marker, is read by itself from the **stream leader**
+(`$JS.API.STREAM.MSG.GET`), never through the bucket's direct get, which any
+replica — one that has fallen behind included — may answer: a member that had
+not yet applied an acknowledged write answered from before it (see
+[Coordination § Every read is the leader's](../concepts/coordination.md#every-read-is-the-leaders)).
+A single key is read with that same leader request. A marker needs that
+read because on a replicated bucket the pass may be served by a replica that
+applied a key's delete and not yet its re-creation. On a quiet bucket the
+certification therefore costs the index read and one leader read per recent
+removal the pass meets, and under writes one more per key the pass lost. What
+keeps "recent" recent is the maintenance duty, which sweeps the removal markers
+older than three hours out of every shared bucket with no age, each with a
+leader-side `$JS.API.STREAM.PURGE` bounded at the marker's own revision so a
+key written again since is untouched (see
+[Coordination](../concepts/coordination.md#removal-markers-are-swept)). While a
+bucket's stream is **electing a leader**, a listing of it answers unavailable
+rather than a short list, since every member answers the index from its own
+store until one leads — the answer every caller already treats as a store
+that did not answer, never as "no records". A listing's one bound is
+the broker's page size for that index, **100,000 keys under one filter**; see
+[Coordination](../concepts/coordination.md#the-three-valued-answer) for what
+happens past it.
+The engine deliberately does **not** use the batched direct get that would
+avoid the consumer: it is served by any replica, and this estate has reads
+whose answer is acted on with nothing to arbitrate them. So a credential
+scoped only to publishing and consuming is not enough; the account needs the
+consumer API, `$JS.API.STREAM.INFO`, `$JS.API.STREAM.MSG.GET` and
+`$JS.API.STREAM.PURGE` alongside the rest of `$JS.API`. If the broker's own
+debug logging is on, that consumer churn is what produces a steady stream of
+`JetStream connection closed: Client Closed` lines — see `stream.debug`, which
+is off by default for exactly this reason.
 
 #### A clustered node is given longer to create them
 
@@ -565,21 +605,43 @@ which settles the question either way: absent and it is made, present and it
 comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
+**A dropped stream or consumer lookup is asked again within two seconds; a
+create after sixteen.** The broker decides a read — does this stream, this consumer exist —
+when it processes it: it answers, or it returns without a word, and nothing
+answers that request later. Every fleet booting together meets the second
+case. An object another node has just asked for is *in flight*, assigned by
+the metadata leader but not yet applied by the member chosen to lead it, and
+until that member has applied it every other member drops a lookup of it. So
+a lookup of one of the engine's streams or consumers, of a coordination
+bucket, or of the object store's bucket, waits one second for its answer and
+is asked again a second later — every two seconds, for up to thirty in all. A
+create is the opposite case: the broker keeps its reply until the object it
+made has a leader, which can take an election, so a create waits fifteen
+seconds for its answer and is re-sent a second after that. A lookup used to wait the create's fifteen too, and a fresh
+three-member fleet was measured idling sixteen seconds of its boot on one
+dropped stream lookup.
+
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens nineteen buckets and several streams in a
-row and logged nothing between them, so one that hung emitted nothing at all
-until its budget expired and the log could not say which object it was on. Any
-create still running after 10 seconds now writes one `WARN` naming it
-(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
-and so does the lookup that precedes it
-(`jetstream_stream_lookup_slow`, `jetstream_consumer_lookup_slow`) — that
-lookup is the first call to reach the metadata group, so a member stalled
-against a group that has not settled waits there, where nothing used to
-report it at all. A probe that went unanswered is named as such
+was otherwise silent — a node opens every coordination bucket and several
+streams in a row and logged nothing between them, so one that hung emitted
+nothing at all until its budget expired and the log could not say which object
+it was on. Any create still running after 10 seconds now writes one `WARN`
+naming it (`coord_kv_bucket_slow`, `natsobj_bucket_slow`,
+`jetstream_stream_slow`, `jetstream_consumer_slow`), and so does the lookup
+that precedes it (`jetstream_stream_lookup_slow`,
+`jetstream_consumer_lookup_slow`) — that lookup is the first call to reach the
+metadata group, so a member stalled against a group that has not settled
+waits there, where nothing used to report it at all. The read of each state
+log's ceiling that sizes the logs before any of them is created is the same
+kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
+five are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than five in a row. The object store's
+bucket is looked up and created as one step, and writes one line over the two
+(`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
-`coord_kv_bucket_lookup_unanswered`) rather than failing the boot.
-One line per object, deliberately: whether more lines follow is what tells a
-slow bring-up from a wedged one.
+`coord_kv_bucket_lookup_unanswered`, `natsobj_bucket_lookup_unanswered`)
+rather than failing the boot. One line per object, deliberately: whether more
+lines follow is what tells a slow bring-up from a wedged one.
 
 **Every broker line names the member that emitted it.** More than one
 embedded broker can run in one process — a fleet test does exactly that — and
@@ -786,6 +848,113 @@ Do **not** also start a second node on the same host with such a file — both r
 
 While seats are still being claimed the node reports what is true rather than pretending: `/health` lists the seats it holds so far, and nothing is lost in the meantime because every seat's mailbox is created before any claiming (see [Event System](../concepts/event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)). A seat's own children still start before its mailbox is attached, so a turn never begins without its tools — that ordering is unchanged; what changed is that they start **concurrently** rather than one after another, so a seat attaches in the time its slowest server takes rather than the sum of all of them.
 
+### Exposing webhooks without the admin API
+
+Every route an outside party calls shares `api.port` with everything else by
+default: the vendor webhooks, the admin API (`/config`, `/secrets`, `/setup`,
+`/operator`, the fleet and retention gestures), the read surface and the
+dashboard, and the sign-in routes under `/auth`. A deployment that must accept
+GitLab or Slack deliveries from the internet but keep the rest private would
+then have to publish that one port
+and filter it **by path** in a proxy — an allow-list kept outside the engine,
+where one forgotten route or one prefix matched too widely puts `/config` on
+the internet and nothing here can see it.
+
+`api.public` splits the two onto separate sockets instead:
+
+```yaml
+# crewlet.yaml (Tier A)
+api:
+  host: "10.0.0.5"     # private: the dashboard, the REST API, the probes
+  port: 8000
+  external_url: "https://crewlet.internal.example.com"   # where people reach api.port
+  public:
+    port: 8443         # published: webhooks and the sandbox endpoints only
+                       #   (host defaults to every interface)
+    external_url: "https://hooks.example.com"   # where vendors reach it
+```
+
+| Route | Served on |
+|---|---|
+| `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
+| `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
+| `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
+| everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
+
+`api.port` answers a public route with `404 no_route` and a hint naming
+`api.public` — a vendor pointed at the wrong port learns it from the first
+delivery rather than from a delivery quietly accepted on the socket nobody
+published. The public listener answers every other route exactly as it answers
+a path nothing serves: the same `404`, the same generic hint, nothing that says
+an admin port exists behind it. It requires no credential and decides
+before the guard runs, so `/config` there is that same `404` whatever
+credential is sent. The split
+is the engine's own, from one list (the `/webhooks/`, `/otlp/` and `/mcp/`
+prefixes, the routes that authenticate by a provider signature or a signed
+per-run token rather than by a person's or a token's credential), so there is
+no allow-list to keep in step with the routes a release adds.
+
+**Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
+on somebody else's network and reaches only what you publish; it calls
+`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path and
+never holds a credential of anybody's. Leaving them on `api.port` would force that
+port public for every company running remote sandboxes. Point
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
+address.
+
+**Why the probes are not.** `/health` describes the node — its version, its
+seats, its posture — for whoever runs it, and an orchestrator or a load balancer
+can probe a port other than the one it routes traffic to. Point the public load
+balancer's health check, and the orchestrator's liveness and readiness probes,
+at `api.port`'s `/health` and `/ready`; on Kubernetes that is the pod's own
+address, which the kubelet reaches whether or not the port is in the public
+Service. Readiness is per process, so a draining node leaves rotation on both
+sockets at once.
+
+What to point where:
+
+- **`api.public.external_url`** is where vendors and sandboxes reach this
+  deployment: the **public** listener's address as your proxy or load balancer
+  publishes it, required once `api.public.port` is set on an `ingress` node.
+  Every webhook the engine registers, every vendor app it provisions and every
+  per-run sandbox endpoint it hands out is built on it.
+- **`api.external_url`** is where people reach the dashboard — `api.port`'s
+  address as your private network or VPN reaches it. It names the session
+  cookie and is the only `Origin` a write is accepted from, and every link an
+  agent composes for a person (`${crewlet_base_url}` in a tool skill, a page
+  change's `url`, an invitation or a password link) is built on it; the public
+  listener could serve none of them. On a deployment with no public listener it
+  is the vendors' address too; the two are two fields because here they
+  cannot be one. Both are Tier A, because both are facts about where the
+  operator published this deployment's sockets.
+- **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
+  read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
+- **A node without the `ingress` role** serves its
+  [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
+  `api.port` and one route beside them, its seats' tool bridge, and with
+  `api.public` set it binds the public port for the bridge alone — so one
+  Tier A file still serves every role, and every node's
+  `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0` (or
+  `-api-port 0`) is still the hard off switch: it binds nothing, the public
+  port included, whatever the shared file says about `api.public`.
+
+`api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
+container whose public Service or load balancer forwards only `api.public.port`
+— or name a private interface where the host itself is reachable.
+`crewlet validate` refuses a public listener beside `api.port: 0` on a node with
+the `ingress` role (no probe would answer) and a public port that is also
+`api.port`, `stream.cluster.port` or
+`stream.leaf.port` on the same address or with either binding every interface.
+
+**Draining.** Both sockets go through the one drain gate: from the first moment
+of a drain the webhook routes answer `503` with a `Retry-After` on the public
+listener, while the sandbox endpoints keep serving the runs already in flight,
+and `api.port` keeps `/health` at `200`. Once the drain completes the public
+listener closes first and `api.port` after it, each waiting up to five seconds
+for its requests, so the probes answer until the very end — an open bridge
+session can hold the public listener for its whole five seconds, and a
+liveness probe must not fail while it does.
+
 ### Separate processes (a split deployment)
 
 Run ingress as its own node when you want the webhook receiver to stay up
@@ -803,20 +972,40 @@ Both nodes can read the same Tier A file: against an external NATS server
 nothing in it is per-node except `node.id`, and `CREWLET_NODE_ID` injects
 that without templating anything. A clustered embedded stream is the one
 exception — each member also names its own route port and its own peers. So
-give each node its roles at the command line, and its own `-api-port`, since
-only the ingress node should bind one:
+give each node its roles at the command line, and its own `-api-port`: on one
+host two listeners cannot share a port, and only the ingress node's carries
+the API — the other's carries its [probes](#probes) and nothing else:
 
 ```bash
-# Terminal 1: the agents and the fleet duties, no HTTP
-crewlet run -config crewlet.yaml -roles seats,workers -api-port 0
+# Terminal 1: the agents and the fleet duties — /health and /ready only
+crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 8001
 
 # Terminal 2: the webhook receiver and the dashboard
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
+
+`-api-port 0` on the first binds nothing at all, which is fine on a host where
+nothing probes it.
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), give the seats node a port instead of `-api-port 0`, and set its `CREWLET_MCP_BRIDGE_URL` to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge and nothing else (`api_bridge_listening`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), the seats node needs its port, and its `CREWLET_MCP_BRIDGE_URL` set to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge beside the probes and nothing else (`api_probes_listening … tool_bridge=true`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+
+**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, an agent-mode seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
+
+```yaml
+api:
+  port: 8000
+  public:
+    port: ${CREWLET_PUBLIC_PORT}
+```
+
+```bash
+CREWLET_PUBLIC_PORT=8443 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
+CREWLET_PUBLIC_PORT=8444 crewlet run -config crewlet.yaml -roles data,seats,workers
+```
+
+The seats node binds only its public port, for its bridge; one started with `-api-port 0` binds nothing, so it needs no public port of its own.
 
 `crewlet migrate` is idempotent and safe to re-run. Each node also
 auto-migrates its own store file on boot, and two nodes starting together
@@ -832,17 +1021,72 @@ restart. Against a **stopped** one it writes this node's store, and the node
 publishes the activation when it next starts. Either way the file is one
 gesture; only the timing differs.
 
-- **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
-- **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`-roles workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty and the identity sweep
+- **`data`** holds the company's durable state — a copy of the replicated estate, the identity directory's included, and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
+- **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
+- **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
+- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector and the identity sweep
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
 logging.
+
+### Probes
+
+Every node with an `api.port` answers `/health` and `/ready` on it, whatever
+its roles, so an orchestrator can probe each one the same way. What the two
+answer is fixed; what `/ready` *means* follows from whether the node takes
+traffic:
+
+| | `/health` (liveness) | `/ready` |
+|---|---|---|
+| A node with `ingress` | `200` while the process is alive, through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
+| A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
+
+A node without `ingress` serves **nothing else** on that port — no API, no
+dashboard, no webhook — and a seats node's agent-mode tool bridge only when
+`CREWLET_MCP_BRIDGE_URL` is set. The reasons, their precedence and both bodies
+are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+
+On Kubernetes that is one probe block for every node, with `api.host: 0.0.0.0`
+so the kubelet can reach the pod's address, and `api.port: 8000` — the port the
+image's `EXPOSE` documents:
+
+```yaml
+# the engine container of any node — ingress, seats, satellite
+ports:
+  - {name: http, containerPort: 8000}
+livenessProbe:
+  httpGet: {path: /health, port: http}
+  periodSeconds: 10
+  timeoutSeconds: 5        # /health reads the coordination plane under a
+  failureThreshold: 6      #   budget well inside this; a minute of silence
+                           #   is a wedged process, not a slow broker
+readinessProbe:
+  httpGet: {path: /ready, port: http}
+  periodSeconds: 5
+  timeoutSeconds: 5
+```
+
+Liveness tolerates a minute because the engine ends a wedged process itself:
+the [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves)
+exits once its watched duty stalls for a seat lease TTL (45 s), so a liveness
+failure is the backstop for a process that cannot even do that. Readiness on a
+node without `ingress` is what a rolling update waits on before it replaces
+the next pod, so a satellite that cannot reach its fleet holds the rollout
+rather than letting it take the next one down too. Give every pod a
+`terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+
+A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
+needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
+member only once the one before it is ready, and no member can be ready alone:
+the company revision it applies and the presence lease it holds are both in a
+coordination store that writes through a quorum of the members — so the first
+waits for peers the StatefulSet will not start until it is ready, and the set
+never comes up.
 
 ### Replica count
 
@@ -926,11 +1170,14 @@ usually looks like, is exposed to the bottom two rows by construction.
 **Declining the fsync is a legitimate trade and it is made explicitly.** Set
 `sync` to a duration — `30s` — and that duration is the window: the most an
 acknowledged write may be behind the disk. Tier A refuses the value in the
-three places where it would be recorded and then not honoured:
+four places where it would be recorded and then not honoured:
 
 - **against `stream.type: nats`**, because the field configures the embedded
   server's file store and an external cluster stores its own data (set
   `sync_interval` on that cluster instead);
+- **on a leaf** (`stream.leaf.urls`), because a leaf's broker runs no
+  JetStream and has no file store at all — the members it joins decide what
+  an acknowledged write has reached, in their own `stream.sync`;
 - **below `replicas: 3`**, because the disk being traded away is the only copy
   there is, so the window buys nothing;
 - **on a cluster whose peers are all on this host**, because the majority the
@@ -952,8 +1199,8 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the maintenance sweep, the state logs' trim, the embedding duty and the identity sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
-- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector and the identity sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
+- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
 `node.max_concurrent` (default 32) is the gate every agent turn takes a slot
@@ -968,12 +1215,9 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened by **Turso** — the only driver. There was a
-second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
-both the field and the variable are retired: a config that still sets the field
-is refused with a message saying so, and the variable is read by nothing. The
-file format did not change, so an existing store opens untouched and any
-SQLite-compatible client still reads it.
+One local file per node, opened by **Turso** — the only driver, so there is no
+setting that chooses one. The file is in the SQLite format, so any
+SQLite-compatible client can read it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -990,7 +1234,7 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   start; a cache root that cannot be created at all fails the store open with an
   error naming the directory.
 - **A cache that cannot be repaired names the way out**, and there is no
-  second driver to fall back to any more: delete that directory by hand, or
+  second driver to fall back to: delete that directory by hand, or
   point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
 - **The linux binaries need glibc, and there is no musl build.** The database
   engine is a native library loaded with `dlopen`, which makes the binary
@@ -1010,10 +1254,12 @@ all in the [coordination slot](../concepts/coordination.md) instead.
 
 ### The connection pool, and the one connection ordinary work cannot take
 
-`store.max_open_conns` bounds the pool. Left at `0` it is **derived**:
+`store.max_open_conns` sets each file's **ordinary readers**. Left at `0` it is
+**derived**, and either way what ordinary work may not occupy is added on top:
 
 ```
-pool  = max(8, GOMAXPROCS) readers
+pool  = readers                 (max(8, GOMAXPROCS) unset; the setting when set —
+                                 never fewer than 2 on the replicated estate)
       + 1  reserved for identity work
       + one per pinned writer   (the replicated estate only — one per
                                  state-log domain this node applies)
@@ -1048,18 +1294,20 @@ for why it is held rather than defended by a semaphore: a gate in front of the
 pool would stop `database/sql` ever reaching its own limit, and the
 `pool_starved` alarm below reads exactly that.
 
-**Setting the field means you own the arithmetic.** An explicit value wins
-outright: the reserve and the pinned writers come *out* of the number you give
-rather than being added to it, and at `1` nothing is held back at all (a
-backup's own single-connection handle is exactly that case — an identity read
-there queues with everybody else). Raise it if the `pool_starved` alarm fires —
-see [Alarms](../reference/alarms.md) — which means reads are queuing before
-they start.
+**Setting the field sets the readers, and nothing else.** An explicit value
+replaces `max(8, GOMAXPROCS)`; the reserved connection and the pinned writers
+are added on top of it exactly as they are to the derived figure, so the number
+you give is always the number of connections ordinary reads may draw. Taken out
+of it instead, a figure at or below what is held would leave the readers
+nothing at all, and a read burst would queue behind a writer with nothing
+naming the loss. Raise it if the `pool_starved` alarm fires — see
+[Alarms](../reference/alarms.md) — which means reads are queuing before they
+start.
 
 The load-bearing tables:
 
-- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
-- **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
+- **`agent_diary`** — each agent's private observation log, each note with the vector of the model it came from (a per-agent scan the database ranks; there is no vector index). Written by the reflect path, which embeds content on write; the node holding the seat fills any note left without a vector of the current model. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
+- **`episodes`** — one row per completed turn, raw and LLM-compacted shapes in the same table; a raw turn carries the vector of the model it came from and a compacted row none (a per-seat scan the database ranks; there is no vector index). Drained by the episode-lifecycle duty.
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
 - **`agent_onboarding_markers`** — onboarding bookkeeping, one row per agent.
@@ -1113,6 +1361,53 @@ departure exports to an external sink over OTLP rather than pointing the
 nodes at one database, which the exclusive file ownership rules out by
 construction.
 
+#### Custody: the rows of a node without `data`
+
+A node without the `data` role writes none of its own. Its store is deleted
+at every boot, so rows written there would be gone at its next restart with
+nothing able to read them in between (the API runs only where the data is).
+So it hands every event it would have written to the data nodes, and **exactly
+one** of them keeps each one:
+
+1. **It publishes them durably.** Events are buffered for at most a second —
+   a turn never waits on its own audit trail — and published in batches of up
+   to 256 events or 1 MiB onto the custody topic, `crewlet.custody.records`,
+   on the `CREWLET_CUSTODY` stream. Once the broker acknowledges a batch it
+   survives the node that published it; a batch it could not publish is sent
+   again under the same id, which the broker collapses. The buffer holds 4 096
+   events while the broker is unreachable, and an event that finds it full is
+   dropped and counted (`event_custody_dropped`) rather than holding a turn.
+2. **The data nodes take them from one group,** `event-custody`, and each
+   writes the batch it takes into its own event log, where its `GET /events`
+   and the fleet's history reads find it.
+3. **One data node keeps each batch.** The group delivers a batch whose
+   acknowledgement was lost again, to whichever data node asks next — so after
+   writing a batch a data node *claims* it in the coordination store,
+   create-only. The claim's winner keeps the batch; any other node that wrote
+   it deletes its copy. A batch is acknowledged only once its keeper is
+   decided, and a data node that crashed between writing and claiming settles
+   its copy the same way at its next boot.
+
+That last step is what keeps every figure derived from a node's own log
+honest: the `usage` domain sums each node's day, so a batch two data nodes
+kept would bill a stateless node's spend twice.
+
+Until the node that lost the claim has settled its copy — at once when its
+claim is answered, and otherwise at its next pass, a minute later or as soon
+as it can reach the coordination store again — both logs hold the batch's
+rows. The fleet's history reads hold such a row once, wherever they list rows
+and wherever they count them — the event axis's bars and category counts, a
+trace's or a turn's total, a page of turns' tokens, and the integrations' drop
+and merge counts: each data node counts the rows it keeps and names the ones it
+has not settled, and the node you asked counts each named row once
+([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+
+**Upgrade the data nodes first.** A data node writes each event in a batch by
+its own build's category map, and leaves out a type its build does not place —
+so a node without `data` on a newer build can hand a data node still on this
+one events it cannot keep, and they reach no event log. With every data node
+upgraded before the nodes without `data`, nothing is left out.
+
 #### What gets stored, and under which category
 
 `category` is the one column with a closed vocabulary, and it is what the
@@ -1128,9 +1423,9 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
-| `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
+| `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
 **The map is also the admission list.** A type that is not in it is not written
 and does not reach the activity feed — so the exclusions below are
@@ -1145,13 +1440,15 @@ decision as a value, so the rule below can be checked rather than remembered.
 |---|---|---|
 | `agent_turn_progress` | Intermediate state | Fires as each LLM round opens, answers and runs its tools, as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `agent_spawned` | Placement | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
-| `agent_terminated` | Placement | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
-| `raw_webhook` | Already recorded | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
+| `agent_terminated` | Placement | The counterpart, excluded for the same reason. It is what takes a released instance's call off a live screen rather than leaving it showing whatever it last did; whether the seat still runs anywhere is the seat leases' to say. |
+| `raw_webhook` | Already recorded | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `sandbox_answer_given` | Already recorded | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
 | `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
-| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
+| `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
+| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 **Nothing an anonymous caller can pace is written here.** Every categorised
 type also records who authors its rate — this company's own work (`engine`), an
@@ -1179,6 +1476,16 @@ touch** (a clock rather than an event; a re-issue moves a deadline inside the
 cookie's own signature, so an hour of use writes nothing anywhere). The
 exclusion table lists types something publishes, and nothing publishes either
 of these.
+
+**Stored is not always fed.** One class of type is written like every other row
+and kept out of the dashboard's activity feed — a ring of the whole company's
+last few hundred events, since every node's feed is fed fleet-wide. It is in
+`GET /events`, a turn's history and a trace like any row, and filterable by its
+category.
+
+| Stored, not in the activity feed | Why |
+|---|---|
+| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 
 #### Querying events
 
@@ -1315,11 +1622,7 @@ logging:
     max_backups: 5      # rotated files kept beside the live one (default 5)
 ```
 
-That block is the only way the file says it. A `debug: true` boolean used to
-sit beside it; it was retired rather than wired up, because two keys setting
-one value is a state where they can disagree and something has to arbitrate.
-A file that still carries it is refused with the line that replaces it, not
-with a spelling check.
+That block is the only way the file says it.
 
 The same settings, on the command line, for one run:
 
@@ -1371,7 +1674,7 @@ level is an enum with a sane default; a path is not. A node that could not
 open the file it was told to write *refuses to start*, naming the path and the
 error, rather than running on stderr alone — an operator who configured a
 durable record and silently did not get one has nothing anywhere pointing at
-why, which is exactly how the retired `debug:` field spent its life. The same
+why. The same
 applies to `$CREWLET_LOG_FILE` on the other commands. Once the node is up, a
 file that *becomes* unwritable — a full disk, a volume pulled away — is the
 opposite case and is handled the opposite way: the failure is announced on
@@ -1659,16 +1962,25 @@ An absent window is uncapped, and a ceiling of `0` is refused rather than read
 as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
 for the rules and for the ceilings `crewlet validate` warns can never bind.
 
-Every model round is charged against both before it runs, in every window at
-once — the day, the week and the month it falls in on the company's clock —
-and it is admitted only while every capped window of both has room. A charge
-that does not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused, the window
-(`period`, `window`, `resets_at`) and its figures, beside the turn's own
-`agent_turn_completed`. The check is atomic: if the agent's budget refuses, the org-level consumption it
-had already charged is rolled back. In a fleet the counters live in the
-coordination slot, so an org cap of 500 k a day is 500 k a day across every
-node rather than per process.
+Every model round is charged against both the moment its reply arrives (its
+size is known no sooner) and before any tool it asked for runs, in every
+window at once — the day, the week and the month it falls in on the company's
+clock — and it is admitted only while every capped window of both had room for
+it. A round that does not fit is refused: its tool calls do not run, the turn
+stops, and the engine publishes a `budget_exhausted` event naming the scope that
+refused, the window (`period`, `window`, `resets_at`) and its figures, beside
+the turn's own `agent_turn_completed`. The refused round is **counted all the
+same**, on the seat's counter and the company's, because the vendor has
+already billed it: the refusing window reads past its ceiling by the round that
+crossed it, and every later round is refused against that figure until the
+window turns over or the ceiling is raised. Each scope's check is atomic, and
+nothing a charge counted is taken back: a seat write that fails after the
+company's landed stops the round as an outage and leaves it on the company,
+whose record of a billed round is true, so only that seat's own counter is
+short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
+turns over. In a fleet the counters live in the coordination
+slot, so an org cap of 500 k is 500 k across every node rather than per
+process.
 
 A window's allowance comes back when the window turns over — at local
 midnight, on Monday, on the 1st — rolled inside the first charge after the
@@ -1696,18 +2008,38 @@ part-way through a day judges what the day has already spent rather than
 starting from zero, and `GET /budgets` shows an uncapped company's spend
 rather than nothing.
 
-A refusal is also recorded beside the counter, as when that window last
-refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+A refusal is also recorded beside the counter, as when the gate last turned a
+call away in that window (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
 and the next charge the scope admits clears it, as does the window turning
-over. That, not a counter at its cap,
-is what exhausted means: a refused charge increments nothing, so the counter
-stops short of the cap by the size of the round that did not fit.
+over. The gate turns work away in two ways, and both are recorded: it refuses
+a round's charge, or — once a window is already full, because a context
+assembly, a rewrite, a coding run, a person's answers or an earlier round took
+it there — the work is turned away before its first call, since that call
+would be billed and then refused. That second way is every refusal of a full
+window the engine can see coming: a turn stops its next call, the
+[budget park](../concepts/agent-runtime.md#the-budget-park) defers a seat's
+delivery, a person's `answer_knowledge` question is refused, and the
+reflection stage declines a pass and a conversation entry's rewrites. Each is
+recorded on the scope a charge would be refused by (the company's before the
+seat's), a turn's once per window for each part of the turn, so a window that
+is refusing everything sent its way never reads as one that has refused
+nothing. Because the counter carries every round it refused, `GET /budgets`,
+the live meter and the park all read a window that refused a round **over** its
+ceiling by the round that crossed it, never just short of it; `refused_at` is
+when the gate last said no. A window filled with nothing asked of it since — a
+background pass, a coding run whose turn has not resumed, and no delivery,
+question or pass for that scope after it — carries no `refused_at` until
+something is, though its `state` is already `refusing`.
 
-Four spends cannot be checked by their own size first, because their size is
-known only once they have happened, and each is **post-charged** — added to the
-counters in the windows it is recorded in, without a check, because no answer
-can un-spend it — behind a gate that reads the room left *before* it starts:
+No model call can be checked by its own size first, because its size is known
+only once it has happened. A turn's round is judged when it is charged, as
+above, because a verdict still has something to stop: the tools it asked for
+and every model call of the turn after it, each refused before it is sent
+rather than billed and refused in turn. Four other spends have nothing left to
+stop by the time their size is known, so each is **post-charged** — added to
+the counters in the windows it is recorded in, without a verdict — behind a
+gate that reads the room left *before* it starts:
 
 - **A coding run.** Its box spends while the turn is suspended, so its tokens
   are known only when the run is collected, and they reach both the seat's
@@ -1717,14 +2049,22 @@ can un-spend it — behind a gate that reads the room left *before* it starts:
   calls the [learning subsystem](../concepts/agent-learning.md) makes on a
   seat's behalf. A pass does not start for a seat or company with no room
   left, and each completion it makes is recorded in full on the seat's counter
-  and the company's, past the ceiling included.
-- **A turn's context assembly** — the memory filter, the knowledge query and
+  and the company's, past the ceiling included. The same gate stands in front
+  of the rewrite of a [conversation entry's](../concepts/conversation-sessions.md)
+  long tool payloads, made after a turn under the same reflection stage: with
+  no room left the entry is still written, each such payload named by its size
+  and digest.
+- **A turn's own auxiliary calls** — the memory filter, the knowledge query and
   the episode summary the [turn-start prefetch](../concepts/agent-learning.md)
-  asks the seat's auxiliary model for before the first phase opens. Its gate is
-  the turn's own: a delivery to a seat whose window has no room left is
+  asks the seat's auxiliary model for before the first phase opens, and every
+  rewrite the turn's conversation block, ledgers, judge and tools need. Their
+  gate is the turn's own: a delivery to a seat whose window has no room left is
   [parked](../concepts/agent-runtime.md#the-budget-park) before it runs, so no
-  prefetch starts for it, and each completion it does make is recorded on the
-  seat's counter and the company's like an auxiliary pass.
+  prefetch starts for it; each completion the turn does make is recorded on the
+  seat's counter and the company's through the turn's own meter, which then
+  holds any window the completion filled; and the turn makes no further call,
+  auxiliary or not, while that window is full — except its task card's
+  rewrite, the turn's record, made after its last round.
 - **A person's knowledge answer** — the dashboard's ⌘K answer
   ([`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge)).
   It is a person's question rather than a seat's work, so it is gated on the
@@ -1734,7 +2074,10 @@ can un-spend it — behind a gate that reads the room left *before* it starts:
   bound to (which is why a credential bound to no seat is refused it).
 
 In each case the next round the seat or the company attempts is refused
-against the recorded figure.
+against the recorded figure — and for a turn's own auxiliary calls, and for a
+coding run its resumed turn collects, that round is refused before it is sent:
+the turn's meter holds what the post-charge answered, or reads it once before
+the resumed turn's first call.
 
 ### Structured Logging
 

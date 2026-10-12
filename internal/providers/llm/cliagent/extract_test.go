@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // A real Claude Code answer, trimmed to the fields the profile reads. Pinned
@@ -22,7 +23,7 @@ const claudeCodeAnswer = `{"is_error":false,"duration_api_ms":2046,"num_turns":1
 
 func TestTheClaudeCodeProfileReadsARealAnswer(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestTheClaudeCodeProfileReadsARealAnswer(t *testing.T) {
 // a 42,823-token prompt.
 func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -74,12 +75,12 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 // RUNNING total: text concatenates, usage takes the last value.
 func TestAStreamConcatenatesTextAndTakesTheFinalUsage(t *testing.T) {
 	t.Parallel()
-	p := Profile{
-		Output:    OutputJSONL,
-		TextPaths: []Path{{"item", "text"}, {"msg", "message"}},
-		Usage: UsagePaths{
-			Input:  []Path{{"msg", "info", "total_token_usage", "input_tokens"}},
-			Output: []Path{{"msg", "info", "total_token_usage", "output_tokens"}},
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSONL,
+		TextPaths: []cliprofile.Path{{"item", "text"}, {"msg", "message"}},
+		Usage: cliprofile.UsagePaths{
+			Input:  []cliprofile.Path{{"msg", "info", "total_token_usage", "input_tokens"}},
+			Output: []cliprofile.Path{{"msg", "info", "total_token_usage", "output_tokens"}},
 		},
 	}
 	stream := strings.Join([]string{
@@ -103,7 +104,7 @@ func TestAStreamConcatenatesTextAndTakesTheFinalUsage(t *testing.T) {
 // should not need an override for it.
 func TestAJSONAnswerIsFoundBehindABanner(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSON, TextPaths: []Path{{"result"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}}}
 	got := extract(p, "Loading model…\n"+`{"result":"the answer"}`)
 	if got.text != "the answer" {
 		t.Errorf("text = %q", got.text)
@@ -115,7 +116,7 @@ func TestAJSONAnswerIsFoundBehindABanner(t *testing.T) {
 // own counts — and `crewlet llm doctor` prints which.
 func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSON, TextPaths: []Path{{"result"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}}}
 	got := extract(p, `{"result":"hi"}`)
 	if got.reported {
 		t.Fatal("a profile that read no usage claimed it had")
@@ -134,7 +135,7 @@ func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 // Text output is taken verbatim, with no JSON expectations at all.
 func TestTextOutputIsTakenVerbatim(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputText}
+	p := cliprofile.Profile{Output: cliprofile.OutputText}
 	if got := extract(p, "  plain prose  \n"); got.text != "plain prose" {
 		t.Errorf("text = %q", got.text)
 	}
@@ -144,7 +145,7 @@ func TestTextOutputIsTakenVerbatim(t *testing.T) {
 // successful answer.
 func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
 // in a list of content blocks as often as in a field.
 func TestPathsIndexIntoArrays(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSON, TextPaths: []Path{{"content", "0", "text"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"content", "0", "text"}}}
 	got := extract(p, `{"content":[{"text":"block one"},{"text":"block two"}]}`)
 	if got.text != "block one" {
 		t.Errorf("text = %q", got.text)
@@ -225,7 +226,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 		t.Fatalf("Truncated = %d, want %d", buf.Truncated(), len(body)-64)
 	}
 
-	p := &Provider{profile: Profile{}, model: "m"}
+	p := &Provider{profile: cliprofile.Profile{}, model: "m"}
 	_, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: buf.String(), droppedStdout: buf.Truncated(),
 	}, "")
@@ -246,7 +247,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 // stderr overrunning costs diagnosis, not correctness, so it must NOT refuse.
 func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
 	t.Parallel()
-	p := &Provider{profile: Profile{}, model: "m"}
+	p := &Provider{profile: cliprofile.Profile{}, model: "m"}
 	comp, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
 	}, "")
@@ -289,7 +290,7 @@ const claudeCodeEmptyAnswer = `{"duration_api_ms":11377,"stop_reason":"end_turn"
 // thought and said nothing).
 func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -329,7 +330,7 @@ func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T
 // rather than passing the CLI's output off as the model's words.
 func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSON, TextPaths: []Path{{"result"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}}}
 	// The vendor renamed the field: valid JSON, nothing where we look.
 	const drifted = `{"reply":"the answer nobody found","type":"result"}`
 
@@ -364,7 +365,7 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 // falling through. An empty hit must not end the walk.
 func TestAnEmptyTextPathFallsThroughToTheNextOne(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSON, TextPaths: []Path{{"result"}, {"response"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}, {"response"}}}
 	got := extract(p, `{"result":"","response":"the answer"}`)
 	if got.text != "the answer" {
 		t.Errorf("text = %q, want the later path's value", got.text)
@@ -379,7 +380,7 @@ func TestAnEmptyTextPathFallsThroughToTheNextOne(t *testing.T) {
 // recognise.
 func TestAStreamIsLocatedByAnyEventCarryingThePath(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSONL, TextPaths: []Path{{"item", "text"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSONL, TextPaths: []cliprofile.Path{{"item", "text"}}}
 	got := extract(p, strings.Join([]string{
 		`{"item":{"text":""}}`,
 		`{"unrelated":"event"}`,
@@ -397,7 +398,7 @@ func TestAStreamIsLocatedByAnyEventCarryingThePath(t *testing.T) {
 // whose content is the CLI's own event log.
 func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 	t.Parallel()
-	p := Profile{Output: OutputJSONL, TextPaths: []Path{{"item", "text"}}}
+	p := cliprofile.Profile{Output: cliprofile.OutputJSONL, TextPaths: []cliprofile.Path{{"item", "text"}}}
 	const log = `{"event":"started"}` + "\n" + `{"event":"finished","output":"hello"}`
 
 	if got := extract(p, log); got.located || got.text != "" {
@@ -416,7 +417,7 @@ func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 // never printed.
 func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 // rate limit rather than burning the chain's next member on a server fault.
 func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -471,7 +472,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 // `cli.overrides`, so it is tested on its own terms.
 func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", map[string]any{
+	p, err := cliprofile.Load("claude-code", map[string]any{
 		"limit_markers": []any{map[string]any{
 			"sentinel": "quota spent", "reset_separator": "|", "reset_unit": "epoch",
 		}},

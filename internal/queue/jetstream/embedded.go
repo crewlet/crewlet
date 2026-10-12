@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -20,6 +22,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -98,7 +102,31 @@ const (
 	// a fast local cluster is not held back by the poll itself, and it runs
 	// at most a few hundred times.
 	clusterReadyPoll = 100 * time.Millisecond
+
+	// clusterReadyAsk is how long one question put to the fleet's
+	// JetStream during that wait — "do you answer?" — waits for its reply
+	// before it is asked again.
+	//
+	// [jsprovision.ReadTerm], and not merely the same number: the question is
+	// a metadata READ, which the metadata leader answers when it processes it
+	// and every other member drops, so it is exactly the request that term is
+	// sized for, and a second constant here would be a second opinion about
+	// one fact.
+	clusterReadyAsk = jsprovision.ReadTerm
 )
+
+// readiness bounds the wait for the fleet to be able to serve this broker:
+// how long it may take, how often it re-checks, and how long one question put
+// to the fleet's JetStream waits for its answer.
+//
+// THE ZERO VALUE IS PRODUCTION ([embeddedServer.readiness]). It is a value at
+// all, rather than the constants alone, because the branch that names what to
+// fix is reached only by the WHOLE wait running out — sixty seconds — and a
+// case that cannot afford to reach it ends up asserting on whatever error a
+// shorter deadline of its own produced instead, which names nothing.
+type readiness struct {
+	timeout, poll, ask time.Duration
+}
 
 // embeddedServer is a nats-server running inside this process.
 //
@@ -118,7 +146,32 @@ type embeddedServer struct {
 	// clustered records whether this member has peers, which decides
 	// whether anything has to wait for a metadata leader.
 	clustered bool
+	// leaf records a broker that joined the fleet as a LEAF: JetStream is
+	// off here, so everything a stream or a bucket needs is across its link
+	// rather than in this process. See [Config.LeafURLs].
+	leaf bool
+	// system is the identity that reaches this member's system account,
+	// declared on a clustered member only — see membership.go.
+	system systemUser
+	// ready bounds the waits for the fleet to serve this broker; zero is
+	// production. Set by this package's own tests and nothing else — see
+	// [readiness].
+	ready readiness
 }
+
+// readiness is the bound on the waits for the fleet to serve this broker:
+// production's unless this package's own tests set [embeddedServer.ready].
+func (e *embeddedServer) readiness() readiness {
+	if e.ready != (readiness{}) {
+		return e.ready
+	}
+	return readiness{timeout: clusterReadyTimeout, poll: clusterReadyPoll, ask: clusterReadyAsk}
+}
+
+// holdsStreams reports whether this process's broker is where its streams
+// live — an embedded member rather than a leaf of one, or no embedded broker
+// at all.
+func (e *embeddedServer) holdsStreams() bool { return e != nil && !e.leaf }
 
 // Server is an embedded broker that outlives any one client of it.
 //
@@ -151,6 +204,55 @@ func StartServer(ctx context.Context, cfg Config) (*Server, error) {
 // because several nodes can be clients of one broker.
 func (s *Server) Client(ctx context.Context, opts ...queue.Option) (*Queue, error) {
 	return newQueueOn(ctx, s.cfg, s.embedded, false, queue.Resolve(opts...))
+}
+
+// Conn returns a NATS connection to this server, held to the transport's
+// contract like every connection this package opens, for a caller that rides
+// the broker without a queue client of its own: a test standing members up to
+// exercise the coordination store, an object store or the broker's log bridge
+// directly.
+//
+// UNWATCHED: NATS closing it for good is the caller's to notice, and no queue
+// reports it as a lost node — see [watched]. That is why a node's own
+// coordination store does not take its connection from here: on an embedded
+// broker it rides [Queue.DialWatched], whose close for good stops the node
+// rather than leaving it renewing nothing while it consumes work (ADR-0001).
+//
+// The caller owns the connection and must close it.
+func (s *Server) Conn() (*nats.Conn, error) {
+	if s.embedded == nil {
+		return nil, errors.New("jetstream: server is shut down")
+	}
+	return s.embedded.connect(watched{})
+}
+
+// AwaitClusterReady waits until this member can serve a stream of replicas
+// copies: its JetStream current, routed to replicas-1 peers, and the metadata
+// leader answering it. It is the wait [Server.Client] makes before a client
+// provisions anything, and a no-op on a member with no cluster.
+//
+// EXPORTED FOR WHAT [Server.Conn] SKIPS. A subsystem that rides a member's
+// connection without a client — the coordination store, in a test that
+// stands members up itself — gets none of that wait, and a metadata request
+// it sends before the group has a leader is not refused but DROPPED: it costs
+// a whole ask term before anything asks again. A caller that starts members
+// waits for every one of them here, AFTER all of them have started: waited
+// inside [StartServer], the first member of a fresh cluster would wait for a
+// quorum its own blocking keeps from forming.
+func (s *Server) AwaitClusterReady(ctx context.Context, replicas int) error {
+	if s.embedded == nil {
+		return errors.New("jetstream: server is shut down")
+	}
+	nc, err := s.embedded.connect(watched{})
+	if err != nil {
+		return fmt.Errorf("jetstream: connect to wait for the cluster: %w", err)
+	}
+	defer nc.Close()
+	js, err := s.cfg.API().Client(nc)
+	if err != nil {
+		return fmt.Errorf("jetstream: open jetstream to wait for the cluster: %w", err)
+	}
+	return s.embedded.awaitClusterReady(ctx, js, replicas)
 }
 
 // RoutePeers names the cluster members this server currently holds a route
@@ -236,6 +338,41 @@ func (s *Server) ClusterPort() int {
 	return addr.Port
 }
 
+// AnyPort is the [Config.LeafPort] that binds the leaf listener on whichever
+// port the OS hands out — nats-server's own spelling of that request — and
+// [Server.LeafPort] reads back which one it was.
+//
+// It is for a member whose leaves are told its address AFTER it starts, which
+// is every test that joins a leaf to a member. Reserving a free port and naming
+// it instead means binding one, reading its number and letting it go before
+// the member binds it, and anything else on the machine — usually the rest of
+// this suite, starting brokers by the dozen — can take it in between: the
+// member then refuses to start ([ErrLeafPortTaken]) and the case fails for a
+// reason that has nothing to do with it. Bound by the OS, there is no window.
+//
+// Never a deployment's setting: a fleet's leaves are configured with the
+// member's address before either starts, so Tier A takes a port it can name
+// (`stream.leaf.port`, 0..65535) and refuses this.
+const AnyPort = -1
+
+// LeafPort is the port this member's LEAF listener bound, and 0 when it opened
+// none — what a leaf dials when the member was asked for [AnyPort].
+//
+// READ OFF THE SERVER'S OWN REPORT (Varz), the one place nats-server says it:
+// it writes the port it bound back into its options before it reports ready,
+// and offers no listener address for leaves the way it does for routes
+// ([Server.ClusterPort]).
+func (s *Server) LeafPort() int {
+	if s.embedded == nil {
+		return 0
+	}
+	varz, err := s.embedded.ns.Varz(nil)
+	if err != nil || varz.LeafNode.Port < 0 {
+		return 0
+	}
+	return varz.LeafNode.Port
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
@@ -254,7 +391,11 @@ func (s *Server) Shutdown() {
 // it is opened ([carriesTheContract]), so it fails the boot instead, and only
 // through that check — and a wrong SyncAlways surfaces only as acked data
 // missing after a host loses power, which no test can stage.
-func embeddedOptions(cfg Config) (*server.Options, string, error) {
+//
+// system is the identity a CLUSTERED member declares its system account with
+// (see membership.go), minted by the caller because the key that signs for it
+// cannot be read back out of the options; a solo member and a leaf ignore it.
+func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, error) {
 	// THE NAME, and only the name: the cluster block below is installed on
 	// it alone, so a port or a peer list without one configures nothing and
 	// this member starts solo. Tier A refuses that shape (it requires
@@ -262,21 +403,55 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 	// the same field for the provisioning budgets — one rule, so the server
 	// that gets built and the budget it is given cannot disagree.
 	clustered := cfg.ClusterName != ""
+	leaf := len(cfg.LeafURLs) > 0
+	if leaf {
+		// A LEAF HOLDS NOTHING, and every member setting is a way of
+		// holding something: a cluster is raft groups, a leaf listener
+		// is a hub other leaves depend on, a store directory is streams.
+		// Refused rather than ignored, because a leaf quietly given a
+		// store directory is a node its operator believes is durable.
+		switch {
+		case clustered || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0:
+			return nil, "", errors.New("jetstream: a leaf is not a cluster " +
+				"member — drop the cluster settings or the leaf URLs")
+		case cfg.LeafPort != 0:
+			return nil, "", errors.New("jetstream: a leaf opens no leaf " +
+				"listener of its own — other leaves join a member")
+		case cfg.StoreDir != "":
+			return nil, "", errors.New("jetstream: a leaf runs no JetStream, " +
+				"so it has no store directory to keep")
+		}
+	}
+	if cfg.LeafPort < 0 && cfg.LeafPort != AnyPort {
+		return nil, "", fmt.Errorf("jetstream: leaf port %d is not a port — "+
+			"name one in 1..65535, 0 for no listener, or AnyPort", cfg.LeafPort)
+	}
+	if cfg.LeafPort != 0 && cfg.StoreDir == "" {
+		// A MEMBER THAT LETS LEAVES IN IS WHERE EVERYTHING THEY DO IS
+		// KEPT — their seats' mailboxes, every record they write — and a
+		// leaf creates the streams it is first to use in the FILE store,
+		// as a client of any broker it does not run does. A member keeping
+		// streams in memory would lose all of it at its next restart and
+		// refuse the leaves' own streams as a configuration mismatch.
+		return nil, "", errors.New("jetstream: a member with a leaf listener " +
+			"needs a store directory — the nodes that join it keep nothing, so " +
+			"this member keeps everything they do")
+	}
 	name := cfg.ServerName
 	if name == "" {
-		if clustered {
+		if clustered || leaf {
 			// Refused rather than generated. A generated name is unique,
 			// which is half the requirement — the other half is that it
 			// survives a restart, and a name minted at boot silently
 			// orphans this member's replicas every time the process
 			// comes back. See Config.ServerName.
-			return nil, "", errors.New("jetstream: ServerName is required for a clustered embedded server")
+			return nil, "", errors.New("jetstream: ServerName is required for a clustered embedded server or a leaf")
 		}
 		name = "crewlet"
 	}
 	opts := &server.Options{
 		ServerName: name,
-		JetStream:  true,
+		JetStream:  !leaf,
 		Port:       -1,
 		// No listener in the solo case. This is a security property as
 		// much as a convenience: an embedded broker with no socket
@@ -388,12 +563,38 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		// [Queue.StreamBudget] holds a reservation to.
 		JetStreamMaxStore: cfg.StoreMaxBytes,
 	}
+	if opts.JetStream {
+		// THE FLEET'S ONE DOMAIN, served by every member so a leaf's
+		// clients have a JetStream to address across their link — see
+		// [jsapi]. A member's own clients address it too, and its local
+		// server answers the domain's subjects exactly as it answers the
+		// plain ones, so no client has to know which kind of node it is
+		// on.
+		opts.JetStreamDomain = jsapi.Domain
+	}
+	if leaf {
+		remotes, err := leafRemotes(cfg.LeafURLs)
+		if err != nil {
+			return nil, "", err
+		}
+		opts.LeafNode.Remotes = remotes
+		// The leaf's clients are this process alone, and its one link is
+		// the one it dials, so nothing here listens at all.
+		opts.DontListen = true
+		return opts, "", nil
+	}
+	if cfg.LeafPort != 0 {
+		opts.LeafNode.Host = cfg.LeafHost
+		opts.LeafNode.Port = cfg.LeafPort
+		opts.LeafNode.Advertise = cfg.LeafAdvertise
+	}
 	var scratch string
 	if opts.StoreDir == "" {
-		// An in-memory server. Streams are memory-backed too (see
-		// ensureStreams), which suits a test and no node serving a
-		// company: every node, an ingress-only one included, runs the
-		// engine and provisions the streams its company lives on.
+		// A member with no StoreDir keeps its streams in memory (see
+		// ensureStreams), which suits a test and no member serving a
+		// company: a restart loses every replica it held. A leaf never
+		// reaches here — it returned above with JetStream off — so this
+		// branch is only ever a member's.
 		opts.JetStreamMaxStore = -1
 
 		// It still needs somewhere to put its own metadata, and left
@@ -423,12 +624,28 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 			Advertise: cfg.ClusterAdvertise,
 		}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
+		// AND ITS SYSTEM ACCOUNT, reachable from this process alone — the
+		// only account the metadata group's membership is changed through.
+		// See membership.go.
+		if system.declared() {
+			system.declare(opts)
+		}
 	}
 	return opts, scratch, nil
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	opts, scratch, err := embeddedOptions(cfg)
+	// THE SYSTEM ACCOUNT'S KEY, for a clustered member: the one rule
+	// [embeddedOptions] reads for `clustered`, which refuses a leaf that
+	// names a cluster before anything declares it.
+	var system systemUser
+	if cfg.ClusterName != "" {
+		var err error
+		if system, err = newSystemUser(); err != nil {
+			return nil, err
+		}
+	}
+	opts, scratch, err := embeddedOptions(cfg, system)
 	if err != nil {
 		return nil, err
 	}
@@ -449,6 +666,28 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// The probe cannot close the race and does not try; what it buys is the
 	// common case, named, in microseconds. The accept-timeout message below
 	// covers the rest.
+	// THE LEAF LISTENER THE SAME WAY, and for the same reason: a member
+	// whose leaf port is taken logs the bind failure and never becomes
+	// ready, and the boot spends its budget reporting something else. Not
+	// [AnyPort], which names no port to probe: the OS hands out a free one.
+	// Refused as [ErrLeafPortTaken], never the route listener's sentinel:
+	// the remedy is a different setting on a different listener.
+	if opts.LeafNode.Port > 0 {
+		free, probeErr := PortAvailable(ctx, opts.LeafNode.Host, opts.LeafNode.Port)
+		switch {
+		case probeErr != nil:
+			removeScratch(scratch)
+			return nil, fmt.Errorf("stream.leaf.port %d on %s cannot "+
+				"be bound by this node: %w", opts.LeafNode.Port,
+				routeHostLabel(opts.LeafNode.Host), probeErr)
+		case !free:
+			removeScratch(scratch)
+			return nil, fmt.Errorf("%w: stream.leaf.port %d is already "+
+				"in use on %s, so no stateless node could join the fleet through "+
+				"this member — free that port or give this node a different one",
+				ErrLeafPortTaken, opts.LeafNode.Port, routeHostLabel(opts.LeafNode.Host))
+		}
+	}
 	if clustered && opts.Cluster.Port != 0 {
 		free, probeErr := PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port)
 		switch {
@@ -515,6 +754,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}
 	return &embeddedServer{
 		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
+		leaf: len(opts.LeafNode.Remotes) > 0, system: system,
 	}, nil
 }
 
@@ -589,21 +829,60 @@ func notReadyError(budget time.Duration, clustered bool,
 // is a seed set — it may name this member, it may name a subset, and neither
 // shape says how many members a stream needs.
 //
+// # And why "current" is not "answering"
+//
+// JetStreamIsCurrent is a LOCAL flag: it asks whether this member's copy of
+// the metadata log has commits and has applied them, and whether a leader it
+// KNOWS OF has spoken lately — and a member that knows of no leader at all,
+// mid-election or restarted with its log on disk, still reports itself current
+// (server/raft.go, isCurrent skips the leader-contact check when there is no
+// leader to have heard from). Provisioning that starts then is put to a group
+// with no leader, and a group with no leader does not refuse it: only the
+// leader takes a create, and every member but the leader returns WITHOUT
+// REPLYING to it (server/jetstream_api.go, jsStreamCreateRequest) until the
+// group is ten seconds old — so each create waits out one whole
+// [jsprovision.AskTerm], fifteen seconds, and the pause before it is asked
+// again.
+//
+// So the wait ends on an ANSWER: the fleet's JetStream account report, which
+// in a cluster only the metadata leader gives (jsAccountInfoRequest returns
+// silently on every other member), asked every [clusterReadyAsk] once the two
+// local halves hold. An answer is the leader, reachable from this member, which
+// is precisely what the provisioning that follows needs; a dropped request is
+// asked again a heartbeat later rather than waited on.
+//
+// js is the client the provisioning will use, so the question travels the
+// path the creates will.
+//
 // A no-op for a solo member and for an external URL: solo has no metadata
-// group to join, and an external cluster is somebody else's to have made
+// group to join, and an external cluster is its own operator's to have made
 // ready before pointing an engine at it.
-func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) error {
+func (e *embeddedServer) awaitClusterReady(ctx context.Context, js jetstream.JetStream, replicas int) error {
 	if e == nil || !e.clustered {
 		return nil
 	}
+	r := e.readiness()
 	// A member of a cluster still writes R=1 streams sometimes, and one
 	// replica needs no peer at all — so the floor is zero rather than a
 	// negative that would read as "wait for nobody" by accident.
 	wantPeers := max(replicas-1, 0)
-	ready := func() bool {
+	local := func() bool {
 		return e.ns.JetStreamIsCurrent() && len(e.routePeers()) >= wantPeers
 	}
-	deadline := time.Now().Add(clusterReadyTimeout)
+	// answered is the last answer to the metadata question, and
+	// errNotAsked until one is put: a wait that never got as far as asking
+	// must not report the leader as silent.
+	answered := errNotAsked
+	ready := func() bool {
+		if !local() {
+			return false
+		}
+		askCtx, cancel := context.WithTimeout(ctx, r.ask)
+		defer cancel()
+		_, answered = js.AccountInfo(askCtx)
+		return answered == nil
+	}
+	deadline := time.Now().Add(r.timeout)
 	for time.Now().Before(deadline) {
 		if ready() {
 			return nil
@@ -612,21 +891,77 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for jetstream cluster %q: %w",
 				e.ns.ClusterName(), ctx.Err())
-		case <-time.After(clusterReadyPoll):
+		case <-time.After(r.poll):
 		}
 	}
+	// ONE LAST LOOK, so a member that got there during the final poll is not
+	// failed for the timing of the loop around it.
 	if ready() {
 		return nil
 	}
-	// THE TWO HALVES ARE NAMED SEPARATELY, because they have different
+	// THE THREE HALVES ARE NAMED SEPARATELY, because they have different
 	// remedies: a member that never became current is one whose metadata
-	// group could not form, and a member that is current with too few
-	// peers is a routing problem — a firewall, a wrong advertise address,
-	// a peer that never started.
+	// group could not form; a member that is current with too few peers is
+	// a routing problem — a firewall, a wrong advertise address, a peer
+	// that never started; and one that is both but was never answered is
+	// a group with no leader it can reach.
 	return fmt.Errorf("embedded nats server %q is not ready to serve a "+
 		"%d-replica stream within %s: jetstream current=%t, routed to %v "+
-		"(want %d peers)", e.ns.Name(), replicas, clusterReadyTimeout,
-		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
+		"(want %d peers), metadata leader answered: %v", e.ns.Name(), replicas,
+		r.timeout, e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers, answered)
+}
+
+// errNotAsked is the metadata question a readiness wait never got as far as
+// putting, because this member was never current and routed at once.
+var errNotAsked = errors.New("not asked: the member was never current with " +
+	"enough routed peers")
+
+// awaitLeafReady waits until a leaf's link is up and the fleet's JetStream
+// answers across it.
+//
+// BOTH HALVES, because either alone is a lie about the one that matters. The
+// link counts as up the moment it is accepted, while the member at the other
+// end may still be recovering its streams; and a JetStream answer proves the
+// link rather than merely the member. Bounded by the clustered accept budget,
+// because the far side IS a cluster as far as this node can tell — see
+// [Config.Clustered].
+//
+// A no-op for everything that is not a leaf.
+func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStream) error {
+	if e == nil || !e.leaf {
+		return nil
+	}
+	r := e.readiness()
+	deadline := time.Now().Add(r.timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		if e.ns.NumLeafNodes() > 0 {
+			askCtx, cancel := context.WithTimeout(ctx, r.ask)
+			_, last = js.AccountInfo(askCtx)
+			cancel()
+			if last == nil {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			// THE CALLER'S DEADLINE, which says nothing about the link:
+			// cut short, a wait cannot tell a member that is not there
+			// from a link that has not formed YET, so naming the setting
+			// to fix here would be a diagnosis it has no evidence for.
+			return fmt.Errorf("waiting for leaf %q to reach the fleet: %w",
+				e.ns.Name(), ctx.Err())
+		case <-time.After(r.poll):
+		}
+	}
+	if e.ns.NumLeafNodes() == 0 {
+		return fmt.Errorf("leaf %q made no link to any member within %s — "+
+			"stream.leaf.urls names no member that is up and listening on its "+
+			"stream.leaf.port, or a firewall is between them",
+			e.ns.Name(), r.timeout)
+	}
+	return fmt.Errorf("leaf %q is linked to the fleet but its JetStream did not "+
+		"answer within %s: %w", e.ns.Name(), r.timeout, last)
 }
 
 // embeddedReconnectWait is how long a connection to this process's own broker
@@ -755,6 +1090,26 @@ func removeScratch(dir string) {
 	if err := os.RemoveAll(dir); err != nil {
 		logging.Get("queue.jetstream").Warn("embedded_scratch_not_removed", "dir", dir, "error", err)
 	}
+}
+
+// leafRemotes parses a leaf's URLs into the one remote it dials.
+//
+// ONE REMOTE WITH EVERY URL rather than one remote per URL, because the fleet
+// is one account on one hub: a remote per member would be N links into the
+// same account, and interest would arrive by every one of them. The server
+// rotates through the URLs of a single remote, which is exactly "any member
+// that answers".
+func leafRemotes(urls []string) ([]*server.RemoteLeafOpts, error) {
+	parsed := make([]*url.URL, 0, len(urls))
+	for _, raw := range urls {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("jetstream: leaf URL %q is not host:port "+
+				"behind a nats-leaf:// or nats:// scheme", raw)
+		}
+		parsed = append(parsed, u)
+	}
+	return []*server.RemoteLeafOpts{{URLs: parsed}}, nil
 }
 
 func joinURLs(urls []string) string {
@@ -983,6 +1338,18 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 // failure — a bad company config, an engine that will not start — must fail
 // the first time rather than three times with a misleading diagnosis.
 var ErrRoutePortTaken = errors.New("cluster route port taken")
+
+// ErrLeafPortTaken is a member whose LEAF listener's port (`stream.leaf.port`)
+// was held by something else when the member probed it before binding.
+//
+// A SENTINEL OF ITS OWN, beside [ErrRoutePortTaken] rather than folded into
+// it: the two name different listeners with different remedies — a member
+// that cannot route is cut off from its peers, one that cannot open its leaf
+// listener has nowhere for a stateless node to join — and reported as a route
+// port, a taken leaf port sent its reader to a cluster block that may not
+// exist. Retrying on a different number answers either, so a caller that can
+// lose both matches both.
+var ErrLeafPortTaken = errors.New("leaf listener port taken")
 
 // PortAvailable reports whether a port can still be bound on host right now.
 //

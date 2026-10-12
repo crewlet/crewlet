@@ -60,7 +60,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		},
 		bob.String(): {
 			ID: bob.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
-			Login: "bob.sre", NameSealed: []byte("sealed-name"),
+			Login: "bob.sre", Seat: "sre-desk", NameSealed: []byte("sealed-name"),
 			Grants: []iam.Grant{iam.GrantStateRead},
 		},
 	}}
@@ -1040,7 +1040,7 @@ func TestALoginTheAddressCannotProposeIsAskedFor(t *testing.T) {
 // A PERSON IS NEVER CREATED OR INVITED WITHOUT A SEAT, AND NEVER LEFT WITHOUT
 // ONE.
 //
-// A person holds a human seat for as long as they are here (ADR-0026). A
+// A person holds a human seat for as long as they are here (ADR-0032). A
 // create or an invitation naming none — a seat of nothing but spaces included —
 // is `400 seat_required` naming the field BEFORE anything is minted or
 // published, because the remedy is the caller's to type; an edit clearing a
@@ -1323,15 +1323,16 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 
 	// AND THE CONTROL: a node that CAN ask reports the one the rule
 	// calls dangling, in the rule's own words, and asks about nobody the
-	// directory does not bind.
+	// directory does not bind — the service account acting as itself.
 	var asked []string
 	const why = `seat "founder" is a "agent" seat; bind them to another human seat, or remove them`
 	with := newRig(t, func(o *iamapi.Options) {
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			asked = append(asked, row.ID)
-			return true, why, nil
+			return row.Seat == "founder", why, nil
 		}
 	})
+	with.directory.people[ciRelease.String()] = unboundServiceAccount()
 	got = with.as(administrator(), http.MethodGet, "/iam/check", nil)
 	finding := findingOf(got.body, string(iamapi.KindDanglingBinding))
 	if finding == nil {
@@ -1341,8 +1342,19 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 		t.Errorf("the finding reads %v, want the rule's own sentence about "+
 			"\"founder\"", finding)
 	}
-	if !slices.Equal(asked, []string{alice.String()}) {
-		t.Errorf("the rule was asked about %v, want only the one bound person", asked)
+	slices.Sort(asked)
+	if want := []string{alice.String(), bob.String()}; !slices.Equal(asked, want) {
+		t.Errorf("the rule was asked about %v, want the two bound people %v "+
+			"and never the unbound service account", asked, want)
+	}
+}
+
+// unboundServiceAccount is a service account acting as itself: the one
+// principal the directory holds that binds no seat.
+func unboundServiceAccount() iamdomain.PersonRow {
+	return iamdomain.PersonRow{
+		ID: ciRelease.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "ci:release",
 	}
 }
 
@@ -1359,13 +1371,15 @@ func TestABindingTheChartCannotJudgeIsCountedAsUnchecked(t *testing.T) {
 			return false, "", errors.New("this node runs no company yet")
 		}
 	})
+	r.directory.people[ciRelease.String()] = unboundServiceAccount()
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 	if hasFinding(got.body, string(iamapi.KindDanglingBinding)) {
 		t.Errorf("a binding nobody could judge was reported dangling: %v", got.body)
 	}
-	if n, _ := got.body["bindings_unchecked"].(float64); n != 1 {
-		t.Errorf("bindings_unchecked = %v, want 1 — the one bound person whose "+
-			"seat the chart could not answer for", got.body["bindings_unchecked"])
+	if n, _ := got.body["bindings_unchecked"].(float64); n != 2 {
+		t.Errorf("bindings_unchecked = %v, want 2 — the two bound people whose "+
+			"seats the chart could not answer for, and never the service "+
+			"account that binds none", got.body["bindings_unchecked"])
 	}
 
 	// AND THE CONTROL: a chart that answers leaves nothing unchecked.
@@ -1388,59 +1402,6 @@ func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 	if !hasFinding(got.body, string(iamapi.KindClampedGrant)) {
 		t.Errorf("the report does not name the clamped grant: %v", got.body)
-	}
-}
-
-// A PERSON WITHOUT A SEAT IS REPORTED, AT EVERY STAGE, AND A SERVICE ACCOUNT
-// WITHOUT ONE NEVER IS.
-//
-// Every person holds a human seat (ADR-0026), and nothing this build writes
-// leaves one without — so a person with no seat is a row recorded before the
-// rule, acting under their bare login, in no unit and led by nobody, and this
-// report is where an administrator finds them. Suspending somebody does not
-// make their missing seat stop mattering. A service account's seat is optional
-// by design, so the CONTROL is one with none. And the row says it binds
-// nothing, so it is never counted among the bindings this node could not
-// check.
-//
-// Mutation: report a seatless service account, or only an active person, and
-// a row goes red.
-func TestTheReportNamesAPersonWithoutASeat(t *testing.T) {
-	t.Parallel()
-	dave := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d7")
-	r := newRig(t)
-	r.directory.people[dave.String()] = iamdomain.PersonRow{
-		ID: dave.String(), Kind: iam.KindPerson, Stage: iam.StageSuspended,
-		Login: "dave.ops",
-	}
-	r.directory.people[ciRelease.String()] = iamdomain.PersonRow{
-		ID: ciRelease.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "ci:release",
-	}
-	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d (body %v)", got.status, got.body)
-	}
-	var seatless []string
-	rows, _ := got.body["findings"].([]any)
-	for _, raw := range rows {
-		row, _ := raw.(map[string]any)
-		if row["kind"] == string(iamapi.KindNoSeat) {
-			seatless = append(seatless, row["login"].(string))
-			if detail, _ := row["detail"].(string); !strings.Contains(detail,
-				"PATCH /iam/people/") {
-				t.Errorf("the finding reads %q, want the move that repairs it", detail)
-			}
-		}
-	}
-	slices.Sort(seatless)
-	if !slices.Equal(seatless, []string{"bob.sre", "dave.ops"}) {
-		t.Errorf("the report names %v as seatless, want the two people with no "+
-			"seat and not the service account", seatless)
-	}
-	if n, _ := got.body["bindings_unchecked"].(float64); n != 0 {
-		t.Errorf("bindings_unchecked = %v, want 0 — a row binding nothing has "+
-			"nothing to check", got.body["bindings_unchecked"])
 	}
 }
 
@@ -1478,7 +1439,6 @@ func TestTheReportIsInTheOrderItSaysItIs(t *testing.T) {
 		string(iamapi.KindNoManageHolder) + " ",
 		string(iamapi.KindNoCredential) + " alice.admin",
 		string(iamapi.KindNoCredential) + " bob.sre",
-		string(iamapi.KindNoSeat) + " bob.sre",
 		string(iamapi.KindDanglingBinding) + " alice.admin",
 		string(iamapi.KindClampedGrant) + " alice.admin",
 	}

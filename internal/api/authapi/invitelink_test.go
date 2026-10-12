@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -371,7 +370,7 @@ func (unreadableSeats) Seat(context.Context, string) (session.Seat, bool, error)
 
 // EVERY INVITATION'S VIEW NAMES ITS SEAT, AS THE CHART HOLDS IT NOW.
 //
-// A person holds a human seat for as long as they exist (ADR-0026), so every
+// A person holds a human seat for as long as they exist (ADR-0032), so every
 // invitation holds one and the seat is part of what its holder agrees to: the
 // view carries it on EVERY answer, never only where the chart still names it.
 // A seat the chart has retired since the issue — removed, or made an agent's —
@@ -421,82 +420,6 @@ func TestEveryInvitationViewNamesItsSeat(t *testing.T) {
 			}
 			if got, _ := seat.(map[string]any); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("the view shows seat %v, want %v", seat, tc.want)
-			}
-		})
-	}
-}
-
-// seatlessInvitation is [sealedInvitation] issued before every invitation held
-// a seat: it names none.
-type seatlessInvitation struct{ sealedInvitation }
-
-func (seatlessInvitation) InvitationByID(ctx context.Context, id string) (
-	iamdomain.InvitationRow, error) {
-
-	row, err := sealedInvitation{}.InvitationByID(ctx, id)
-	row.Seat = ""
-	return row, err
-}
-
-// AN INVITATION NAMING NO SEAT IS A DEAD LINK, on the view and the redemption.
-//
-// One issued before every invitation held a seat creates nobody — a person
-// holds a human seat for as long as they exist, and the redemption's own
-// record refuses a link naming none — so it is answered the one 410 every dead
-// link gets, and on the VIEW, before anybody chooses a password at a form
-// whose every submission would be refused. NEVER a 400 asking for a seat: the
-// invitee left nothing out and the form has no field to put one in; what they
-// need is a new link. It is the link's holder presenting the link's own
-// secret, so it is not a failed attempt. The CONTROL is the same link onto a
-// seat, which opens.
-//
-// Mutation: read such a link as open and the view renders, and the redemption
-// reaches the record.
-func TestAnInvitationNamingNoSeatIsADeadLink(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name      string
-		directory authapi.Directory
-		status    int
-	}{
-		{"a link onto a seat (the control)", sealedInvitation{}, http.StatusOK},
-		{"a link naming no seat", seatlessInvitation{}, http.StatusGone},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			audit := &recordingAudit{}
-			writer := &recordingWriter{}
-			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-				o.Directory, o.Writer, o.Audit = tc.directory, writer, audit
-				o.Seats = engLead
-				o.Sealer = stubSealer{address: "dana@example.com"}
-			}).Routes(mux)
-
-			viewed := httptest.NewRecorder()
-			mux.ServeHTTP(viewed, viewInvite(invitationID))
-			redeemed := postJSON(t, mux, "/auth/invite/"+invitationID,
-				map[string]string{"secret": invitationSecret, "login": "dana.sre",
-					"name": "Dana", "password": "a-perfectly-fine-passphrase"})
-			for route, rec := range map[string]*httptest.ResponseRecorder{
-				"the view": viewed, "the redemption": redeemed} {
-				if rec.Code != tc.status {
-					t.Errorf("%s answered %d, want %d: %s", route, rec.Code,
-						tc.status, rec.Body)
-				}
-				if tc.status == http.StatusGone &&
-					codeOf(t, rec) != string(httpjson.CodeInviteSpent) {
-					t.Errorf("%s answered %s, want the one refusal every dead "+
-						"link gets", route, rec.Body)
-				}
-			}
-			if tc.status == http.StatusGone && len(writer.enrolled) != 0 {
-				t.Errorf("a link naming no seat reached the record: %+v",
-					writer.enrolled)
-			}
-			if _, failures := audit.snapshot(); len(failures) != 0 {
-				t.Errorf("the link's own holder was counted as a guesser: %v",
-					failures)
 			}
 		})
 	}

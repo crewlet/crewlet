@@ -244,8 +244,9 @@ type MaintenanceOperation struct {
 	// AN EXCLUSION IS THE ONE FACT THE SEAL TAKES ON SOMEBODY'S WORD, so
 	// whose word it was is the first question a post-mortem asks when the
 	// process turns out not to have been stopped — and it was answered only
-	// by the log line of whichever node served the request. A node a build
-	// that did not record it excluded has no entry.
+	// by the log line of whichever node served the request. The exclusion
+	// writes the entry in the same update that adds the node to Excluded,
+	// so every excluded node has one.
 	ExcludedBy map[string]MaintenanceParty `json:"excluded_by,omitempty"`
 
 	// Journal is every write attempt against this stream's configuration
@@ -270,9 +271,10 @@ type MaintenanceOperation struct {
 
 	// EnteredAt is when the exclusion was taken and By which operator ran
 	// the verb — the author — with OperatorID the credential they ran it
-	// through, empty on an operation a build that did not record it opened.
-	// Revision is the store's own, for the compare-and-set every mutation
-	// is.
+	// through: the machine token or browser session they acted through, or
+	// their own login where that is the credential (internal/iam's
+	// ActorFor). Revision is the store's own, for the compare-and-set every
+	// mutation is.
 	EnteredAt  time.Time `json:"entered_at"`
 	By         string    `json:"by"`
 	OperatorID string    `json:"operator_id,omitempty"`

@@ -21,7 +21,8 @@ func runNodeGates(t *testing.T, new Factory) {
 
 // NodeGates certifies what a domain says is a NODE GATE ([statelog.Domain]'s
 // NodeGate): its own eviction and readmission are, every node gate installs an
-// apply gate, and a domain that claims no identity has none.
+// apply gate, and a domain that claims no identity has none — and that a domain
+// claiming identity reads its node gates off its log ([statelog.EvictionProbe]).
 //
 // # Why the publisher's answer rests on this
 //
@@ -78,6 +79,12 @@ func NodeGates(c Candidate) error {
 	}
 
 	if c.Domain.ClaimsIdentity() {
+		if _, probes := c.Domain.(statelog.EvictionProbe); !probes {
+			errs = append(errs, fmt.Errorf("%s claims identity and cannot read its "+
+				"node gates off its log (statelog.EvictionProbe) — a node a peer "+
+				"re-anchored past never applies that peer's eviction, so the log "+
+				"is the only place it can learn of it", name))
+		}
 		if c.EncodeGate == nil {
 			errs = append(errs, fmt.Errorf("%s claims identity and supplies no "+
 				"eviction record, so nothing can show the publisher takes its "+
@@ -121,6 +128,10 @@ func NodeGates(c Candidate) error {
 func GateNodeGates(c GateCandidate) error {
 	name := c.Domain.Name()
 	var errs []error
+	if _, probes := c.Domain.(statelog.EvictionProbe); !probes {
+		errs = append(errs, fmt.Errorf("%s installs an eviction gate and cannot "+
+			"read its node gates off its log (statelog.EvictionProbe)", name))
+	}
 	for _, r := range []struct {
 		label string
 		body  func() ([]byte, error)
@@ -166,22 +177,42 @@ func GateNodeGates(c GateCandidate) error {
 // answer could be written wrong, for [RunGates] to require every one reported.
 var nodeGateLiars = map[string]func(statelog.Domain) statelog.Domain{
 	"answers with its apply gate, so a purge is a node gate": func(d statelog.Domain) statelog.Domain {
-		return applyGateAsNodeGate{d}
+		return applyGateAsNodeGate{bent{d}}
 	},
 	"calls nothing a node gate, not even its eviction": func(d statelog.Domain) statelog.Domain {
-		return noNodeGate{d}
+		return noNodeGate{bent{d}}
 	},
+}
+
+// bent is a gating domain one of whose answers a liar replaces. It forwards the
+// eviction probe of the domain it wraps, so each bend is reported for what it
+// bends rather than for having lost the probe on the way in — a wrapper that
+// dropped it would be caught by the probe check whatever else it did.
+type bent struct{ statelog.Domain }
+
+func (b bent) EvictionSubject(node string) statelog.Subject {
+	if probe, ok := b.Domain.(statelog.EvictionProbe); ok {
+		return probe.EvictionSubject(node)
+	}
+	return statelog.Subject{}
+}
+
+func (b bent) Evicts(payload []byte) (bool, error) {
+	if probe, ok := b.Domain.(statelog.EvictionProbe); ok {
+		return probe.Evicts(payload)
+	}
+	return false, fmt.Errorf("%s reads no node gate off its log", b.Name())
 }
 
 // applyGateAsNodeGate answers the node-gate question with the apply gate's
 // answer — true for the purge as well as the eviction.
-type applyGateAsNodeGate struct{ statelog.Domain }
+type applyGateAsNodeGate struct{ bent }
 
 func (d applyGateAsNodeGate) NodeGate(env statelog.Envelope) bool {
 	return d.InstallsGate(env)
 }
 
 // noNodeGate calls nothing a node gate, so the publisher refuses its eviction.
-type noNodeGate struct{ statelog.Domain }
+type noNodeGate struct{ bent }
 
 func (noNodeGate) NodeGate(statelog.Envelope) bool { return false }

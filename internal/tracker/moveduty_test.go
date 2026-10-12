@@ -152,7 +152,7 @@ func TestTheDutyLeavesAMoveWhoseWalkHoldsItsClaim(t *testing.T) {
 		r.drain()
 	}
 	stopMoveOf(t, r, "n-root", "n-kid-b")
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
+	lease, _, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
 		t.Fatalf("hold the running walk's claim: (%v, %v)", lease, err)
@@ -472,4 +472,19 @@ func TestATaskAMoveHasNotCarriedYetTakesNoNewSubtask(t *testing.T) {
 	if _, err := r.writer.CreateTask(t.Context(), "op-late-after", behind, nil); err != nil {
 		t.Fatalf("a subtask under the task once the move carried it: %v", err)
 	}
+}
+
+// recordAt decodes one record on the harness's log, opened out of its signed
+// frame as the applier opens it.
+func (r *roundTrip) recordAt(t *testing.T, seq uint64) tracker.MutationRecord {
+	t.Helper()
+	_, payload, _, ok, err := r.log.At(t.Context(), seq)
+	if err != nil || !ok {
+		t.Fatalf("read record %d: (%v, %v)", seq, ok, err)
+	}
+	rec, err := tracker.Decode(r.open(seq, payload))
+	if err != nil {
+		t.Fatalf("decode record %d: %v", seq, err)
+	}
+	return rec
 }

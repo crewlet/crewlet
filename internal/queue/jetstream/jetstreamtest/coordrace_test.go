@@ -22,11 +22,13 @@ import (
 //
 //   - A READ SERVED BY A REPLICA behind an acknowledged write: a run just
 //     created read back as absent, and a charge was counted short. coord/kv
-//     reads every key from the stream leader and closes every listing on it.
+//     reads every key from the stream leader and certifies every listing
+//     against the leader's per-subject index.
 //   - A LEADER'S "ANOTHER WRITE IS IN FLIGHT", read as a lost race: a removal
 //     at the version its caller had just read was refused while the leader
 //     still had that caller's own create in flight, and the race over a record
-//     that was never removed had no winner. coord/kv waits that answer out.
+//     that was never removed had no winner. coord/kv waits that answer out
+//     (internal/jsinflight).
 //   - A LOSER TOLD THE STORE WAS DOWN: on a replicated stream a share of a
 //     create race's losers came back as a refusal the client wrapped in
 //     neither of its sentinels, and a create that matched only the sentinel
@@ -34,32 +36,32 @@ import (
 //
 // IT IS A RACE AND FAILS LIKE ONE: under load, a share of runs, and on an idle
 // machine almost never. Each mechanism has a staged case that fails every time
-// — TestAWalkServedByACopyThatIsBehindIsClosedByTheLeader and
-// TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided in coord/kv, and
+// — TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind and
+// TestAReadIsNeverAnsweredByACopyThatIsBehind in coord/kv, the in-flight
+// cases of internal/jsinflight, and
 // TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind here — and this
 // one holds them together under the timing that produced the failures.
 //
 // Mutation, measured with eight CPU burners on four cores: the build before
 // coord/kv read through the leader failed 9 runs of 12 ("a run just created
 // read back as absent", "8 admitted and 7 counted"). Handing back the
-// leader's first answer from leaderBucket.settle failed 0 of 12 at that load —
-// the in-flight answer is rarer than a stale replica — which is why that
-// mechanism's guard is the staged case, not this one. And no round here lists
-// any more: making leaderBucket.closeOnLeader return without asking once
-// failed 6 of 12, through a budget round that reset its counter by a listing
-// first, and a windowed counter is rolled inside the charge that counts it and
-// never reset (ADR-0019), so the staged walk case is that mechanism's only
-// guard.
+// leader's first in-flight answer rather than waiting it out failed 0 of 12 at
+// that load — the in-flight answer is rarer than a stale replica — which is
+// why that mechanism's guard is the staged case, not this one. And no round
+// here lists any more: a windowed counter is rolled inside the charge that
+// counts it and never reset (ADR-0019), so a listing that stops short of the
+// leader is guarded by coord/kv's staged walk cases alone.
 func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
-	store, err := coordkv.OpenFleet(t.Context(), c.Client(t, 0).Conn(),
+	store, err := coordkv.OpenFleet(t.Context(), c.Client(t, 0).JetStream(),
 		coordkv.FleetConfig{
 			BucketPrefix: "raced", Replicas: len(c.Servers), Clustered: true,
-			RateWindow: time.Minute, ClaimTTL: 10 * time.Minute, SetupOnceRetention: 10 * time.Minute,
+			RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 			LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-			FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
-			BudgetRetention: coord.BudgetRetention, StatusFreshness: 10 * time.Minute,
+			FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
+			CooldownMax: time.Hour, BudgetRetention: coord.BudgetRetention,
+			StatusFreshness: 10 * time.Minute, CustodyRetention: 10 * time.Minute,
 		})
 	if err != nil {
 		t.Fatalf("open a replicated fleet store: %v", err)

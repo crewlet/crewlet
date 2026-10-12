@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE WHOLE PATH: a write reaches the broker, the applier and the reader.
@@ -28,7 +29,7 @@ var wednesday = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 type roundTrip struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.ReplicatedHandle
 	log     *js.DomainLog
 	store   *pages.Store
 	applier *pages.Applier
@@ -47,6 +48,22 @@ type roundTrip struct {
 	verifier *statelog.Verifier
 
 	consumed uint64
+}
+
+// markLedgerLost moves the operation ledger's watermark to cutoff and deletes
+// nothing, as the retention sweep records the cutoff it deleted below.
+func (r *roundTrip) markLedgerLost(cutoff time.Time) {
+	r.t.Helper()
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.t.Context(), `
+			INSERT INTO statelog_ops_lost (ops_table, lost_before) VALUES (?, ?)
+			ON CONFLICT (ops_table) DO UPDATE SET
+				lost_before = MAX(lost_before, excluded.lost_before)`,
+			pages.Domain{}.OpsTable(), store.EncodeTime(cutoff))
+		return err
+	}); err != nil {
+		r.t.Fatalf("move the operation ledger's watermark: %v", err)
+	}
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -83,15 +100,11 @@ func newRoundTrip(t *testing.T) *roundTrip {
 }
 
 // openNodeStore opens one node's own store, closed with the test.
-func openNodeStore(t *testing.T, name string) *store.DB {
+func openNodeStore(t *testing.T, name string) store.ReplicatedHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), name),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), name), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -101,15 +114,15 @@ func openNodeStore(t *testing.T, name string) *store.DB {
 // newRoundTripOn is the harness's node over a log and a store it is handed:
 // the ones [newRoundTrip] opens, or a SECOND node joining the same log under
 // its own id and its own store — the shape a race between two nodes needs.
-func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := pages.NewRows(db)
+	rows, err := pages.NewRows(db.Reader(), pages.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := pages.NewFence(db, nodeID)
+	fence := pages.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
@@ -135,11 +148,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
-	signer := testSigner(t, pages.Domain{})
+	signer, verifier := testSigner(t, pages.Domain{}), testVerifier(t, pages.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Signer: signer,
-		Gates:  pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Domain: pages.Domain{}, Spec: pages.Domain{}.Stream(), Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
+		Rows:    rows, Fence: fence, Signer: signer,
+		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter,
+		NodeID:        nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -147,8 +162,8 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	storeOptions := pages.Options{
-		Publisher: publisher, DB: db,
+	kb, err := pages.NewStore(pages.Options{
+		Publisher: publisher, DB: db.Reader(),
 		Now: func() time.Time { return wednesday },
 		// EVERY HARNESS RESERVES TS AND HOME, so both rules are in force
 		// on every case rather than only on the one that is about them —
@@ -157,8 +172,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		Reserved: func() pages.Reserved {
 			return pages.Reserved{Skills: "TS", Root: "HOME"}
 		},
-	}
-	kb, err := pages.NewStore(storeOptions)
+	})
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}
@@ -166,21 +180,26 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	// reader its own transaction would exercise the SQL and none of the
 	// contract the rows are served under — which is the shape that let the
 	// level be a label for as long as it was.
-	authority, err := statelogtest.LocalReader(pages.Domain{}, db.Replicated(),
+	authority, err := statelogtest.LocalReader(pages.Domain{}, db,
 		waiter.Committed())
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: db, Log: authority})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: db.Reader(), Log: authority})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
-	return &roundTrip{
+	r := &roundTrip{
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
-		signer: signer, verifier: testVerifier(t, pages.Domain{}),
+		signer: signer, verifier: verifier,
 	}
+	// THIS NODE'S APPLIER RUNS WHILE A WRITE WAITS, as a running node's
+	// does — see [testWaiter]. A case about a node that is behind says so
+	// with [roundTrip.holdApplier].
+	waiter.advance = r.drain
+	return r
 }
 
 // drain consumes every record the broker holds beyond what this node has
@@ -231,7 +250,7 @@ func (r *roundTrip) drain() {
 			Payload:  body,
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
 			if err != nil {
 				return err
@@ -267,8 +286,8 @@ func (r *roundTrip) drain() {
 			}
 			_, err = tx.ExecContext(r.t.Context(), `
 				INSERT INTO statelog_cursor
-					(stream, generation, seq, stream_created_at, updated_at)
-				VALUES (?,?,?,0,0)
+					(stream, generation, seq, stream_created_at, updated_at, applied_version)
+				VALUES (?,?,?,0,0, 0)
 				ON CONFLICT (stream) DO UPDATE SET
 					generation = excluded.generation, seq = excluded.seq`,
 				record.Position.Stream, int64(record.Position.Generation),
@@ -312,26 +331,54 @@ func (r *roundTrip) get(ref string) pages.Detail {
 	return detail
 }
 
-// testWaiter is this node's own applier as the publisher sees it.
+// Voided voids nothing: this harness never re-anchors, so no generation is
+// ever abandoned.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
+
+// testWaiter is this node's own applier as the publisher and the reader see
+// it.
+//
+// # It applies while a write waits, because a running node's applier does
+//
+// A write appends its record and then waits — out to the publisher's
+// [statelog.Deps.ResolveBudget] — for this node to apply it, which is what
+// lets the operation ledger answer `applied`. A node's applier consumes the log
+// the whole time, so that wait ends in milliseconds; a harness whose applier
+// ran only when a case called [roundTrip.drain] could only let it expire, and
+// every write here sat out the full two seconds and answered `pending`. That
+// was most of this package's time and none of what it asserts, and it took
+// every write down the arm production almost never takes. So the wait runs
+// [roundTrip.drain], on the writing goroutine — the publisher holds no
+// transaction while it waits, its decision's snapshot already closed — and a
+// case's own drain afterwards finds nothing left.
+//
+// # And a node that is behind says so, at once
+//
+// [roundTrip.holdApplier] takes the applier out of the wait: a write then
+// resolves `pending` and a floored read refuses `behind`, which is a node whose
+// applier has not reached the position. The wait answers what an expired budget
+// answers, without spending it — nothing can move the position while the
+// caller blocks here, so waiting would only arrive at the same answer later.
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
 
-	// advance, when set, is this node's applier run from inside a write's
-	// own wait — see [roundTrip.applyWhileWriting].
+	// advance is this node's applier, run from inside a wait; nil is a
+	// node holding its applier back — see [roundTrip.holdApplier].
 	advance func()
 }
 
-// applyWhileWriting makes this node's applier run from inside a write's own
-// wait, which is what it does in production and what this harness otherwise
-// cannot express: a write that lost the broker's arbitration to a peer's
-// record waits for this node to apply that record before it decides again,
-// and in a harness where nothing consumes the log during a call that wait can
-// only expire.
-func (r *roundTrip) applyWhileWriting() {
+// holdApplier keeps this node's applier out of every wait for the rest of the
+// case: a write resolves `pending` and a read floored past what this node has
+// applied refuses `behind`. A drain by hand brings the node level once and
+// does NOT put the applier back in the wait, so the next write is `pending`
+// again. It is the state of a node whose applier is behind its own log — the
+// one a case about a write that has not landed here, or about a read that
+// must not be served from before it, needs to hold.
+func (r *roundTrip) holdApplier() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
-	r.waiter.advance = r.drain
+	r.waiter.advance = nil
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -361,9 +408,25 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 		w.mu.Lock()
 		advance := w.advance
 		w.mu.Unlock()
-		if advance != nil {
-			advance()
+		if advance == nil {
+			// HELD: nothing moves the position while the caller blocks
+			// here, so answer what the budget's expiry would. THE
+			// CALLER'S OWN ERROR FIRST: a context already cancelled is
+			// a cancellation, and reporting it as a deadline would send
+			// the publisher down the pending path after an explicit
+			// cancel.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded
 		}
+		advance()
+		if w.Committed().Packed() >= p.Packed() {
+			return nil
+		}
+		// A POSITION PAST THE LOG'S END is not one this wait can reach
+		// by applying; it can only be reached by a write that has not
+		// happened yet, so the wait is the caller's budget.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

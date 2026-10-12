@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -49,6 +49,15 @@ type SteerDeps struct {
 	// Asker reaches every node, one of which runs the turn. Nil omits the
 	// tool.
 	Asker FleetAsker
+
+	// Wire signs every request the tool scatters and verifies every reply,
+	// under the fleet keyring ([steer.Channel], internal/signedask) — the
+	// node's own, which its desk answers with. Required with Asker: the
+	// running node offers a note as the person it names on this node's
+	// decision that they may, so a note it could not verify would be one
+	// anybody on the broker could have written, and a reply this node did
+	// not verify could name whichever seat the caller leads.
+	Wire *signedask.Channel[steer.Request, steer.Reply]
 
 	// Actor is who is sending the note, off the caller's own credential —
 	// the same resolution every other operator write takes
@@ -142,7 +151,7 @@ func (t *steerTurn) Call(ctx context.Context, args map[string]any) (tools.Result
 func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	if t.deps.Asker == nil || t.deps.Actor == nil {
+	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil {
 		return refused(tools.RefusalUnavailable, SteerTurnTool+" is unavailable: "+
 			"this surface was built without a way to reach the fleet."), nil
 	}
@@ -196,6 +205,9 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	})
 	if refusal != nil {
 		return *refusal, nil
+	}
+	if answered && reply.Unverified != "" {
+		return unverifiedRefusal(turnID, reply), nil
 	}
 	if !answered {
 		log.WarnContext(ctx, "steer_turn_unanswered",
@@ -266,6 +278,8 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 			"answered for turn %s within %s: it is not running anywhere, or the node "+
 			"running it did not answer in time. Nothing was sent; try again.",
 			clip(turnID), SteerAskBudget)))
+	case reply.Unverified != "":
+		return refusalOf(unverifiedRefusal(turnID, reply))
 	}
 	owner, named := t.seatOf(reply)
 	if !named {
@@ -304,16 +318,23 @@ func (t *steerTurn) seatOf(reply steer.Reply) (string, bool) {
 // ask scatters one request and returns the reply that answers for its turn.
 // answered is false when no node did within [SteerAskBudget]; a refusal is
 // the ask itself failing, which sent nothing anywhere.
+//
+// SIGNED AND BOUND, every time: a fresh id per ask — a probe and the offer
+// after it are two requests — and the ask's own deadline, which is how long
+// a node remembers the id; and a reply is believed only where it verifies
+// and answers that id.
 func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bool, *tools.Result) {
-	request, err := json.Marshal(req)
-	if err != nil {
-		// A FAULT: the request is this build's own struct, so an encode
-		// that fails fails the same way every time.
-		return steer.Reply{}, false, refusalOf(faulted(ctx, SteerTurnTool, err,
-			"steer_turn could not encode its request: "+faultSaid+". Nothing was sent."))
-	}
 	askCtx, cancel := context.WithTimeout(ctx, SteerAskBudget)
 	defer cancel()
+	req.ID = signedask.NewID()
+	req.Deadline, _ = askCtx.Deadline()
+	request, err := t.deps.Wire.SealRequest(req)
+	if err != nil {
+		// A FAULT: the request is this build's own struct, bound here, so
+		// a seal that fails fails the same way every time.
+		return steer.Reply{}, false, refusalOf(faulted(ctx, SteerTurnTool, err,
+			"steer_turn could not sign its request: "+faultSaid+". Nothing was sent."))
+	}
 	replies, err := t.deps.Asker.Ask(askCtx, topics.SeatSteer, request, 1)
 	if err != nil {
 		// THE ASK COULD NOT BE MADE, so nothing was sent anywhere — which
@@ -322,19 +343,41 @@ func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bo
 		return steer.Reply{}, false, refusalOf(nodeFailure(ctx, SteerTurnTool, err,
 			"steer_turn could not reach the fleet", "Nothing was sent."))
 	}
-	reply, answered := steerReplyFor(replies, req.TurnID)
+	reply, answered := t.replyFor(ctx, replies, req)
 	return reply, answered, nil
 }
 
-// steerReplyFor is the reply that answers for turnID, if any did. A reply this
-// build cannot read, or one about another turn, is a node that did not answer.
-func steerReplyFor(replies [][]byte, turnID string) (steer.Reply, bool) {
+// replyFor is the reply that answers req, if any did. A reply the fleet did
+// not sign, one signed for another request, one this build cannot read and
+// one about another turn are each a node that did not answer — never an
+// answer: a reply nobody can vouch for that named the caller's own report as
+// the turn's seat would be the authority deciding on a forgery.
+func (t *steerTurn) replyFor(ctx context.Context, replies [][]byte, req steer.Request) (steer.Reply, bool) {
 	for _, raw := range replies {
-		var reply steer.Reply
-		if err := json.Unmarshal(raw, &reply); err != nil || reply.TurnID != turnID {
+		reply, why, err := t.deps.Wire.OpenReply(raw, req.ID)
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "steer_turn_reply_unread", "turn_id", req.TurnID,
+				"error", err.Error())
+			continue
+		case why != "":
+			log.WarnContext(ctx, "steer_turn_reply_refused", "turn_id", req.TurnID,
+				"detail", why)
+			continue
+		case reply.TurnID != req.TurnID:
 			continue
 		}
 		return reply, true
 	}
 	return steer.Reply{}, false
+}
+
+// unverifiedRefusal is the running node saying it took nothing because it
+// could not verify the request: unavailable, since a keyring an operator
+// brings into agreement is what changes the answer, and naming what the node
+// holds, which is all a person needs to say to the operator.
+func unverifiedRefusal(turnID string, reply steer.Reply) tools.Result {
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("Turn %s's node could not "+
+		"verify the note, so it took nothing: %s. Nothing was sent.", clip(turnID),
+		reply.Unverified))
 }

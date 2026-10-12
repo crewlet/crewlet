@@ -28,6 +28,22 @@ func fleetKeyring(t *testing.T) (string, string) {
 	return "e2e", testKeyMaterial(t)
 }
 
+// keyring is one ring [fleetKeyring] minted, for the nodes a case hands it to.
+type keyring struct{ id, material string }
+
+// fleetRing is [fleetKeyring] as a value a case passes to each node it builds.
+func fleetRing(t *testing.T) keyring {
+	t.Helper()
+	id, material := fleetKeyring(t)
+	return keyring{id: id, material: material}
+}
+
+// hold gives boot this ring and nothing else.
+func (r keyring) hold(boot *config.Bootstrap) {
+	boot.Secrets.ActiveKeyID = r.id
+	boot.Secrets.Keys = []config.SecretKey{{ID: r.id, Material: r.material}}
+}
+
 // testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
 // so a suite's key is a key rather than a fixture's idea of one: the size, the
 // randomness and the encoding are all read off the production definition, and

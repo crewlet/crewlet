@@ -558,8 +558,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		//
 		// THE REFUSAL IS WHAT SAYS a binding was decided and this node
 		// will not honour it: the principal's seat is empty either way,
-		// and a genuinely seatless person carries no refusal, so the two
-		// never read alike.
+		// and a genuinely seatless principal — a service account acting as
+		// itself — carries no refusal, so the two never read alike.
 		//
 		// THE COOKIE IS NOT CLEARED, unlike a refused session: the
 		// bearer is live and works the moment somebody rebinds them,

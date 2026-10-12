@@ -62,10 +62,10 @@ token_budget:
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
 # what running the engine's own tracker and wiki buys here: the one address
-# its skills need is where this deployment answers, and the engine injects
-# that itself from ``api.external_url`` in the OPERATOR's own Tier A file,
-# as ${crewlet_base_url}.  The bundled platform-mentions skill builds every
-# shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
+# its skills need is where people reach this deployment's dashboard, and the
+# engine injects that itself as ${crewlet_base_url} from ``api.external_url``
+# in the OPERATOR's own Tier A file.  The bundled platform-mentions skill
+# builds every shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
 # ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing for
 # an operator to keep in step.
 #
@@ -84,7 +84,7 @@ providers:
     # Prefer Anthropic?  Swap the default for:
     #   default:
     #     type: anthropic
-    #     model: claude-sonnet-5
+    #     model: claude-sonnet-5-5
     #     api_keys:
     #       - "${ANTHROPIC_API_KEY}"
     default:
@@ -117,8 +117,10 @@ providers:
   # ${LLM_API_KEY} provider, so the sandbox needs NO extra secret.  Claude
   # Code only speaks the Anthropic API, so choosing it here would require
   # adding an 'anthropic' providers.llm entry and pointing each engineer's
-  # role.llm_sandbox at it (otherwise the sandbox run fails credential
-  # validation — SandboxCredentialError — at launch).
+  # role.llm_sandbox at it, or giving each engineer a Claude Code sign-in
+  # of its own in role.sandbox.env (otherwise the launch is refused with a
+  # SandboxModelError: Claude Code can read neither this entry's model nor
+  # its key).
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
     # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,
@@ -338,7 +340,7 @@ learning:
   enabled: true
   reflect:
     enabled: true                          # PersistDecider runs after every terminal turn
-    summarize_episodes: true               # cheap-model summary of query_episodes hits
+    summarize_episodes: true               # cheap-model briefing of the Similar prior work hits
   counterparty:
     enabled: true                          # observe + auto-inject counterparty traits
   skill_synthesis:
@@ -969,7 +971,14 @@ units:
               # `e2b`, once that backend is in the catalogue) here and
               # nothing else changes.
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1056,7 +1065,14 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1136,7 +1152,14 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]
+                # No tracker in the box: the engine's builtins stay with the
+                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
+                # the coding agent knows the work item only through the
+                # brief the executor writes — the bundled skill:code_runtime
+                # tells it to copy in the facts and acceptance criteria.
+                # Code-host MCP not needed either — it pushes + opens the MR
+                # via git push options.
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).

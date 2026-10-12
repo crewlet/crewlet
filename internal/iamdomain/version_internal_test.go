@@ -20,9 +20,14 @@ import (
 // failure they would cause: one below what its fields need is applied lossily
 // by exactly the builds it exists to hold back, and a gate, a barrier or a
 // generation carrying a field is one an older node defers or retains — a
-// deferred removal is a person off-boarded still signing in there. The table
-// is empty today, so the case states a field a later build would add. Mutation:
-// stamp at the table's ceiling, or drop either refusal, and a case fails.
+// deferred removal is a person off-boarded still signing in there. The one
+// field a gate MAY carry is a change to its own apply
+// ([statelog.VersionedField.Gate]): stamped at the version that reads it, every
+// older build halts there rather than apply the old rule, while a field beside
+// it the gate did not need is still refused. The table is empty today, so the
+// case states fields a later build would add. Mutation: stamp at the table's
+// ceiling, drop either refusal, or read every gate field as refused, and a
+// case fails.
 func TestTheStampIsTheLowestVersionThatReadsTheRecord(t *testing.T) {
 	t.Parallel()
 	person := "0192f00d-0000-7000-8000-0000000000aa"
@@ -88,6 +93,30 @@ func TestTheStampIsTheLowestVersionThatReadsTheRecord(t *testing.T) {
 	if _, err := gate.encodeWith(later); err == nil {
 		t.Error("a removal carrying a later field at the version that reads it " +
 			"was encoded — a gate stays at the base for ever")
+	}
+
+	// SAVE A CHANGE TO THE GATE'S OWN APPLY, which rides the version that
+	// reads it so every older build halts at it.
+	gateField := statelog.VersionedField{
+		Name: "MutationRecord.Reason", Since: RecordVersion + 1,
+		Op: string(OpRemove), Path: []string{"reason"}, Gate: true}
+	changed := append(VersionedFields(), gateField)
+	gate.V = 0
+	if got, err := stamped(gate, changed); err != nil || got != RecordVersion+1 {
+		t.Errorf("a removal carrying its own changed apply is stamped (%d, %v), "+
+			"want %d — an older build must halt at the record rather than "+
+			"apply it by the rule it has", got, err, RecordVersion+1)
+	}
+	// AND NOTHING BESIDE IT: a field above the gate's own is one the gate
+	// did not need, and an older node would leave service for it.
+	beside := append(VersionedFields(), gateField, statelog.VersionedField{
+		Name: "MutationRecord.Actor", Since: RecordVersion + 2,
+		Path: []string{"actor"}})
+	gate.Actor = "ana.admin"
+	if _, err := gate.encodeWith(beside); err == nil {
+		t.Error("a removal carrying a field above its own changed apply was " +
+			"encoded — an older node would halt for a field rather than for a " +
+			"rule it cannot honour")
 	}
 }
 

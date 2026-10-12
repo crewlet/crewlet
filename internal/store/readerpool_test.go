@@ -37,34 +37,34 @@ func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 	if got, want := (Options{}).poolSize(), defaultReaderConns()+identityReserve; got != want {
 		t.Errorf("poolSize() = %d, want %d", got, want)
 	}
-	// A caller that sets the bound owns the arithmetic: it wins outright.
-	if got := (Options{MaxOpenConns: 3}).poolSize(); got != 3 {
-		t.Errorf("an explicit bound became %d, want the 3 that was asked for", got)
-	}
 }
 
-// TestTheReserveIsSkippedWhereThereIsNoRoomForIt.
+// TestWhatOrdinaryWorkMayNotTakeIsAddedToTheReaders.
 //
-// A handle opened at one connection owns its own arithmetic and has to be able
-// to serve somebody. Holding a connection back there would leave a handle with
-// none, which is a deadlock rather than a tight fit — and a backup's own
-// handle and an adoption's are both exactly that case.
-func TestTheReserveIsSkippedWhereThereIsNoRoomForIt(t *testing.T) {
+// A bound a caller sets is the ORDINARY READERS, and the connections nobody
+// else may take — the identity reserve, and a pinned writer per log — are
+// added beside them. Taken out of the bound instead, a handle opened at one
+// connection had no room to hold a reserve and served identity work from the
+// pool behind every scan, and one bounded at or below its pins left its
+// readers nothing at all.
+//
+// Mutation: drop either term from [Options.poolSize], and the case naming it
+// fails.
+func TestWhatOrdinaryWorkMayNotTakeIsAddedToTheReaders(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		opts Options
-		pins int
-		want bool
+		want int
 	}{
-		{"one connection, no room to hold any back", Options{MaxOpenConns: 1}, 0, false},
-		{"two connections, one held", Options{MaxOpenConns: 2}, 0, true},
-		{"the pins are spoken for too", Options{MaxOpenConns: 4}, 3, false},
-		{"and one more than the pins is room", Options{MaxOpenConns: 5}, 3, true},
-		{"the derived default always has room", Options{}, 0, true},
+		{"one reader and the reserve beside it", Options{MaxOpenConns: 1}, 1 + identityReserve},
+		{"three readers and the reserve", Options{MaxOpenConns: 3}, 3 + identityReserve},
+		{"and the pins on top of both", Options{MaxOpenConns: 3, pins: 5}, 3 + identityReserve + 5},
+		{"the derived readers take the same terms", Options{pins: 2},
+			defaultReaderConns() + identityReserve + 2},
 	} {
-		if got := tc.opts.reserveRoom(tc.pins); got != tc.want {
-			t.Errorf("%s: reserveRoom = %v, want %v", tc.name, got, tc.want)
+		if got := tc.opts.poolSize(); got != tc.want {
+			t.Errorf("%s: poolSize = %d, want %d", tc.name, got, tc.want)
 		}
 	}
 }
@@ -79,20 +79,18 @@ func TestTheReserveIsSkippedWhereThereIsNoRoomForIt(t *testing.T) {
 // [Identity] is the only way to spend it.
 func TestASocketStormCannotStarveIdentityWork(t *testing.T) {
 	t.Parallel()
-	// Four connections: one held for identity, three left for readers.
-	const pool = 4
-	opts := Options{MaxOpenConns: pool}
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "storm.db"), opts)
+	// Three readers, and the connection held for identity beside them.
+	const ordinary = 3
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "storm.db"),
+		Options{MaxOpenConns: ordinary})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
-	if !opts.reserveRoom(0) {
+	if got, want := db.SQL().Stats().MaxOpenConnections, ordinary+identityReserve; got != want {
 		t.Fatalf("the fixture is not the shape this case is about: a pool of "+
-			"%d holds nothing back", pool)
+			"%d, want %d readers and the reserve", got, want)
 	}
-	ordinary := pool - identityReserve
 
 	// Saturate the readers: every remaining connection held by a read that
 	// will not return until this test says so.
@@ -167,24 +165,30 @@ func TestASocketStormCannotStarveIdentityWork(t *testing.T) {
 	}
 }
 
-// TestIdentityWorkFallsBackWhereNoConnectionCouldBeHeld: a handle with no room
-// for a reserve must still answer an identity read, from the pool like
+// TestAnIdentityReadIsServedOnceTheReserveIsReleased: a handle whose reserved
+// connection is gone must still answer an identity read, from the pool like
 // everybody else. That is where those reads were before the reserve existed,
-// and refusing a question the handle can answer would be worse.
-func TestIdentityWorkFallsBackWhereNoConnectionCouldBeHeld(t *testing.T) {
+// and refusing a question the handle can answer would be worse. The reserve
+// is gone here because it was never drawn — exactly the state a draw that
+// failed at the open, or one retired and not yet replaced, leaves.
+//
+// Mutation: answer errNoReserve to the caller rather than falling through to
+// the pool, and the read fails.
+func TestAnIdentityReadIsServedOnceTheReserveIsReleased(t *testing.T) {
 	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "one.db"),
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "one.db"),
 		Options{MaxOpenConns: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	db.releaseIdentityReserve()
 
 	if err := db.Read(Identity(t.Context()), func(tx *sql.Tx) error {
 		var one int
 		return tx.QueryRowContext(t.Context(), `SELECT 1`).Scan(&one)
 	}); err != nil {
-		t.Errorf("an identity read on a single-connection handle failed: %v", err)
+		t.Errorf("an identity read on a handle holding no reserve failed: %v", err)
 	}
 }
 

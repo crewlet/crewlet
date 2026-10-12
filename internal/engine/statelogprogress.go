@@ -15,23 +15,23 @@ import (
 //
 // [statelog.Health] is a SNAPSHOT — every field describes this instant — and
 // two of the conditions built on it are properties of a SERIES. `Stalled` is
-// "the checkpoint has not moved for [statelog.StallGrace]", and the shed
+// "the checkpoint has not moved for [statelog.StallGrace]", and the fault
 // in [statelog.Health.Healthy] is "a record this build cannot decode has been
 // held past [statelog.DeferralGrace]". Neither can be derived from one
 // reading, so both were left unset: `Health.Stalled` was never assigned by
 // anything, which made the `stalled` arm of [statelog.Health.Refusal]
 // unreachable and left a frozen applier serving reads as though it were
-// current, and `DeferredSince` had no producer at all, so the shed the
-// `deferred_old` alarm promises an operator — "its seats move at 30m" —
-// never happened.
+// current, and `DeferredSince` had no producer at all, so what the
+// `deferred_old` alarm promises an operator — then "its seats move at 30m",
+// now that the node takes its copy out of service — never happened.
 //
 // # It is observed on the position heartbeat, not on the read
 //
 // The observation has to happen on a loop with its own cadence, because "has
 // not moved" is only meaningful against a previous look. It rides
-// [PositionHeartbeat], which already ticks per node per interval and already
-// reads exactly these numbers to write the register row — so the observation
-// costs nothing and cannot drift from what the fleet is told.
+// [statelog.PositionHeartbeat], which already ticks per node per interval and
+// already reads exactly these numbers to write the register row — so the
+// observation costs nothing and cannot drift from what the fleet is told.
 //
 // # What "moved" is measured on: the applier's COMMITTED checkpoint
 //
@@ -45,8 +45,9 @@ import (
 // record in flight at every beat — the prefix read as frozen past
 // [statelog.StallGrace], so the request path answered 503 for every session,
 // machine token and seat binding on the node, and `Health.Stalled` refused its
-// reads and shed its seats — which [statelog.Health.Healthy] says a deferral
-// must never do inside [statelog.DeferralGrace], and which a whole-node answer
+// reads and took its copy out of service — which [statelog.Health.Healthy]
+// says a deferral must never do inside [statelog.DeferralGrace], and which a
+// whole-node answer
 // never needed to do at all: what a retained record withholds is scoped, and
 // the readers that depend on it ask their own scope ([statelog] `DeferredIn`),
 // while the deferral's age is this tracker's other half.
@@ -143,7 +144,7 @@ func (p *progress) stalled(now time.Time) bool {
 // [progress.stalled] feeds [statelog.Health.Stalled], which a health read and
 // the serviceability gate take. The REQUEST path — every session this node
 // validates, every seat a bound credential acts as, every login's record —
-// reads [runningDomain.Lag] instead and compares it against the same
+// reads [runningLog.Lag] instead and compares it against the same
 // [statelog.StallGrace], and that figure was a backlog divided by the drain
 // rate alone. The drain rate is measured over APPLY time and nothing moves it
 // while no batch runs, so an applier that wedged with a small backlog kept the

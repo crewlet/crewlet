@@ -248,15 +248,17 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	// ASKED THROUGH THE LAUNCHER, not through runLLM directly: what is
 	// under test is which phase the agent-mode path chooses, and a test
 	// that named the phase itself would pass whatever the launcher did.
-	launcher := &agentLauncher{seat: seat}
-	executor, _, _ := launcher.executorLLM(c)
-	if executor == nil || executor.Model != "opus" {
-		t.Fatalf("an agent-mode run resolved to %+v, want the executor's own model", executor)
+	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
+	executor, err := launcher.executorRun(c, nil)
+	if err != nil || executor.llm == nil || executor.llm.Model != "opus" {
+		t.Fatalf("an agent-mode run resolved to %+v (err %v), want the executor's own model",
+			executor.llm, err)
 	}
 	// And a run_sandbox call still goes to the model the seat chose for it.
-	delegated, _, _ := sandboxLLM(c, seat)
-	if delegated == nil || delegated.Model != "haiku" {
-		t.Fatalf("a delegated coding run resolved to %+v, want llm_sandbox's model", delegated)
+	delegated, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil)
+	if err != nil || delegated.llm == nil || delegated.llm.Model != "haiku" {
+		t.Fatalf("a delegated coding run resolved to %+v (err %v), want llm_sandbox's model",
+			delegated.llm, err)
 	}
 }
 
@@ -400,9 +402,20 @@ func composed(t *testing.T, cfg *config.Company) *Company {
 // store, a queue for the start event and a bridge with somewhere to dial.
 func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	t.Helper()
+	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	return e
+}
+
+// launchRig is [launchReadyEngine] over a bridge the caller built — one a test
+// can dial — with the runner every launch starts its job on.
+func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sandbox.FakeRunner) {
+	t.Helper()
+	jobs := sandbox.NewFakeRunner("claude-code")
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
-		Runners:            map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Runners:            map[string]sandbox.Runner{"claude-code": jobs},
 		DefaultCodingAgent: "claude-code",
 	})
 	if err != nil {
@@ -410,9 +423,6 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	q := memory.New()
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
-	})
 	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
 	// listener took opens no session.
 	_ = bridge.Handler()
@@ -431,7 +441,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	e.useSandbox(pending, coordinator)
 	e.epoch.current.Store(c)
-	return e
+	return e, jobs
 }
 
 // A NODE THAT SERVES NO BRIDGE REFUSES AGENT MODE, AND SAYS WHICH SETTING.
@@ -562,10 +572,12 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 				ForTurn(l.turn),
 		}
 	}
-	launcherFor := func(e *Engine, seat *org.Role) *agentLauncher {
+	// The runner the turn resolved from the executor's own entry, as
+	// executorRuntime resolves it: a CLI's agent mode runs on that CLI.
+	launcherFor := func(e *Engine, seat *org.Role, runner string) *agentLauncher {
 		return &agentLauncher{
 			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-			codingAgent: "claude-code", placement: sandbox.E2B,
+			codingAgent: runner, placement: sandbox.E2B,
 		}
 	}
 
@@ -573,7 +585,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// session opened for the run is closed with the refusal.
 	c, seat := splitLoginCompany(t, "codex", "api")
 	e := launchReadyEngine(t, c)
-	launcher := launcherFor(e, seat)
+	launcher := launcherFor(e, seat, "codex")
 	err := launcher.LaunchExecutor(t.Context(), request(launcher))
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
@@ -587,7 +599,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// And the mirror image, or a launcher that always refused would pass.
 	c, seat = splitLoginCompany(t, "api", "codex")
 	e = launchReadyEngine(t, c)
-	launcher = launcherFor(e, seat)
+	launcher = launcherFor(e, seat, "claude-code")
 	if err := launcher.LaunchExecutor(t.Context(), request(launcher)); err != nil {
 		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}

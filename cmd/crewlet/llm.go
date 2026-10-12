@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -38,7 +39,8 @@ import (
 // binary can be missing from the engine host, the profile's flags can have
 // drifted from the installed version, the login can be present but expired,
 // and — the one nothing else catches — the model can answer prose instead of
-// the tool-call envelope, which costs every seat a corrective round for ever.
+// the tool-call envelope, which costs every phase corrective rounds and, when
+// the model never manages the envelope, ends it without its submission.
 // Only a real completion with a real tool proves the last one, so `doctor`
 // runs one.
 //
@@ -49,12 +51,26 @@ import (
 // was assumed. The web probe asks it to fetch a URL, because web is the one
 // local tool every profile keeps ON and a vendor's sandbox flag can cut it
 // without saying so.
+//
+// # Why doctor also reads anthropic entries
+//
+// An `anthropic` entry needs no login, but it can be configured perfectly and
+// still be refused on every call: its request is SHAPED from a capability
+// table compiled into this build (claudemodel), and a model the vendor has
+// since changed — or a gateway alias the table reads as the wrong generation —
+// answers that shape with a 400, which the fallback chain does not retry. So
+// doctor reads the model's record from the vendor's Models API and reports
+// where the table disagrees with it, and sends one round in the shape a phase
+// sends to certify a tool call comes back. The other subcommands stay
+// cli-agent only: there is no login to broker, list or export.
 
-const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens
+const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens;
+and the health of the anthropic entries beside them
 
 Usage:
-  crewlet llm list                        Providers, agent, model and login state
-  crewlet llm doctor [KEY]                Verify end to end (-no-smoke skips the real calls)
+  crewlet llm list                        Providers, agent, model and how each is signed in
+  crewlet llm doctor [KEY]                Verify cli-agent and anthropic entries end to end
+                                          (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
   crewlet llm login KEY -from-host        Adopt a login already on this machine
   crewlet llm login KEY -capture-token    Mint a headless token into the secret store
@@ -72,11 +88,12 @@ Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
   -home PATH     Read a host login from somewhere other than this user's home
-  -no-smoke      Skip doctor's real completions (the tool call and both probes)
+  -no-smoke      Skip doctor's real completions (the tool call and both probes; an
+                 anthropic entry's Models API read still runs, it bills nothing)
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(args []string, stdout, stderr io.Writer) error {
+func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -120,19 +137,29 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	providers, closeResolver, err := loadCLIAgents(ctx, *companyPath, *bootstrapPath, stderr)
+	company, resolver, closeResolver, err := loadLLMConfig(ctx, *companyPath, *bootstrapPath, stderr)
 	if err != nil {
 		return err
 	}
 	defer closeResolver()
 
+	if sub == "doctor" {
+		entries, buildErr := doctorEntries(company, resolver, *companyPath)
+		if buildErr != nil {
+			return buildErr
+		}
+		return doctorLLM(ctx, entries, key, !*noSmoke, stdout)
+	}
+	providers, err := cliAgents(company, resolver, *companyPath)
+	if err != nil {
+		return err
+	}
+
 	switch sub {
 	case "list":
 		return listLLMProviders(providers, stdout)
-	case "doctor":
-		return doctorLLM(ctx, providers, key, !*noSmoke, stdout)
 	case "login":
-		return loginLLM(ctx, loginRequest{
+		return loginLLM(ctx, environ, loginRequest{
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
@@ -155,7 +182,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
 		return nil
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":
 		return importLLM(providers, key, os.Stdin, stdout)
 	default:
@@ -171,23 +198,29 @@ type cliAgentProvider struct {
 	provider *cliagent.Provider
 }
 
-// loadCLIAgents builds every cli-agent provider the company declares.
+// loadLLMConfig reads the company document and the resolver its references
+// go through.
 //
-// Through the SAME resolver the provisioning CLIs use — store first, then the
+// The SAME resolver the provisioning CLIs use — store first, then the
 // environment — because a token rotated into the secret store must win over a
 // stale `.env` exported into this shell months ago. A command that resolved
 // from the environment alone would report a provider as having no token while
 // the running engine used one.
-func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) ([]cliAgentProvider, func(), error) {
+func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
 	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	return company, resolver, closeResolver, nil
+}
 
+// cliAgents builds every cli-agent provider the company declares, in the
+// order the document wrote them.
+func cliAgents(company *config.Company, resolver *config.Resolver, companyPath string) ([]cliAgentProvider, error) {
 	var out []cliAgentProvider
 	for _, key := range company.Providers.ProviderOrder() {
 		spec := company.Providers.LLM[key]
@@ -196,19 +229,17 @@ func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes
 		}
 		built, err := engine.BuildCLIAgent(key, spec, resolver)
 		if err != nil {
-			closeResolver()
-			return nil, nil, err
+			return nil, err
 		}
 		out = append(out, cliAgentProvider{key: key, provider: built})
 	}
 	if len(out) == 0 {
-		closeResolver()
-		return nil, nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%s declares no cli-agent providers — see "+
 				"docs/concepts/subscription-llm-backends.md for the config block",
 			companyPath)
 	}
-	return out, closeResolver, nil
+	return out, nil
 }
 
 // oneProvider picks the provider a key names, or explains the choice.
@@ -239,7 +270,7 @@ func providerKeys(providers []cliAgentProvider) []string {
 
 func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tLOGIN\tSTATE DIR")
+	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {
@@ -247,34 +278,128 @@ func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.LoginState(), p.provider.Workspace().Root())
+			p.provider.SignInState(), p.provider.Workspace().Root())
 	}
 	return w.Flush()
 }
 
-func doctorLLM(ctx context.Context, providers []cliAgentProvider, key string, smoke bool, stdout io.Writer) error {
-	selected := providers
-	if key != "" {
-		p, err := oneProvider(providers, key)
-		if err != nil {
-			return err
+// diagnosis is what doctor prints about one entry, whichever backend it is.
+// Declared here, by the one caller that needs both backends' reports to look
+// alike.
+type diagnosis interface {
+	Render(w io.Writer)
+	Healthy() bool
+}
+
+// doctorEntry is one entry doctor can examine.
+type doctorEntry struct {
+	key  string
+	kind config.LLMProviderType
+	// diagnose measures the entry; smoke sends the billed calls.
+	diagnose func(ctx context.Context, smoke bool) diagnosis
+}
+
+// doctorEntries is every entry doctor examines, in the order the document
+// wrote them: the cli-agent entries and the anthropic ones.
+//
+// AN ENTRY THAT DOES NOT BUILD IS A REPORT, not an abort. The engine would
+// refuse to apply this document over it, which is precisely what an operator
+// running doctor needs to read — beside every other entry's report, rather
+// than instead of it.
+//
+// The openai entries are not examined (there is no capability table to drift
+// from and no login to check), and naming one is refused by name rather than
+// answered with a report of nothing.
+func doctorEntries(company *config.Company, resolver *config.Resolver, companyPath string) ([]doctorEntry, error) {
+	var out []doctorEntry
+	for _, key := range company.Providers.ProviderOrder() {
+		spec := company.Providers.LLM[key]
+		entry := doctorEntry{key: key, kind: spec.Type}
+		switch spec.Type {
+		case config.LLMCLIAgent:
+			built, err := engine.BuildCLIAgent(key, spec, resolver)
+			if err != nil {
+				entry.diagnose = unbuilt(key, err)
+				break
+			}
+			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+				return built.Diagnose(ctx, cliagent.DiagnoseOptions{
+					Smoke: smoke,
+					// THE ENGINE'S OWN ANSWERS, not the provider's guess at
+					// them: which runners this build registers and what a
+					// sandbox can dial are facts about the process, and both
+					// decide whether an agent-mode entry works at all.
+					AgentRunners: codingagent.Names(),
+					BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
+				})
+			}
+		case config.LLMAnthropic:
+			built, err := engine.BuildAnthropic(key, spec, resolver)
+			if err != nil {
+				entry.diagnose = unbuilt(key, err)
+				break
+			}
+			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+				return built.Diagnose(ctx, anthropic.DiagnoseOptions{Key: key, Smoke: smoke})
+			}
 		}
-		selected = []cliAgentProvider{{key: key, provider: p}}
+		out = append(out, entry)
+	}
+	if !slices.ContainsFunc(out, doctorEntry.examined) {
+		return nil, fmt.Errorf(
+			"%s declares no cli-agent or anthropic providers, which are the entries "+
+				"doctor examines — see docs/concepts/subscription-llm-backends.md",
+			companyPath)
+	}
+	return out, nil
+}
+
+// examined reports whether doctor has a report for this entry's type.
+func (e doctorEntry) examined() bool { return e.diagnose != nil }
+
+// buildFailure is the report for an entry that did not build.
+type buildFailure struct {
+	key string
+	err error
+}
+
+func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
+	return func(context.Context, bool) diagnosis { return buildFailure{key: key, err: err} }
+}
+
+func (b buildFailure) Healthy() bool { return false }
+
+func (b buildFailure) Render(w io.Writer) {
+	fmt.Fprintf(w, "%-14s: %s\n", "provider", b.key)
+	fmt.Fprintln(w, "problems:")
+	fmt.Fprintf(w, "  - it does not build, so the engine would refuse this document: %v\n", b.err)
+}
+
+func doctorLLM(ctx context.Context, entries []doctorEntry, key string, smoke bool, stdout io.Writer) error {
+	selected := slices.DeleteFunc(slices.Clone(entries), func(e doctorEntry) bool { return !e.examined() })
+	if key != "" {
+		i := slices.IndexFunc(entries, func(e doctorEntry) bool { return e.key == key })
+		switch {
+		case i < 0:
+			keys := make([]string, 0, len(selected))
+			for _, e := range selected {
+				keys = append(keys, e.key)
+			}
+			slices.Sort(keys)
+			return fmt.Errorf("no provider %q (doctor examines %s)", key, strings.Join(keys, ", "))
+		case !entries[i].examined():
+			return fmt.Errorf(
+				"provider %q is type %q; doctor examines cli-agent and anthropic entries",
+				key, entries[i].kind)
+		}
+		selected = []doctorEntry{entries[i]}
 	}
 	unhealthy := 0
-	for i, p := range selected {
+	for i, e := range selected {
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
-		d := p.provider.Diagnose(ctx, cliagent.DiagnoseOptions{
-			Smoke: smoke,
-			// THE ENGINE'S OWN ANSWERS, not the provider's guess at them:
-			// which runners this build registers and what a sandbox can
-			// dial are facts about the process, and both decide whether
-			// an agent-mode entry works at all.
-			AgentRunners: codingagent.Names(),
-			BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
-		})
+		d := e.diagnose(ctx, smoke)
 		d.Render(stdout)
 		if !d.Healthy() {
 			unhealthy++
@@ -284,7 +409,7 @@ func doctorLLM(ctx context.Context, providers []cliAgentProvider, key string, sm
 		// A non-zero exit, because `doctor` is what a deploy script runs
 		// before it lets a node take seats — a green-looking command that
 		// exited 0 with problems printed is one nobody gates on.
-		return fmt.Errorf("%d of %d cli-agent providers have problems", unhealthy, len(selected))
+		return fmt.Errorf("%d of %d providers have problems", unhealthy, len(selected))
 	}
 	return nil
 }
@@ -303,7 +428,7 @@ type loginRequest struct {
 	printToken    bool
 }
 
-func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
+func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
 	p, err := oneProvider(req.providers, req.key)
 	if err != nil {
 		return err
@@ -396,7 +521,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
+		if err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
@@ -435,7 +560,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -455,7 +580,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
+	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
 		return err
 	}
 	// NOT "any engine sharing that database". The store is one file, one
@@ -473,8 +598,8 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 }
 
 // storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, "")
+func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
+	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}

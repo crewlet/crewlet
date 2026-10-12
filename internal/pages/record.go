@@ -26,28 +26,49 @@ import (
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// Version 1 is every shape this domain has: no build that wrote anything else
-// was ever released.
+// # What each version added
+//
+//   - 1: every shape this domain has, a container's chart epoch
+//     ([ContainerPayload.ChartEpoch]) included.
 const RecordVersion = 1
 
-// baseRecordVersion is version 1, the base format: what every build there will
-// ever be reads, and what a record carrying no versioned field is stamped at.
-// A gate, the read index's barrier and a reanchor's generation stay at it
-// ([RecordEnvelope.readByEveryBuild]).
+// baseRecordVersion is version 1, the base format: what every build there has
+// ever been reads, and what a record carrying no versioned field is stamped at.
+//
+// THE BARRIER AND A REANCHOR'S GENERATION ARE PINNED AT IT FOR EVER, as every
+// gate is ([GateRecordVersion]) — never at [RecordVersion], and never left to a
+// table that could one day raise them — because of what an older node does
+// with a record it cannot read: it retains it. A retained barrier is one more
+// deferral row on that node for every linearizable read anybody makes, and a
+// node holding a deferral declines to snapshot until it upgrades; a retained
+// generation is a transition that node never makes. Neither has anything a
+// later version could add to it, and [Encode] refuses either one carrying a
+// versioned field ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
 
 // versionedFields is every field a pages record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
 //
-// EMPTY, because the base format is everything this build writes. Adding a
-// field to a record, a payload or a document after a release is adding a row
-// here, moving [RecordVersion] to its version, and giving the domain's
-// statelogtest candidate a record that carries it — on the tracker's terms,
-// which are the framework's ([statelog.VersionedField]).
+// Adding a field to a record, a payload or a document is adding a row here,
+// moving [RecordVersion] to its version, and giving the domain's statelogtest
+// candidate a record that carries it — on the tracker's terms, which are the
+// framework's ([statelog.VersionedField]). A field no tag has shipped is still
+// a field two builds of one rolling upgrade disagree about, so "nothing has
+// been released" does not exempt a new field from its row.
 var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
+
+// GateRecordVersion is the version every gate-installing record carries, FOR
+// EVER.
+//
+// An eviction whose version this build could not read would be deferred, and a
+// deferred gate leaves this node's own gate table empty while it goes on
+// applying every record the evicted node appends — with no inverse that
+// repairs it. So the two gate kinds are pinned at 1 and never evolve: a field
+// they need that they cannot have is a field that belongs somewhere else.
+const GateRecordVersion = 1
 
 // OpKind is what a record does.
 type OpKind string
@@ -186,8 +207,8 @@ func (e RecordEnvelope) InstallsGate() bool {
 // a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, and a
 // reanchor's generation.
 //
-// Each stays at [baseRecordVersion] for its own reason, and all three reasons
-// are what an older node does with a record it cannot read. A gate it
+// Each is pinned at [baseRecordVersion] for its own reason, and all three
+// reasons are what an older node does with a record it cannot read. A gate it
 // deferred would leave its gate table empty while it went on applying every
 // record the gate was meant to drop, with no inverse that repairs it; a
 // barrier it retained is one more deferral row for every linearizable read;
@@ -371,8 +392,9 @@ func Decode(payload []byte) (MutationRecord, error) {
 //
 // A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
 // unset and this stamps [versionedFields]' minimum over the bytes it is about
-// to publish. A set version is kept — a relay keeps its writer's — and refused
-// when it is below what the record carries. A record every build must read
+// to publish. A set version is kept — a relay keeps its writer's, a barrier
+// and a generation their pinned [baseRecordVersion] — and refused when it is
+// below what the record carries. A record every build must read
 // ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
 // versioned field at all, stamped or set.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }

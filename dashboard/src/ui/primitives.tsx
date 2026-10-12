@@ -198,8 +198,8 @@ function useRovingGroup<T extends string>(
   // fallbacks are load-bearing and the second was missing: `held` leaves the
   // set when a caller narrows `options`, and `value` is outside it whenever a
   // URL carries a parameter this build does not know — `?lens=bogus` is a
-  // link from an older build, a typo, or a renamed option. With neither in
-  // `values`, every option rendered `tabIndex={-1}` and the group left the
+  // typo, a hand-written link, or an option a newer build offers. With neither
+  // in `values`, every option rendered `tabIndex={-1}` and the group left the
   // page's tab order altogether: unreachable by keyboard, which is worse than
   // the plain buttons this replaced, since those were each a stop of their
   // own. The first option is the honest landing place — nothing is checked,

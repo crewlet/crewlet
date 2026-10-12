@@ -61,8 +61,8 @@ import (
 //
 // Every method is safe on a nil log and a nil log's every count is zero:
 // a turn built without one — a test, a tool exercised directly — derives each
-// id as if its call were the run's first of its kind, which is what every id
-// was before this existed. The engine builds every real turn with one.
+// id as if its call were the run's first of its kind. The engine builds every
+// real turn with one.
 type CallLog struct {
 	mu      sync.Mutex
 	entries []callEntry

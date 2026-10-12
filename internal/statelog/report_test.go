@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -354,14 +355,17 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			tomb := statelog.Tombstone{NodeID: "node-9", At: evicted, By: "ops-3"}
+			d := healthyDomain("tracker", true)
+			d.Tombstones = []statelog.Tombstone{tomb}
 			rep := statelog.NewReport(statelog.ReportInputs{
 				NodeID:           "node-1",
 				At:               tc.at,
 				RegisterReadable: true,
-				Register: []coord.NodePositions{
-					{NodeID: "node-9", At: evicted},
-				},
-				Tombstones: []statelog.Tombstone{{NodeID: "node-9", At: evicted, By: "ops-3"}},
+				Domains:          []statelog.DomainInputs{d},
+				Register: []coord.NodePositions{{NodeID: "node-9", At: evicted,
+					Domains: map[string]coord.DomainPosition{"tracker": {Seq: 3}}}},
+				Tombstones: []statelog.Tombstone{tomb},
 			})
 			row := rep.Nodes[0]
 			if row.Evicted == nil {
@@ -386,11 +390,13 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 // did not appear in would be a block with no visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
+	d := healthyDomain("tracker", true)
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
 		Live:             []statelog.Presence{{NodeID: "node-7"}},
+		Domains:          []statelog.DomainInputs{d},
 	})
 	if len(rep.Nodes) != 1 || rep.Nodes[0].NodeID != "node-7" {
 		t.Fatalf("a live node that has never reported is missing from the node "+
@@ -404,6 +410,46 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 		t.Errorf("a node that has never reported shows a position (%v, %d domains); "+
 			"that is a node at zero rather than a node with nothing to say",
 			row.At, len(row.Domains))
+	}
+}
+
+// THE COUNTED MARK IS THE TRIM'S SET, LOG BY LOG.
+//
+// A node is marked counted where some log's counted set holds it, each set over
+// that log's own rows and tombstones and the live data nodes: a node evicted
+// past the window on the only log its row names is counted nowhere, and one
+// evicted on one log and still reporting another is counted — on the other.
+// Folded into one set over every row, the first was marked counted while the
+// trim waited for it on no log.
+func TestTheCountedMarkIsTheTrimsSetLogByLog(t *testing.T) {
+	t.Parallel()
+	tracker := healthyDomain("tracker", true)
+	tracker.Tombstones = []statelog.Tombstone{
+		{NodeID: "evicted", At: reportAt.Add(-time.Hour)},
+		{NodeID: "half", At: reportAt.Add(-time.Hour)},
+	}
+	pages := healthyDomain("pages", true)
+	row := func(node string, positions map[string]coord.DomainPosition) coord.NodePositions {
+		return coord.NodePositions{NodeID: node, At: reportAt, Domains: positions}
+	}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains:          []statelog.DomainInputs{tracker, pages},
+		Register: []coord.NodePositions{
+			row("server", map[string]coord.DomainPosition{"tracker": {Seq: 9}, "pages": {Seq: 9}}),
+			row("evicted", map[string]coord.DomainPosition{"tracker": {Seq: 2}}),
+			row("half", map[string]coord.DomainPosition{"tracker": {Seq: 2}, "pages": {Seq: 2}}),
+		},
+	})
+	marks := map[string]bool{}
+	for _, n := range rep.Nodes {
+		marks[n.NodeID] = n.Counted
+	}
+	want := map[string]bool{"server": true, "evicted": false, "half": true}
+	if !maps.Equal(marks, want) {
+		t.Errorf("the node block marks counted %v, want %v", marks, want)
 	}
 }
 
@@ -588,21 +634,22 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 // says what is true of that log.
 //
 // What the deferral grace does is a log's: past it, a record held on a log that
-// gates seat admission has moved this node's seats and one held on a log that
-// gates none has moved nothing. The form this replaced reduced the node to its
-// OLDEST held record, so a node holding an identity record for two hours and a
-// tracker record for forty minutes raised one alarm saying the identity
-// record moved no seats — while the tracker's had moved them all. A floor is
+// judges this node's copy of the estate has taken the copy out of service and
+// one held on a log that judges none has taken nothing out. The form this
+// replaced reduced the node to its OLDEST held record, so a node holding an
+// identity record for two hours and a tracker record for forty minutes raised
+// one alarm saying the identity record took nothing out of service — while the
+// tracker's already had. A floor is
 // the same: a read of one log refuses on that log's floor, and two logs
 // re-anchored while this node was not are two re-anchors, where the node's
 // longest named one.
 func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 	t.Parallel()
 	identity := healthyDomain("iam", true)
-	identity.DeferredAge, identity.DeferredSheds = 2*time.Hour, false
+	identity.DeferredAge, identity.DeferredJudgesCopy = 2*time.Hour, false
 	identity.DeferredRecord = "at CREWLET_IAM@1:88, written at record version 2 against the 1 this build reads"
 	work := healthyDomain("tracker", true)
-	work.DeferredAge, work.DeferredSheds = 40*time.Minute, true
+	work.DeferredAge, work.DeferredJudgesCopy = 40*time.Minute, true
 	work.DeferredRecord = "at CREWLET_TRACKER@1:640, written at record version 3 against the 2 this build reads"
 	// AND ONE LOG'S FLOOR UNREADABLE, the other's fine.
 	work.FloorUnknownFor = 3 * time.Minute
@@ -638,9 +685,10 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 	}
 	for log, want := range map[string][]string{
 		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m,",
-			"at which this node's seats move to a peer"},
+			"at which this node stops serving its copy of the estate"},
 		"iam": {"CREWLET_IAM@1:88", "held for 2h,",
-			"this log does not gate seat admission, so it moves no seats"},
+			"this log does not judge this node's copy of the estate, so nothing " +
+				"is taken out of service"},
 	} {
 		for _, says := range want {
 			if !strings.Contains(held[log], says) {
@@ -683,8 +731,11 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	d.Decision = statelog.Trim(in.Terms())
 	d.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
 	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
-	d.DeferredAge, d.DeferredSheds = statelog.DeferralGrace+time.Minute, true
+	d.DeferredAge, d.DeferredJudgesCopy = statelog.DeferralGrace+time.Minute, true
 	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
+	// AND READ LINEARIZABLY PAST ITS CENSUS, by more than the drift factor.
+	d.LinearizableReadsExpected = 1_000
+	d.LinearizableReads = int(statelog.CensusDriftFactor*1_000) + 1
 
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID: "node-1", At: reportAt, RegisterReadable: true,

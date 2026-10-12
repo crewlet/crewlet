@@ -56,9 +56,6 @@ func TestTheInvitationListingIsOpenUnlessAllIsAsked(t *testing.T) {
 		{ID: "inv-redeemed", Sealed: "sealed", Seat: "sre",
 			ExpiresAt: at.Add(time.Hour), RedeemedAt: at.Add(-time.Minute),
 			Person: bob.String()},
-		// ISSUED BEFORE EVERY INVITATION NAMED A SEAT: its deadline is
-		// ahead and it opens nothing, since its redemption is refused.
-		{ID: "inv-seatless", Sealed: "sealed", ExpiresAt: at.Add(time.Hour)},
 	}
 
 	open := r.as(administrator(), http.MethodGet, "/iam/invitations", nil)
@@ -92,15 +89,11 @@ func TestTheInvitationListingIsOpenUnlessAllIsAsked(t *testing.T) {
 
 	every := r.as(administrator(), http.MethodGet, "/iam/invitations?all=true", nil)
 	rows = listedInvitations(t, every)
-	if len(rows) != 5 {
-		t.Fatalf("all=true listed %v, want all five held", rows)
+	if len(rows) != 4 {
+		t.Fatalf("all=true listed %v, want all four held", rows)
 	}
 	if rows["inv-expired"]["state"] != "expired" {
 		t.Errorf("an aged-out invitation rendered %v", rows["inv-expired"])
-	}
-	if rows["inv-seatless"]["state"] != "expired" {
-		t.Errorf("an invitation naming no seat rendered %v, want one that no "+
-			"longer opens", rows["inv-seatless"])
 	}
 	if redeemed := rows["inv-redeemed"]; redeemed["state"] != "redeemed" ||
 		redeemed["person"] != bob.String() {

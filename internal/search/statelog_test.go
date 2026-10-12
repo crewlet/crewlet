@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -37,6 +38,11 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
+			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
+			// domain writes is in the base format — so there is no record
+			// to carry; the kind this build's successor adds brings a
+			// Carrying case, which the suite refuses to run without.
+			Fields: search.VersionedFields(),
 			Kinds:  suiteKinds(),
 			Rows:   search.NewRows,
 			Write:  suiteWrite,
@@ -47,15 +53,24 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 // suiteWrite is one tick of the domain's own [search.Embedder] — the only
 // writer this domain has — over one document that needs a vector.
 //
-// THE TICK LOGS A FAILED BATCH RATHER THAN RETURNING IT, by design, so the
-// count is what says whether anything was published: a record the publisher
-// refused is a batch that published nothing, and a tick that published
-// nothing certifies nothing.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+// THE TICK LOGS A PROVIDER FAILURE RATHER THAN RETURNING IT, by design, and
+// returns a publish that failed — so both the error and the count are read: a
+// record the publisher refused is a tick that published nothing, and a tick
+// that published nothing certifies nothing.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: pub, Embedder: embeddings.NewFake(8), Model: "suite-embed",
-		Corpora: []search.Corpus{oneStaleDocument{}},
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Publisher: pub, Estate: db, Log: search.Domain{}.Stream().Name,
+		// THE SUITE'S ONE NODE, applied through its own end: the corpus is
+		// one document, below the index's minimum, so the step decides
+		// nothing whatever it reads.
+		Standing: func(context.Context) (search.LogStanding, error) {
+			return search.LogStanding{Current: true}, nil
+		},
+		Embedder: embeddings.NewFake(8), Model: "suite-embed",
+		Corpora:  []search.Corpus{oneStaleDocument{}},
+		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:   unbounded{},
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		return err
@@ -76,7 +91,7 @@ type oneStaleDocument struct{}
 
 func (oneStaleDocument) Source() search.Source { return search.SourceTask }
 
-func (oneStaleDocument) Stale(context.Context, string, int, int) ([]search.Document, []string, error) {
+func (oneStaleDocument) Stale(context.Context, string, int, int, search.Held) ([]search.Document, []string, error) {
 	return []search.Document{{
 		ID: "suite-task", Container: "SUITE", Version: 1,
 		Title: "The suite's task", Body: "Something to embed.",
@@ -255,5 +270,68 @@ func TestAnUnfiledSourceDoesNotScopeToTheWholeCompany(t *testing.T) {
 	if fmt.Sprint(statelog.Ancestors(unfiled)[1]) ==
 		fmt.Sprint(statelog.Ancestors(filed)[1]) {
 		t.Fatal("an unfiled document shares its container level with a filed one")
+	}
+}
+
+// A KIND A NEWER BUILD ADDED IS AN ENVELOPE THIS BUILD FILES, NEVER A STOP.
+//
+// The envelope is the half every build reads, and a failure to read it stops
+// the applier outright — the framework has no position, kind or scope to
+// retain the record under. So the envelope asks only whether the subject is a
+// subject; whether its KIND is one this build writes is the version-gated
+// second pass's question. Asked of the envelope, every kind a later build adds
+// would stop every older node of a rolling upgrade instead of being deferred,
+// which is what [search.Source] promises.
+func TestAKindANewerBuildAddedIsDeferredNotStopped(t *testing.T) {
+	t.Parallel()
+	record := func(version int) []byte {
+		return []byte(fmt.Sprintf(`{"v":%d,"op_id":"later","subject":`+
+			`{"source":"file","id":"f-1"},"op":"embed","gen":1,`+
+			`"scope":{"Paths":["v/ENG/file.f-1"]}}`, version))
+	}
+
+	domain := search.Domain{}
+	later := record(search.RecordVersion + 1)
+	env, err := domain.Envelope(later)
+	if err != nil {
+		t.Fatalf("a record of a kind a newer build writes, at that build's "+
+			"version, yielded no envelope — so the applier stops on it rather "+
+			"than retaining it: %v", err)
+	}
+	if env.Kind != "file" || env.Subject.ID != "f-1" || len(env.Scope.Paths) != 1 {
+		t.Fatalf("the envelope reads kind %q, subject %q and %d scope path(s)",
+			env.Kind, env.Subject.ID, len(env.Scope.Paths))
+	}
+	var future *search.ErrFutureVersion
+	if _, err := search.Decode(later); !errors.As(err, &future) {
+		t.Fatalf("the payload of a newer build's record decoded as %v, not as "+
+			"a version this build retains", err)
+	}
+
+	// AT A VERSION THIS BUILD READS, the same kind is a writer fault: a build
+	// adding a kind states it above every build that cannot read it.
+	current := record(search.RecordVersion)
+	if _, err := domain.Envelope(current); err != nil {
+		t.Fatalf("the envelope of a record at this build's own version refused "+
+			"its kind — that is the payload's question: %v", err)
+	}
+	if _, err := search.Decode(current); err == nil || errors.As(err, &future) {
+		t.Fatalf("a kind this build does not write, at a version it reads, "+
+			"decoded as %v", err)
+	}
+
+	// AND A SUBJECT THAT IS NOT A SUBJECT STILL HAS NO ENVELOPE.
+	malformed := map[string]string{
+		"an empty kind":     `{"source":"","id":"f-1"}`,
+		"a wildcard kind":   `{"source":"fi>le","id":"f-1"}`,
+		"a wildcard id":     `{"source":"file","id":"f.*"}`,
+		"whitespace in one": `{"source":"file","id":"f 1"}`,
+	}
+	for name, subject := range malformed {
+		payload := []byte(`{"v":2,"subject":` + subject + `,"op":"embed",` +
+			`"scope":{"Paths":["v/ENG/x"]}}`)
+		if _, err := domain.Envelope(payload); err == nil {
+			t.Errorf("%s: an envelope decoded from a subject no wire can carry", name)
+		}
 	}
 }

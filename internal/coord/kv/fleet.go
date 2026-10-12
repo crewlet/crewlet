@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/backoff"
@@ -74,14 +73,18 @@ const positionsSuffix = "_statelog_positions"
 // ctx IS THE BOOT'S, and the per-create deadline is derived below rather than
 // taken from the caller, because the read-back at the end runs precisely when
 // that deadline has expired — see [jsprovision.Settle].
+//
+// What comes back beside the bucket is what is IN FORCE on it — read back on
+// every path, the create included ([observeBucket]) — so a caller has the age
+// and the replica count without a second round trip.
 func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, bucketFacts, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens nineteen of these in a row — [Open]'s three and the fleet
-	// store's sixteen buckets — and logs nothing between them, so a node
-	// that hung here emitted nothing at all until its budget expired — and
-	// the log could not say which bucket it was on.
+	// opens every bucket of both coordination stores in a row and logs
+	// nothing between them, so a node that hung here emitted nothing at all
+	// until its budget expired — and the log could not say which bucket it
+	// was on.
 	//
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.
@@ -105,13 +108,28 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 				"says whether it got past it")
 	})
 
-	// THE LOOKUP IS SIZED AS A READ, not as the create it precedes — see
-	// [jsprovision.LookupBudget]. Sharing the create's term meant a lookup
-	// nobody answered spent the whole clustered budget and left none of it
-	// for the create that would have settled the question.
+	// THE LOOKUP IS SIZED AS A READ, not as the create it precedes, in both
+	// of its bounds.
+	//
+	// Its CEILING is [jsprovision.LookupBudget]. Sharing the create's
+	// budget meant a lookup nobody answered spent the whole clustered
+	// budget and left none of it for the create that would have settled
+	// the question.
+	//
+	// And each REQUEST is asked through [jsprovision.Read], so one nobody
+	// answered is sent again a [jsprovision.ReadTerm] later rather than
+	// after a write's [jsprovision.AskTerm]. A read is answered when the
+	// server processes it or never, and a fleet booting together meets
+	// "never" as a matter of course: a bucket another member has just
+	// asked for is IN FLIGHT, assigned with no leader yet, and every
+	// member but the one chosen to lead it drops a lookup of it. Asked at
+	// the write's term, each lookup dropped that way held a booting node
+	// for that term and a [jsprovision.ReAsk] — sixteen seconds a bucket,
+	// on a boot that opens every coordination bucket in a row — where a
+	// read's term costs it two.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
 	var bucket jetstream.KeyValue
-	err := jsprovision.Ask(lookupCtx, jsprovision.Clustered(clustered).AskTerm(),
+	err := jsprovision.Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			bucket, e = js.KeyValue(ctx, cfg.Bucket)
@@ -164,77 +182,64 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// whose stream a peer had resized between the lookup and now).
 		return observeBucket(ctx, bucket, cfg)
 	}
-	if jsprovision.OutOfCapacity(createErr) {
-		// THE BROKER HAS NO ROOM. Nothing frees capacity by being
-		// waited for, so this was attempted ONCE — [jsprovision.Place]
-		// re-asks only [jsprovision.Unplaceable] — and it is terminal.
-		// That is the whole difference between this arm and the one
-		// below, and the reason they are two rather than one condition:
-		// they are told apart by whether the create is retried, and a
-		// merged arm could only ever be exercised as a pair.
-		//
-		// IT IS NOT A CEILING OF THIS BUCKET'S OWN. A bucket declares
-		// none — nats.go sends MaxBytes -1 for a [jetstream.KeyValueConfig]
-		// that sets none, and checkBytesLimits reads a negative as one
-		// byte — so what is spent is what the limit's OTHER reservations
-		// already hold, the state logs' ceilings above all, and what an
-		// operator changes is theirs or the limit's rather than this
-		// bucket's.
-		//
-		// WHICH LIMIT REFUSED DEPENDS ON THE TOPOLOGY, and for a BUCKET
-		// it is never the one a clustered stream gets. A standalone
-		// create is checked against the account's limit and the
-		// server's (checkAllLimits, checkServer=true), so
-		// `stream.store_max_bytes` can refuse it. A clustered create
-		// runs the account half alone (jsClusteredStreamLimitsCheck →
-		// checkAccountLimits, checkServer=false), and the place a
-		// clustered STREAM's server limit surfaces instead — the
-		// metadata leader's peer selection — skips its storage check
-		// entirely for an object with no ceiling: the test is
-		// `maxBytes > 0 && maxBytes > available`
-		// (server/jetstream_cluster.go, selectPeerGroup). So on a fleet
-		// this is the ACCOUNT limit's refusal alone, under the two
-		// codes [jsprovision.OutOfCapacity] names. A clustered member
-		// that cannot place the bucket for want of room is not this
-		// arm and not this fact: that refusal is about another
-		// member's disk, which is why it stays [jsprovision.Unplaceable]
-		// below and is waited out rather than reported.
-		//
-		// NOT READ BACK: nothing was placed. Without this arm the
-		// refusal fell through to the read-back below and came back as
-		// a bucket that is "not there", which is the one reading that
-		// sends an operator to the wrong subsystem.
-		return nil, bucketFacts{}, createErr
-	}
 	if jsprovision.NoApplicableLimit(createErr) {
-		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the arm
-		// above wearing another code: that one is a ceiling that does
-		// not fit inside a limit, and this is an account that states no
-		// limit to fit into. A bucket declares no ceiling of its own,
-		// so it is the clearest case of the two being different — there
-		// is no number here to make smaller.
+		// NO LIMIT APPLIES TO THIS BUCKET AT ALL: the account's limits are
+		// tiered and carry none for the replica class `stream.replicas`
+		// puts this node in, so the broker refuses before comparing a
+		// byte. A bucket declares no ceiling of its own, which makes it the
+		// clearest case of this being a different fact from "it does not
+		// fit" — there is no number here to make smaller — and the detail
+		// names the class to give a limit instead.
 		//
-		// TERMINAL AND NOT READ BACK for the same reason as the arm
-		// above, and it matters more here: unclassified, this refusal
-		// fell through and reported a bucket that is "not there", which
-		// of everything on a boot path is the sentence most likely to
-		// be read as corruption.
+		// ASKED BEFORE the general refusal below, which it is one of,
+		// because it is the one worded differently. Unclassified, it fell
+		// through to the read-back and reported a bucket that is "not
+		// there", which of everything on a boot path is the sentence most
+		// likely to be read as corruption.
 		return nil, bucketFacts{}, fmt.Errorf("%w%s", createErr,
 			jsprovision.NoApplicableLimitDetail(cfg.Replicas))
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING, and it stayed that way for the whole budget,
-		// which createKeyValue has already waited out — re-asking every
-		// [jsprovision.PlacementRetry] until the create's deadline. A
-		// cluster still gathering members is the one condition worth
-		// waiting on, which is exactly why the capacity refusal above
-		// must not share this arm: waited out, a limit nobody was going
-		// to raise cost the whole provisioning budget and then reported
-		// the broker's bare text.
+	if jsprovision.Refused(createErr) {
+		// THE BROKER REFUSED THIS CREATE ON THE REQUEST ALONE, for a
+		// reason no peer creating the same bucket can have produced — see
+		// [jsprovision.Refused] for which, and why a list. Nothing was
+		// placed, so there is nothing to read back. Read back, a refusal
+		// spent the read-back window asking after a bucket nobody made and
+		// then arrived wrapped in "(and it is not there)", the one reading
+		// that sends an operator to the wrong subsystem — and this arm
+		// used to name three refusals of its own, so every other one
+		// (subjects another stream already holds, the account's stream
+		// count) was found that way first.
 		//
-		// Nothing was placed here either, so there is nothing to read
-		// back and a not-found would only obscure the refusal that says
-		// what is actually wrong.
+		// The two a bucket meets most are told apart by the RETRY, never
+		// by this arm. A cluster still gathering members
+		// ([jsprovision.Unplaceable]) is the one condition worth waiting
+		// on, so createKeyValue re-asked it every
+		// [jsprovision.PlacementRetry] until the create's deadline; a
+		// broker with no room ([jsprovision.OutOfCapacity]) frees nothing
+		// by being waited for, so [jsprovision.Place] asked it once.
+		// Waited out, a limit nobody was going to raise cost the whole
+		// provisioning budget and then reported the broker's bare text.
+		//
+		// AND THE ROOM IS NEVER A CEILING OF THIS BUCKET'S OWN. A bucket
+		// declares none — nats.go sends MaxBytes -1 for a
+		// [jetstream.KeyValueConfig] that sets none, and checkBytesLimits
+		// reads a negative as one byte — so what is spent is what the
+		// limit's OTHER reservations already hold, the state logs'
+		// ceilings above all, and what an operator changes is theirs or
+		// the limit's. Which limit refused depends on the topology. A
+		// standalone create is checked against the account's limit and
+		// the server's (checkAllLimits, checkServer=true), so
+		// `stream.store_max_bytes` can refuse it. A clustered one runs
+		// the account half alone (jsClusteredStreamLimitsCheck →
+		// checkAccountLimits, checkServer=false), and the metadata
+		// leader's peer selection skips its storage check for an object
+		// with no ceiling (`maxBytes > 0 && maxBytes > available`,
+		// server/jetstream_cluster.go, selectPeerGroup) — so a refusal
+		// to place the bucket for want of room is about another member's
+		// disk, which this node cannot read, and it stays
+		// [jsprovision.Unplaceable] and is waited out rather than
+		// reported.
 		return nil, bucketFacts{}, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this
@@ -273,7 +278,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 
 // observeBucket reads back what is IN FORCE on a bucket and returns it: the
 // replica count, which it REFUSES to run short of, and the age, which the
-// caller reports on.
+// caller reports on ([reportRetention]).
 //
 // # Why a booting node refuses rather than resizing
 //
@@ -309,10 +314,16 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 // to say most of them. One metadata read per bucket per boot is what knowing
 // costs.
 //
-// ctx IS THE BOOT'S and the term is derived inside [readBucket], for the
-// reason [jsprovision.Settle] gives: the per-create deadline may be spent by
-// the time this runs — a slow lookup is enough — and an observation handed it
-// fails instantly on a bucket that was just found.
+// THE READ IS [readBucket]'s, the one status read on this boot path, and so
+// it is [jsprovision.Settle]'s: ctx is the boot's, and Settle owns the
+// [jsprovision.ReadBack] window and gives each attempt a
+// [jsprovision.ReadTerm] of its own. Both halves matter here. The per-create
+// deadline may be spent by the time this runs — a slow lookup is enough — and
+// an observation handed it fails instantly on a bucket that was just found.
+// And a status read is a metadata READ, answered when the server processes it
+// or never: asked once with the whole window, a request the group dropped
+// waited all five seconds for a reply nobody was going to send and then failed
+// the boot over a bucket it had just found.
 func observeBucket(ctx context.Context, bucket jetstream.KeyValue,
 	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, bucketFacts, error) {
 
@@ -356,11 +367,10 @@ func observeBucket(ctx context.Context, bucket jetstream.KeyValue,
 // # Why a warning is worth a line at all
 //
 // Because every one of these differences is silent in exactly the way the
-// bucket table warns about: a claims bucket adopted at a peer's five minutes
-// under a node configured for fifteen expires a claim ten minutes before its
-// caller believes it does, and nothing says so — not the write, not the read,
-// not the caller. The only moment the two numbers are ever in one place is
-// this one.
+// bucket table warns about: a ledger bucket adopted at a peer's shorter age
+// forgets a completion a redelivery can still reach, and nothing says so — not
+// the write, not the read, not the caller. The only moment the two numbers are
+// ever in one place is this one.
 func reportRetention(ctx context.Context, name string, want time.Duration, facts bucketFacts) {
 	if facts.age == want {
 		return
@@ -405,7 +415,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SIXTEEN buckets and not one
+// # Why EIGHTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -417,14 +427,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	claims     the dedupe window, minutes: long enough to cover a
 //	           third-party app's retries and an operator's replay, short
 //	           enough that a deliberate re-send later is not swallowed
-//	setup      a browser round trip and two clicks, a quarter of an hour:
-//	           the same first-claim-wins record as claims on THREE TIMES
-//	           its horizon, which is the whole reason it is a bucket of
-//	           its own — a claim taken for longer than the bucket it lands
-//	           in does not last longer, it lapses with the bucket and says
-//	           nothing, and a spent callback state that lapses early is a
-//	           replayable one
-//	ledger    turn-completion retention, days: it has to outlast the
+//	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
 //	cooldowns  the longest credential cooldown, a day
 //	status     peer freshness, a minute: a node that STOPS reporting must
@@ -448,6 +451,12 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
+//	rebases    the operation ledger's retention, a month: a rebase is
+//	           inherited only while it lies within the state log's mint
+//	           horizon of the attempt reading it, a day short of that, so
+//	           the bucket forgets a record exactly when no attempt could
+//	           still inherit it — and one forgotten sooner sends a retry to
+//	           mint anew and write again what the attempt before it wrote
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
 //	           the only thing that knows a billed box exists
@@ -466,6 +475,15 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           age would forget a mailbox that still exists and leave it
 //	           retaining mail for a seat nobody runs, with nothing left to
 //	           retire it
+//	objects    none at all: the record names which backend the company's
+//	           files are in, and one that expired would let the next node
+//	           to boot record a different one — the files split between two
+//	           stores with nothing failing
+//	custody    a day past the event log's own retention, thirty-two days:
+//	           the record names which data node keeps a stateless node's
+//	           batch, and a node that wrote one and never learned whether it
+//	           kept it asks later — so the record has to outlive every row
+//	           it can be asked about, and nothing longer
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -488,7 +506,6 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 const (
 	rateSuffix         = "_rate"
 	claimsSuffix       = "_claims"
-	setupSuffix        = "_setup_once"
 	ledgerSuffix       = "_ledger"
 	cooldownSuffix     = "_cooldowns"
 	statusSuffix       = "_status"
@@ -497,10 +514,13 @@ const (
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
+	rebasesSuffix      = "_rebases"
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
+	objectsSuffix      = "_objects"
+	custodySuffix      = "_custody"
 	// activationKey holds the pointer AND the current revision's sealed
 	// body, in one record — see [activationRecord].
 	activationKey   = "activation"
@@ -520,13 +540,11 @@ type FleetConfig struct {
 	// while a straggler finishes writing to it.
 	RateWindow time.Duration
 
-	// ClaimTTL is how long a webhook delivery stays claimed.
-	ClaimTTL time.Duration
-
-	// SetupOnceRetention is how long a spent setup-callback state stays
-	// recorded. Its own bucket because it is three times ClaimTTL, and a
-	// claim cannot outlive the bucket it is written to.
-	SetupOnceRetention time.Duration
+	// MaxClaimTTL is the longest claim the claims bucket holds, and so its
+	// age — see [coord.MaxClaimTTL], which is what every deployment passes.
+	// Each claim lapses at its own deadline, carried in the record; the
+	// age only reaps what has lapsed, and caps what a claim may ask for.
+	MaxClaimTTL time.Duration
 
 	// LedgerRetention is how long a turn completion is remembered.
 	LedgerRetention time.Duration
@@ -541,6 +559,10 @@ type FleetConfig struct {
 	// the record, so the age is a true last-activity stamp.
 	FollowRetention time.Duration
 
+	// RebaseRetention is how long a unit of work's recorded rebase is kept
+	// — see [coord.RebaseRetention], which is what every deployment passes.
+	RebaseRetention time.Duration
+
 	// CooldownMax is the longest credential cooldown, and therefore the
 	// bucket's age: a cooldown is stored as its own end instant, so the
 	// bucket only has to outlive the longest one anybody sets.
@@ -554,6 +576,10 @@ type FleetConfig struct {
 
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
+
+	// CustodyRetention is how long the record of which data node keeps a
+	// stateless node's batch is kept — see [coord.CustodyRetention].
+	CustodyRetention time.Duration
 
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
@@ -586,13 +612,14 @@ func (c *FleetConfig) normalize() error {
 		name  string
 		value time.Duration
 	}{
-		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
-		{"SetupOnceRetention", c.SetupOnceRetention},
+		{"RateWindow", c.RateWindow}, {"MaxClaimTTL", c.MaxClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
+		{"RebaseRetention", c.RebaseRetention},
 		{"CooldownMax", c.CooldownMax},
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
+		{"CustodyRetention", c.CustodyRetention},
 	}
 	for _, field := range required {
 		switch {
@@ -615,21 +642,23 @@ func (c *FleetConfig) normalize() error {
 
 // FleetStore is the JetStream KV [coord.Fleet].
 type FleetStore struct {
-	rate         *leaderBucket
-	claims       *leaderBucket
-	setup        *leaderBucket
-	ledger       *leaderBucket
-	cooldowns    *leaderBucket
-	status       *leaderBucket
-	config       *leaderBucket
-	budgets      *leaderBucket
-	channels     *leaderBucket
-	follows      *leaderBucket
-	secrets      *leaderBucket
-	fires        *leaderBucket
-	runs         *leaderBucket
-	integrations *leaderBucket
-	mailboxes    *leaderBucket
+	rate         jetstream.KeyValue
+	claims       jetstream.KeyValue
+	ledger       jetstream.KeyValue
+	cooldowns    jetstream.KeyValue
+	status       jetstream.KeyValue
+	config       jetstream.KeyValue
+	budgets      jetstream.KeyValue
+	channels     jetstream.KeyValue
+	follows      jetstream.KeyValue
+	secrets      jetstream.KeyValue
+	fires        jetstream.KeyValue
+	rebases      jetstream.KeyValue
+	runs         jetstream.KeyValue
+	integrations jetstream.KeyValue
+	mailboxes    jetstream.KeyValue
+	objects      jetstream.KeyValue
+	custody      jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -637,14 +666,33 @@ type FleetStore struct {
 	// its maintenance acknowledgement and a seat pause. They are together
 	// because none of them may ever expire — each is read to decide what
 	// somebody ELSE may delete, publish or run — and every listing over the
-	// bucket filters by class, which is the load-bearing half of sharing
-	// it. The document
-	// families that once had buckets beside this one left with the last
-	// projector; only their key grammar outlived them, in coord/keys.go.
-	positions *leaderBucket
+	// bucket filters by class, which is the load-bearing half of sharing it.
+	// The document families that once had buckets beside this one left with
+	// the last projector; only their key grammar outlived them, in
+	// coord/keys.go.
+	positions jetstream.KeyValue
+
+	// js is the JetStream context, held for what a bucket's own KeyValue
+	// handle cannot do: read the stream's key index every listing is
+	// certified against and a key as its stream LEADER holds it (walk.go),
+	// and purge a marker through its own revision (markers.go).
+	js jetstream.JetStream
+
+	// ageless is every bucket above the broker never ages — the ones whose
+	// removal markers stay until [FleetStore.SweepMarkers] removes them.
+	// DERIVED from the retention each bucket is opened with rather than
+	// listed, so a bucket added without an age is swept without anybody
+	// remembering to say so.
+	ageless []jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
+
+	// maxClaim is the longest claim [FleetStore.Claim] accepts: the claims
+	// bucket's age IN FORCE, never this node's config — the bucket is
+	// adopted as it stands, and its age is what it honours. Zero is a bucket
+	// with no age, which reaps nothing and so caps nothing.
+	maxClaim time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -662,7 +710,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, sixteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -671,30 +719,27 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // sizing argument, and a sizing argument over the wrong number of buckets is
 // worse than none — see TestEveryBucketHasALifetimeClass, which holds every
 // "N buckets" in this file against the open table below.
-func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
-	if nc == nil {
-		return nil, errors.New("coord/kv: a NATS connection is required")
+func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*FleetStore, error) {
+	if js == nil {
+		return nil, errors.New("coord/kv: a JetStream client is required — built " +
+			"over the stream's own connection, in the API its broker speaks " +
+			"(see internal/jsapi)")
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
-	}
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx,
 		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
-	open := func(suffix, describe string, ttl time.Duration) (*leaderBucket, error) {
+	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, bucketFacts, error) {
 		name := cfg.BucketPrefix + suffix
 		bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
-			Bucket: name, Description: describe, TTL: ttl,
-			Replicas: cfg.Replicas,
+			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
+			return nil, bucketFacts{}, fmt.Errorf("coord/kv: open %s: %w", name, err)
 		}
 		// EVERY BUCKET, because a retention this node did not get is
 		// invisible in behaviour until the day it matters — see
@@ -702,15 +747,18 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		// its own, in [Open], because there the age is also this
 		// store's arithmetic.
 		reportRetention(ctx, name, ttl, facts)
-		// EVERY READ OF IT ASKS THE LEADER, whatever the bucket's own
-		// allow_direct says — see bucket.go for why the guarantee is the
-		// reader's and why the flag is not rewritten.
-		return newLeaderBucket(js, bucket, facts), nil
+		// EVERY CONDITIONAL WRITE TO IT IS DECIDED BY THE LEADER — see
+		// settle.go for the third answer a compare-and-set can get.
+		return settled(js, bucket), facts, nil
 	}
 
-	store := &FleetStore{rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness}
+	store := &FleetStore{
+		js:         js,
+		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+	}
+	var claimFacts bucketFacts
 	for _, bucket := range []struct {
-		into     **leaderBucket
+		into     *jetstream.KeyValue
 		suffix   string
 		describe string
 		ttl      time.Duration
@@ -719,11 +767,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
 			cfg.RateWindow * rateBucketFactor},
 		{&store.claims, claimsSuffix,
-			"Crewlet inbound-delivery claims; the bucket TTL is the dedupe window",
-			cfg.ClaimTTL},
-		{&store.setup, setupSuffix,
-			"Crewlet spent setup-callback states; the bucket TTL is how long a minted state is valid",
-			cfg.SetupOnceRetention},
+			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
+				"bucket age is the longest claim's",
+			cfg.MaxClaimTTL},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
 			cfg.LedgerRetention},
@@ -746,6 +792,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},
+		{&store.rebases, rebasesSuffix,
+			"Crewlet operation-id rebases; the bucket TTL outlasts the horizon a rebase is inherited within",
+			cfg.RebaseRetention},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
@@ -754,18 +803,37 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
+		{&store.objects, objectsSuffix,
+			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0},
+		{&store.custody, custodySuffix,
+			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
+			cfg.CustodyRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
-		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
+		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
 			return nil, err
 		}
 		*bucket.into = got
+		if bucket.into == &store.claims {
+			claimFacts = facts
+		}
+		if bucket.ttl == 0 {
+			store.ageless = append(store.ageless, got)
+		}
 	}
 
+	// THE CLAIMS BUCKET'S AGE IS A CEILING, NOT A PREFERENCE: every claim
+	// carries its own deadline and the age only reaps what has lapsed, so a
+	// claim longer than the age IN FORCE would be reaped live — and a
+	// Mattermost post a reconnecting seat replays delivered twice. So Claim
+	// refuses one ([coord.ErrTTLTooLong]) rather than take it on a promise
+	// the bucket cannot keep. The age is the one openBucket read back.
+	store.maxClaim = claimFacts.age
+
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
-		"rate_window", cfg.RateWindow, "claim_ttl", cfg.ClaimTTL,
+		"rate_window", cfg.RateWindow, "max_claim_ttl", store.maxClaim,
 		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
 		"budget_retention", cfg.BudgetRetention,
 		"status_freshness", cfg.StatusFreshness)
@@ -775,19 +843,35 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 // each walks a whole bucket — see [eachEntry], which is the one implementation
 // and which both backends reach through a method of their own only so that a
 // call site reads as a walk rather than as connection plumbing.
-func (f *FleetStore) each(ctx context.Context, b *leaderBucket,
+func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, b, visit)
+	return eachEntry(ctx, f.js, kv, visit)
+}
+
+// get reads one key as its stream LEADER holds it — see [getLatest], the one
+// single-key read this package makes, and kv.go for why it is never the
+// bucket handle's own direct get.
+func (f *FleetStore) get(ctx context.Context, kv jetstream.KeyValue,
+	key string) (jetstream.KeyValueEntry, error) {
+
+	return getLatest(ctx, f.js, kv, key)
+}
+
+// create writes a key that must not hold a live value — see [createKey], the
+// one create this package makes, and markers.go for why it is not the bucket
+// handle's own.
+func (f *FleetStore) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
+	return createKey(ctx, f.js, kv, key, value)
 }
 
 // eachUnder is [each] narrowed to the keys matching one filter, with `what`
 // naming the listing a failure could not complete — see [eachEntryUnder],
 // which is where both are explained.
-func (f *FleetStore) eachUnder(ctx context.Context, b *leaderBucket, keys, what string,
+func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, b, keys, what, visit)
+	return eachEntryUnder(ctx, f.js, kv, keys, what, visit)
 }
 
 // ---- the rate valve ---------------------------------------------------- //
@@ -821,16 +905,16 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 
 	for range fleetCASRetries {
-		entry, err := f.rate.Get(ctx, key)
+		entry, err := f.get(ctx, f.rate, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Create, not Put: the first caller in a window must be
 			// distinguishable from a caller racing it, or two nodes both
 			// write "1" and the window counts one.
-			_, created := f.rate.Create(ctx, key, mustEncodeRate(1))
+			_, created := f.create(ctx, f.rate, key, mustEncodeRate(1))
 			switch {
 			case created == nil:
 				return true, nil
-			case lostCreateRace(created):
+			case errors.Is(created, jetstream.ErrKeyExists):
 				continue
 			default:
 				return false, unavailable("increment the rate window", created)
@@ -872,45 +956,93 @@ func mustEncodeRate(count int) []byte {
 // ---- the delivery claims ----------------------------------------------- //
 
 // Claim records a key and reports whether this caller was first.
-func (f *FleetStore) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
-	return claimOnce(ctx, f.claims, "claim the delivery", key, now)
-}
-
-// ClaimSetup records a spent setup-callback state and reports whether this
-// caller was first.
-//
-// THE SAME MECHANISM ON A DIFFERENT BUCKET, and that is the entire difference:
-// the horizon a claim lapses on is the bucket's age, so a caller wanting
-// coord.SetupOnceRetention rather than coord.ClaimTTL needs the bucket rather
-// than an argument. Written as an argument it was accepted, ignored, and
-// lapsed ten minutes early.
-func (f *FleetStore) ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error) {
-	return claimOnce(ctx, f.setup, "claim the setup state", key, now)
-}
-
-// claimOnce is first-claim-wins against one bucket.
-//
-// ONE IMPLEMENTATION for both registries, because the only thing that differs
-// between them is which bucket — and therefore which age — the record lands
-// in. Two copies would be two places for the create-not-put rule to be
-// forgotten.
-func claimOnce(ctx context.Context, bucket *leaderBucket, what, key string,
-	now time.Time) (bool, error) {
-
+func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
 	if key == "" {
 		return false, errors.New("coord/kv: a claim needs a key")
 	}
-	// Create is the whole mechanism: it fails when the key exists, so the
-	// FIRST caller wins and every other loses the race. Expiry is the
-	// bucket's, which means the server decides when a claim lapses and no
-	// node compares its own clock to a peer's deadline.
-	if _, err := bucket.Create(ctx, encodeKey(key), []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		if lostCreateRace(err) {
+	if ttl <= 0 {
+		return false, errors.New("coord/kv: a claim needs a positive ttl")
+	}
+	// REFUSED, never clamped: the bucket keeps a record for its age and no
+	// longer, so a longer claim would lapse early and let through the very
+	// duplicate it was sized to stop.
+	if f.maxClaim > 0 && ttl > f.maxClaim {
+		return false, fmt.Errorf("coord/kv: a %v claim exceeds the claims bucket's age %v: %w",
+			ttl, f.maxClaim, coord.ErrTTLTooLong)
+	}
+	encoded := encodeKey(key)
+	value := mustEncodeClaim(claimRecord{At: now.UTC(), Until: now.Add(ttl).UTC()})
+	for range claimAttempts {
+		// Create is the mechanism: it fails when the key exists, so the
+		// FIRST caller wins and every other gets ErrKeyExists.
+		_, err := f.create(ctx, f.claims, encoded, value)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, jetstream.ErrKeyExists) {
+			return false, unavailable("claim the delivery", err)
+		}
+		// AND A KEY THAT EXISTS IS NOT YET A CLAIM THAT HOLDS. The bucket's
+		// age is the LONGEST claim's, so a shorter one is judged by the
+		// deadline its record carries — which is what lets a webhook's
+		// five-minute claim and a socket's thirty-minute one share a
+		// bucket, each lapsing when its own caller said.
+		entry, err := f.get(ctx, f.claims, encoded)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			// Reaped or released since the create lost: ask again.
+			continue
+		case err != nil:
+			return false, unavailable("read the delivery claim", err)
+		}
+		if decodeClaim(entry.Value()).Until.After(now) {
 			return false, nil
 		}
-		return false, unavailable(what, err)
+		// LAPSED — or a value that names no deadline, which no claim this
+		// store writes is, and which is taken over as the claim the
+		// contract fails open to: take it over at the revision just read, so
+		// two callers finding the same lapsed claim cannot both win it.
+		_, err = f.claims.Update(ctx, encoded, value, entry.Revision())
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return false, unavailable("take over the lapsed delivery claim", err)
+		}
 	}
-	return true, nil
+	// Every round had a winner and it was somebody else — which is
+	// unknown rather than "claimed": the contract fails open on an error.
+	return false, contended("claim", key)
+}
+
+// claimAttempts bounds the create/read/take-over rounds of one claim. Each
+// lost round means another caller moved the key in between, and three such
+// rounds on one delivery id is a store under contention rather than a race
+// another round would settle.
+const claimAttempts = 3
+
+// claimRecord is one delivery claim: when it was taken and when it lapses.
+type claimRecord struct {
+	At    time.Time `json:"at"`
+	Until time.Time `json:"until"`
+}
+
+// decodeClaim reads a claim record: the zero record, which has lapsed, for a
+// value that names no deadline.
+func decodeClaim(raw []byte) claimRecord {
+	var record claimRecord
+	if json.Unmarshal(raw, &record) != nil {
+		return claimRecord{}
+	}
+	return record
+}
+
+func mustEncodeClaim(record claimRecord) []byte {
+	// Two times cannot fail to encode.
+	raw, _ := json.Marshal(record)
+	return raw
 }
 
 // Release drops a claim.
@@ -918,9 +1050,10 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 	if key == "" {
 		return nil
 	}
-	// Purge, not Delete: Delete leaves a tombstone that Create still
-	// refuses, so a released claim could never be re-claimed and a
-	// deliberate replay would be swallowed for the bucket's whole age.
+	// Purge rather than Delete, though on a bucket keeping one revision
+	// per key both leave exactly one marker: the marker ages out with the
+	// bucket, and createKey writes over it, so a released claim is
+	// re-claimable at once and a deliberate replay is never swallowed.
 	if err := f.claims.Purge(ctx, encodeKey(key)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("release the delivery claim", err)
@@ -943,7 +1076,7 @@ func (f *FleetStore) Worked(ctx context.Context, scope string, keys []string) (m
 		if key == "" {
 			continue
 		}
-		_, err := f.ledger.Get(ctx, ledgerKey(scope, key))
+		_, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
 		switch {
 		case err == nil:
 			out[key] = true
@@ -971,8 +1104,8 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 	}
 	// FIRST WRITER WINS, and losing is not a failure: two nodes completing
 	// one trigger is the case the ledger exists to collapse.
-	if _, err := f.ledger.Create(ctx, ledgerKey(scope, key), raw); err != nil &&
-		!lostCreateRace(err) {
+	if _, err := f.create(ctx, f.ledger, ledgerKey(scope, key), raw); err != nil &&
+		!errors.Is(err, jetstream.ErrKeyExists) {
 		return unavailable("record the completion", err)
 	}
 	return nil
@@ -991,13 +1124,13 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 	value := []byte(until.UTC().Format(time.RFC3339Nano))
 
 	for range fleetCASRetries {
-		entry, err := f.cooldowns.Get(ctx, encoded)
+		entry, err := f.get(ctx, f.cooldowns, encoded)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			_, created := f.cooldowns.Create(ctx, encoded, value)
+			_, created := f.create(ctx, f.cooldowns, encoded, value)
 			switch {
 			case created == nil:
 				return nil
-			case lostCreateRace(created):
+			case errors.Is(created, jetstream.ErrKeyExists):
 				continue
 			default:
 				return unavailable("record the cooldown", created)
@@ -1061,11 +1194,11 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 // KEYED BY PERIOD rather than positional, so a record reads as what it is in
 // `nats kv get` and a period this build does not know is a key it skips
 // rather than a slot it misplaces. Evolution is additive, with the caveat
-// every record here carries: a build that predates a field DROPS it when it
-// rewrites the record, because it re-encodes only what it knows. A refusal
-// stamp an older node drops is the harmless direction — the stamp is what a
-// dashboard shows, never what the gate decides with, and the next refusal by a
-// newer node writes it again.
+// every record here carries: a build that does not know a field DROPS it when
+// it rewrites the record, because it re-encodes only what it knows. So any
+// field a build adds must be one whose loss on a rewrite is harmless, as
+// RefusedAt's is: the stamp is what a dashboard shows, never what the gate
+// decides with, and the next refusal writes it again.
 type tallyRecord struct {
 	Slots map[period.Period]slotRecord `json:"slots"`
 	At    time.Time                    `json:"at,omitzero"`
@@ -1105,14 +1238,31 @@ func decodeTally(raw []byte) (coord.Tally, error) {
 	return t, nil
 }
 
-// Charge checks and increments the org's counter and the seat's, in every
-// window.
+// Charge records a round in the org's counter and the seat's, in every
+// window, and judges whether it fitted. See [coord.Budgets.Charge].
 //
-// Two keys and no transaction, so the all-or-nothing property is BUILT: the
-// org is charged first and compensated if the seat then refuses. See
-// [coord.Budgets.Charge] for why that order and not the reverse. Each scope's
-// windows are ONE record, so each scope is still one compare-and-swap, and the
-// roll onto a new window happens inside it.
+// Two keys and no transaction, so the order is BUILT: the org is counted and
+// judged first, then the seat. Each scope is one compare-and-swap that rolls
+// its windows, counts the round, and stamps the windows that refused it, so a
+// refusal and the record of the round it refused land in the same write and
+// no reader ever sees one without the other. Nothing either write recorded is
+// ever taken back: a seat write that fails after the company's landed leaves
+// the round on the company, and says so.
+//
+// ONCE THE COMPANY'S WRITE HAS LANDED, THE REST OF THE CHARGE RUNS ON A
+// CONTEXT THAT OUTLIVES THE CALLER'S. The round was spent before it was
+// charged, so from that write on the charge is half recorded, and a caller
+// hanging up between the two writes — a turn cancelled, a node draining — is
+// ordinary. Left on the caller's context the seat's write failed with it, and
+// the seat's counter was short of a round only because somebody stopped
+// listening; on this one, only a write that itself fails leaves the partial
+// ([coord.SeatUncountedError]). It cannot hang in the caller's place: the
+// client bounds every request made on a context with no deadline by its own
+// API timeout, and only a lost race is retried, a bounded number of times.
+// The company's own write keeps the caller's context, because before it
+// nothing is recorded: a caller that hung up first is told so with nothing
+// half done, and one that must record a round however it ends passes a
+// context of this kind itself, as the engine's meter does.
 func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		// Not an error and not a charge. A phase whose provider reported
@@ -1124,85 +1274,90 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
 	}
 
-	// A charge larger than a whole ceiling can never fit, so it is screened
-	// before anything is written, and a seat whose own ceiling is smaller
-	// than the charge never costs the org a bump and an unwind.
-	if req.OrgCaps.Exceeds(req.Tokens) {
-		org, err := f.tally(ctx, coord.OrgScope, req.Windows)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
-	}
-	if req.SeatCaps.Exceeds(req.Tokens) {
-		// ORG FIRST even here, which is why the screen reads the org's
-		// counter before naming the seat. Testing each ceiling alone
-		// reported the seat for a charge the company had no room for
-		// either, and the contract's ordering rule exists for exactly that
-		// case: an operator who raised this seat's ceiling would still be
-		// refused.
-		if len(req.OrgCaps) > 0 {
-			org, err := f.tally(ctx, coord.OrgScope, req.Windows)
-			if err != nil {
-				return coord.Spend{}, err
-			}
-			if len(org.Refusing(req.Tokens, req.OrgCaps)) > 0 {
-				return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
-			}
-		}
-		seat, err := f.tally(ctx, req.Seat, req.Windows)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
-	}
-
-	org, fits, err := f.bump(ctx, coord.OrgScope, req.Tokens, req.Windows, req.OrgCaps)
+	org, refusing, err := f.count(ctx, coord.OrgScope, req.Tokens, req.Windows, req.OrgCaps, false)
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	if !fits {
-		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
+	// The company's write has landed. See the doc for why everything after
+	// it is written on this context rather than the caller's.
+	landed := context.WithoutCancel(ctx)
+	if len(refusing) > 0 {
+		// THE COMPANY REFUSED, and the round is the seat's all the same:
+		// it is counted there with no verdict of its own, so the seat's
+		// stamps stay whatever they were (see coord.WindowUsage.RefusedAt).
+		//
+		// A seat write that fails here is LOGGED, never returned and never
+		// unwound. The refusal is decided — on a counter this call wrote —
+		// and turning it into an error would report an outage for a company
+		// that is simply out of budget; the company's record of the round
+		// is true, so taking it back would only make the counter wrong in a
+		// second place. The answer then carries no seat counter: there is
+		// none this charge wrote to report.
+		refused := org.Refusal("org", refusing, req.OrgCaps, req.Windows)
+		refused.Org = org.Usage(coord.OrgScope, req.Windows)
+		seat, _, seatErr := f.count(landed, req.Seat, req.Tokens, req.Windows, nil, false)
+		if seatErr != nil {
+			log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
+				"tokens", req.Tokens, "error", seatErr,
+				"detail", "the company refused this round and counted it; the seat's own "+
+					"counter understates its spend by the round")
+			return refused, nil
+		}
+		refused.Agent = seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 
-	seat, fits, err := f.bump(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps)
-	switch {
-	case err != nil, !fits:
-		// COMPENSATE, which is what a single SQL transaction used to do
-		// for free: charging the company for a turn that never ran lets
-		// it exhaust its budget on work it did not do.
-		f.unwindOrg(ctx, req.Tokens, org)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
+	seat, refusing, err := f.count(landed, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
+	if err != nil {
+		// THE COMPANY KEEPS THE ROUND. The seat's verdict is unknown, so
+		// the charge is an error and the round stops — but the round was
+		// billed before it was charged, and the company's record of it is
+		// true, exactly as it is where the company refused above. Taking
+		// it back used to leave the company short of a round it had paid
+		// for, since nothing that charges asks again, and the next round
+		// was admitted against room this one had used. The error names the
+		// partial (coord.SeatUncountedError) so nobody reads it as a
+		// charge that recorded nothing.
+		log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
+			"tokens", req.Tokens, "error", err,
+			"detail", "the company counted this round and the seat's write failed; the "+
+				"seat's own counter understates its spend by the round")
+		return coord.Spend{}, &coord.SeatUncountedError{Seat: req.Seat, Tokens: req.Tokens, Err: err}
 	}
-	// ADMITTED, so each scope that carried a refusal has just had room in
-	// every window. The counter writes above deliberately kept the stamps:
-	// the org is written before the seat is tested, and clearing them there
-	// would let a charge that was refused overall erase the company's
-	// refusal.
-	for _, scope := range []struct {
-		key  string
-		seen coord.Tally
-	}{{coord.OrgScope, org}, {req.Seat, seat}} {
-		if scope.seen.Refused() {
-			f.clearRefusal(ctx, scope.key, scope.seen)
-		}
+	if len(refusing) > 0 {
+		// Refused by the seat. The company's half stays counted, and its
+		// stamps stay too: the company had room, but the charge was
+		// refused overall, so it is not the company's refusal to clear.
+		// Both counters travel with the refusal — the round can have left
+		// the company with no room either (coord.Spend.Org).
+		refused := seat.Refusal("agent", refusing, req.SeatCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
+	}
+	// ADMITTED, so the company has just had room in every window too. Its
+	// write above deliberately kept its stamps: it was counted before the
+	// seat was judged, and clearing them there would let a charge the seat
+	// refused erase the company's refusal. The seat's were cleared inside
+	// its own write, where the verdict was known.
+	if org.Refused() {
+		f.clearRefusal(ctx, coord.OrgScope, org)
 	}
 	return coord.Spend{
 		OK:    true,
 		Org:   org.ClearAll().Usage(coord.OrgScope, req.Windows),
-		Agent: seat.ClearAll().Usage(req.Seat, req.Windows),
+		Agent: seat.Usage(req.Seat, req.Windows),
 	}, nil
 }
 
 // PostCharge adds spend that already happened to the org's counter and the
 // seat's, refusing nothing. See [coord.Budgets.PostCharge].
 //
-// The same two writes as an admitted [FleetStore.Charge], org first, with no
-// ceiling to test and no refusal stamp cleared: [FleetStore.bump] carries a
-// stamp through, and nothing here decided the scope had room.
+// The same two writes as [FleetStore.Charge], org first, with no ceiling to
+// judge and no refusal stamp touched: nothing here decided the scope had room.
+// The seat's is written on a context that outlives the caller's, for Charge's
+// reason. And the same partial when the seat's write itself fails after the
+// company's: the company keeps what it counted, and the error names what the
+// seat is missing.
 func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -1213,26 +1368,56 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 	if err := windows.Validate(); err != nil {
 		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
+	org, _, err := f.count(ctx, coord.OrgScope, tokens, windows, nil, false)
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	agent, _, err := f.bump(ctx, seat, tokens, windows, nil)
+	agent, _, err := f.count(context.WithoutCancel(ctx), seat, tokens, windows, nil, false)
 	if err != nil {
-		f.unwindOrg(ctx, tokens, org)
-		return coord.Spend{}, err
+		// THE COMPANY KEEPS IT, for Charge's reason: the spend happened,
+		// and the company's record of it is true. The compensation this
+		// replaced took it back so a caller that retried would not count
+		// the company twice — but most callers never retry, and the one
+		// that does now finishes the seat's half alone (PostChargeSeat).
+		log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", seat,
+			"tokens", tokens, "error", err,
+			"detail", "the company counted this post-charge and the seat's write failed; "+
+				"the seat's own counter understates its spend by it")
+		return coord.Spend{}, &coord.SeatUncountedError{Seat: seat, Tokens: tokens, Err: err}
 	}
 	return coord.Spend{
 		OK: true, Org: org.Usage(coord.OrgScope, windows), Agent: agent.Usage(seat, windows),
 	}, nil
 }
 
+// PostChargeSeat adds spend that already happened to one seat's counter alone,
+// refusing nothing. See [coord.Budgets.PostChargeSeat].
+//
+// ONE write, so it can leave no partial of its own, and a count with no caps
+// carries the seat's refusal stamps through untouched.
+func (f *FleetStore) PostChargeSeat(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if seat == "" {
+		return coord.Usage{}, errors.New("coord/kv: a charge needs a seat scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	agent, _, err := f.count(ctx, seat, tokens, windows, nil, false)
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return agent.Usage(seat, windows), nil
+}
+
 // PostChargeOrg adds spend that already happened to the company's counter
 // alone, refusing nothing. See [coord.Budgets.PostChargeOrg].
 //
-// ONE write, so there is no half to compensate: the company's record is the
-// only key it touches, and [FleetStore.bump] with no caps carries its refusal
-// stamps through untouched.
+// ONE write, so it can leave no partial: the company's record is the only key
+// it touches, and a count with no caps carries its refusal stamps through
+// untouched.
 func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error) {
 	if tokens <= 0 {
 		return coord.Usage{}, nil
@@ -1240,94 +1425,63 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 	if err := windows.Validate(); err != nil {
 		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
+	org, _, err := f.count(ctx, coord.OrgScope, tokens, windows, nil, false)
 	if err != nil {
 		return coord.Usage{}, err
 	}
 	return org.Usage(coord.OrgScope, windows), nil
 }
 
-// unwindOrg takes back the org's half of a charge whose seat half did not
-// land, from the windows that charge was counted in.
+// Refuse stamps every full window of one scope with a refusal the gate made
+// without a charge, counting nothing. See [coord.Budgets.Refuse].
 //
-// On a context that OUTLIVES the caller's. The failure being undone is often
-// the caller's own cancellation (a turn stopped mid-charge, a node draining),
-// and an unwind that inherited that dead context failed with it: the company
-// was billed for a round that never ran, and refused early until the window
-// turned over. It cannot hang in the caller's place: the client bounds every
-// request made on a context with no deadline by its own API timeout.
+// ONE compare-and-swap, under the discipline a charge's own write keeps: the
+// counter read, rolled to the request's windows and judged on what it holds
+// NOW — never on what the caller saw when it decided — so a window a peer
+// rolled over or a caller's caps leave room in is not stamped, and a stamp
+// written between the read and the write by another refusal is one this
+// write races at the broker rather than overwrites blind. A counter with
+// nothing to stamp is not written at all, so a refusal can neither create a
+// record nor persist a roll; and the record it does write is the one a
+// charge writes, read alike by every build ([tallyRecord]).
 //
-// Logged rather than returned: the caller's answer is already decided, and a
-// compensation that failed leaves the org over-stated, which trips a cap
-// EARLY. That is the safe direction, and it is worth a line saying so rather
-// than a drift nobody can later explain.
-func (f *FleetStore) unwindOrg(ctx context.Context, tokens int, charged coord.Tally) {
-	_, undo := f.casTally(context.WithoutCancel(ctx), coord.OrgScope, "unwind the token counter",
-		func(stored coord.Tally, found bool) (coord.Tally, bool) {
-			// Gone means aged out, and there is nothing left to take a
-			// charge back from.
-			return stored.Undo(tokens, charged, time.Now().UTC()), found
-		})
-	if undo != nil {
-		log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
-			"tokens", tokens, "error", undo,
-			"detail", "the org counter is over-stated by this charge in the windows it "+
-				"was counted in, and will refuse early until they turn over")
+// On the caller's context. Nothing is half done here — one key, one write —
+// so a caller that hung up first is told so with nothing recorded, and one
+// that must record its refusal however it ends passes a context that
+// outlives it, as the engine's meter does.
+func (f *FleetStore) Refuse(ctx context.Context, scope string, caps coord.Caps, windows coord.Windows) (coord.Usage, error) {
+	if scope == "" {
+		return coord.Usage{}, errors.New("coord/kv: a refusal needs a scope")
 	}
-}
-
-// refuse stamps a refusal on the windows of the scope that made it and
-// answers with it.
-//
-// rolled is the scope's counter rolled to the charge's windows, which is what
-// the refusal was found on. A stamp that cannot be written is LOGGED and the
-// refusal still stands. The decision was taken from a counter this call read,
-// so it is true whether or not the stamp lands; turning it into an error
-// would report an outage for a company that is simply out of budget, and
-// those send an operator to different places. What the failure costs is one
-// dashboard not saying "refusing charges" until the next refusal writes.
-func (f *FleetStore) refuse(ctx context.Context, scope, name string, rolled coord.Tally, tokens int,
-	caps coord.Caps, windows coord.Windows) coord.Spend {
-
-	refusing := rolled.Refusing(tokens, caps)
-	if err := f.stampRefusal(ctx, scope, refusing, rolled, windows); err != nil {
-		log.WarnContext(ctx, "coord_kv_budget_refusal_not_recorded", "scope", scope, "error", err,
-			"detail", "the charge was still refused; the live meter will not show "+
-				"this refusal until the scope refuses another charge")
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	return rolled.Refusal(name, refusing, caps, windows)
-}
-
-// stampRefusal records now as the last refusal of each refusing window,
-// under a compare-and-swap that leaves the spend untouched.
-//
-// A scope with no record yet gets one at zero spend: a seat refused on its
-// first charge has refused a charge, and that is worth listing. The record is
-// rolled to the charge's windows first, so a stamp never lands on a slot still
-// counting a window that is over.
-func (f *FleetStore) stampRefusal(ctx context.Context, scope string, refusing []period.Period,
-	refused coord.Tally, windows coord.Windows) error {
-
-	_, err := f.casTally(ctx, scope, "record the budget refusal",
+	if err := caps.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	tally, err := f.casTally(ctx, scope, "record the budget refusal",
 		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
-			return stored.Roll(windows).Stamp(refusing, refused, time.Now().UTC()), true
+			stamped, full := stored.Refuse(caps, windows, time.Now().UTC())
+			return stamped, len(full) > 0
 		})
-	return err
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return tally.Usage(scope, windows), nil
 }
 
-// clearRefusal drops the refusals an admitted charge found on the scope.
+// clearRefusal drops the refusals an admitted charge found on a scope.
 //
 // ONLY THE STAMPS IT SAW. Between the charge's write and this one another
 // caller may have been refused and stamped a newer instant, and that refusal
 // is still true; clearing it would hide a scope that is refusing right now.
-// A failure is logged for the reason [FleetStore.refuse] gives: the charge
-// already happened, and the stamp is what a dashboard reads, not what the gate
-// decides with.
+// A failure is logged rather than returned: the charge already happened, and
+// the stamp is what a dashboard reads, not what the gate decides with.
 //
-// On a context that OUTLIVES the caller's, for the reason [FleetStore.unwindOrg]
-// gives: this runs AFTER both counters have been written, so the charge is a
-// fact whatever happens next, and the caller's context dying between the two
-// writes and this one is ordinary — a turn cancelled, a node draining. Left on
+// On a context that OUTLIVES the caller's, as the seat's write before it is
+// ([FleetStore.Charge]): this runs after both counters have been written, so
+// the charge is a fact whatever happens next, and the caller's context dying
+// before this write is ordinary — a turn cancelled, a node draining. Left on
 // that context the clear failed with it, and the scope kept telling every
 // dashboard it was refusing charges while it had just admitted one. It cannot
 // hang in the caller's place: the client bounds a request made on a context
@@ -1347,31 +1501,35 @@ func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen coord.
 	}
 }
 
-// bump rolls one scope's counter to the charge's windows and counts tokens in
-// every one of them, under a compare-and-swap — or reports that a capped
-// window has no room and writes nothing. It answers the counter it wrote, or
-// the rolled counter the refusal was found on.
+// count is one scope's share of a charge under a compare-and-swap: the
+// counter rolled to the charge's windows, the round counted in every one of
+// them, and the windows that had no room for it stamped — [coord.Tally.Count].
+// It answers the counter it wrote and the periods that refused.
 //
-// The record's refusal stamps are CARRIED through, never cleared here: see
-// [FleetStore.Charge] for who clears them and why this cannot.
-func (f *FleetStore) bump(ctx context.Context, scope string, tokens int, windows coord.Windows,
-	caps coord.Caps) (coord.Tally, bool, error) {
+// Nil caps judge nothing, which is the record with no verdict a post-charge
+// makes and a seat the company refused for is given. clearOnAdmit clears every
+// stamp the scope carried when it was judged and had room, which only the LAST
+// scope a charge judges may do, inside its own write: it is the one write that
+// knows the whole charge was admitted. Every other write CARRIES the stamps
+// through — see [FleetStore.Charge] for who clears the company's, and why its
+// own write cannot.
+func (f *FleetStore) count(ctx context.Context, scope string, tokens int, windows coord.Windows,
+	caps coord.Caps, clearOnAdmit bool) (coord.Tally, []period.Period, error) {
 
-	fits := true
+	var refusing []period.Period
 	tally, err := f.casTally(ctx, scope, "charge the token counter",
 		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
-			rolled := stored.Roll(windows)
-			if len(rolled.Refusing(tokens, caps)) > 0 {
-				fits = false
-				return rolled, false
+			var counted coord.Tally
+			counted, refusing = stored.Count(tokens, caps, windows, time.Now().UTC())
+			if clearOnAdmit && len(refusing) == 0 {
+				counted = counted.ClearAll()
 			}
-			fits = true
-			return rolled.Add(tokens, time.Now().UTC()), true
+			return counted, true
 		})
 	if err != nil {
-		return coord.Tally{}, false, err
+		return coord.Tally{}, nil, err
 	}
-	return tally, fits, nil
+	return tally, refusing, nil
 }
 
 // casTally is one read-modify-write of a scope's counter under a
@@ -1409,7 +1567,7 @@ func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
 			found    bool
 			revision uint64
 		)
-		entry, err := f.budgets.Get(ctx, key)
+		entry, err := f.get(ctx, f.budgets, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 		case err != nil:
@@ -1428,21 +1586,15 @@ func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
 		if err != nil {
 			return coord.Tally{}, err
 		}
-		// Both writes are SETTLED by the leader bucket, so a refusal here
-		// is a decided one — a peer's write, never this caller's own still
-		// in flight — and each is read by the classifier for its shape.
-		var lost bool
 		if found {
 			_, err = f.budgets.Update(ctx, key, raw, revision)
-			lost = lostUpdateRace(err)
 		} else {
-			_, err = f.budgets.Create(ctx, key, raw)
-			lost = lostCreateRace(err)
+			_, err = f.create(ctx, f.budgets, key, raw)
 		}
 		switch {
 		case err == nil:
 			return next, nil
-		case lost:
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists):
 			continue
 		default:
 			return coord.Tally{}, unavailable(verb, err)
@@ -1480,7 +1632,7 @@ func counterRetryDelay(attempt int) time.Duration {
 // be judged on by the charge that wrote next. A scope never charged is the
 // zero Tally rolled, every window unspent.
 func (f *FleetStore) tally(ctx context.Context, scope string, windows coord.Windows) (coord.Tally, error) {
-	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	entry, err := f.get(ctx, f.budgets, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Tally{}.Roll(windows), nil
 	}
@@ -1502,7 +1654,7 @@ func (f *FleetStore) Used(ctx context.Context, scope string, windows coord.Windo
 	if err := windows.Validate(); err != nil {
 		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	entry, err := f.get(ctx, f.budgets, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Unspent(scope, windows), nil
 	}
@@ -1552,19 +1704,18 @@ func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.
 // key's revision is the epoch, so storing one too would give two answers that
 // could disagree.
 //
-// The ORIGIN fields are additive: a pointer an older build wrote has none of
-// them and decodes to a zero [coord.RevisionOrigin], and an older build
-// reading one this build wrote ignores them. See [coord.RevisionOrigin].
+// The ORIGIN fields travel beside the revision so a peer adopting it records
+// who wrote it. The record evolves additively: a later build must keep every
+// key here with the meaning it has here, because this build reads its pointer
+// during a rolling upgrade. See [coord.RevisionOrigin].
 type activationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
 	Summary    string    `json:"summary,omitempty"`
 
-	// The revision's ORIGIN — see [coord.RevisionOrigin] — under the keys
-	// a pointer has always carried them by, plus the credential. ADDITIVE:
-	// a pointer that lacks one decodes with it empty, and a build that does
-	// not know one ignores it on the way in. The kind is read as the value
-	// it is: an unknown spelling stays unknown ([iam.ActorKind.Valid]).
+	// The revision's ORIGIN — see [coord.RevisionOrigin] — plus the
+	// credential it was written through. The kind is read as the value it
+	// is: an unknown spelling stays unknown ([iam.ActorKind.Valid]).
 	Author     string        `json:"author,omitempty"`
 	AuthorKind iam.ActorKind `json:"author_kind,omitempty"`
 	OperatorID string        `json:"operator_id,omitempty"`
@@ -1606,6 +1757,9 @@ func encodeActivation(record activationRecord) ([]byte, error) {
 func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
+	}
+	if err := req.Origin.Check(); err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: activate %s: %w", req.RevisionID, err)
 	}
 	if req.Expect != "" && req.ExpectAbsent {
 		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
@@ -1711,7 +1865,7 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 // pointer reads the activation pointer: its record, the KV sequence to
 // compare-and-set against, and whether there is one at all.
 func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return activationRecord{}, 0, false, nil
 	}
@@ -1744,9 +1898,9 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 		if err != nil {
 			return 0, time.Time{}, err
 		}
-		revision, err := f.config.Create(ctx, activationKey, raw)
+		revision, err := f.create(ctx, f.config, activationKey, raw)
 		if err != nil {
-			if lostCreateRace(err) {
+			if errors.Is(err, jetstream.ErrKeyExists) {
 				return 0, time.Time{}, fmt.Errorf("%w: an activation was published "+
 					"while this write was being prepared", coord.ErrActivationRaced)
 			}
@@ -1808,12 +1962,12 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 		if held {
 			revision, err = f.config.Update(ctx, activationKey, raw, seq)
 		} else {
-			revision, err = f.config.Create(ctx, activationKey, raw)
+			revision, err = f.create(ctx, f.config, activationKey, raw)
 		}
 		switch {
 		case err == nil:
 			return revision, at, nil
-		case lostCreateRace(err):
+		case errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err):
 			if ctx.Err() != nil {
 				return 0, time.Time{}, unavailable("publish the activation", ctx.Err())
 			}
@@ -1831,9 +1985,10 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 // ONE CODE, and the other "wrong last sequence" is deliberately not it. 10164
 // was read here as the same refusal on a replicated stream, and it is not a
 // refusal at all: it is the leader saying another write to the subject is
-// still in process, which decides nothing — the write ahead may be this
-// caller's own, already acknowledged. [leaderBucket.settle] waits it out on
-// every conditional write, so it never reaches a caller as a race. See there.
+// still in flight, which decides nothing — the write ahead may be this
+// caller's own, already acknowledged. Every bucket handle here is [settled],
+// which waits it out on every conditional write, so it never reaches a caller
+// as a race. See settle.go.
 //
 // Matched on the code and never on the message, which this client is free to
 // reword in any release: a refusal read as an outage answers 503 where it
@@ -1842,56 +1997,6 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 func isWrongLastSequence(err error) bool {
 	var api *jetstream.APIError
 	return errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence
-}
-
-// The two CAS-race classifiers.
-//
-// Every conditional write in this package — a create-only record, a
-// compare-and-set append — has to tell "somebody else wrote first" from "the
-// store could not be reached". Reading the second as the first is a lost
-// update reported as a conflict a caller retries into; reading the first as
-// the second is a race reported as an outage, which is the failure the
-// three-valued rule exists to prevent from the other side.
-
-// lostCreateRace reports whether a create lost to a first writer, and EVERY
-// Create in this package asks it rather than matching a sentinel of its own.
-//
-// THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
-// writer. ErrKeyExists is what [leaderBucket.Create] answers when the leader
-// holds a live value. A revision mismatch is a conditional write the leader
-// compared and refused. And the bare decided refusal is matched by its code
-// too ([isWrongLastSequence]), so a write that reaches here without the
-// client's mapping is still read as the race it is.
-//
-// WHAT IS NOT IN IT is the leader's in-process answer (10164), which this
-// classifier used to count as a loss — measured at three replicas, a fifth of
-// a create race's losers arrived that way. It decides nothing: the write it
-// waits on may already have landed and be this caller's own, so read as a
-// loss it gave a race over a just-removed record no winner. Every conditional
-// write here is settled past it ([leaderBucket.settle]) before this is asked.
-//
-// Getting this wrong is not loud, and it reaches every bucket whose records
-// are ever removed: a delivery claim answered "unknown" after its release and
-// was processed twice, a failed sign-in racing another node's to a flushed
-// record went unrecorded and left its node's throttle on its own curve for
-// the half minute it leaves an unanswering store alone, a charge racing
-// another to a counter nobody had written failed as an outage — each on a
-// clustered estate only, which is exactly where nobody is running the
-// single-server suite that would show it.
-func lostCreateRace(err error) bool {
-	return errors.Is(err, jetstream.ErrKeyExists) ||
-		errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
-		isWrongLastSequence(err)
-}
-
-// lostUpdateRace reports whether a conditional write lost its race.
-//
-// A deleted key lands here too: the record it was conditioned on is gone,
-// which is the same answer for the caller — re-read and re-decide.
-func lostUpdateRace(err error) bool {
-	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
-		errors.Is(err, jetstream.ErrKeyNotFound) ||
-		isWrongLastSequence(err)
 }
 
 // Payload returns the current revision's sealed payload.
@@ -1905,7 +2010,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMe
 	if revisionID == "" {
 		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
 	}
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, false, nil
 	}
@@ -1928,7 +2033,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMe
 
 // Target reads the pointer.
 func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Activation{}, false, nil
 	}
@@ -2023,8 +2128,9 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 // nothing here can open it and the key id beside it is the only thing a
 // rotation sweep needs to read.
 //
-// THE PROVENANCE IS ADDITIVE: a record an older build wrote carries no kind
-// and no credential, and decodes with both empty, which is what it knows.
+// The VERSION is not in it: it is the key's revision, which the store
+// assigns, so a record carrying one too would give two answers that could
+// disagree. A read hands it back beside the row ([coord.SecretRecord.Version]).
 type secretRecord struct {
 	Name          string    `json:"name"`
 	Value         string    `json:"value"`
@@ -2041,7 +2147,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 	if name == "" {
 		return coord.SecretRecord{}, false, errors.New("coord/kv: a secret needs a name")
 	}
-	entry, err := f.secrets.Get(ctx, encodeKey(name))
+	entry, err := f.get(ctx, f.secrets, encodeKey(name))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SecretRecord{}, false, nil
@@ -2130,22 +2236,20 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 
 // CreateSecret writes a sealed value only where none is stored.
 //
-// A PURGED ROW IS ABSENT, which the client's Create already reads correctly: it
-// re-publishes at the purge marker's revision rather than refusing a key whose
-// only history is a delete. What it does not map is that re-publish LOSING — a
-// second creator landing between the two — which answers a bare
-// wrong-last-sequence, so that is read as the row somebody else created too
-// ([lostCreateRace]).
+// THROUGH [createKey], the one create this package makes, so a purged row is
+// absent — a create is never refused over the history of a key somebody
+// destroyed — and a live one is somebody else's, answered false and left
+// untouched.
 func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
 	raw, err := encodeSecret(rec)
 	if err != nil {
 		return false, err
 	}
-	_, err = f.secrets.Create(ctx, encodeKey(rec.Name), raw)
+	_, err = f.create(ctx, f.secrets, encodeKey(rec.Name), raw)
 	switch {
 	case err == nil:
 		return true, nil
-	case lostCreateRace(err):
+	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
 		return false, unavailable("create the secret", err)
@@ -2171,8 +2275,7 @@ func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, v
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists),
-		isWrongLastSequence(err):
+	case lostUpdateRace(err):
 		return false, nil
 	default:
 		return false, unavailable("update the secret", err)
@@ -2181,15 +2284,16 @@ func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, v
 
 // DeleteSecret removes a value, reporting whether it was there.
 //
-// PURGED rather than deleted, like every other record here that must not come
-// back: a KV delete leaves a tombstone the history keeps, and for a credential
-// the history is the thing you least want kept.
+// PURGED, the standing rule for a bucket no clock ages (markers.go, "Every
+// removal is a purge"), and here its reason is sharpest: a purge removes every
+// revision the bucket holds, whatever history it was created with, and for a
+// credential the history is the thing you least want kept.
 func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error) {
 	if name == "" {
 		return false, errors.New("coord/kv: a secret needs a name")
 	}
 	key := encodeKey(name)
-	if _, err := f.secrets.Get(ctx, key); errors.Is(err, jetstream.ErrKeyNotFound) {
+	if _, err := f.get(ctx, f.secrets, key); errors.Is(err, jetstream.ErrKeyNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, unavailable("read the secret before deleting it", err)
@@ -2276,9 +2380,9 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.channels.Create(ctx, encodeKey(ch.ID), raw)
+	_, err = f.create(ctx, f.channels, encodeKey(ch.ID), raw)
 	switch {
-	case err == nil, lostCreateRace(err):
+	case err == nil, errors.Is(err, jetstream.ErrKeyExists):
 		return nil
 	default:
 		return unavailable("open the channel", err)
@@ -2287,7 +2391,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 
 // Channel reads one record.
 func (f *FleetStore) Channel(ctx context.Context, id string) (coord.Channel, bool, error) {
-	entry, err := f.channels.Get(ctx, encodeKey(id))
+	entry, err := f.get(ctx, f.channels, encodeKey(id))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Channel{}, false, nil
 	}
@@ -2330,7 +2434,7 @@ func (f *FleetStore) CountChannelMessage(ctx context.Context, id string, at time
 func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply func(coord.Channel) coord.Channel) (coord.Channel, bool, error) {
 	key := encodeKey(id)
 	for range fleetCASRetries {
-		entry, err := f.channels.Get(ctx, key)
+		entry, err := f.get(ctx, f.channels, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return coord.Channel{}, false, nil
 		}
@@ -2401,9 +2505,9 @@ func (f *FleetStore) listChannels(ctx context.Context, keep func(coord.Channel) 
 
 // PurgeChannels deletes channels closed before the cutoff.
 //
-// Purge rather than Delete, so the key's history goes with it: a Delete
-// leaves a tombstone revision, and a bucket with no TTL keeps every one of
-// them for the life of the deployment.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error) {
 	// DECIDED FIRST, PURGED AFTER — the sweep must not write to the bucket
 	// its own listing is still being delivered from. Each candidate carries
@@ -2462,11 +2566,11 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 	if err != nil {
 		return false, fmt.Errorf("coord/kv: encode the fire claim: %w", err)
 	}
-	_, err = f.fires.Create(ctx, encodeKey(key), raw)
+	_, err = f.create(ctx, f.fires, encodeKey(key), raw)
 	switch {
 	case err == nil:
 		return true, nil
-	case lostCreateRace(err):
+	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
 		// RAISED, never reported as "somebody else has it". The caller
@@ -2484,11 +2588,139 @@ type fireRecord struct {
 	At time.Time `json:"at"`
 }
 
+// ---- the custody claims ----------------------------------------------- //
+
+// custodyRecord is one batch's keeper on the wire. The instant is diagnostic,
+// and nothing branches on it.
+type custodyRecord struct {
+	Node string    `json:"node"`
+	At   time.Time `json:"at"`
+}
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper.
+//
+// A refused create is read back FROM THE LEADER ([FleetStore.get]): the key
+// exists, and a replica behind the create would answer that it does not, so a
+// caller would be told nobody keeps a batch somebody does — and keep a second
+// copy. A key that has gone between the refusal and the read — aged out, which
+// needs a month — is created again rather than answered, a bounded number of
+// times.
+func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
+	}
+	raw, err := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
+	if err != nil {
+		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", err)
+	}
+	key := encodeKey(batch)
+	for range fleetCASRetries {
+		_, err = f.create(ctx, f.custody, key, raw)
+		switch {
+		case err == nil:
+			return node, nil
+		case !errors.Is(err, jetstream.ErrKeyExists):
+			return "", unavailable("claim custody of batch "+batch, err)
+		}
+		entry, err := f.get(ctx, f.custody, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			continue
+		case err != nil:
+			return "", unavailable("read the keeper of batch "+batch, err)
+		}
+		// RAISED, never answered as a keeper: a record that cannot be read,
+		// or names nobody, cannot decide whose copy goes, and guessing
+		// either way loses the batch or keeps it twice.
+		var held custodyRecord
+		if err := json.Unmarshal(entry.Value(), &held); err != nil {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, err)
+		}
+		if held.Node == "" {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
+		}
+		return held.Node, nil
+	}
+	return "", contended("ClaimCustody", batch)
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// rebaseRecord is one recorded rebase on the wire.
+type rebaseRecord struct {
+	At time.Time `json:"at"`
+}
+
+// Rebase reads the instant recorded for a seed and the revision it was read
+// at, (zero, 0) where nothing is recorded.
+//
+// FROM THE LEADER, like every single-key read here ([FleetStore.get]): a
+// replica behind the quorum answers "not found" for a record a peer's attempt
+// wrote a moment ago, and "not found" is the answer that sends this attempt to
+// mint anew.
+func (f *FleetStore) Rebase(ctx context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/kv: a rebase needs a seed")
+	}
+	entry, err := f.get(ctx, f.rebases, encodeKey(seed))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return time.Time{}, 0, nil
+	}
+	if err != nil {
+		return time.Time{}, 0, unavailable("read the rebase", err)
+	}
+	var rec rebaseRecord
+	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		// A record nobody can read is not "nothing recorded": answered as
+		// absent, the caller would mint anew over an instant an earlier
+		// attempt wrote under.
+		return time.Time{}, 0, fmt.Errorf("coord/kv: the rebase recorded for %q "+
+			"does not decode: %w", seed, err)
+	}
+	return rec.At.UTC(), entry.Revision(), nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the revision read: 0
+// creates it only where nothing is recorded.
+func (f *FleetStore) RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/kv: a rebase needs a seed")
+	}
+	value, err := json.Marshal(rebaseRecord{At: at.UTC()})
+	if err != nil {
+		return false, fmt.Errorf("coord/kv: encode the rebase: %w", err)
+	}
+	if version == 0 {
+		_, err = f.create(ctx, f.rebases, encodeKey(seed), value)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists):
+			return false, nil
+		default:
+			return false, unavailable("record the rebase", err)
+		}
+	}
+	_, err = f.rebases.Update(ctx, encodeKey(seed), value, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		// A LOST RACE, not a fault: another attempt moved it since this
+		// one read it, or the bucket aged it out — and either way the
+		// caller reads again and decides from what is there now.
+		return false, nil
+	default:
+		return false, unavailable("record the rebase", err)
+	}
+}
+
 // ---- the detached sandbox runs ----------------------------------------- //
 
 // SandboxRun reads one run's record.
 func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
-	entry, err := f.runs.Get(ctx, encodeKey(turnID))
+	entry, err := f.get(ctx, f.runs, encodeKey(turnID))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Record{}, false, nil
 	}
@@ -2528,11 +2760,11 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	if turnID == "" {
 		return false, errors.New("coord/kv: a sandbox run needs a turn id")
 	}
-	_, err := f.runs.Create(ctx, encodeKey(turnID), value)
+	_, err := f.create(ctx, f.runs, encodeKey(turnID), value)
 	switch {
 	case err == nil:
 		return true, nil
-	case lostCreateRace(err):
+	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
 		return false, unavailable("create the sandbox run", err)
@@ -2564,9 +2796,9 @@ func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value 
 
 // DeleteSandboxRun removes a record at a version.
 //
-// Purge rather than Delete, so the key's history goes with it: a Delete leaves
-// a tombstone revision, and a bucket with no TTL keeps every one of them for
-// the life of the deployment.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error) {
 	if version == 0 {
 		// The client drops a LastRevision of 0 and purges unconditionally,
@@ -2623,10 +2855,9 @@ func (f *FleetStore) PutIntegrationStatus(ctx context.Context, kind string, valu
 
 // DeleteIntegrationStatus drops a surface's status.
 //
-// Purge rather than Delete, matching the sandbox runs above: a Delete leaves a
-// tombstone revision, and a bucket with no TTL keeps every one of them for the
-// life of the deployment. A surface an operator adds and removes a few times
-// while wiring a company would otherwise accumulate history nothing reads.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) DeleteIntegrationStatus(ctx context.Context, kind string) error {
 	err := f.integrations.Purge(ctx, encodeKey(kind))
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {

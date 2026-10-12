@@ -22,6 +22,8 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -203,8 +205,8 @@ function mount({
   agents?: Record<string, unknown>[];
 } = {}) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 1 } as never);
-  store.applyOrg(ORG as never);
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  store.applyOrg(withDerived(ORG) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -583,10 +585,10 @@ describe("the pane", () => {
 describe("who is looking", () => {
   const NOBODY = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
   const UNBOUND = {
-    login: "ops.lead",
+    login: "svc:ops",
     grants: ["work:write"],
     handle: "",
-    owner: "ops.lead",
+    owner: "svc:ops",
     name: "",
     kind: "",
     acts: ["mark_inbox"],
@@ -604,23 +606,21 @@ describe("who is looking", () => {
     expect(reasonOf(markAll)).toContain(WRITE_REASONS.anonymous);
   });
 
-  // AN UNBOUND READER IS SOMEBODY: their record is their login, and what they
-  // follow and what names them reaches it. Asked by `handle`, they had no
-  // inbox here at all while their assistant wrote notices to their login.
-  test("a person bound to no seat reads the inbox kept under their login", async () => {
+  // AN UNBOUND READER IS SOMEBODY: its record is its login, and what it
+  // follows and what names it reaches it. Asked by `handle`, it had no inbox
+  // here at all while its assistant wrote notices to its login. Only a
+  // credential is ever unbound — a service account here — since every person
+  // holds a human seat.
+  test("a service account bound to no seat reads the inbox kept under its login", async () => {
     mount({
       viewer: UNBOUND,
       answers: { viewer: UNBOUND, work_inbox: inboxOf([notice("r-1")]) },
     });
     await settle();
     expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
-    // A PERSON'S LOGIN, so the fault is theirs to have mended — every person
-    // holds a human seat — and no command is theirs to run. A service account
-    // is told the opposite (`MyWork.test.tsx`). Mutation: word every unbound
-    // reader alike and the command appears here.
-    expect(screen.getByText(/Every person holds a human seat and you hold none/)).toBeTruthy();
-    expect(screen.queryByText(/crewlet iam/)).toBeNull();
-    expect(asked.find((a) => a.kind === "work_inbox")?.params.handle).toBe("ops.lead");
+    // WHAT BINDING WOULD ADD, and the command that does it.
+    expect(screen.getByText(/crewlet iam bind ID SEAT/)).toBeTruthy();
+    expect(asked.find((a) => a.kind === "work_inbox")?.params.handle).toBe("svc:ops");
     const markAll = screen.getByRole("button", { name: "Mark all read" });
     expect(markAll.getAttribute("aria-disabled")).not.toBe("true");
   });

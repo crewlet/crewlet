@@ -1,11 +1,15 @@
 package tracker_test
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -86,6 +90,99 @@ func TestABulkEditReportsAnUnknownOutcomeAsAFailure(t *testing.T) {
 		t.Errorf("the re-run put %d record(s) on the log for a change that had "+
 			"landed", got-end)
 	}
+}
+
+// A BULK EDIT LET THROUGH WITH NO LEASE IS COUNTED AS ONE, never as admitted.
+//
+// The admission fails OPEN on purpose — a coordination store that did not
+// answer, or the mixed-version gate refusing the claim, says nothing about a
+// colleague editing — but the bulk it waves through runs outside the fleet's
+// one bound on bulk edits, and it was counted `admitted` and logged nothing.
+// So a store refusing every admission looked exactly like a fleet whose bulks
+// never collided, which is how an embedded-kv fleet ran with no bulk bound at
+// all and nothing said so.
+func TestABulkAdmittedWithNoLeaseIsCountedApart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stage  func(t *testing.T, r *roundTrip)
+		result string
+	}{
+		{"held", func(*testing.T, *roundTrip) {}, "admitted"},
+		{"unanswered", func(_ *testing.T, r *roundTrip) {
+			r.claimOn(unansweredClaims{Backend: r.claims})
+		}, "fail_open"},
+		{"refused_by_the_gate", stageAnOlderNode, "fail_open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			r.applyWhileWriting()
+			filedTask(t, r, "t-1")
+			tc.stage(t, r)
+
+			done := tracker.StatusDone
+			result, err := r.writer.UpdateTasks(t.Context(), statelog.NewOpID(time.Now(), "bulk"),
+				[]string{"t-1"}, "ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil)
+			if err != nil || len(result.Applied) != 1 {
+				t.Fatalf("the bulk = (applied %v, failed %v, %v), want t-1 applied — the "+
+					"admission fails open, it does not refuse", result.Applied, result.Failed, err)
+			}
+			got := bulkCalls(r)
+			if got[tc.result] != 1 || len(got) != 1 {
+				t.Fatalf("the bulk was counted %v, want one %q", got, tc.result)
+			}
+		})
+	}
+}
+
+// unansweredClaims is a coordination store that does not answer a claim:
+// every TryAcquire is UNKNOWN, the third answer and the one a store blip gives.
+type unansweredClaims struct{ coord.Backend }
+
+func (unansweredClaims) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+	return nil, "", fmt.Errorf("%w: the store did not answer", coord.ErrUnavailable)
+}
+
+// stageAnOlderNode puts this rig's writer one lease protocol AHEAD of a live
+// node, which is the arrangement the mixed-version gate refuses every claim
+// in: a node on this build's protocol holds its presence lease, and the
+// writer claims as the build after it.
+//
+// THE WRITER IS MOVED UP rather than the peer staged below, because this build
+// may already speak the lowest protocol there is — and a protocol of zero or
+// less is not "older", it is "this build" ([coord.AcquireOptions.Protocol]),
+// so a peer staged one below the first version is a peer the gate never sees.
+func stageAnOlderNode(t *testing.T, r *roundTrip) {
+	t.Helper()
+	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion, Ungated: true,
+	}); err != nil || lease == nil {
+		t.Fatalf("stage a node on this build's protocol: (%v, %v)", lease, err)
+	}
+	r.claimOn(newerClaims{Backend: r.claims})
+}
+
+// newerClaims is a coordination store this rig's writer reaches as the build
+// after this one: every claim it makes states the next lease protocol.
+type newerClaims struct{ coord.Backend }
+
+func (n newerClaims) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	opts.Protocol = coord.ProtocolVersion + 1
+	return n.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// bulkCalls is the bulk calls counter on this rig, by result.
+func bulkCalls(r *roundTrip) map[string]uint64 {
+	out := map[string]uint64{}
+	for _, snap := range r.metrics.Read() {
+		if snap.Name == metrics.TrackerBulkCalls {
+			out[snap.Attrs["result"]] += snap.Total
+		}
+	}
+	return out
 }
 
 // A TASK OUTSIDE THE PROJECT A WRITE NAMES IS REFUSED, not written under a

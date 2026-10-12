@@ -25,12 +25,42 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 				b.Stream.Replicas = 3
 				b.Stream.Sync = "30s"
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
 				b.Stream.Cluster = config.StreamCluster{
 					Name: "crewlet", Port: 6222,
 					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
 				}
 			},
 			"stream.sync", "30s behind the disk",
+		},
+		// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is left out of every
+		// count of the cluster, and the operator is told which one and why
+		// — the count they wrote is not the count the rules used.
+		"this node's own route in its peer list is not counted": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222, Host: "10.0.0.11",
+					Peers: []string{"nats://10.0.0.11:6222", "nats://node-b.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[0]", "this node's own route (it matches cluster.host and cluster.port)",
+		},
+		"a member listed twice is counted once": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222,
+					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[2]", "repeats peers[1]",
 		},
 		"an operator floor never trims until it is told": {
 			func(b *config.Bootstrap) {
@@ -41,6 +71,14 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 		"nobody owns the backup": {
 			func(b *config.Bootstrap) {},
 			"retention.backup_owner", "backup owner",
+		},
+		// THE INGRESS ROLE WITH NO LISTENER: the node integrations, a
+		// browser and an orchestrator all look for binds nothing.
+		"an ingress node with no port": {
+			func(b *config.Bootstrap) {
+				b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+			},
+			"api.port", "no orchestrator can probe it",
 		},
 		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
 		// produces nothing at all: `stream.debug` unlocks nats-server's
@@ -117,6 +155,37 @@ func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	}
 	if got := b.Warnings(); len(got) != 0 {
 		t.Errorf("a fully stated deployment warned: %v", got)
+	}
+}
+
+// AND A PEER LIST OF THE OTHER MEMBERS SAYS NOTHING ABOUT ITS PEERS — with
+// this node's own listener and advertised address both stated, so the quiet
+// is the comparison finding no match rather than having nothing to compare.
+func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
+	t.Parallel()
+	b := config.RunnableBootstrap()
+	b.Stream.StoreDir = "/var/lib/crewlet/stream"
+	b.Retention.BackupOwner = "platform-oncall"
+	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+	b.Stream.Replicas = 3
+	// DECLARED, as a fleet node's roles are: a member of a fleet that left
+	// them to the every-role default is warned about that, which is not
+	// what this case is about.
+	b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+	// AND A PORT, as an ingress node's is: one with none is warned about
+	// that, which is not what this case is about either — and with it,
+	// what serving the API asks for, stated soundly.
+	b.API.Port = 8080
+	config.ServeAPI(&b)
+	b.Stream.Cluster = config.StreamCluster{
+		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
+		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	if got := b.Warnings(); len(got) != 0 {
+		t.Errorf("a peer list of the other members warned: %v", got)
 	}
 }
 
@@ -307,7 +376,7 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 }
 
 // A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED BY TIER A ALONE, company or
-// none.
+// none, on every broker MEMBER — and never on a leaf, which keeps no stream.
 //
 // A domain's write-ahead log lives on the stream, and an embedded stream with
 // no store directory keeps its streams in memory — so a restart recreates them
@@ -318,16 +387,17 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 // # Why this is not a cross-tier rule any more
 //
 // It was one — `CheckTiers`, which asked the company too — while a node's
-// logs waited for its first company: only a company started one. Every node
-// runs the core runtime from boot now, every domain's log and the identity
-// estate on it, so the pair's check let through exactly the node it should
-// have refused: one started with no company, whose first person's invitation
-// would be gone at its first restart. So there is no company in these cases at
-// all.
+// logs waited for its first company: only a company started one. Every data
+// node runs the core runtime from boot now, every domain's log and the
+// identity estate on it, and every member is a data node, so the pair's check
+// let through exactly the node it should have refused: one started with no
+// company, whose first person's invitation would be gone at its first restart.
+// So there is no company in these cases at all.
 //
 // Mutation: let `Durable` pass an embedded stream with a blank directory and
 // the first rows are accepted; drop the call from the stream's validator and
-// Validate accepts them while Durable refuses.
+// Validate accepts them while Durable refuses; drop the leaf's exemption and
+// the leaf row is refused.
 func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -339,6 +409,11 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		"a blank store directory is none":   {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "  "}, false},
 		"an embedded stream that persists":  {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "/var/lib/crewlet/stream"}, true},
 		"an external cluster keeps its own": {config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222", Replicas: 1}, true},
+		// A LEAF KEEPS NO STREAM: it runs no JetStream, every log it
+		// reaches is a member's, and the member holds the store directory
+		// — so it passes with none, and is refused one by its own rule.
+		"a leaf keeps no stream of its own": {config.Stream{Type: config.StreamEmbedded, Replicas: 1,
+			Leaf: config.StreamLeaf{URLs: []string{"nats-leaf://data-a.example.com:7422"}}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// THE ENGINE'S DOOR, which asks the same function for a
@@ -350,6 +425,13 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			b.Stream = tc.stream
 			if tc.stream.Type == config.StreamNATS {
 				// A fleet's broker needs the fleet's coordination.
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+			}
+			if tc.stream.Leaf.Joins() {
+				// A LEAF IS A NODE WITHOUT `data`, so it keeps a scratch
+				// store and runs nothing a node without data may not.
+				b.Node.Roles = []string{"seats"}
+				b.Store.Scratch = true
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 			}
 			validated := b.Validate()
@@ -380,7 +462,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 // A COMPANY WITH NO HUMAN SEAT IS ONE NOBODY CAN JOIN, and it is said before
 // anybody tries.
 //
-// Every person holds a human seat for as long as they are here (ADR-0026):
+// Every person holds a human seat for as long as they are here (ADR-0032):
 // an invitation and an administrator's create each name the seat the person
 // will hold, and both are refused without one. So a company declaring none
 // admits nobody — which an operator otherwise learns from the refusal of their
@@ -465,6 +547,43 @@ func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 			} {
 				if !strings.Contains(w.Message, says) {
 					t.Errorf("the advisory does not say %q: %q", says, w.Message)
+				}
+			}
+		})
+	}
+}
+
+// THE PORT IS WARNED ABOUT ONLY WHERE INGRESS WAS ASKED FOR. A node without the
+// role that binds nothing is a satellite with nothing inbound, which an
+// operator chooses; an omitted role list is the single-process default before
+// anybody chose a port; and a declared ingress node with a port is the shape
+// the warning asks for. Each is held quiet here, so a warning that fired on
+// every port of 0 fails this rather than training its reader to skip it.
+func TestOnlyADeclaredIngressNodeIsWarnedForBindingNothing(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*config.Bootstrap){
+		"a data node without ingress": func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "seats", "workers"}
+		},
+		"roles left to the default": func(b *config.Bootstrap) {},
+		"a declared ingress node with a port": func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+			b.API.Port = 8080
+			config.ServeAPI(b)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := config.RunnableBootstrap()
+			b.Stream.StoreDir = "/var/lib/crewlet/stream"
+			b.Retention.BackupOwner = "platform-oncall"
+			mutate(&b)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("the fixture does not validate: %v", err)
+			}
+			for _, w := range b.Warnings() {
+				if w.Path == "api.port" {
+					t.Errorf("warned about api.port: %s", w.Message)
 				}
 			}
 		})

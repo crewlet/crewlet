@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE WHOLE WRITE PATH: a directory record reaches the broker, the applier and
@@ -42,7 +43,7 @@ var brokerAt = time.Unix(1_700_000_000, 0).UTC()
 
 type writeRig struct {
 	t        *testing.T
-	db       *store.DB
+	db       store.ReplicatedHandle
 	log      *js.DomainLog
 	writer   *iamdomain.Writer
 	applier  *iamdomain.Applier
@@ -136,22 +137,13 @@ func newWriteRigWith(t *testing.T,
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close the store: %v", err)
-		}
-	})
+	db := openNodeEstate(t, "the store")
 
-	rows, err := iamdomain.NewRows(db)
+	rows, err := iamdomain.NewRows(db.Reader(), spec)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := iamdomain.NewFence(db, "node-a")
+	fence := iamdomain.NewFence(db.Reader(), "node-a")
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
@@ -188,10 +180,17 @@ func newWriteRigWith(t *testing.T,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
+	verifier := testVerifier(t)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: iamdomain.Domain{}, Log: appender, Rows: rows, Fence: fence,
-		Signer: testSigner(t), Gates: iamdomain.NewGates(db),
-		Waiter: waiter, Identity: waiter, Admission: reserve, NodeID: "node-a",
+		Domain: iamdomain.Domain{}, Spec: spec, Log: appender, Rows: rows,
+		Fence: fence, Signer: testSigner(t),
+		// THE SAME LOG READ BY POSITION, through this node's verifier, as
+		// the engine hands it: a resolution that finds a record it did not
+		// put there asks that record who wrote it.
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
+		Gates:   iamdomain.NewGates(db.Reader()),
+		Waiter:  waiter, Voids: waiter, Identity: waiter, Admission: reserve,
+		NodeID:     "node-a",
 		Generation: func() uint32 { return 0 },
 		// THE PRODUCTION BUDGET, and not a shorter one to save a case's
 		// seconds: this rig's applier is a polling loop that re-reads every
@@ -217,7 +216,7 @@ func newWriteRigWith(t *testing.T,
 	announced := &writerEvents{}
 	seats := &rigSeats{}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
-		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
+		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
 		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
 		// THE RIG'S PARTY AUTHORS EVERYTHING — and holds every grant,
@@ -236,7 +235,7 @@ func newWriteRigWith(t *testing.T,
 	// grants: a party derived from a principal carries that principal's
 	// credential, and the node acts on nobody's.
 	nodeDeps := iamdomain.WriterDeps{
-		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
+		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
 		Events: announced, Actor: "node-a", ActorKind: iam.KindMachine,
 		Grants: []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant},
@@ -249,7 +248,7 @@ func newWriteRigWith(t *testing.T,
 	rig := &writeRig{
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events: announced, seats: seats,
-		verifier: testVerifier(t),
+		verifier: verifier,
 		sealer:   sealer, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
 	// WHAT EACH COMMITTED BATCH MOVED IS KEPT, so a case can say which
@@ -313,7 +312,7 @@ func (r *writeRig) drainTo() error {
 // made of — and `now` is that node's batch clock, the one per-node instant an
 // apply is handed.
 func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
-	db *store.DB, applier *iamdomain.Applier, from uint64, now time.Time,
+	db store.ReplicatedHandle, applier *iamdomain.Applier, from uint64, now time.Time,
 	reached func(statelog.Position)) (uint64, error) {
 
 	last, err := log.End(t.Context())
@@ -353,7 +352,7 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
 			Payload:  body,
 			StoredAt: storedAt,
 		}
-		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := applier.Gated(t.Context(), tx, record)
 			if err != nil {
 				return err
@@ -563,7 +562,7 @@ var firstLinkExpiry = brokerAt.Add(credential.EnrolmentLinkLifetime)
 
 // vacantSeat puts one HUMAN seat in the running company and answers its handle:
 // the seat a person's create, an invitation or a move names. Every person holds
-// one (ADR-0026), so every case that creates a person asks for one here.
+// one (ADR-0032), so every case that creates a person asks for one here.
 func (r *writeRig) vacantSeat(handle string) string {
 	r.t.Helper()
 	r.seatOnly(handle)
@@ -656,12 +655,12 @@ func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 	// has to wait actually wait, rather than being served the rows from
 	// before the position it was handed.
 	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, r.db.Replicated(), r.waiter)
+		iamdomain.Domain{}, r.db, r.waiter)
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: r.db, Log: log, Committed: r.waiter.Committed,
+		DB: r.db.Reader(), Log: log, Committed: r.waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -673,7 +672,7 @@ func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 func (r *writeRig) column(query string, args ...any) []string {
 	r.t.Helper()
 	var out []string
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(r.t.Context(), query, args...)
 		if err != nil {
 			return err
@@ -716,6 +715,10 @@ func (w *rigWaiter) Committed() statelog.Position {
 // before every append: the rig's log is the one its rows came from, always.
 func (w *rigWaiter) StreamIdentity() error { return nil }
 func (w *rigWaiter) Truncated() error      { return nil }
+
+// Voided voids nothing: the rig applies by hand and never re-anchors, so no
+// generation is ever abandoned or overtaken under it.
+func (w *rigWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {
@@ -797,6 +800,22 @@ func (r *writeRig) anybody(t *testing.T) (bool, error) {
 func (r *writeRig) behind(ctx context.Context) (uint64, error) {
 	end, err := r.log.End(ctx)
 	return end + 3, err
+}
+
+// openNodeEstate opens one node's store with its replicated estate beside it
+// — the one file every state log here applies into — closed with the test,
+// and answers the handle a holder of that estate keeps. what names the node in
+// a failure.
+func openNodeEstate(t *testing.T, what string) store.ReplicatedHandle {
+	t.Helper()
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Errorf("close %s: %v", what, err)
+		}
+	})
+	return db
 }
 
 func testSigner(t *testing.T) *statelog.Signer {
@@ -1142,7 +1161,7 @@ func invalidationRecord(t *testing.T, generation, seq uint64) statelog.Record {
 		},
 		Actor: "operator", ActorKind: iam.KindPerson,
 		Mutation: mustJSON(t, iamdomain.Invalidation{
-			V: iamdomain.DocumentVersion, Generation: generation,
+			V: iamdomain.GateRecordVersion, Generation: generation,
 			By: "operator",
 		}),
 	})

@@ -144,6 +144,58 @@ func SeatTurns(ctx context.Context, estate Estate, q SpendQuery) ([]TurnsRow, er
 	return out, nil
 }
 
+// PersonRow is one spend cell of one node's day for one PERSON: the human seat
+// a person's questions (or a unit they lead's passes) were spent for, named by
+// its handle and its role as the record named them.
+type PersonRow struct {
+	Day, Node, Person, Role string
+	Tokens
+}
+
+// PersonQuery is a range of company days, both inclusive, and optionally one
+// person by their seat's handle.
+type PersonQuery struct {
+	From, To string
+	Person   string
+}
+
+// PersonSpend reads every node's spend for people over the company days
+// q.From..q.To, inclusive, in (day, node, person, cell) order — the half of a
+// named spend window no seat's row carries, since a person has no agent id.
+func PersonSpend(ctx context.Context, estate Estate, q PersonQuery) ([]PersonRow, error) {
+	if err := (SpendQuery{From: q.From, To: q.To}).check(); err != nil {
+		return nil, err
+	}
+	var out []PersonRow
+	err := estate.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT day, node, person, role, phase, worker, model, provider_key,
+			       input, output, cache_read, cache_write, total, calls
+			  FROM usage_person_tokens
+			 WHERE day >= ? AND day <= ? AND (? = '' OR person = ?)
+			 ORDER BY day, node, person, phase, worker, model, provider_key`,
+			q.From, q.To, q.Person, q.Person)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var r PersonRow
+			if err := rows.Scan(&r.Day, &r.Node, &r.Person, &r.Role, &r.Phase, &r.Worker,
+				&r.Model, &r.ProviderKey, &r.Input, &r.Output, &r.CacheRead,
+				&r.CacheWrite, &r.Total, &r.Calls); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("usage: read the people's spend for %s..%s: %w", q.From, q.To, err)
+	}
+	return out, nil
+}
+
 // SeatDay is one node's whole head row for one seat on one day, with the
 // tokens that day's spend cells add up to — every number a seat's activity
 // answer folds, from one read.

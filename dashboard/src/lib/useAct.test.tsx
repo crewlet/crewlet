@@ -37,6 +37,8 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 interface Sent {

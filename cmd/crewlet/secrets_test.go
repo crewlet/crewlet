@@ -51,6 +51,7 @@ func secretsCmd(t *testing.T, cfg string, args ...string) (string, string, error
 // A SECRET ROUND TRIPS THROUGH THE CLI, which is the whole surface: set,
 // list, get, unset.
 func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
@@ -95,6 +96,7 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 // is "is X set", which the listing answers without putting a credential into
 // a terminal and a screen-share.
 func TestGettingASecretNeedsTheRevealFlag(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -115,6 +117,7 @@ func TestGettingASecretNeedsTheRevealFlag(t *testing.T) {
 // so `-value ""` must be distinguishable from omitting the flag, which
 // reads stdin.
 func TestAnEmptyValueIsStoredRatherThanReadFromStdin(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", ""); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -181,6 +184,7 @@ func TestKeygenEmitsAPasteableKey(t *testing.T) {
 // A REKEY MOVES THE STALE ROWS AND NAMES THEM, which is the last chance to
 // see what is now safe to retire the old key over.
 func TestRekeyReportsWhatItMoved(t *testing.T) {
+	t.Parallel()
 	first := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, first, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -342,6 +346,7 @@ func TestKeygenNeedsAKeyID(t *testing.T) {
 // id column, which is there for exactly this — a preview that opened every
 // row would be a bigger exposure than the pass it previews.
 func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
+	t.Parallel()
 	first := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, first, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
@@ -395,15 +400,16 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 // up, so the fleet's store is reachable through its API, and that is the only
 // route that puts a value on every node.
 func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
+	t.Parallel()
 	// THE CREDENTIAL IS THE OPERATOR'S OWN, which is what routing through
 	// a node now needs: the command no longer helps itself to the first
 	// entry of the Tier A list it just parsed.
-	t.Setenv(apiTokenEnv, "ops-token")
+	operator := tokenEnviron("ops-token")
 	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	locked := fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
-	target, err := throughTheRunningNode(boot, "crewlet.yaml", locked)
+	target, err := throughTheRunningNode(operator, boot, "crewlet.yaml", locked)
 	if err != nil {
 		t.Fatalf("a locked store was refused instead of routed: %v", err)
 	}
@@ -429,7 +435,7 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	boot := bootWithAPI(t, "127.0.0.1", 0, "ops-token")
 	locked := fmt.Errorf("%w: held by pid 41", store.ErrLocked)
 
-	_, err := throughTheRunningNode(boot, "crewlet.yaml", locked)
+	_, err := throughTheRunningNode(noEnviron, boot, "crewlet.yaml", locked)
 	if err == nil {
 		t.Fatal("a node with no HTTP surface was accepted as a write target")
 	}
@@ -459,7 +465,7 @@ func TestOnlyALockedStoreIsRoutedThroughTheAPI(t *testing.T) {
 	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	other := errors.New("the keyring cannot open this store")
 
-	target, err := throughTheRunningNode(boot, "crewlet.yaml", other)
+	target, err := throughTheRunningNode(noEnviron, boot, "crewlet.yaml", other)
 	if target != nil {
 		t.Fatal("an unrelated failure was answered with an API client, so a " +
 			"broken node would report a connection error instead of its fault")

@@ -107,7 +107,7 @@ func (f *fleet) newHost(node string, cfg Config) *Host {
 func (f *fleet) present(node string, ttl time.Duration, profile placement.NodeProfile) {
 	f.t.Helper()
 	profile.ID = node
-	lease, err := f.store.TryAcquire(f.ctx, coord.NodeResource(node), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.NodeResource(node), coord.AcquireOptions{
 		Owner: node + ":1", TTL: ttl, Preferred: node, Protocol: coord.ProtocolVersion,
 		Ungated: true, Meta: profile.Meta(),
 	})
@@ -124,7 +124,7 @@ func (f *fleet) peerTakes(handle, owner string, epochHeldBy string, epoch int64)
 	if _, err := f.store.Release(f.ctx, seatResource(handle), epochHeldBy, epoch); err != nil {
 		f.t.Fatalf("peerTakes release: %v", err)
 	}
-	lease, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
 		Owner: owner, TTL: time.Minute, Protocol: coord.ProtocolVersion,
 	})
 	if err != nil || lease == nil {
@@ -166,7 +166,7 @@ func numberedSeats(n int) func() []placement.Seat {
 // — so this is how a test stages "these seats were last served here".
 func (f *fleet) seedHint(handle, node string) {
 	f.t.Helper()
-	lease, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
 		Owner: node + ":previous", TTL: time.Millisecond, Preferred: node,
 		Protocol: coord.ProtocolVersion,
 	})
@@ -185,6 +185,11 @@ type hookLog struct {
 	acquires   []string
 	releases   []string
 	admissions []string
+
+	// established records each OnEstablished, with whether the host
+	// admitted turns on the seat at that moment (see [hookLog.admits]).
+	established []string
+	admits      func(handle string) bool
 
 	// acquireErr and releaseErr decide, per call, whether the hook fails.
 	acquireErr func(handle string, calls int) error
@@ -210,6 +215,20 @@ func (l *hookLog) OnAcquire(_ context.Context, s placement.Seat, _ coord.Lease) 
 		return fail(handle, n)
 	}
 	return nil
+}
+
+func (l *hookLog) OnEstablished(_ context.Context, s placement.Seat, _ coord.Lease) {
+	handle := s.Handle
+	l.mu.Lock()
+	admits := l.admits
+	l.mu.Unlock()
+	entry := handle
+	if admits != nil && admits(handle) {
+		entry += ":admitting"
+	}
+	l.mu.Lock()
+	l.established = append(l.established, entry)
+	l.mu.Unlock()
 }
 
 func (l *hookLog) OnRelease(_ context.Context, s placement.Seat, _ coord.Lease, reason ReleaseReason) error {
@@ -241,6 +260,9 @@ func (l *hookLog) OnAdmission(_ context.Context, s placement.Seat, admitted bool
 func (l *hookLog) acquired() []string    { return l.copyOf(&l.acquires) }
 func (l *hookLog) released() []string    { return l.copyOf(&l.releases) }
 func (l *hookLog) admissioned() []string { return l.copyOf(&l.admissions) }
+func (l *hookLog) establishedSeats() []string {
+	return l.copyOf(&l.established)
+}
 
 func (l *hookLog) copyOf(field *[]string) []string {
 	l.mu.Lock()

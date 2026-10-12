@@ -98,16 +98,23 @@ type barrierRun struct {
 // told that than left holding a request open.
 const DefaultBarrierBudget = 5 * time.Second
 
-// NewReadIndex builds a domain's read index.
+// NewReadIndex builds the read index of one of a domain's logs — the one spec
+// names, whose own barrier subject the index appends to.
+//
+// ONE PER LOG, AND SINGLE-FLIGHTED PER LOG: a barrier proves where ONE
+// stream's end is, so each log a node runs has its own index proving its own
+// end, and a reader of one log never waits on an append to another.
+//
+// signer is the fleet keyring's signer for the domain: a barrier is a record
+// on the log like any other, so it is signed like any other.
 //
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, log Appender, signer *Signer, admission Admission,
-	encode func(Envelope) ([]byte, error), gen func() uint32,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
+	admission Admission, encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
-	spec := d.Stream()
-	if err := spec.Validate(); err != nil {
+	if err := spec.Instantiates(d); err != nil {
 		return nil, err
 	}
 	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
@@ -121,10 +128,10 @@ func NewReadIndex(d Domain, log Appender, signer *Signer, admission Admission,
 		return nil, fmt.Errorf("statelog: read index for %q has no encoder", d.Name())
 	}
 	switch {
-	case KeepsGateReserve(d) && admission == nil:
+	case ReservationOf(d).Kept && admission == nil:
 		return nil, fmt.Errorf("statelog: read index for %q has no admission, so "+
 			"its barriers would fill the gate reserve an eviction needs", d.Name())
-	case !KeepsGateReserve(d) && admission != nil:
+	case !ReservationOf(d).Kept && admission != nil:
 		return nil, fmt.Errorf("statelog: read index for %q was given an "+
 			"admission, and its log keeps no gate reserve", d.Name())
 	}
@@ -138,7 +145,7 @@ func NewReadIndex(d Domain, log Appender, signer *Signer, admission Admission,
 	return &ReadIndex{
 		log:       signed,
 		stream:    spec.Name,
-		subject:   spec.SubjectPrefix + "." + BarrierKind,
+		subject:   wireSubject(spec.SubjectPrefix, Subject{Kind: BarrierKind}),
 		domain:    d.Name(),
 		encode:    encode,
 		gen:       gen,

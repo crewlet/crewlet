@@ -26,11 +26,11 @@
  * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
  * Mattermost channel and GitLab access level mean something only when the
  * company has connected that tool, so each says "<Tool> is not connected"
- * instead of offering a setting that does nothing. The tracker project and
- * knowledge space a unit or a seat owns are not a tool's: they are the
- * document's own `project` and `space`, whichever backend runs the tracker and
- * the knowledge base, so they are always drawn. Two of the tool fields change
- * more than their field, and say so
+ * instead of offering a setting that does nothing. A project and a space are
+ * NOT a tool's: they are the seat's or unit's own `project` and `space`,
+ * naming a container on whichever tracker and knowledge base the company runs
+ * — the engine's own by default — so they are drawn unless the company runs
+ * none. Two of the tool fields change more than their field, and say so
  * beside it: a GitHub tier on a seat with no GitHub block enrols the seat,
  * and a tier change on a seat whose app exists does not reach the app, whose
  * permissions were fixed when it was created.
@@ -79,6 +79,7 @@ import {
 } from "./editorForm.ts";
 import {
   ACKNOWLEDGEMENT_TEXT,
+  AvatarField,
   EditorSection,
   NodeProblems,
   NotConnected,
@@ -91,7 +92,8 @@ import {
   UnitTypeField,
   placeOnFields,
 } from "./dialogParts.tsx";
-import { NodeGlyph, type NodeGlyphKind } from "./nodeMarks.tsx";
+import { NodeGlyph, type NodeGlyphKind } from "~/ui/orgNodes.tsx";
+import type { AvatarCharacter } from "~/lib/avatar.ts";
 import type { Segment } from "./model/document.ts";
 import {
   allUnits,
@@ -112,6 +114,7 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
   PHASE_MODEL_FIELDS,
+  backendFor,
   currentCheck,
   defaultGitLabAccessLevel,
   derivedSeatOf,
@@ -237,6 +240,7 @@ const READ_ONLY_REASON = "These fields are for reading, so there is nothing to a
 function EditorShell({
   title,
   mark,
+  character,
   name,
   dirty,
   blocked,
@@ -250,6 +254,8 @@ function EditorShell({
   title: string;
   /** What is being edited, for the panel's own mark: see `NodeGlyph`. */
   mark: NodeGlyphKind;
+  /** The character an agent seat's mark is drawn as, as the form holds it now. */
+  character?: AvatarCharacter;
   /** How the node is named in the discard prompt. */
   name: string;
   dirty: boolean;
@@ -295,7 +301,7 @@ function EditorShell({
         // the chart card carry for this node, so the three surfaces mark it
         // identically and the panel says what it is editing before its title
         // is read.
-        icon={<NodeGlyph kind={mark} size="md" />}
+        icon={<NodeGlyph kind={mark} size="md" character={character} />}
         onClose={requestClose}
         // ALWAYS A FORM. The panel is a <form> only while it has a submit
         // handler, and swapping the element as Apply became unavailable would
@@ -460,12 +466,21 @@ function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
 const PROJECT: Segment[] = ["project"];
 const SPACE: Segment[] = ["space"];
 
+/** The ownership fields the company has a backend for, as field paths. */
+function ownsFieldPaths(company: CompanyDocument): Segment[][] {
+  return [
+    ...(backendFor(company, "tracker") !== "none" ? [PROJECT] : []),
+    ...(backendFor(company, "knowledge") !== "none" ? [SPACE] : []),
+  ];
+}
+
 /**
  * The tracker project and knowledge space a unit or a root seat OWNS: where
- * its unrouted work is filed and where it writes pages, whichever backend runs
- * the tracker and the knowledge base. Vendor-neutral fields of the document
- * (`project`, `space`), never a vendor's block, which no unit and no seat
- * carries. Not a permission.
+ * its unrouted work is filed and where it writes pages, on whichever backend
+ * runs the tracker and the knowledge base. Vendor-neutral fields of the
+ * document (`project`, `space`), never a vendor's block, which no unit and no
+ * seat carries. Not a permission. Each is drawn only where the company runs
+ * that backend: with none, there is nothing to own, and the section says so.
  */
 function Owns({
   who,
@@ -487,30 +502,46 @@ function Owns({
   /** Why a lead's draft may not change either (`model/scope.ts`), or `null`. */
   keyLimit: string | null;
 }) {
+  const { state } = useBuilder();
+  const company = state.draft.company;
   const meaning =
     who === "unit"
       ? "Where unrouted work for this unit goes and where it files its pages. Not a permission."
       : "Where unrouted work for this seat goes and where it files its pages, for a seat at the top level. A seat inside a unit takes its unit's. Not a permission.";
   return (
     <EditorSection title="Owns" hint={keyLimit ? `${meaning} ${keyLimit}` : meaning}>
-      <ConfigField
-        label="Tracker project"
-        kind="id"
-        value={project}
-        onChange={onProject}
-        required={false}
-        disabled={disabled || keyLimit !== null}
-        error={errorFor(PROJECT)}
-      />
-      <ConfigField
-        label="Knowledge space"
-        kind="id"
-        value={space}
-        onChange={onSpace}
-        required={false}
-        disabled={disabled || keyLimit !== null}
-        error={errorFor(SPACE)}
-      />
+      {backendFor(company, "tracker") !== "none" ? (
+        <ConfigField
+          label="Tracker project"
+          kind="id"
+          value={project}
+          onChange={onProject}
+          required={false}
+          disabled={disabled || keyLimit !== null}
+          error={errorFor(PROJECT)}
+        />
+      ) : (
+        <p className="builder-note muted">
+          The company runs no work tracker (<InlineCode>tracker.backend: none</InlineCode>), so
+          there is no project to own.
+        </p>
+      )}
+      {backendFor(company, "knowledge") !== "none" ? (
+        <ConfigField
+          label="Knowledge space"
+          kind="id"
+          value={space}
+          onChange={onSpace}
+          required={false}
+          disabled={disabled || keyLimit !== null}
+          error={errorFor(SPACE)}
+        />
+      ) : (
+        <p className="builder-note muted">
+          The company runs no knowledge base (<InlineCode>knowledge.backend: none</InlineCode>), so
+          there is no space to own.
+        </p>
+      )}
     </EditorSection>
   );
 }
@@ -621,11 +652,10 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
 
 /**
  * The field paths a unit's form draws, so a problem the engine reported on a
- * field this form does NOT draw (a Jira project on a company that has not
- * connected Jira) is listed at the top rather than attached to a field nobody
- * can see.
+ * field this form does NOT draw (a project on a company that runs no tracker)
+ * is listed at the top rather than attached to a field nobody can see.
  */
-function unitFieldPaths(data: ConfigUnit): Segment[][] {
+function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][] {
   return [
     ["name"],
     ["type"],
@@ -634,8 +664,7 @@ function unitFieldPaths(data: ConfigUnit): Segment[][] {
     ["goals"],
     ["channel"],
     ["knowledge"],
-    PROJECT,
-    SPACE,
+    ...ownsFieldPaths(company),
     ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
   ];
 }
@@ -662,7 +691,10 @@ function UnitEditor({
   const key = unit.key;
   const { initial, form, set, dirty } = useForm<UnitForm>(() => unitForm(unit.data));
   const { refusal, apply } = useApply(api, key, onClose);
-  const { errorFor, rest } = placeOnFields(placedOn(api, key), unitFieldPaths(unit.data));
+  const { errorFor, rest } = placeOnFields(
+    placedOn(api, key),
+    unitFieldPaths(state.draft.company, unit.data),
+  );
   const disabled = api.readOnly;
   // A LEAD'S OWN UNIT keeps its lead, which decides who may change the unit,
   // and every unit keeps the keys another system finds it by
@@ -866,8 +898,9 @@ function seatFieldPaths(
     ...(human
       ? [["contact"] as Segment[], ["availability"] as Segment[]]
       : [
-          PROJECT,
-          SPACE,
+          ["avatar"] as Segment[],
+          ["avatar", "character"] as Segment[],
+          ["avatar", "color"] as Segment[],
           ["behavioral_guidelines"] as Segment[],
           ["llm"] as Segment[],
           // The block, for a problem about its shape, and each window, so a
@@ -877,6 +910,7 @@ function seatFieldPaths(
           ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
           ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
+          ...ownsFieldPaths(company),
         ]),
   ];
 }
@@ -935,6 +969,7 @@ function SeatEditor({
     <EditorShell
       title={`Edit ${data.name || "seat"}`}
       mark={human ? "human" : "agent"}
+      character={form.avatar?.character}
       name={data.name || "this seat"}
       dirty={dirty}
       blocked={blocked}
@@ -966,6 +1001,17 @@ function SeatEditor({
         <HandleFact seat={seat} dirty={dirty} onClose={onClose} />
       )}
       <KindFact seatKey={key} human={human} dirty={dirty} onClose={onClose} />
+      {form.avatar && (
+        <EditorSection title="Profile icon">
+          <AvatarField
+            value={form.avatar}
+            onChange={(avatar) => set({ avatar })}
+            disabled={disabled}
+            characterError={errorFor(["avatar", "character"]) ?? errorFor(["avatar"])}
+            colorError={errorFor(["avatar", "color"])}
+          />
+        </EditorSection>
+      )}
       <ConfigField
         label="Email"
         kind="email"
@@ -1545,11 +1591,14 @@ function IntegrationsSection({
       <EditorSection title="Slack">
         {!isConnected(company, "slack") ? (
           <NotConnected tool="slack" />
+        ) : isRecord(slack) ? (
+          <p className="builder-note muted">
+            This seat speaks as its own Slack app, in its unit's channel, whose credentials are set
+            from Integrations. <ScreenLink to="integrations">Open Integrations</ScreenLink>
+          </p>
         ) : (
           <p className="builder-note muted">
-            {isRecord(slack)
-              ? "This seat speaks through a Slack app of its own, whose credentials are set from Integrations."
-              : "This seat has no Slack app of its own."}{" "}
+            This seat has no Slack app of its own.{" "}
             <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         )}

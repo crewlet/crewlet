@@ -71,24 +71,39 @@ func (s *fakeSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.To
 	return toolloop.ToolResult{Output: "ok"}, nil
 }
 
-// meter records spends and can refuse or fail.
+// meter records spends and can refuse or fail. A refused spend is recorded
+// too, as the fleet's counter records one: the meter is handed tokens a
+// round has already spent. And it holds what it has seen as the engine's
+// meter does: once nothing more fits under refuseAt, every later charge is
+// certain to be refused, and [meter.Refused] says so before one is made.
 type meter struct {
 	spent    int
 	refuseAt int // refuse once cumulative spend would exceed this; 0 never
 	err      error
 }
 
+func (m *meter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	if m.refuseAt == 0 || m.spent < m.refuseAt {
+		return toolloop.SpendOutcome{}, false
+	}
+	return toolloop.SpendOutcome{
+		Scope: "role", Used: m.spent, Limit: m.refuseAt,
+		Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
+	}, true
+}
+
 func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuseAt > 0 && m.spent+tokens > m.refuseAt {
+	fits := m.refuseAt == 0 || m.spent+tokens <= m.refuseAt
+	m.spent += tokens
+	if !fits {
 		return toolloop.SpendOutcome{
 			Scope: "role", Used: m.spent, Limit: m.refuseAt,
 			Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
 		}, nil
 	}
-	m.spent += tokens
 	return toolloop.SpendOutcome{OK: true}, nil
 }
 
@@ -219,69 +234,13 @@ func TestATerminatingToolEndsTheLoop(t *testing.T) {
 	}
 }
 
-// --- the forced tool call --------------------------------------------------
+// --- the loop that does not finish by a call -------------------------------
 
-func TestARequiredToolCallIsEnforcedNotRequested(t *testing.T) {
+func TestProseWithoutATerminatorIsACleanFinish(t *testing.T) {
 	t.Parallel()
-	// Some endpoints ignore tool_choice and some models think-then-stop.
-	// Accepting prose as a clean finish is how a forced round silently
-	// produces nothing at all.
-	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "I think the plan should be..."}, // no tool call
-		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
-	}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 5, ToolChoice: "required",
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(res.Executions) != 1 {
-		t.Fatalf("executions = %+v, want the tool to have run after the correction",
-			res.Executions)
-	}
-	// The correction must name the tools: a model answering with prose has
-	// usually misread the surface rather than refused it.
-	var corrected bool
-	for _, m := range res.Messages {
-		if m.Role == llm.RoleUser && strings.Contains(m.Content, "submit_work") {
-			corrected = true
-		}
-	}
-	if !corrected {
-		t.Error("the corrective re-prompt did not name the available tools")
-	}
-}
-
-func TestTheForcedRetryIsBounded(t *testing.T) {
-	t.Parallel()
-	// A model that can never emit the call must not burn the whole round
-	// budget on re-prompts.
-	prose := llm.Completion{Content: "still prose"}
-	p := &scriptedProvider{turns: []llm.Completion{prose, prose, prose, prose, prose}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 10, ToolChoice: "required",
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	// One initial round plus at most two corrections.
-	if res.RoundsUsed > 3 {
-		t.Errorf("rounds = %d, want at most 3 — the retry is unbounded", res.RoundsUsed)
-	}
-	if len(res.Executions) != 0 {
-		t.Errorf("executions = %+v, want none", res.Executions)
-	}
-}
-
-func TestProseWithoutARequiredToolCallIsACleanFinish(t *testing.T) {
-	t.Parallel()
-	// The counterfactual for the two above: with no forced choice, prose
-	// IS the answer and must not be re-prompted.
+	// The counterfactual for every finishing case below: a loop that names
+	// no call that finishes it takes prose as the answer, and must not
+	// re-prompt it.
 	p := &scriptedProvider{turns: []llm.Completion{{Content: "the answer"}}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
 
@@ -292,7 +251,12 @@ func TestProseWithoutARequiredToolCallIsACleanFinish(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.RoundsUsed != 1 {
-		t.Errorf("rounds = %d, want 1 — an unforced prose answer was re-prompted", res.RoundsUsed)
+		t.Errorf("rounds = %d, want 1 — a prose answer was re-prompted", res.RoundsUsed)
+	}
+	// And the answer is not marked declined: nothing about this loop said
+	// it had to end in a call.
+	if len(res.Narration) != 1 || res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want one round that is NOT declined", res.Narration)
 	}
 }
 
@@ -414,69 +378,6 @@ func TestAnEmptyRoundAfterRealWorkGetsItsOwnCorrective(t *testing.T) {
 	}
 }
 
-// The same rule for the forced corrective, whose own rationale — a model that
-// cannot emit the call in three attempts will not emit it in ten — is a claim
-// about consecutive attempts. A round that emitted a call in between is proof
-// the model can, so the run starts over.
-func TestADeclinedRoundAfterACallGetsItsOwnForcedCorrective(t *testing.T) {
-	t.Parallel()
-	prose := llm.Completion{Content: "I think we should stop here"}
-	p := &scriptedProvider{turns: []llm.Completion{
-		prose, prose, // two declines — the run's whole allowance
-		{Content: "fine", ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
-		prose, prose, // a NEW run, so two more correctives
-		{Content: "ok", ToolCalls: []llm.ToolCall{toolCall("2", "submit_work")}},
-	}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
-
-	// Six, so the run ends on the second call rather than on a break — what
-	// this asserts is that the loop REACHED it, not where it stopped.
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 6, ToolChoice: llm.ToolChoiceRequired,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(s.ran) != 2 {
-		t.Fatalf("tool ran %d times, want 2 — the second run of declines was not "+
-			"corrected, so the phase gave up before the second submission", len(s.ran))
-	}
-	if res.RoundsUsed != 6 {
-		t.Errorf("rounds = %d, want 6", res.RoundsUsed)
-	}
-}
-
-// The forced corrective WINS on a caller that required a tool call, so a
-// reviewer's four-round budget is not taxed twice for one round that said
-// nothing. "Call one of these tools" is strictly the better instruction for a
-// phase whose only output is a call, and it already covers a model that
-// thought and stopped.
-func TestARequiredToolCallGetsTheToolCorrectiveNotTheEmptyOne(t *testing.T) {
-	t.Parallel()
-	empty := llm.Completion{Content: ""}
-	p := &scriptedProvider{turns: []llm.Completion{empty, empty, empty, empty, empty}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 10, ToolChoice: "required",
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	// One attempt plus the two forced correctives, and NOT a third round
-	// from the empty-answer corrective piling on after they ran out.
-	if res.RoundsUsed != 3 {
-		t.Errorf("rounds = %d, want 3 — the two correctives both fired on one round",
-			res.RoundsUsed)
-	}
-	for _, m := range res.Messages {
-		if m.Role == llm.RoleUser && strings.Contains(m.Content, "Your last reply was empty") {
-			t.Error("the empty-answer corrective fired on a forced caller, taxing " +
-				"a round budget sized for the tool corrective alone")
-		}
-	}
-}
-
 // The counterfactual that keeps the guard honest: an empty round is only the
 // rounds with NEITHER, so a model that narrated and called nothing further is
 // still a clean finish.
@@ -496,6 +397,471 @@ func TestProseWithNoToolCallStaysACleanFinish(t *testing.T) {
 	}
 	if res.RoundsUsed != 1 {
 		t.Errorf("rounds = %d, want 1", res.RoundsUsed)
+	}
+}
+
+// --- the phase that finishes by a call ---------------------------------------
+
+// writtenSubmission is the measured failure: a model on a cli-agent text
+// backend answered its last round with one fenced block holding submit_work's
+// ARGUMENTS — the report, typed out — rather than the call.
+var writtenSubmission = llm.Completion{Content: "```json\n" +
+	`{"summary":"Commented on the work item","outcome":"delivered",` +
+	`"deliveries":["comment_on_work_item"]}` + "\n```"}
+
+func submitCall(id string) llm.Completion {
+	return llm.Completion{ToolCalls: []llm.ToolCall{toolCall(id, "submit_work")}}
+}
+
+// finishingCorrectives counts the finishing correctives a conversation holds.
+func finishingCorrectives(msgs []llm.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "so this phase has not finished") {
+			n++
+		}
+	}
+	return n
+}
+
+// A LOOP THAT DECLARES TERMINATORS HAS SAID HOW IT FINISHES. A round of prose
+// there is a model that wrote its report where nobody reads it, and the phase
+// used to end on it — the executor then rescued as incomplete and the reviewer
+// read the fenced JSON as "what the agent produced". It is asked again — by a
+// message naming the call, never by forcing one, since a request has no way to
+// force a call — and the round is marked declined on the record.
+func TestAPhaseThatWroteItsSubmissionAsTextIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{writtenSubmission, submitCall("1")}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("comment_on_work_item"), def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 24,
+		Messages:       []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 {
+		t.Fatalf("rounds = %d, want 2 — the written submission ended the phase", res.RoundsUsed)
+	}
+	if len(s.ran) != 1 || s.ran[0] != "submit_work" {
+		t.Errorf("ran %v, want the submission the corrective asked for", s.ran)
+	}
+	second := p.seen[1]
+	last := second.Messages[len(second.Messages)-1]
+	if last.Role != llm.RoleUser || !strings.Contains(last.Content, "`submit_work`") ||
+		!strings.Contains(last.Content, "JSON included") {
+		t.Errorf("the corrective round opened on %+v, want the finishing corrective "+
+			"naming submit_work", last)
+	}
+	if len(res.Narration) != 1 || res.Narration[0].Round != 1 || !res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want round 1 marked declined", res.Narration)
+	}
+	if res.EmptyAnswers != 0 {
+		t.Errorf("EmptyAnswers = %d, want 0 — the round said something", res.EmptyAnswers)
+	}
+}
+
+// Bounded, on the finishing allowance: a model that will not
+// submit is asked twice, then the phase ends without its submission — for the
+// caller's rescue path — rather than burning the round budget.
+func TestTheFinishingCorrectiveIsBounded(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		writtenSubmission, writtenSubmission, writtenSubmission, writtenSubmission,
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10,
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 3 {
+		t.Errorf("rounds = %d, want 3 — one attempt plus two correctives", res.RoundsUsed)
+	}
+	if got := finishingCorrectives(res.Messages); got != 2 {
+		t.Errorf("finishing correctives = %d, want 2", got)
+	}
+	// Every one of them declined, the last included: that is what tells a
+	// reader the phase ended without its submission.
+	for _, n := range res.Narration {
+		if !n.Declined {
+			t.Errorf("round %d not marked declined", n.Round)
+		}
+	}
+	if res.ExhaustedRounds {
+		t.Error("a phase that stopped asking for tools reported itself exhausted")
+	}
+}
+
+// Per RUN of declined rounds: a round that called a tool in between is a model
+// that can, so its next run of prose earns its own two correctives.
+func TestTheFinishingAllowanceResetsAfterACall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		writtenSubmission, writtenSubmission, // the run's whole allowance
+		{ToolCalls: []llm.ToolCall{toolCall("r", "read")}},
+		writtenSubmission, writtenSubmission, // a new run
+		submitCall("s"),
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10,
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 6 || len(s.ran) != 2 || s.ran[1] != "submit_work" {
+		t.Errorf("rounds = %d ran = %v, want the submission reached at round 6",
+			res.RoundsUsed, s.ran)
+	}
+	if got := finishingCorrectives(res.Messages); got != 4 {
+		t.Errorf("finishing correctives = %d, want 4 — two per run", got)
+	}
+}
+
+// AN EMPTY ROUND IN A SUBMISSION PHASE gets the finishing corrective, not the
+// empty-answer one — whose "write it in the response itself" steers a phase
+// that finishes by a call straight into its rescue — and is still counted.
+func TestAnEmptyRoundInASubmissionPhaseGetsTheFinishingCorrective(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{ReasoningContent: "thinking very hard", OutputTokens: 627},
+		submitCall("1"),
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 || len(s.ran) != 1 {
+		t.Fatalf("rounds = %d ran = %v, want the submission at round 2", res.RoundsUsed, s.ran)
+	}
+	if res.EmptyAnswers != 1 {
+		t.Errorf("EmptyAnswers = %d, want 1 — the round still reached nobody", res.EmptyAnswers)
+	}
+	if finishingCorrectives(res.Messages) != 1 {
+		t.Error("the empty round did not get the finishing corrective")
+	}
+	for _, m := range res.Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "Your last reply was empty") {
+			t.Error("the empty-answer corrective fired in a phase that finishes by a call")
+		}
+	}
+	// Declined is for a round that SAID something; this one said nothing,
+	// and the count above is its record.
+	if len(res.Narration) != 1 || res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want the thinking-only round not marked declined",
+			res.Narration)
+	}
+}
+
+// EMPTY ROUNDS IN A SUBMISSION PHASE SHARE THE FINISHING ALLOWANCE, and the
+// empty-answer corrective never tops it up once it is spent: one attempt and
+// two correctives, and not a fourth round for a failure the phase was already
+// asked about twice.
+func TestEmptyRoundsInASubmissionPhaseShareTheFinishingAllowance(t *testing.T) {
+	t.Parallel()
+	empty := llm.Completion{Content: ""}
+	p := &scriptedProvider{turns: []llm.Completion{empty, empty, empty, empty, empty}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10,
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 3 {
+		t.Errorf("rounds = %d, want 3 — one attempt plus two finishing correctives",
+			res.RoundsUsed)
+	}
+	if got := finishingCorrectives(res.Messages); got != 2 {
+		t.Errorf("finishing correctives = %d, want 2", got)
+	}
+	for _, m := range res.Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "Your last reply was empty") {
+			t.Error("the empty-answer corrective fired in a phase that finishes by a call")
+		}
+	}
+	if res.EmptyAnswers != 3 {
+		t.Errorf("EmptyAnswers = %d, want 3", res.EmptyAnswers)
+	}
+}
+
+// failOnceSurface refuses the first call to a tool and accepts every later one.
+type failOnceSurface struct {
+	tools  []llm.ToolDef
+	failed bool
+	ran    []string
+}
+
+func (s *failOnceSurface) ToolDefs() []llm.ToolDef { return s.tools }
+func (s *failOnceSurface) Phase() string           { return "execute" }
+func (s *failOnceSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	s.ran = append(s.ran, call.Name)
+	if !s.failed {
+		s.failed = true
+		return toolloop.ToolResult{Output: "Invalid submission: outcome is required", Failed: true}, nil
+	}
+	return toolloop.ToolResult{Output: "submitted"}, nil
+}
+
+// A FAILED SUBMISSION IS NOT A FINISH, and neither is the prose a model writes
+// after it: a model that read the refusal and gave up in words is asked again,
+// and the corrected submission ends the phase.
+func TestProseAfterAFailedSubmissionIsCorrected(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		submitCall("1"),
+		{Content: "I could not submit, so here is my report: all done."},
+		submitCall("2"),
+	}}
+	s := &failOnceSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+		TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 3 || len(s.ran) != 2 {
+		t.Fatalf("rounds = %d ran = %v, want the second submission at round 3",
+			res.RoundsUsed, s.ran)
+	}
+	if finishingCorrectives(res.Messages) != 1 {
+		t.Error("the prose after the refused submission was not corrected")
+	}
+}
+
+// Several terminators are named as a choice.
+func TestTheFinishingCorrectiveNamesEveryTerminator(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "done"}, {ToolCalls: []llm.ToolCall{toolCall("1", "approve")}},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("approve"), def("reject")}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+		TerminateAfter: []string{"approve", "reject"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(res.Messages[len(res.Messages)-3].Content, "one of `approve`, `reject`") {
+		t.Errorf("corrective = %q, want both terminators named as a choice",
+			res.Messages[len(res.Messages)-3].Content)
+	}
+}
+
+// A CORRECTIVE NOTHING WILL READ IS NOT SENT. On the last round of the budget
+// no round follows, so each corrective — finishing and empty alike — would only
+// sit unanswered at the end of the conversation the caller records. The loop
+// ends there and the declined mark on its last round says why; a FINISHING
+// corrective is handed back as Withheld, for a caller that may run the phase
+// past this budget, and an empty-answer one is not, since that loop's prose
+// is a finish.
+func TestNoCorrectiveIsAppendedOnTheLastRound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		answer   llm.Completion
+		cfg      toolloop.Config
+		declined bool
+		withheld bool
+	}{
+		{"finishing", writtenSubmission, toolloop.Config{TerminateAfter: []string{"submit_work"}}, true, true},
+		{"finishing, empty", llm.Completion{}, toolloop.Config{TerminateAfter: []string{"submit_work"}}, false, true},
+		{"empty", llm.Completion{}, toolloop.Config{}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := tc.cfg
+			cfg.Provider = &scriptedProvider{turns: []llm.Completion{tc.answer}}
+			cfg.Surface = &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+			cfg.MaxRounds = 1
+			cfg.Messages = []llm.Message{{Role: llm.RoleUser, Content: "go"}}
+			res, err := toolloop.Run(t.Context(), cfg)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := res.Messages[len(res.Messages)-1]; got.Role != llm.RoleAssistant {
+				t.Errorf("the conversation ends on a %s message %q nothing will answer",
+					got.Role, got.Content)
+			}
+			if res.RoundsUsed != 1 {
+				t.Errorf("rounds = %d, want 1", res.RoundsUsed)
+			}
+			// The mark on the last round is what says why the phase
+			// ended without its submission; an empty round is counted
+			// rather than marked.
+			if tc.declined && (len(res.Narration) != 1 || !res.Narration[0].Declined) {
+				t.Errorf("narration = %+v, want the last round marked declined", res.Narration)
+			}
+			if got := res.Withheld != ""; got != tc.withheld {
+				t.Errorf("withheld = %q, want one: %v", res.Withheld, tc.withheld)
+			}
+			if tc.withheld && !strings.Contains(res.Withheld, "`submit_work`") {
+				t.Errorf("withheld = %q, want the finishing corrective", res.Withheld)
+			}
+			if res.ExhaustedRounds {
+				t.Error("a loop that stopped asking for tools reported itself exhausted")
+			}
+		})
+	}
+}
+
+// NOTHING IS WITHHELD ONCE THE ALLOWANCE IS SPENT: a run of declines that had
+// both its correctives inside the budget has none left to hand back, so a
+// caller cannot extend it past the bound.
+func TestNothingIsWithheldOnceTheAllowanceIsSpent(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		writtenSubmission, writtenSubmission, writtenSubmission,
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("submit_work")}},
+		MaxRounds: 3, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Withheld != "" || res.CorrectivesSpent != 2 {
+		t.Errorf("withheld = %q spent = %d, want nothing withheld after both correctives",
+			res.Withheld, res.CorrectivesSpent)
+	}
+}
+
+// A CONTINUATION SHARES THE ALLOWANCE it was seeded with: one that picks up a
+// run of declines that already had a corrective, plus the withheld one its
+// caller sent, has nothing left to send — the same two a single invocation
+// would have spent.
+func TestASeededAllowanceIsSharedNotReset(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{writtenSubmission, writtenSubmission}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("submit_work")}},
+		MaxRounds: 5, TerminateAfter: []string{"submit_work"}, CorrectivesSpent: 2,
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 1 || finishingCorrectives(res.Messages) != 0 {
+		t.Errorf("rounds = %d correctives = %d, want the run to end on its first decline",
+			res.RoundsUsed, finishingCorrectives(res.Messages))
+	}
+}
+
+// A TERMINATOR ON THE BUDGET'S LAST ROUND IS A FINISH, not exhaustion: the
+// round's last message is a call, which is what an exhausted loop's is, and
+// read that way the caller asked the judge — and ran granted rounds — about a
+// phase that had already submitted.
+func TestATerminatorOnTheLastRoundIsNotExhaustion(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read")}}, submitCall("2"),
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}},
+		MaxRounds: 2, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExhaustedRounds {
+		t.Error("a loop its terminator ended reported itself exhausted")
+	}
+}
+
+// THE TEXT IS THE MODEL'S ANSWER TO ITS TASK, not to the correctives. A run of
+// rounds that called nothing keeps its first answer and drops the rest, which
+// re-wrote the same report for a corrective; a round that called a tool ends
+// the run, so a later answer is a new one; and a thinking-only round before
+// the answer is part of it.
+func TestTheTextKeepsTheAnswerNotItsRepeats(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "first report"},
+		{Content: "first report, again"},
+		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{ReasoningContent: "thinking it over"},
+		{Content: "second report"},
+		{Content: "second report, again"},
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}},
+		MaxRounds: 6, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := "first report\n\nworking\n\n<think>thinking it over</think>\n\nsecond report"
+	if res.Text != want {
+		t.Errorf("text = %q, want %q", res.Text, want)
+	}
+	// Every round is still on the record, the repeats included.
+	if res.RoundsUsed != 6 || len(res.Narration) != 6 {
+		t.Errorf("rounds = %d narrated = %d, want all 6 on the record",
+			res.RoundsUsed, len(res.Narration))
+	}
+}
+
+// ONLY A TERMINATOR THE ROUND OFFERS COUNTS. One the surface does not carry
+// cannot be called, so a corrective naming it is a round spent on nothing, and
+// the loop reads the prose as its answer — exactly as a loop that declared no
+// terminator does. Nor is the round marked declined: there was no call it
+// could have made.
+func TestATerminatorTheRoundDoesNotOfferIsNotOwed(t *testing.T) {
+	t.Parallel()
+	prose := llm.Completion{Content: "the answer"}
+	p := &scriptedProvider{turns: []llm.Completion{prose, prose}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read")}},
+		MaxRounds: 5, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 1 || finishingCorrectives(res.Messages) != 0 {
+		t.Errorf("rounds = %d, correctives = %d, want 1 and 0 — the submission was "+
+			"not on the surface", res.RoundsUsed, finishingCorrectives(res.Messages))
+	}
+	if len(res.Narration) != 1 || res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want the round not marked declined", res.Narration)
+	}
+	if res.Withheld != "" {
+		t.Errorf("withheld = %q, want nothing owed to a phase that could not call it",
+			res.Withheld)
+	}
+
+	// And of several, only the offered ones are named.
+	p = &scriptedProvider{turns: []llm.Completion{
+		{Content: "done"}, {ToolCalls: []llm.ToolCall{toolCall("1", "approve")}},
+	}}
+	res, err = toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("approve")}},
+		MaxRounds: 5, TerminateAfter: []string{"approve", "reject"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	corrective := res.Messages[len(res.Messages)-3].Content
+	if !strings.Contains(corrective, "`approve`") || strings.Contains(corrective, "reject") {
+		t.Errorf("corrective = %q, want only the offered approve named", corrective)
 	}
 }
 
@@ -521,6 +887,13 @@ func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
 	}
 	if be.Scope != "role" {
 		t.Errorf("scope = %q, want role — the refusal did not name itself", be.Scope)
+	}
+	// THE REFUSED ROUND WAS HANDED TO THE METER WHOLE — input and output,
+	// both billed before anything judged them — and the refusal states the
+	// spend as that round left it, past the ceiling.
+	if m.spent != 120 || be.Used != 120 || be.Limit != 100 {
+		t.Errorf("meter holds %d and the refusal says %d/%d, want the whole 120-token "+
+			"round counted against the ceiling of 100", m.spent, be.Used, be.Limit)
 	}
 	// AND THE WINDOW IT REFUSED IN, carried from the counter's answer
 	// unchanged: a ceiling is per calendar window, so a refusal that does
@@ -555,6 +928,86 @@ func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 	}
 	if len(s.ran) != 0 {
 		t.Errorf("a refused round ran its tools: %v", s.ran)
+	}
+}
+
+// A REFUSAL THE METER ALREADY HOLDS MAKES NO CALL — the first round included.
+//
+// The refused round is counted, so the window it named reads past its ceiling
+// and every later charge is refused whatever its size. The loop used to make
+// the next call anyway, which the vendor billed and the meter then refused:
+// a phase opened after the turn was refused (the reviewer after a judge's
+// refusal, the executor after onboarding's) paid for one round it could
+// never keep. Stopped before the call, it is refused with the same error, and
+// a person's note waiting for that round is left in the box for whoever
+// reads it next rather than marked as read by a round that never ran.
+func TestARefusalTheMeterHoldsMakesNoCall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{}
+	var log []string
+	box := &noteBox{log: &log}
+	box.offer("n-1", "use staging")
+	m := &meter{refuseAt: 100, spent: 130}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{}, MaxRounds: 5, Budget: m, Steer: box,
+	})
+	var be *toolloop.BudgetError
+	if !errors.As(err, &be) || be.Scope != "role" || be.Used != 130 || be.Limit != 100 ||
+		be.Window != "2026-W39" || !be.ResetsAt.Equal(weekTurnsOver) {
+		t.Fatalf("err = %v, want the refusal the meter holds, window and all", err)
+	}
+	if p.calls != 0 {
+		t.Errorf("the provider was called %d times on a refusal the meter already held", p.calls)
+	}
+	if m.spent != 130 {
+		t.Errorf("the meter was charged to %d by a round that should never have run", m.spent)
+	}
+	if len(log) != 0 {
+		t.Errorf("the box was drained (%v) by a round that never ran", log)
+	}
+}
+
+// chargingSurface charges the turn's meter from inside a tool, the way a
+// worker the round delegated to charges the seat's: a refusal can land on the
+// meter during a round without being that round's own.
+type chargingSurface struct {
+	fakeSurface
+	meter  *meter
+	tokens int
+}
+
+func (s *chargingSurface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	if _, err := s.meter.Spend(ctx, s.tokens); err != nil {
+		return toolloop.ToolResult{}, err
+	}
+	return s.fakeSurface.Execute(ctx, call)
+}
+
+// A REFUSAL LANDING DURING A ROUND STOPS THE NEXT ROUND'S CALL. The round was
+// admitted and its tool ran, and the tool's own charge — a worker refused by
+// the seat — took the window past its ceiling. The loop's next round is
+// certain to be refused, so it is not made.
+func TestARefusalLandingDuringARoundStopsTheNextCall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{InputTokens: 40, ToolCalls: []llm.ToolCall{toolCall("1", "delegate")}},
+		{Content: "never asked"},
+	}}
+	m := &meter{refuseAt: 100}
+	s := &chargingSurface{fakeSurface: fakeSurface{tools: []llm.ToolDef{def("delegate")}}, meter: m, tokens: 80}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Budget: m,
+	})
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want the refusal the tool's charge left standing", err)
+	}
+	if p.calls != 1 {
+		t.Errorf("the provider was called %d times, want the one admitted round", p.calls)
+	}
+	if len(s.ran) != 1 {
+		t.Errorf("tools ran %v, want the admitted round's one call", s.ran)
 	}
 }
 
@@ -952,10 +1405,14 @@ func TestRunRefusesAConfigThatCannotWork(t *testing.T) {
 		Provider: &scriptedProvider{}, Surface: &fakeSurface{}, MaxRounds: 1,
 	}
 	for name, mangle := range map[string]func(*toolloop.Config){
-		"no provider":  func(c *toolloop.Config) { c.Provider = nil },
-		"no surface":   func(c *toolloop.Config) { c.Surface = nil },
-		"no rounds":    func(c *toolloop.Config) { c.MaxRounds = 0 },
-		"negative cap": func(c *toolloop.Config) { c.MaxRounds = -1 },
+		"no provider":                func(c *toolloop.Config) { c.Provider = nil },
+		"no surface":                 func(c *toolloop.Config) { c.Surface = nil },
+		"no rounds":                  func(c *toolloop.Config) { c.MaxRounds = 0 },
+		"negative cap":               func(c *toolloop.Config) { c.MaxRounds = -1 },
+		"negative correctives spent": func(c *toolloop.Config) { c.CorrectivesSpent = -1 },
+		"more correctives spent than the bound": func(c *toolloop.Config) {
+			c.CorrectivesSpent = toolloop.MaxFinishingCorrectives + 1
+		},
 	} {
 		cfg := base
 		mangle(&cfg)

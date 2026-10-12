@@ -253,7 +253,7 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		if err := fs.Parse([]string{"-print"}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), w)
+		sink, closeSink, err := sinks.open(t.Context(), noEnviron, w)
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -482,7 +482,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 
 	for vendor, commands := range vendorCommands {
 		var out bytes.Buffer
-		if err := runIntegration(vendor, nil, io.Discard, &out); !errors.Is(err, flag.ErrHelp) {
+		if err := runIntegration(noEnviron, vendor, nil, io.Discard, &out); !errors.Is(err, flag.ErrHelp) {
 			t.Fatalf("%s: bare invocation returned %v, want the help sentinel", vendor, err)
 		}
 		usage := out.String()
@@ -500,7 +500,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 			// AND IT REACHES THAT RUNNER. `-h` makes every subcommand
 			// print its flags and stop, which is the cheapest proof that
 			// the dispatch found it rather than falling through.
-			if err := runIntegration(vendor, []string{command.sub, "-h"},
+			if err := runIntegration(noEnviron, vendor, []string{command.sub, "-h"},
 				io.Discard, io.Discard); errors.Is(err, errUnknownSub) {
 				t.Errorf("%s: usage names %q but dispatch does not reach it",
 					vendor, command.sub)
@@ -508,7 +508,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 		}
 		// AN UNKNOWN SUBCOMMAND IS AN ERROR, not a usage dump: a typo
 		// answered with help reads as though the command was accepted.
-		if err := runIntegration(vendor, []string{"nonesuch"},
+		if err := runIntegration(noEnviron, vendor, []string{"nonesuch"},
 			io.Discard, io.Discard); !errors.Is(err, errUnknownSub) {
 			t.Errorf("%s: an unknown subcommand returned %v, want an unknown-command error",
 				vendor, err)
@@ -573,7 +573,57 @@ func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
 		if got := webhookBase("", nil); got != "" {
 			t.Errorf("no flag and no Tier A produced %q, want empty", got)
 		}
+		if got := webhookBaseKey(nil); got != "api.external_url" {
+			t.Errorf("with no Tier A a pass is told to set %q, want the "+
+				"key of a deployment with no public listener", got)
+		}
 	})
+}
+
+// BEHIND A PUBLIC LISTENER A VENDOR IS HANDED THE PUBLIC ADDRESS, and a refusal
+// names the key that address is read from.
+//
+// Once `api.public` is set every webhook route is served only on that listener
+// and `api.external_url` answers 404 for each of them — so a command that built
+// its hooks, manifests and redirects on the person's address registered every
+// one of them where nothing delivers, while the reconcile loop, reading the
+// vendors' address, re-pointed them on its next tick. And a Tier A with a public
+// listener and no address of its own was told to set `api.external_url`, which
+// was set, and which nothing building a vendor URL reads.
+func TestBehindAPublicListenerAVendorIsHandedThePublicAddress(t *testing.T) {
+	t.Parallel()
+	boot := config.DefaultBootstrap()
+	boot.API.ExternalURL = "https://admin.example.com/"
+	boot.API.Public = config.APIPublic{Port: 8443, ExternalURL: "https://hooks.example.com/"}
+
+	if got := webhookBase("", &boot); got != "https://hooks.example.com" {
+		t.Errorf("an untyped flag built vendor URLs on %q, want the public "+
+			"listener's address", got)
+	}
+	if got := webhookBase("https://typed.example.com", &boot); got != "https://typed.example.com" {
+		t.Errorf("a typed flag did not win over the public listener: %q", got)
+	}
+	if got := webhookBaseKey(&boot); got != "api.public.external_url" {
+		t.Errorf("a pass with no address is told to set %q, want the public "+
+			"listener's key", got)
+	}
+
+	// THE PUBLIC LISTENER WITH NO ADDRESS OF ITS OWN, which Tier A allows
+	// off an ingress node: there is no vendor address at all — never the
+	// person's borrowed — and the refusal names the key that is missing.
+	boot.API.Public.ExternalURL = ""
+	if got := webhookBase("", &boot); got != "" {
+		t.Errorf("a public listener with no address built vendor URLs on %q, "+
+			"want none", got)
+	}
+	got := noPublicBase(&boot)
+	if !strings.Contains(got, "`api.public.external_url`") {
+		t.Errorf("the refusal does not name the key the address is read from: %q", got)
+	}
+	if strings.Contains(got, "`api.external_url`") {
+		t.Errorf("the refusal names the person's address, which is set and "+
+			"which no vendor URL is built on: %q", got)
+	}
 }
 
 // THE DOCUMENT DECIDES WHERE ACCOUNTS ARE OWNED, and the flag overrides it

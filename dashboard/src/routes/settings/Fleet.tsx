@@ -77,6 +77,8 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
+import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
+import { FileStorage } from "./FileStorage.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -105,10 +107,21 @@ export function Fleet({ node }: { node?: string }) {
 // The fleet
 // ---------------------------------------------------------------------------
 
+/**
+ * The Broker column's cell: the kind a node's presence advertises, `unknown`
+ * marked as the one reading that is a guess.
+ */
+export function BrokerCell({ broker }: { broker: string }) {
+  return <BrokerKindTag kind={broker} />;
+}
+
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  // THE BROKER'S MEMBERSHIP, polled beside the lease table on the same
+  // cadence: a member that died is noticed on both at once.
+  const broker = useQuery("fleet_broker", undefined, { pollMs: POLL_MS });
   // THE COLUMN'S "n behind on config" IS THIS READING, not a second poll.
   usePublishFleet(data);
   const { open: openPeek } = usePeekControls();
@@ -280,8 +293,26 @@ function FleetScreen() {
                   // own width, and under a peek the column gives way whole:
                   // the node's peek names its roles among its facts.
                   width: "max-content",
-                  drop: 3,
+                  drop: 4,
                   cell: (n) => <TagsCell tags={n.roles} />,
+                },
+                {
+                  key: "broker",
+                  header: "Broker",
+                  shrink: true,
+                  // SECOND TO GIVE WAY, after the lease: what a node's broker
+                  // is follows from its config and changes with a restart at
+                  // most, the Broker members panel below names every node's
+                  // kind again, and the peek carries it among its facts.
+                  drop: 2,
+                  sortValue: (n) => n.broker,
+                  // HOW ITS BROKER TAKES PART, which the roles no longer say: a
+                  // node's broker is what its stream block makes it. `unknown`
+                  // is a value — a node advertising a kind this build does not
+                  // know (a newer build's), which a capacity seal counts as a
+                  // member — and it is marked, because it is the one reading
+                  // here that is a guess.
+                  cell: (n) => <BrokerCell broker={n.broker} />,
                 },
                 {
                   key: "seats",
@@ -300,8 +331,8 @@ function FleetScreen() {
                   align: "right",
                   shrink: true,
                   // The node's peek says it too ("Running"), so it may give way
-                  // — last of the four, being the load an operator scans for.
-                  drop: 4,
+                  // — last of the five, being the load an operator scans for.
+                  drop: 5,
                   // ABSENT IS NOT ZERO, and the engine is careful to send it
                   // absent: the presence heartbeat carries it only for a node
                   // that publishes one at all. `?? 0` drew a confident idle row
@@ -355,8 +386,8 @@ function FleetScreen() {
                   // — a node is listed exactly as long as it does — so this
                   // column is a countdown that reads "healthy" by construction
                   // until the moment the row leaves; the node's own page and
-                  // peek carry it as "Its own lease". At 1280 the eight
-                  // columns want about 770px of a 746px grid, and this is the
+                  // peek carry it as "Its own lease". At 1280 the nine
+                  // columns want about 840px of a 746px grid, and this is the
                   // one whose absence costs the scan least.
                   drop: 1,
                   sortValue: (n) => n.expires_in ?? null,
@@ -371,7 +402,7 @@ function FleetScreen() {
                   header: "Up since",
                   shrink: true,
                   // The node's peek carries it beside In flight ("Running").
-                  drop: 2,
+                  drop: 3,
                   sortValue: (n) => n.started_at ?? "",
                   cell: (n) => <DateCell at={n.started_at} now={now} />,
                 },
@@ -442,9 +473,9 @@ function FleetScreen() {
                     header: "Since",
                     align: "right",
                     shrink: true,
-                    // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
-                    // sorts as unknown rather than as the epoch of time.
-                    sortValue: (s) => s.acquired_at ?? null,
+                    // OLDEST FIRST WHEN ASCENDING, by the instant rather than
+                    // its spelling, whose fractional seconds vary in length.
+                    sortValue: (s) => Date.parse(s.acquired_at),
                     cell: (s) => <HeldSince lease={s} now={now} />,
                   },
                   {
@@ -502,6 +533,15 @@ function FleetScreen() {
               />
             </Card>
           </div>
+
+          <FileStorage objects={data.objects} now={now} />
+
+          <BrokerMembership
+            answer={broker.data ?? undefined}
+            error={broker.error}
+            refusal={broker.refusal}
+            onChanged={broker.refetch}
+          />
 
           {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
             zero as the text "0" — so a healthy fleet drew a stray digit under
@@ -588,18 +628,11 @@ export function HeldBy({ node }: { node: string }) {
 /**
  * Since when a seat's holder has held it — the tenure's start, which a renewal
  * does not move, so "since 08:02" means the seat has not changed node since
- * 08:02 (`coord.Lease.AcquiredAt`, on the coordination store's clock).
- *
- * NOT `DateCell`: its empty value reads "Never", and an absent stamp is not a
- * lease that never began — it is one written by a build older than the stamp,
- * whose start nobody recorded. Unknown is said as unknown.
+ * 08:02 (`coord.Lease.AcquiredAt`, on the coordination store's clock). Every
+ * lease carries one, and it is the START the cell reads, never the lease's
+ * end.
  */
 export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
-  if (!lease.acquired_at) {
-    return (
-      <EmptyValue label="Not recorded: this lease was written by a build older than the stamp" />
-    );
-  }
   return <DateCell at={lease.acquired_at} now={now} />;
 }
 
@@ -855,6 +888,14 @@ export function nodeFacts({
       ),
       set: true,
     },
+    {
+      // HOW ITS BROKER TAKES PART — a member of the embedded cluster, a leaf
+      // on one, or a client of an external cluster. A fact for the same reason
+      // Roles is: the table's Broker column gives way under an open peek, and
+      // a column hidden in favour of the peek has to be in it.
+      label: "Broker",
+      value: <BrokerCell broker={node.broker} />,
+    },
     version
       ? {
           label: "Version",
@@ -995,7 +1036,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               header: "Since",
               align: "right",
               shrink: true,
-              sortValue: (s) => s.acquired_at ?? null,
+              sortValue: (s) => Date.parse(s.acquired_at),
               cell: (s) => <HeldSince lease={s} now={now} />,
             },
             {

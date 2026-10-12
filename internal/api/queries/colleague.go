@@ -86,7 +86,11 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 	if s.WithheldContacts != nil {
 		withheld = s.WithheldContacts()
 	}
-	corpus := builtin.Corpus(s.organization(), withheld)
+	// THE CONTACT IDS THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), which
+	// is where a seat's own lookup resolves the same fields: an id sealed in
+	// the secret store, read here from the process environment, was a person
+	// the exact-id tier could not find.
+	corpus := builtin.Corpus(s.organization(), s.Env, withheld)
 	if !principal.Can(iam.GrantConfigRead) {
 		for i := range corpus {
 			corpus[i].External = nil

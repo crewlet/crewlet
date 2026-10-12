@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -65,7 +66,7 @@ type claims struct {
 
 func newClaims() *claims { return &claims{held: map[string]bool{}} }
 
-func (c *claims) Claim(_ context.Context, key string, _ time.Time) (bool, error) {
+func (c *claims) Claim(_ context.Context, key string, _ time.Duration, _ time.Time) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -233,6 +234,38 @@ func TestACommittedChangeBecomesAWake(t *testing.T) {
 	}
 }
 
+// A WAKE CARRIES WHERE THE CHANGE THAT CAUSED IT WAS COMMITTED — the record's
+// own position, as the token a turn reads back — so the seat it wakes reads
+// no older than what woke it. A delivery carrying no valid position carries no
+// trigger, rather than one that names nothing.
+func TestAWakeCarriesThePositionOfTheChangeThatCausedIt(t *testing.T) {
+	t.Parallel()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
+	run(t, docs, pub, cl, newProbe())
+
+	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Payload: []byte(`{}`),
+		Position: 42, Stream: "CREWLET_TRACKER_LOG", Gen: 3})
+	settle(t, func() bool { return pub.count() == 1 }, "the change never became a wake")
+	w, ok := events.DataAs[*types.RawWebhook](pub.first(t))
+	if !ok || w == nil {
+		t.Fatal("the published event is not a raw webhook")
+	}
+	at, err := statelog.ParsePosition(w.Trigger)
+	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 3, Seq: 42}
+	if err != nil || at != want {
+		t.Fatalf("the wake carries trigger %q (%v), want %v", w.Trigger, err, want)
+	}
+
+	writeChange(t, docs, "u2")
+	settle(t, func() bool { return pub.count() == 2 }, "the second change never became a wake")
+	pub.mu.Lock()
+	second := pub.sent[1]
+	pub.mu.Unlock()
+	if w, _ := events.DataAs[*types.RawWebhook](second); w == nil || w.Trigger != "" {
+		t.Errorf("a delivery with no log position carries trigger %q, want none", w.Trigger)
+	}
+}
+
 // A CLAIM COLLAPSES A REDELIVERY. A node that died after publishing but
 // before acking hands the change to a peer, and without the claim that peer
 // wakes everybody a second time.
@@ -254,7 +287,7 @@ func TestARedeliveredChangeIsPublishedOnce(t *testing.T) {
 
 	// Replaying the FIRST change's id through the claim is what a
 	// redelivery does.
-	if won, err := cl.Claim(t.Context(), changefeed.ClaimKey("work", "u1"), time.Now()); err != nil || won {
+	if won, err := cl.Claim(t.Context(), changefeed.ClaimKey("work", "u1"), time.Minute, time.Now()); err != nil || won {
 		t.Errorf("the first change's claim was not held: won=%v err=%v", won, err)
 	}
 }
@@ -416,36 +449,3 @@ func (n *nameless) Source() changefeed.Source {
 type groupless struct{ probe }
 
 func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "page"} }
-
-// A REMOVED RECORD IS ACKED AND NEVER TRANSLATED.
-//
-// The decision moved out of the two domain translators and into the framework
-// when the seam did, and it can only live in one place: every estate answers
-// it the same way — the wake this record once produced was delivered when it
-// was written — so a removal must not reach a translator and must not circle
-// back through the dead-letter path.
-func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
-	t.Parallel()
-	docs, pub, cl := newEstate(), &capture{}, newClaims()
-	p := newProbe()
-	run(t, docs, pub, cl, p)
-
-	writeChange(t, docs, "u1")
-	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
-	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Removed: true})
-
-	// The removal must not reach the translator, and it must not circle:
-	// a later change is translated exactly once, which it would not be if
-	// the removal were being redelivered.
-	writeChange(t, docs, "u2")
-	settle(t, func() bool { return p.translations() == 2 }, "the second change never arrived")
-	time.Sleep(100 * time.Millisecond)
-	if got := p.translations(); got != 2 {
-		t.Errorf("%d translations for two changes and a removal — the removal "+
-			"is being translated or retried", got)
-	}
-	if got := docs.acks("u1"); got < 2 {
-		t.Errorf("the removal was acked %d time(s) beyond its change — a "+
-			"removal that is not acked comes back for ever", got-1)
-	}
-}

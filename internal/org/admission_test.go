@@ -6,13 +6,15 @@ import (
 	"testing"
 )
 
-// The admission rules: a unit key is unique across the whole company, and a
-// `unit:` reference is written only where it places something. They are a
-// CLASS of their own, apart from Validate, because stored companies predate
-// them and still run exactly as they did; the config layer refuses a
-// submitted document for breaking one and applies a stored revision with a
-// warning. What these pin is the rule itself, its class, and the shape of what
-// it reports — and what it deliberately does NOT hold unique: a name.
+// The admission rules: a unit key is unique across the whole company, a
+// `unit:` reference is written only where it places something, and a
+// schedule's cron expression is one the scheduler can parse. They are a CLASS
+// of their own, apart from Validate, because a company that breaks one still
+// runs and a newer peer may admit a revision under rules this build does not
+// share; the config layer refuses a submitted document for breaking one and
+// applies a revision with a warning. What these pin is the rule itself, its
+// class, and the shape of what it reports — and what it deliberately does NOT
+// hold unique: a name.
 
 // violations flattens a joined error into the leaf errors that wrap sentinel.
 func violations(err, sentinel error) []error {
@@ -297,5 +299,39 @@ func TestAUnitReferenceOnANestedSeatMustNameItsUnit(t *testing.T) {
 	}
 	if err := o.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil: the rule is an admission rule", err)
+	}
+}
+
+// A CRON THE GRAMMAR REFUSES IS AN ADMISSION RULE, NAMING ITS OWNER BY IDENTITY.
+//
+// A schedule that never fires does not stop the rest of the company running,
+// so the runnable rules let it through and only admission refuses it — and the
+// refusal names the seat by its HANDLE and the unit by its KEY, never by a
+// name: two seats may share a name, and a message naming one would send an
+// operator to the wrong seat. Both carriers share the name "Ops" here, which is
+// the case a name-keyed message cannot tell apart.
+//
+// Mutation: name the owner by r.Name and the first want fails; drop the rule
+// from ValidateAdmission and no violation is found.
+func TestACronTheGrammarRefusesIsAnAdmissionRuleNamingItsOwner(t *testing.T) {
+	t.Parallel()
+	bad := []Schedule{{Name: "standup", Cron: "61 * * * *", Task: "post a note"}}
+	o := normalized(&Organization{Name: "T",
+		Roles: []*Role{{Name: "Ops", DeclaredHandle: "ops-lead", Schedules: bad}},
+		Units: []*Unit{{Name: "Ops", ID: "ops-team", Schedules: bad,
+			Roles: []*Role{{Name: "Dev", DeclaredHandle: "dev"}}}},
+	})
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil: the grammar is an admission rule", err)
+	}
+	got := violations(o.ValidateAdmission(), ErrInvalidSchedule)
+	if len(got) != 2 {
+		t.Fatalf("violations = %v, want the seat's and the unit's", got)
+	}
+	joined := errors.Join(got...).Error()
+	for _, want := range []string{`role "ops-lead"`, `unit "ops-team"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the refusal does not name %s: %v", want, joined)
+		}
 	}
 }

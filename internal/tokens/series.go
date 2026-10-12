@@ -72,9 +72,9 @@ func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 
 // Band is one of the four bands a phase breakdown is drawn in.
 //
-// FOUR, folded ONCE, here: the engine has seven phase values (and a retired
-// eighth still in the history), a chart has four data hues, and a phase band a
-// screen folded itself would be the fold that disagreed with the next screen's.
+// FOUR, folded ONCE, here: the engine has seven phase values, a chart has four
+// data hues, and a phase band a screen folded itself would be the fold that
+// disagreed with the next screen's.
 type Band string
 
 // The four bands, in the order a chart stacks them.
@@ -88,7 +88,11 @@ const (
 	// BandWorkers is the delegated workers the executor handed tasks to.
 	BandWorkers Band = "workers"
 	// BandAuxiliary is everything that is not the turn's own work: the
-	// learning workers, the round-cap judge and the first-turn onboarding.
+	// seat's auxiliary model (the turn-start context, every compaction
+	// rewrite, the reflection workers, the background learning passes, a
+	// person's answered question — the `auxiliary` phase of an
+	// `auxiliary_spend` record), the round-cap judge and the first-turn
+	// onboarding.
 	BandAuxiliary Band = "auxiliary"
 )
 
@@ -98,15 +102,12 @@ var Bands = []Band{BandExecute, BandReview, BandWorkers, BandAuxiliary}
 
 // PhaseBand is the band a phase value is drawn in.
 //
-// The retired `plan` phase folds into Execute: it was a leg of the turn itself
-// — the frame that decides is the frame that acts now — and a pre-redesign
-// node's records still carry it inside the usage horizon. Any other value this
-// build does not know (a newer peer's phase, or none at all) is AUXILIARY,
-// never dropped: it is spend, and "not the turn's own recognised work" is the
-// one honest thing this build can say about it.
+// A value this build does not know (a newer peer's phase, or none at all) is
+// AUXILIARY, never dropped: it is spend, and "not the turn's own recognised
+// work" is the one honest thing this build can say about it.
 func PhaseBand(phase string) Band {
 	switch phase {
-	case "execute", "sandbox", "plan":
+	case "execute", "sandbox":
 		return BandExecute
 	case "review":
 		return BandReview
@@ -125,10 +126,11 @@ func PhaseBand(phase string) Band {
 // other dimension is present on every cell, so the empty ones become "unknown"
 // the way the rollup's do.
 //
-// A SEAT AND A UNIT ARE BANDED BY IDENTITY — the seat's agent id, the unit's
-// key — and never by name, because two seats or two units may share a name and
-// a band keyed on it was both of them, while one seat renamed inside the window
-// was two bands. [GroupRow.Label] is what a band is called.
+// A SEAT AND A UNIT ARE BANDED BY IDENTITY — the seat's agent id (a person's
+// [PersonKey]), the unit's key — and never by name, because two seats or two
+// units may share a name and a band keyed on it was both of them, while one
+// seat renamed inside the window was two bands. [GroupRow.Label] is what a band
+// is called.
 func (g Group) key(c Cell, seats Seats) (string, bool) {
 	switch g {
 	case GroupPhase:
@@ -138,14 +140,15 @@ func (g Group) key(c Cell, seats Seats) (string, bool) {
 	case GroupProvider:
 		return orUnknown(c.ProviderKey), true
 	case GroupSeat:
-		return seatKey(c.AgentID, c.Role), true
+		return c.who(), true
 	case GroupUnit:
 		// A seat at the root of the chart is in no unit, and that is a
 		// real placement rather than a missing one — so it groups under
 		// its own band rather than under "unknown", which would pool
 		// every root seat with every seat the caller's chart happened not
-		// to carry.
-		if seat, ok := seats.lookup(c.AgentID); ok && seat.UnitKey != "" {
+		// to carry. A PERSON's spend is filed under their human seat's
+		// unit, which the chart names under their [PersonKey].
+		if seat, ok := seats.lookup(c.who()); ok && seat.UnitKey != "" {
 			return seat.UnitKey, true
 		}
 		return unattachedUnit, true
@@ -189,8 +192,9 @@ type GroupRow struct {
 	// — the residual row, which is what makes the fold unambiguous without
 	// reserving a name a real phase or model might carry.
 	//
-	// By seat it is the seat's agent id and by unit the unit's key — see
-	// [Group.key] — which no reader should print: Label is the words.
+	// By seat it is the seat's agent id (a person's [PersonKey]) and by unit
+	// the unit's key — see [Group.key] — which no reader should print: Label
+	// is the words.
 	Group string `json:"group"`
 
 	// Label is what the band is called when its key is an identity rather
@@ -202,12 +206,14 @@ type GroupRow struct {
 	// Handle is the seat's handle when the grouping is by seat and the
 	// chart holds the seat, so a row can link to the page it names. Absent
 	// rather than guessed for a seat the chart no longer holds, which is
-	// [Options.Seats]' own rule.
+	// [Options.Seats]' own rule — except a person's, whose handle is the
+	// only identity their band has.
 	Handle string `json:"handle,omitempty"`
 
-	// Seats counts the distinct seats — by agent id — that spent in a UNIT
-	// band over the window, so a legend can say "Platform · 4 seats" and a
-	// reader can tell a busy seat from a busy team.
+	// Seats counts the distinct spenders — seats by agent id, people by
+	// their handle — that spent in a UNIT band over the window, so a legend
+	// can say "Platform · 4 seats" and a reader can tell a busy seat from a
+	// busy team.
 	Seats int `json:"seats,omitempty"`
 
 	// Other marks the residual row, and Folded counts the distinct groups
@@ -215,6 +221,35 @@ type GroupRow struct {
 	// presenting a band whose size no reader can account for.
 	Other  bool `json:"other"`
 	Folded int  `json:"folded"`
+
+	// Parts splits a UNIT band by the seats that spent in it, biggest first,
+	// so a team's bar can be drawn in its seats' shares from the same cells
+	// that made the band, without a second query whose seats would have to be
+	// placed in units again by a second reading of the chart. They sum to the
+	// band. Absent on every other grouping and on the residual row, which
+	// holds several units.
+	Parts []GroupPart `json:"parts,omitempty"`
+
+	Bucket
+}
+
+// GroupPart is one spender's share of a UNIT band over the window.
+type GroupPart struct {
+	// Group is the spender as the seat grouping keys its band — the seat's
+	// agent id, or a person's [PersonKey] — an identity no reader should
+	// print: Label is the words.
+	Group string `json:"group"`
+
+	// Label is what the part is called: the chart's name for the seat now,
+	// or, for a seat the chart no longer holds, the newest name its days
+	// carried — [GroupRow.Label]'s rule, so a part and the seat's own band
+	// name one seat alike.
+	Label string `json:"label"`
+
+	// Handle is the seat's handle where the chart holds it, and a person's
+	// always, so a part can link to the seat it names — [GroupRow.Handle]'s
+	// rule.
+	Handle string `json:"handle,omitempty"`
 
 	Bucket
 }
@@ -316,10 +351,10 @@ type SeriesOptions struct {
 	// grouping is never capped below its four bands.
 	Groups int
 
-	// Seats is the chart by agent id, as [Options.Seats] is: a seat band's
-	// name and handle, and the unit a GroupUnit band files the seat under.
-	// A seat it does not carry lands in the unattached band rather than an
-	// invented one.
+	// Seats is the chart ([Seats]), as [Options.Seats] is: a seat band's
+	// name and handle, and the unit a GroupUnit band files the seat — or the
+	// person — under. A spender it does not carry lands in the unattached
+	// band rather than an invented one.
 	Seats Seats
 
 	// AgentID is the seat the caller narrowed to, echoed on the answer with
@@ -413,6 +448,11 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 	seats := map[string]map[string]bool{}
 	named := map[string]*label{}
 	handles := map[string]string{}
+	// A UNIT BAND'S SPENDERS, by the seat grouping's key, each named and
+	// linked as the seat grouping names and links its band.
+	parts := map[string]map[string]*Bucket{}
+	partNames := map[string]*label{}
+	partHandles := map[string]string{}
 	for _, c := range cells {
 		if _, inside := index[c.Day]; !inside {
 			continue
@@ -424,11 +464,12 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 		}
 		out.Grouped.merge(c.Bucket)
 		bucketFor(total, key).merge(c.Bucket)
-		seat, known := opts.Seats.lookup(c.AgentID)
+		who := c.who()
+		seat, known := opts.Seats.lookup(who)
 		switch opts.Group {
 		case GroupSeat:
 			labelFor(named, key).fold(cmp.Or(c.Role, c.Handle), c.Day, seat, known)
-			handles[key] = seat.Handle
+			handles[key] = c.handleNow(seat)
 		case GroupUnit:
 			// A unit the chart names is labelled by that name; one it
 			// does not (and the unattached band) is printed by its key,
@@ -438,14 +479,21 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			}
 			if seats[key] == nil {
 				seats[key] = map[string]bool{}
+				parts[key] = map[string]*Bucket{}
 			}
-			seats[key][seatKey(c.AgentID, c.Role)] = true
+			seats[key][who] = true
+			bucketFor(parts[key], who).merge(c.Bucket)
+			labelFor(partNames, who).fold(cmp.Or(c.Role, c.Handle), c.Day, seat, known)
+			partHandles[who] = c.handleNow(seat)
 		}
 	}
 
 	ranked := make([]GroupRow, 0, len(total))
 	for key, b := range total {
-		row := GroupRow{Group: key, Handle: handles[key], Seats: len(seats[key]), Bucket: *b}
+		row := GroupRow{
+			Group: key, Handle: handles[key], Seats: len(seats[key]),
+			Parts: rankParts(parts[key], partNames, partHandles), Bucket: *b,
+		}
 		if l := named[key]; l != nil {
 			row.Label = orUnknown(l.name)
 		}
@@ -498,5 +546,25 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			point.Residual.merge(c.Bucket)
 		}
 	}
+	return out
+}
+
+// rankParts is a unit band's spenders as parts, biggest first, ties on the
+// words a reader sees and then the key — the bands' own order — so an equal
+// split reads the same on every node. Nil for a band with none, which is every
+// band of every grouping but the unit's.
+func rankParts(seats map[string]*Bucket, names map[string]*label, handles map[string]string) []GroupPart {
+	if len(seats) == 0 {
+		return nil
+	}
+	out := make([]GroupPart, 0, len(seats))
+	for seat, b := range seats {
+		part := GroupPart{Group: seat, Handle: handles[seat], Bucket: *b}
+		if l := names[seat]; l != nil {
+			part.Label = orUnknown(l.name)
+		}
+		out = append(out, part)
+	}
+	byTokensThen(out, func(p GroupPart) (int, string) { return p.TotalTokens, p.Label + "\x00" + p.Group })
 	return out
 }

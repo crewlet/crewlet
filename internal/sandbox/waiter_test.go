@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -136,6 +137,14 @@ func (r *waiterRig) launch(turnID string) PendingRun {
 // re-enters. Nothing may poll or claim a run here.
 func (r *waiterRig) launching(turnID string) PendingRun {
 	r.t.Helper()
+	return r.launchingUnder(turnID, rigLease)
+}
+
+// launchingUnder is [waiterRig.launching] under a lease of the case's choosing —
+// the zero one for a run a node that held no lease launched, which a row stays
+// at until something re-stamps it.
+func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -153,18 +162,19 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 		// The item the launching turn was on, so every case runs over a
 		// row that carries one — and a write that dropped it would show.
-		WorkItem: &rigItem,
+		// The unit of work likewise.
+		WorkItem: &rigItem, WorkKey: rigWorkKey,
 		// The model the launch pointed its agent at, which the run's own
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
 		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
-	}, Fence{}); err != nil {
+	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
 	return r.get(turnID)
@@ -174,18 +184,44 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // so a record that fell back to a default would show.
 const rigIteration = 2
 
+// rigLease is the seat lease every rig launch is made under, which the row is
+// stamped with as a real launch's is ([PendingStore.BeginLaunch]): its node's
+// writes carry it, and a seat's next holder — every successor a case hands the
+// seat to recovers it at a higher epoch — fences them out.
+var rigLease = Fence{Owner: "node-a:1", Epoch: 1}
+
+// leased is a coordinator's lease seam for a node that holds every seat under
+// fence ([CoordinatorOptions.Lease]).
+func leased(fence Fence) func(string) (Fence, bool) {
+	return func(string) (Fence, bool) { return fence, true }
+}
+
+// notLeased is the lease seam of a node that has a seat host and holds none of
+// its seats: it has noticed it lost them.
+func notLeased(string) (Fence, bool) { return Fence{}, false }
+
 // rigItem is the work item every rig launch is charged to.
 var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+
+// rigWorkKey is the unit of work every rig launch was dispatched for —
+// distinct from every turn id a case launches under, so an announcement that
+// carried one in place of the other shows.
+const rigWorkKey = "0123456789abcdef0123456789abcdef"
 
 // suspend writes the execute_state a real suspending turn would have written,
 // which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
-	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: map[string]any{
-		"version":              float64(1),
-		"pending_tool_call_id": "call-1",
-		"pending_tool_name":    "run_sandbox",
-	}, Iteration: rigIteration})
+	r.suspendIn(r.t.Context(), turnID)
+}
+
+// suspendIn is suspend from inside a call the coordinator made — a resumed
+// turn's own work — under that call's context.
+func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
+	r.t.Helper()
+	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
+		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
+		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
 	}
@@ -196,7 +232,14 @@ func (r *waiterRig) suspend(turnID string) {
 
 func (r *waiterRig) get(turnID string) PendingRun {
 	r.t.Helper()
-	run, ok, err := r.pending.Get(r.t.Context(), turnID)
+	return r.getIn(r.t.Context(), turnID)
+}
+
+// getIn is get from inside a call the coordinator made, under that call's
+// context.
+func (r *waiterRig) getIn(ctx context.Context, turnID string) PendingRun {
+	r.t.Helper()
+	run, ok, err := r.pending.Get(ctx, turnID)
 	if err != nil || !ok {
 		r.t.Fatalf("Get %s = %v, %v", turnID, ok, err)
 	}
@@ -230,6 +273,7 @@ func (r *waiterRig) tick() int {
 // ---------------------------------------------------------------------
 
 func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 
@@ -246,6 +290,7 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 // broadcast stream, the control copy reaches the one node that holds the
 // suspended conversation.
 func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -269,6 +314,7 @@ func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
 // The completion turn must nest under the turn that started the job rather
 // than opening a trace root of its own.
 func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -288,6 +334,7 @@ func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
 // A completion event is a pure control signal — the outcome is read at collect
 // time, so nothing about the result may ride on the wire.
 func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "shipped it"})
@@ -314,6 +361,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 // A transient poll error is not a completion: firing on one would collect a
 // result the job has not written.
 func TestATransientPollErrorIsRetriedRatherThanFired(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.PollErr = errors.New("connection reset")
@@ -333,6 +381,7 @@ func TestATransientPollErrorIsRetriedRatherThanFired(t *testing.T) {
 // A box that can never be reached again can never produce a result, so the
 // run has to be freed rather than polled forever.
 func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
@@ -358,6 +407,7 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 // a second, and a box that is briefly slow rather than gone gets its turn
 // destroyed.
 func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
@@ -387,6 +437,7 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 // At a cadence slower than the window, the FIRST failure is already older than
 // it. One probe is not evidence a box is gone.
 func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
@@ -404,6 +455,7 @@ func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
 // One reachable tick means the box is there; a later blip must start counting
 // from zero rather than inheriting a streak from an hour ago.
 func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 
@@ -424,6 +476,7 @@ func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
 // A runner nobody registered cannot be polled, and retrying forever would hold
 // the seat busy for the life of the deployment.
 func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
@@ -439,6 +492,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 // The engine imposes NO run-time limit on a coding job — the box is bounded
 // only by how long the engine can go without a heartbeat.
 func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -451,14 +505,77 @@ func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	}
 }
 
+// THE POLL NEVER WAKES A BOX ITS RUN HAS MOVED ON FROM. A poll that listed a
+// running run, then reached its box after the collection had claimed the run
+// and paused the box, used to resume it — Connect wakes whatever it reaches —
+// and nothing kept it alive again, so on E2B it was killed at its timer and
+// the run lost its snapshot. The poll attaches without resuming, and a paused
+// box sends it to the record, which says the run has moved on.
+//
+// Mutation: poll through Connect, and the box is woken and heart-beaten.
+func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	listed := rig.launch("t1")
+	box := rig.provider.Box(listed.SandboxID)
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	// The collection claimed the run off running, read the box and paused
+	// it, between the poll's listing and its reach.
+	if _, ok, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
+		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
+	}
+	if !box.Paused() {
+		t.Fatal("the poll woke a box its run no longer runs")
+	}
+	if box.Keepalives() != 0 {
+		t.Errorf("the poll heart-beat a box its run no longer runs %d time(s)", box.Keepalives())
+	}
+}
+
+// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
+// box again: a collection that read and paused it and then could not resume
+// the turn hands the claim back to running, and the box has to be kept alive
+// and collected anew. The read-only attach must not cost that.
+//
+// Mutation: leave every paused box alone, and the handed-back run's box is
+// never heart-beaten or polled again.
+func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	box := rig.provider.Box(run.SandboxID)
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	if fired := rig.tick(); fired != 1 {
+		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+	}
+	if box.Paused() || box.Keepalives() != 1 {
+		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
+			box.Paused(), box.Keepalives())
+	}
+}
+
 // A run parked on a question is not running: the seat is free and the box is
 // deliberately NOT heart-beaten, because the pause TTL is what bounds it.
 func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -478,6 +595,7 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 // it cannot resume — and the run's turn is destroyed by a job that was too
 // quick. The tick that finds it suspended is the one that may fire.
 func TestARunThatHasNotSuspendedYetIsNotPolled(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launching("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -502,6 +620,7 @@ func TestARunThatHasNotSuspendedYetIsNotPolled(t *testing.T) {
 // A publish failure must not be counted as a fired completion: the coordinator
 // never heard, so the next tick has to try again.
 func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -526,6 +645,7 @@ func (r *waiterRig) park(turnID string) {
 	ctx := r.t.Context()
 	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: r.now,
 	}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -535,6 +655,7 @@ func (r *waiterRig) park(turnID string) {
 }
 
 func TestAPauseInsideItsTtlIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -556,6 +677,7 @@ func TestAPauseInsideItsTtlIsLeftAlone(t *testing.T) {
 // The run is NOT over when the pause expires: the answer can still arrive, and
 // the work re-seeds from the pushed branch, which was always the durable half.
 func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
@@ -581,9 +703,38 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 	}
 }
 
+// A recorded answer waits on its resume, and on a seat no node holds that
+// wait is as open-ended as the question's was. Skipping answered rows left
+// exactly those boxes paused and billed; the answer itself must survive the
+// reap, since the resume re-seeds from the branch.
+func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	rig.park("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
+	}, rigLease); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+
+	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+	rig.tick()
+
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the answered run's box %q reclaimed", killed, run.SandboxID)
+	}
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.Answer == nil || got.SandboxID != "" {
+		t.Fatalf("run = %q answer %+v box %q, want the answer kept and the box forgotten",
+			got.Status, got.Answer, got.SandboxID)
+	}
+}
+
 // Connect auto-resumes, so reclaiming through it would boot the work back up
 // purely to shut it down.
 func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -603,6 +754,7 @@ func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {
 // A zero TTL means "never hold a blocked box": the coordinator already tore
 // this one down when the run blocked, so there is no snapshot left to expire.
 func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
@@ -626,6 +778,7 @@ func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 // Every other paused box belongs to a tail being actively driven; expiring one
 // from here would kill it out from under live work.
 func TestTheReaperTouchesOnlyRunsParkedOnAQuestion(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.MarkBoxPaused(t.Context(), "t1", rig.now); err != nil {
@@ -647,17 +800,18 @@ func TestTheReaperTouchesOnlyRunsParkedOnAQuestion(t *testing.T) {
 // is the authority for the WHOLE reap, not just for the status write — killing
 // before it lands destroys the box the resume is reconnecting to.
 func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: rig.get("t1").LaunchID, From: Awaiting}, rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
-	rig.waiter.reapExpiredPauses(t.Context(), rig.manager,
-		[]PendingRun{withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second))})
+	rig.waiter.reapOne(t.Context(), rig.manager,
+		withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second)))
 
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("the reaper destroyed %v underneath a resume that had already claimed the run", killed)
@@ -672,6 +826,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 // reaper that skipped it left that box paused and billed for ever, which on a
 // remote provider is the most expensive way this subsystem fails.
 func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	if err := rig.provider.Box(run.SandboxID).Pause(t.Context()); err != nil {
@@ -680,6 +835,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 	// The park lands; the stamp that would have dated it does not.
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -710,6 +866,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 // is a LIVE box — dating it from the last write would reclaim a checkout out
 // from under the turn using it.
 func TestAnUnstampedBoxTheEngineIsDrivingIsNotTreatedAsHeld(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 
@@ -745,13 +902,14 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 
 // N nodes polling means N reconnects per box per tick and N racing reapers.
 func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
+		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -769,13 +927,14 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 // is the multi-poller case the duty exists to prevent, and a skipped tick
 // costs one interval.
 func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) {
+		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
 	})
@@ -792,6 +951,7 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
@@ -816,6 +976,107 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	waiter.Stop()
 }
 
+// A PASS LEAVES NOTHING BEHIND IN THE CONTEXT IT WAS GIVEN. That context is
+// the loop's, which lives as long as the process, so a child of it nobody
+// cancelled stays in its list of children until the engine stops — one more
+// every pass, on every node.
+//
+// Mutation: make the walk's context twice, overwriting the first cancel func
+// with the deadline's, and every pass leaves one child registered.
+func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Now:       func() time.Time { return rig.now },
+		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
+		DutyTTL:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	parent := newChildCounter()
+	defer parent.cancel()
+	const passes = 5
+	for range passes {
+		if _, err := waiter.Tick(parent); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	// The walk cancels its own context as it returns, AFTER the last task
+	// it started has told the round it is done — so the round's end is
+	// not quite the walk's. Wait for every task the waiter started.
+	waiter.tasks.Wait()
+	if live := parent.live(); live != 0 {
+		t.Fatalf("%d passes left %d children of their context registered; want none", passes, live)
+	}
+}
+
+// childCounter is a context that counts the children registered on it and not
+// yet cancelled. A context the standard library did not make, with an
+// AfterFunc method, is one every child derived from it registers with through
+// that method, and deregisters from by calling the stop it returned — which is
+// exactly a child's lifetime in its parent's list.
+type childCounter struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+
+	mu       sync.Mutex
+	children map[int]func()
+	next     int
+}
+
+func newChildCounter() *childCounter {
+	return &childCounter{Context: context.Background(), done: make(chan struct{}), children: map[int]func(){}}
+}
+
+func (c *childCounter) Done() <-chan struct{} { return c.done }
+
+func (c *childCounter) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *childCounter) AfterFunc(f func()) func() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.next
+	c.next++
+	c.children[id] = f
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.children[id]
+		delete(c.children, id)
+		return ok
+	}
+}
+
+func (c *childCounter) live() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.children)
+}
+
+func (c *childCounter) cancel() {
+	c.once.Do(func() {
+		close(c.done)
+		c.mu.Lock()
+		children := c.children
+		c.children = map[int]func(){}
+		c.mu.Unlock()
+		for _, f := range children {
+			f()
+		}
+	})
+}
+
 // A MANAGER SWAPPED AFTER THE WAITER STARTED IS THE ONE THE NEXT TICK POLLS
 // THROUGH — and the box a job is still running in stays reachable on a cell the
 // new catalogue dropped.
@@ -825,6 +1086,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // launch used the new ones: a job started after the reload was on a backend
 // the poll had never heard of, and was declared gone.
 func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	// A CATALOGUE THAT MOVED THE CELL TO ANOTHER BACKEND, the way a
 	// reload rebuilds every backend it configures.
@@ -856,7 +1118,7 @@ func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
 func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	if err := r.pending.BeginLaunch(ctx, PendingRun{
+	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", CreatedAt: r.now,
 	}, Fence{}); err != nil {
@@ -871,7 +1133,30 @@ func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 }
 
 func TestAWaiterNeedsItsCollaborators(t *testing.T) {
+	t.Parallel()
 	if _, err := NewWaiter(WaiterOptions{}); err == nil {
 		t.Fatal("a waiter with no queue, store or manager was accepted")
+	}
+}
+
+// A COMPLETION CARRIES THE UNIT OF WORK TOO, by the same rule and for the same
+// reason: see TestAnAnnouncementCarriesTheRunsUnitOfWork. This is the
+// announcement the dashboard's board reads and the one that routes the resume,
+// so a blank key here is a resumed turn whose writes dedupe against nothing.
+func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("turn-1")
+	rig.runner.Finish(Result{Success: true})
+	rig.tick()
+
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	if !ok {
+		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
+	}
+	if payload.WorkKey != rigWorkKey {
+		t.Errorf("WorkKey = %q, want the run's unit of work %q", payload.WorkKey, rigWorkKey)
 	}
 }

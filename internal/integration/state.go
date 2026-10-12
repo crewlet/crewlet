@@ -128,9 +128,9 @@ type State struct {
 	// inside the request, recorded the person: one gesture, two authors,
 	// depending on a checkbox.
 	//
-	// ZERO on a row an older build asked for, or rewrote without knowing
-	// the field, and the teardown is then recorded as the loop's — which
-	// is what it was before there was anybody to name.
+	// Written with the intent by its one writer ([AskTeardown]), from the
+	// asking request's attribution, which always names somebody — so a
+	// disconnecting row always does.
 	RequestedBy Requester `json:"requested_by,omitzero"`
 }
 
@@ -255,6 +255,30 @@ func bound(report Report, findings []Finding) (Report, []Finding) {
 // textcut exists.
 func truncateError(detail string) string {
 	return textcut.Ellipsis(detail, MaxLastErrorLength)
+}
+
+// LogWhole puts on this node's log, WHOLE, every piece of text the status row
+// a pass is about to write will carry shortened — a finding's detail past
+// [MaxDetailLength], a fault past [MaxLastErrorLength].
+//
+// The row's bounds are its KV value's and they stand. But the row was the only
+// place that text was written, so what a bound left out was lost: a validation
+// list's later fields, the scope a refusal named after its first sentence. It
+// is said once, here, where the pass ran, by both writers of a row — the loop
+// and the dashboard's pass — before the fold, so whichever ran it leaves the
+// whole text behind.
+func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
+	for _, f := range findings {
+		if len(f.Detail) > MaxDetailLength {
+			log.InfoContext(ctx, "integration_finding_shortened", "integration", kind,
+				"finding", string(f.Kind), "subject", f.Subject, "bytes", len(f.Detail),
+				"detail", f.Detail)
+		}
+	}
+	if err != nil && len(err.Error()) > MaxLastErrorLength {
+		log.InfoContext(ctx, "integration_fault_shortened", "integration", kind,
+			"bytes", len(err.Error()), "error", err.Error())
+	}
 }
 
 // Store is where the loop keeps what it found.

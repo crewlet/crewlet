@@ -38,6 +38,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
@@ -68,6 +69,9 @@ const DECISIONS_POLL_MS = 30_000;
 
 /** The series and the spend move on the scale of minutes. */
 const SLOW_POLL_MS = 60_000;
+
+/** The leads a managed document honours: none, since it refuses a lead's write too. */
+const NO_LEADS: ReadonlySet<string> = new Set();
 
 export function Home() {
   // WHO IS WORKING, at the head of this page and no other (`useWorkingNow`).
@@ -106,10 +110,20 @@ export function Home() {
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
   // can see and nothing more. See `seatDecisionsFor`.
+  // A LEAD raises a seat they lead whose OWN window refused — never the
+  // company's ceiling — and on a MANAGED document nobody outside its writers
+  // raises anything, a lead included: the engine refuses their `/config` write
+  // `config_managed` exactly as it refuses anybody's (ADR-0030).
   const leads = useLeadScope().seats;
+  const managed = managedBlock(viewer) !== null;
   const seats = useMemo(
-    () => seatDecisionsFor(seatConditionsOf(agents), viewer, leads),
-    [agents, viewer, leads],
+    () =>
+      seatDecisionsFor(
+        seatConditionsOf(agents),
+        { configWrite: mayChangeConfig(viewer), acts: viewer.acts },
+        managed ? NO_LEADS : leads,
+      ),
+    [agents, viewer, leads, managed],
   );
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown — nobody signed in,

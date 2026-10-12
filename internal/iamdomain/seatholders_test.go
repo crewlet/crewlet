@@ -479,7 +479,7 @@ func TestClaimsBySeatAnswersOneClaimPerSeat(t *testing.T) {
 // still leave behind.
 func plant(t *testing.T, rig *writeRig, query string, args ...any) {
 	t.Helper()
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), query, args...)
 		return err
 	}); err != nil {

@@ -32,6 +32,7 @@ import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.t
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
 import {
+  AvatarField,
   ContactField,
   IDENTITY_HELP,
   NAME_HELP,
@@ -39,9 +40,10 @@ import {
   Refusal,
   UnitTypeField,
 } from "./dialogParts.tsx";
-import { locate, siblingsAt } from "./model/draft.ts";
+import { locate, siblingsAt, suggestAvatar } from "./model/draft.ts";
 import { takenIdentities } from "./nodeFacts.ts";
 import { handleProblem, mintHandle, mintUnitKey, unitKeyProblem } from "./model/identity.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
@@ -137,6 +139,9 @@ interface AddForm {
   setContact: (next: string) => void;
   /** Why a lead's draft asks for no contact identity (`model/scope.ts`), or `null`. */
   contactLimit: string | null;
+  /** How the agent seat is drawn: suggested when the form opens, its author's to change. */
+  avatar: AgentAvatar;
+  setAvatar: (next: AgentAvatar) => void;
   refusal: string | null;
   /** The reason nothing can be recorded, drawn wherever the form is drawn. */
   missingParent: boolean;
@@ -168,6 +173,9 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
   const [type, setType] = useState("");
   const [identity, setIdentity] = useState<HumanContactKey>("slack_user_id");
   const [contact, setContact] = useState("");
+  // SUGGESTED ONCE, when the form opens: the first character no agent wears
+  // and the next colour round, which the author may change before adding.
+  const [avatar, setAvatar] = useState<AgentAvatar>(() => suggestAvatar(state.draft));
   const [refusal, setRefusal] = useState<string | null>(null);
   const contactLimit = scopeLimit(state.scope, state.draft, parentKey, "key");
 
@@ -197,6 +205,8 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
       if (kind === "human") {
         data.kind = "human";
         if (contactLimit === null && contact.trim()) data.contact = { [identity]: contact.trim() };
+      } else {
+        data.avatar = { character: avatar.character, color: avatar.color };
       }
       intent = { type: "addSeat", key, placement, data };
     }
@@ -239,6 +249,8 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
     contact,
     setContact,
     contactLimit,
+    avatar,
+    setAvatar,
     refusal,
     missingParent,
     readOnly: api.readOnly,
@@ -285,6 +297,7 @@ function AddNodeFields({ form }: { form: AddForm }) {
         error={form.addressProblem ?? undefined}
       />
       {form.kind === "unit" && <UnitTypeField value={form.type} onChange={form.setType} />}
+      {form.kind === "agent" && <AvatarField value={form.avatar} onChange={form.setAvatar} />}
       {form.kind === "human" &&
         (form.contactLimit === null ? (
           <>

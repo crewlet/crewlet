@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import {
+  MODEL_WORDS,
+  type RenderOptions,
   nestSections,
   outline,
   parseBlocks,
   plainText,
+  renderInline,
   renderMarkdown,
   safeHref,
   splitSections,
@@ -513,5 +516,193 @@ describe("inline code", () => {
     expect(short?.classList.contains("is-whole")).toBe(true);
     expect(long?.classList.contains("is-whole")).toBe(false);
     expect("nimbus jobs wait --node <n>".length).toBeLessThanOrEqual(UnbrokenCode);
+  });
+});
+
+/**
+ * A MODEL'S WORDS ARE MARKDOWN, READ BY A MODEL'S HABITS.
+ *
+ * A round's speech showed a fenced ```json block as literal backticks — a model
+ * writes markdown as readily as a person does. But it does not hand-wrap
+ * paragraphs and it does not section a transcript: its single newlines are the
+ * lines it meant, and its "## Summary" is emphasis inside one item of a page
+ * whose outline belongs to the page.
+ */
+describe("a model's words", () => {
+  function words(source: string, options: RenderOptions = MODEL_WORDS): HTMLElement {
+    const { container } = render(<div className="prose md">{renderMarkdown(source, options)}</div>);
+    return container.firstElementChild as HTMLElement;
+  }
+
+  it("keep every newline as the line break the model meant", () => {
+    const el = words("Name: Engineer\nTeam: Platform\nReports to: Lead");
+    expect(el.querySelectorAll("p")).toHaveLength(1);
+    expect(el.querySelectorAll("br")).toHaveLength(2);
+    // THE CONTROL: a document reads the same newlines as soft wraps.
+    const doc = draw("Name: Engineer\nTeam: Platform\nReports to: Lead");
+    expect(doc.querySelectorAll("br")).toHaveLength(0);
+  });
+
+  it("consume a break marker with its newline rather than printing it", () => {
+    const el = words("one\\\ntwo  \nthree");
+    expect(el.textContent).toBe("onetwothree");
+    expect(el.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it("break lines inside a list item and a quote too", () => {
+    const el = words("- first\n  second\n\n> said\n> twice");
+    expect(el.querySelector("li")?.querySelectorAll("br")).toHaveLength(1);
+    expect(el.querySelector("blockquote")?.querySelectorAll("br")).toHaveLength(1);
+  });
+
+  it("draw a heading line as a styled line of text, never a heading of the page", () => {
+    const el = words("## Summary\nPosted it.\n\n> ### Inside a quote");
+    expect(el.querySelectorAll("h1, h2, h3, h4, h5, h6")).toHaveLength(0);
+    const heads = [...el.querySelectorAll(".md-heading")].map((h) => h.textContent);
+    expect(heads).toEqual(["Summary", "Inside a quote"]);
+    // Its inline markup still renders.
+    expect(words("## The `submit_work` call").querySelector(".md-heading code")).not.toBeNull();
+    // THE CONTROL: a document's heading is still a heading.
+    expect(draw("## Summary").querySelector("h3")).not.toBeNull();
+  });
+
+  it("keep a fence byte for byte, closed or still streaming", () => {
+    const closed = words('```json\n{"outcome": "delivered"}\n```');
+    expect(closed.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "delivered"}');
+    // A round still being written can end inside a fence; what has arrived is
+    // shown as code rather than as the rest of the document.
+    const open = words('Here:\n```json\n{"outcome": "deli');
+    expect(open.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "deli');
+  });
+
+  it("render raw HTML as its text and refuse a link outside the allowlist", () => {
+    const el = words('<img src=x onerror="alert(1)">\n[go](javascript:alert(1))');
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("<img src=x");
+  });
+
+  it("give a heading no anchor when there is no heading to anchor", () => {
+    const el = words("## Summary", { ...MODEL_WORDS, anchors: true });
+    expect(el.querySelector("[id]")).toBeNull();
+  });
+});
+
+/**
+ * Emphasis by CommonMark's delimiter-run rules — the reason being every
+ * snake_case name a model or a prompt mentions without a code span. Each case
+ * runs in BOTH readings, a document's and a model's words, because the
+ * inline grammar is one walk under both and the transcript and the prompt
+ * reader are where the names are.
+ */
+describe("emphasis", () => {
+  const modes: [string, RenderOptions | undefined][] = [
+    ["a document", undefined],
+    ["a model's words", MODEL_WORDS],
+  ];
+  function inline(source: string, options?: RenderOptions): HTMLElement {
+    const { container } = render(<div className="prose md">{renderMarkdown(source, options)}</div>);
+    return container.firstElementChild as HTMLElement;
+  }
+  const marked = (el: HTMLElement, tag: "em" | "strong") =>
+    [...el.querySelectorAll(tag)].map((e) => e.textContent);
+
+  for (const [mode, options] of modes) {
+    describe(`in ${mode}`, () => {
+      it("keeps an underscore inside a word as a letter of it", () => {
+        for (const said of [
+          "I will call submit_work with the result_summary field now.",
+          "fields: task_id, result_summary, next_step",
+          "Use list_mcp_server_tools to discover, then call snake_case_name.",
+          // One guard each: a run that could only OPEN inside a word, and one
+          // that could only CLOSE inside one.
+          "the key is foo_bar_",
+          "_private_name is internal",
+        ]) {
+          const el = inline(said, options);
+          expect(el.querySelector("em, strong"), said).toBeNull();
+          expect(el.textContent, said).toBe(said);
+        }
+      });
+
+      it("keeps a tool catalogue's names whole", () => {
+        // The executor's "## Available tools" lines, which name every tool
+        // bare — the prompt reader's default view of what the model was told.
+        const el = inline(
+          "- list_mcp_server_tools: list what a server offers\n- post_message: post to a chat_thread",
+          options,
+        );
+        expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+          "list_mcp_server_tools: list what a server offers",
+          "post_message: post to a chat_thread",
+        ]);
+        expect(el.querySelector("em")).toBeNull();
+      });
+
+      it("still emphasises what was marked, underscores included", () => {
+        // THE CONTROLS: each of these is emphasis to CommonMark, so a guard
+        // that stopped them would be a guard against emphasis, not intraword.
+        expect(marked(inline("*emph* and _emph_", options), "em")).toEqual(["emph", "emph"]);
+        expect(marked(inline("**strong** and __strong__", options), "strong")).toEqual([
+          "strong",
+          "strong",
+        ]);
+        // An underscore inside the run is a letter; the run is the emphasis.
+        expect(marked(inline("_a_b_ c", options), "em")).toEqual(["a_b"]);
+        expect(marked(inline("__init__ method", options), "strong")).toEqual(["init"]);
+        // An asterisk inside a word still opens and closes, as the spec says.
+        expect(marked(inline("foo*bar*", options), "em")).toEqual(["bar"]);
+        expect(marked(inline("multiply 2*3 and 4*5", options), "em")).toEqual(["3 and 4"]);
+        // Inside parentheses, beside punctuation, is still a word boundary.
+        expect(marked(inline("(see _this_).", options), "em")).toEqual(["this"]);
+        expect(marked(inline("***both***", options), "strong")).toEqual(["both"]);
+        expect(marked(inline("***both***", options), "em")).toEqual(["both"]);
+      });
+
+      it("never opens on whitespace or closes after it", () => {
+        expect(inline("*foo *", options).querySelector("em")).toBeNull();
+        expect(inline("a * b * c", options).querySelector("em")).toBeNull();
+        expect(inline("_ foo_", options).querySelector("em")).toBeNull();
+        expect(inline("** not strong**", options).querySelector("strong")).toBeNull();
+      });
+
+      it("judges a run beside another construct by the same rules", () => {
+        // A word that runs on from a code span is still a word.
+        const el = inline("`a`b_c and d_e", options);
+        expect(el.querySelector("em")).toBeNull();
+        expect(el.textContent).toBe("ab_c and d_e");
+        // A construct's closing mark is punctuation, so a run against it opens.
+        expect(marked(inline("`a`_b_ and [x](https://example.com)*y*", options), "em")).toEqual([
+          "b",
+          "y",
+        ]);
+      });
+    });
+  }
+
+  it("draws a link as its words where the run sits inside a control", () => {
+    // `links: "text"` is for an outline row or a picker's option: a link
+    // inside one is unreachable as itself and steals the row's click.
+    const { container } = render(
+      <p>
+        {renderInline("see [**the** guide](https://example.com) or <https://example.com/x>", "k", {
+          links: "text",
+        })}
+      </p>,
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toBe("see the guide or https://example.com/x");
+    // The label is still markdown.
+    expect(container.querySelector("strong")?.textContent).toBe("the");
+    // THE CONTROL: the default is a link.
+    const linked = render(<p>{renderInline("see [the guide](https://example.com)")}</p>);
+    expect(linked.container.querySelector("a")?.textContent).toBe("the guide");
+  });
+
+  it("flattens to plain text by the same rules", () => {
+    expect(plainText("call submit_work with result_summary")).toBe(
+      "call submit_work with result_summary",
+    );
+    expect(plainText("_a_b_ and **c**")).toBe("a_b and c");
   });
 });

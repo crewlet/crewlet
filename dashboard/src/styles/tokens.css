@@ -51,4 +51,18 @@
      unconditional offset leaves a strip of scrolling page above the header on
      every screen that does not. */
   --sticky-top: 0px;
+
+  /* HOW TALL A BLOCK OF MACHINE TEXT GROWS, at most, before it scrolls itself
+     — a cap, under the view-derived ceiling the shell's scrollers declare
+     (`--record-ceiling`, frame.css), and the whole ceiling for a block outside
+     them, a dialog's. 460px, which was the block stylesheet's own
+     `max-height` and so the height every one of these records has had since
+     they were written. Unbounded is wrong for every one of them: a phase's
+     verbatim system prompt runs to tens of kilobytes, an event payload and a
+     whole configuration to hundreds of lines, and one at nine hundred lines
+     pushes everything under it off the screen. Here, at the root, rather
+     than as a constant each call passed: written once per call site it was
+     five copies before it was one, and a value a caller passes can never
+     follow the view. */
+  --record-max: 460px;
 }

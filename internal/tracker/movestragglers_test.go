@@ -151,10 +151,10 @@ func TestTheStragglerRepairLeavesARootWhoseMoveHoldsItsClaim(t *testing.T) {
 	t.Parallel()
 	r := lateTagFixture(t)
 	strandBehindAMove(t, r, "m-late")
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
+	lease, refused, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
-		t.Fatalf("hold the move's claim: (%v, %v)", lease, err)
+		t.Fatalf("hold the move's claim: (%v, %q, %v)", lease, refused, err)
 	}
 	swept, err := trackerWorker(t, r).Tick(t.Context())
 	if err != nil {

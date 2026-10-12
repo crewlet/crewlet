@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var pinned = time.Date(2026, 8, 23, 15, 0, 0, 0, time.UTC)
@@ -137,10 +138,7 @@ func testCipher(t *testing.T) secrets.Cipher {
 // a queue to record the nudge on.
 func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	s := &surface{
@@ -1240,10 +1238,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // Mutation: drop any one refusal and its row builds a surface.
 func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 

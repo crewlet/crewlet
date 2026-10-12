@@ -32,8 +32,11 @@ func seats(handles ...string) []placement.Seat {
 	return out
 }
 
-// The four wire names one seat's mailbox comprises.
-func inbox(handle string) string        { return topics.AgentInbox(seatID(handle)) }
-func inboxGroup(handle string) string   { return topics.AgentInboxGroup(seatID(handle)) }
-func control(handle string) string      { return topics.AgentControl(seatID(handle)) }
-func controlGroup(handle string) string { return topics.AgentControlGroup(seatID(handle)) }
+// The six wire names one seat's mailbox comprises: its inbox, and the sandbox
+// control and reflection topics its holder subscribes.
+func inbox(handle string) string           { return topics.AgentInbox(seatID(handle)) }
+func inboxGroup(handle string) string      { return topics.AgentInboxGroup(seatID(handle)) }
+func control(handle string) string         { return topics.AgentControl(seatID(handle)) }
+func controlGroup(handle string) string    { return topics.AgentControlGroup(seatID(handle)) }
+func reflection(handle string) string      { return topics.AgentReflect(seatID(handle)) }
+func reflectionGroup(handle string) string { return topics.AgentReflectGroup(seatID(handle)) }

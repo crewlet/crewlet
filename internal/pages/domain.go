@@ -72,7 +72,7 @@ const PagesMaxRecordBytes = statelog.MaxTransportRecordBytes
 // on the server.
 const PagesLogDuplicates = 2 * time.Minute
 
-// Stream is the knowledge base's log.
+// Stream is the knowledge base's log, at the domain's whole budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
 		Name:           topics.PagesLogStream,

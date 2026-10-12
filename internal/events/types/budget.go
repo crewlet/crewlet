@@ -44,13 +44,17 @@ type BudgetExhausted struct {
 	// its period (`day`, `week` or `month`), its label on the company's
 	// clock (`2026-09-23`, `2026-W39`, `2026-09`) and the instant it turns
 	// over, as RFC 3339 in UTC. UsedTokens and MaxTokens are that window's
-	// spend and ceiling. Where several windows refused it is the one that
-	// ends last, which is when the scope next has room without a ceiling
-	// being raised.
-	//
-	// ADDITIVE, and omitted rather than empty: a record from a build that
-	// counted one lifetime figure has no window, and a consumer must read
-	// that absence as "not stated" rather than as a window with no name.
+	// spend and ceiling, the spend as the refused charge LEFT it: the
+	// refused round is counted (coord.Budgets.Charge), so UsedTokens reads
+	// past MaxTokens by it, and it is the figure every reader of the
+	// counter is shown afterwards. A call the turn's meter held before it
+	// was made — the window already full, so no charge was sent — refused
+	// no round of its own, and UsedTokens is the window's spend as the
+	// counter answered when that refusal was recorded, at MaxTokens or past
+	// it. Where several windows refused it is the one that ends last, which
+	// is when the scope next has room without a ceiling being raised. Every
+	// refusal states its window: the gate refuses only inside a calendar
+	// window (ADR-0019).
 	Period   string `json:"period,omitempty"`
 	Window   string `json:"window,omitempty"`
 	ResetsAt string `json:"resets_at,omitempty"`
@@ -90,10 +94,13 @@ const (
 	// near fraction of its ceiling (engine.BudgetNearFraction, served
 	// beside every answer that carries a state).
 	BudgetNear BudgetState = "near"
-	// BudgetRefusing is a capped window the gate is turning charges away
-	// in: it has refused one since it began, or it has no room left for a
-	// single token. The same predicate the budget park waits on, so a
-	// seat is never parked under a meter that reads as merely near.
+	// BudgetRefusing is a capped window the gate is turning work away
+	// in: it has no room left for a single token, which is what every
+	// window that refused a round has, since the refused round is
+	// counted. Never the refusal stamp alone — a ceiling raised since
+	// leaves one on a window with room again. The same predicate the
+	// budget park waits on, so a seat is never parked under a meter that
+	// reads as merely near.
 	BudgetRefusing BudgetState = "refusing"
 )
 
@@ -124,11 +131,14 @@ type BudgetWindow struct {
 	// Limit is the window's ceiling, and ABSENT where nothing caps it —
 	// never 0, which would state a range of nothing that is already full.
 	Limit *int `json:"limit,omitempty"`
-	// RefusedAt is when the window last turned a charge away, RFC 3339 in
-	// UTC, and absent while it has not. That, not Used against Limit, is
-	// the gate's own record of saying no: a refused charge increments
-	// nothing, so a counter charged in rounds stops short of its ceiling
-	// by the round that did not fit. The shared counter's stamp
+	// RefusedAt is when the window last turned a call away, RFC 3339 in
+	// UTC, and absent while it has not: the gate's own record of saying
+	// no, and when — a charge it refused, or work turned away before any
+	// call because the window was already full (a turn's next call, a
+	// seat's delivery parked, a person's question, a reflection pass). A
+	// round it turned away is in Used like any other — a refused round has
+	// been billed, so the counter counts it — which is why a window that
+	// refused a round reads past its Limit. The shared counter's stamp
 	// (coord.WindowUsage.RefusedAt), cleared by the scope's next admitted
 	// charge and by the window turning over, so every node reports the
 	// same one. Carried only for a capped window: a stamp left on a window
@@ -176,11 +186,10 @@ type BudgetSeatMeter struct {
 // written for, so they cannot substitute. The `budgets` query answers the
 // same counters on demand, for a screen that is read rather than watched.
 //
-// EVERY CAPPED WINDOW, not one figure per scope. Its predecessor
-// (`budget_reported`, deleted with this type's arrival — no release carried
-// it) sent each scope's single binding window, so a seat capped by the day
-// and by the month showed one bar that jumped between them, and the live
-// projection dropped the refusal stamp on the floor on its way to the push.
+// EVERY CAPPED WINDOW, not one figure per scope. One figure — each scope's
+// single binding window — would draw a seat capped by the day and by the
+// month as one bar that jumped between them, and would leave no place for
+// each window's refusal stamp on its way to the push.
 //
 // Deliberately NOT persisted. It is a snapshot of a counter that moves every
 // round, published every few seconds by every node, so a durable row per

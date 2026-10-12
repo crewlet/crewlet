@@ -114,6 +114,19 @@ type Surface struct {
 	// and `run_sandbox` leave the process without answering anybody — one
 	// wakes a colleague, the other starts a billed box.
 	KnownOpenWorld []string
+	// Discoverable is every tool the phase reaches only by DISCOVERING it
+	// — an MCP server's, which `list_mcp_server_tools` lists and
+	// `activate_tool` promotes onto the next round — as against a
+	// first-party tool, which the executor holds from its first round.
+	//
+	// It exists for one sentence: the one a delivery refusal ends with,
+	// saying how to reach the surface the asker is waiting on (see
+	// [Remedy]). That sentence used to send every seat to discovery, which
+	// is right for a vendor's surface and wrong for the engine's own
+	// tracker and knowledge base — a seat woken by a work-item comment
+	// followed it to the only MCP server it held and posted in a chat
+	// channel the check could never count.
+	Discoverable []string
 }
 
 // Reaches reports whether this surface holds any tool that delivers to the
@@ -198,11 +211,9 @@ type Input struct {
 	// about which round this is instead of differing by however many
 	// rounds ran before the box did.
 	//
-	// Zero or less is read as one. The value comes off a durable row
-	// another process, and possibly another build, wrote; a row that
-	// cannot say where it parked resumes at one exactly as it did before
-	// this field existed, and taking a negative literally would run the
-	// loop extra rounds and file them under iteration zero.
+	// Zero or less is read as one: the value comes off a durable row, and
+	// taking a non-positive one literally would run the loop extra rounds
+	// and file them under iteration zero.
 	Round int
 }
 
@@ -343,6 +354,11 @@ type Result struct {
 	// holding the wrong one. Accumulating it would report that turn as
 	// having communicated its outcome.
 	//
+	// Nor is it what the delivery GATES ask. [Check] and [OverrideDone]
+	// read the whole turn, because theirs is "was the person waiting
+	// reached at all" — a fact a later round cannot undo, and one the
+	// prior-work ledger forbids that round to establish a second time.
+	//
 	// It exists for the conversation ledger, which files the turn's
 	// artifact as the seat's own "You replied" and had no way to ask. On a
 	// turn that delivered nothing it wrote a reply that never happened into
@@ -350,6 +366,18 @@ type Result struct {
 	// the failure sealed itself, and a follow-up asking "did you do it?"
 	// was answered against a fiction.
 	Delivered bool
+
+	// WorkedThrough are completion-ledger keys for EARLIER triggers this
+	// turn answered without being woken for them: the chat messages its
+	// thread block showed it that were still waiting for an answer.
+	//
+	// FILLED BY THE ENGINE, which assembled the block, and never by the
+	// loop, which does not know what a prompt showed. The dispatch records
+	// them beside the turn's own triggers when the turn completes, so a
+	// message that comes round on its own afterwards — a failed delivery
+	// returns behind its conversation's newer mail — is dropped as already
+	// worked instead of being answered a second time, out of order.
+	WorkedThrough []string
 }
 
 // Run drives the turn.
@@ -493,7 +521,10 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// The engine's own reading of the round, from the record rather
 		// than from the executor's account of it. Two of its three answers
 		// cost no model call at all.
-		verdict := Check(work, in.Reply, surface)
+		//
+		// Against the TURN's record, closed rounds included: see [Check]
+		// for why the obligation is the turn's and not the round's.
+		verdict := Check(work, res.Iterations, in.Reply, surface)
 		if verdict.Skip {
 			log.InfoContext(ctx, "turn_no_action", "turn_id", in.RunID,
 				"round", round, "summary", work.Summary)
@@ -534,7 +565,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		res.Artifact = artifact
 
 		if decision == phase.Done {
-			if override, correction := OverrideDone(work, in.Reply, surface); override {
+			if override, correction := OverrideDone(work, res.Iterations, in.Reply, surface); override {
 				log.WarnContext(ctx, "review_done_overridden_undelivered",
 					"turn_id", in.RunID, "round", round,
 					"cited", work.Deliveries, "called", names(work.Calls))

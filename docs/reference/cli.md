@@ -12,8 +12,8 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. The token takes `state:read`. There is no reset: a window's allowance comes back when the window turns over |
-| `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. The token takes `fleet:operate`. See [Backups & Restore](../guides/backup.md) |
+| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. The token takes `state:read`. There is no reset: a window's allowance comes back when the window turns over |
+| `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. The token takes `fleet:operate`. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `fleet:operate`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
@@ -24,6 +24,9 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `fleet:operate`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `fleet:operate` |
+| `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `fleet:operate` |
+| `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `fleet:operate` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or a `fleet:operate` holder, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -42,8 +45,8 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `config:read` **and** `secrets:read` |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `secrets:write` |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
-| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
+| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and how it is signed in |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
@@ -132,16 +135,16 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. |
-| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. On a deployment whose Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration) the seed is never imported, empty store or not, and says so the same way: the managing system writes the company. |
+| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. **Refused** before the node starts when Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration): the file presents no credential, and the managing system would replace it at its next reconcile. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
 | `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says — unless that document also set `logging.stderr: false`, which would leave the node writing its log nowhere; that combination is refused by name. It moves the path only — the file's shape, level and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. It makes the **engine** verbose and not the embedded broker: nats-server's own debug output is `stream.debug` in Tier A, off by default, because it is per internal-client rather than per event and the engine's coordination reads produce a constant stream of it. The broker's warnings and errors reach the log at either setting. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
-| `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
-| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. Roles decide what a node serves and which duties it holds, never which state logs it applies: every node applies all five, the identity directory included — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md). |
+| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. |
+| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying `api.auth.max_grants` and no more. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
@@ -166,7 +169,7 @@ look for a switch that turns authentication off. There was one — Tier A's
 operator authority with no check on the bind address anywhere, so one unset
 environment variable was a total bypass of every gate, on any deployment,
 reachable by anyone who could reach the port. It is retired; a file still
-carrying it is refused by name.
+carrying it is refused, as one carrying any key this build does not know is.
 
 `-dev-principal` is the thing somebody actually wanted, with the two guards
 that field never had:
@@ -281,9 +284,18 @@ them: none made the write) and `source` is `file` — all three are recorded for
 you and none is settable from the command line. (`PUT /config` takes an
 `X-Summary` header; the CLI has no equivalent.)
 
-Like `seal` and `activate`, this writes the revision to **this node's** store;
+Like `activate`, this writes the revision to **this node's** store;
 the note it prints says what publishes it to a running fleet — for an import,
 the same command run again while a node is up.
+
+**On a managed document** — Tier A names
+[`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)
+— the offline route presents no credential and is refused, naming the writers.
+Through a node, the node judges the token this command sends —
+`CREWLET_API_TOKEN`, and nothing else (`api.auth.tokens` is what a node
+accepts, never a wallet the CLI helps itself from): one of the writers imports
+as before, and any other is refused with `config_managed`, which the command
+prints naming `CREWLET_API_TOKEN` as the credential it sent.
 
 ### `crewlet config export`
 
@@ -363,6 +375,11 @@ crewlet config activate <UUID> [-config PATH]
 Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it.
 
 **Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect; on a running fleet the same gesture is `POST /config/reload`.
+
+On a [managed document](../concepts/configuration.md#managed-configuration)
+that gesture stays open — it changes nothing in the company — and activating
+any **other** revision is refused, because it presents no credential and
+replaces the document the managing system wrote.
 
 ### `crewlet config rekey`
 
@@ -521,7 +538,6 @@ is counted and said first, because it qualifies everything below it.
 |---|---|---|
 | `no_people_manage_holder` | No active person holding a credential they have **used** — a password, a second factor, a token — carries `people:manage`, so nobody can invite, grant or revoke except through a Tier A token. A first password link nobody has spent does not count | Grant it to somebody, with a token |
 | `person_without_credential` | Somebody active with no live way in: a person whose first password link lapsed unspent or was revoked, or whose every credential has been; a service account holding no live token. A live link counts, so somebody created a minute ago is not reported until theirs lapses — and an invitation creates nobody until it is redeemed, so it is never the cause | A person: `reset-password ID`. A service account: `token -person ID`. Or `remove` them |
-| `person_without_seat` | A person who holds no seat: one recorded before every person held a human seat, which nothing this build writes produces. They act under their bare login, in no unit and led by nobody. Reported at every stage, and never for a service account, whose seat is optional | `bind ID SEAT` onto a vacant human seat (`seats -unheld` lists them), or `remove` them |
 | `binding_dangling` | Somebody bound to a seat the org chart no longer holds as a human seat — removed, or made an agent's | A person: `bind` them to another human seat, or `remove` them. A service account: `unbind` it, or `bind` it elsewhere |
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
 
@@ -547,7 +563,7 @@ Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml
 
 The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
-**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start. The engine's exclusive database lock is what tells the two apart, with a pid attached.
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
 `-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` and from nowhere else — `api.auth.tokens` is what a node **accepts** rather than a wallet the CLI helps itself from — and the credential's own identity is recorded as the author of the write.
 
@@ -720,6 +736,13 @@ crewlet migrate -check                   # report pending work, apply nothing
 | `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`). Name it **once**: a second positional, or a positional alongside `-config`, is refused rather than resolved — the two would have to agree and nothing checks that they do. |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
+**A node without `data` has nothing to migrate.** Its store is `store.scratch`
+— created fresh, at the binary's own schema, every time `crewlet run` starts —
+so `migrate` refuses it and says so. The offline `config`, `secrets` and
+`search eval` commands refuse a scratch store for the same reason: what they
+wrote into it would be gone at the next boot. Use the API of a node that holds
+data instead.
+
 Rolling out N nodes at once means N processes opening the same database and
 racing to apply the same files. That race is safe — one transaction per
 file, with the version row written inside it, so a file is either fully
@@ -763,7 +786,7 @@ crewlet budgets show                       # usage per scope
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
 command that talks to a running node — `backup`, `retention`, `work`,
-`seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
+`objects`, `fleet`, `seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
 reads included. It is never a flag: a token typed as an argument is in the
 shell history, in `ps`, and in any CI log that echoes the command, so
 `-token` is refused as an unknown flag. And it is never read out of the
@@ -784,23 +807,32 @@ per window**: the company's day, week and month, then each seat's.
 ```
 Windows on the company clock: Europe/Berlin
 
-SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             REFUSING SINCE
+SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             LAST REFUSED
 org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
 org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
 org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
-eng    day     2026-09-23  99120    100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
+eng    day     2026-09-23  102120   100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
 …
 ```
 
 A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 `STATE` is the engine's own judgement, the one every surface shows: `refusing`
-when the gate has turned a charge away in the window or no charge fits, `near`
-at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
-window last turned a charge away, or `-` while it has not. Read those rather
-than `USED` against `LIMIT`, because a refused charge increments nothing: a seat
-charged in 3 000-token rounds against a 100 000 ceiling stops near 99 000 and
-its row would otherwise read as headroom. The next charge the scope admits
-clears the stamp, and so does the window turning over.
+when no charge fits — which every window that refused a round reaches, since
+the refused round is counted — `near`
+at nine tenths of the ceiling, `ok` otherwise. `LAST REFUSED` is when that
+window last turned a call away — a round whose charge it refused, or work turned
+away unsent because the window was already full (a turn's next call, a parked
+delivery, a person's question, a reflection pass), which is recorded as the
+gate's refusal too — printed only while its `STATE` is
+`refusing`, and `-` otherwise: a window whose ceiling was raised after it
+refused reads `ok` or `near` and shows `-` there, although it keeps the
+refusal's stamp (`refused_at` on `GET /budgets`) until its next admitted
+charge clears it. A refused round is
+counted like any other, because the vendor billed it, so a window that refused
+one reads `USED` past `LIMIT` by that round — the `eng` day above refused a
+3 000-token round at 99 120 — and every later charge is refused against that
+figure. The next charge the scope admits clears the stamp, and so does the
+window turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
@@ -824,9 +856,10 @@ where a counter zeroed by hand left no record of who made the room or why.
 crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-wait DURATION]
 ```
 
-Copies a running node's two durable estates — its store file and every
-JetStream stream and coordination bucket — into one directory, and verifies
-the store copy before calling it a backup.
+Copies what a running node holds — its own store file, the replicated
+estate's file on a node with the `data` role, and every JetStream stream and
+coordination bucket — into one directory, and verifies each store copy before
+calling it a backup.
 
 **It writes to the engine's host, not yours.** `-dir` is resolved where the
 node runs; nothing is downloaded. A relative path is refused rather than
@@ -844,10 +877,24 @@ address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
-whatever its `node.roles`, and on the embedded topology its own broker too; a
-node that dialled an external NATS cluster copies the store alone and says so,
-naming the cluster as where the stream half is backed up, rather than
-presenting a partial copy as a backup.
+whatever its `node.roles`, and a data node the replicated estate beside it. On
+the embedded topology the fleet's streams come too: a member snapshots them
+from its own broker, and a leaf, whose broker keeps no stream, snapshots the
+same streams from the members across its leaf link. A node that dialled an
+external NATS cluster copies its store files alone and says so, naming the
+cluster as where the stream half is backed up, rather than presenting a
+partial copy as a backup.
+
+**The company's files come too**, as an `objects` line. On the default `nats`
+object store their objects are in the `OBJ_crewlet_files` stream the backup
+snapshots with the rest, and the line counts the objects the copy names
+that the stream holds (lost ones are listed beneath); on
+`s3` each object the copy names is read from the bucket into `objects/` and
+checked against its file's size and SHA-256 as it is written, and the line
+gives their count and size. A file whose object the store answered it does
+not hold, or holds wrong, does not fail the backup: it is listed beneath, as
+`PROJECT/path` and the object's key, to restore from an earlier backup or
+upload again. One the store could not answer about at all fails it.
 
 `-wait` (default 30 minutes) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires
@@ -912,15 +959,148 @@ operation id; that id goes back in `-op-id`, which the command sends as the
 request's `Idempotency-Key`, so the retry is the same operation and cannot
 append a second record. A retry whose first purge did land answers `applied`,
 at the position that purge landed at, rather than finding the task already
-gone. Pass the id exactly as printed: it carries the instant it was minted, and
+gone. The command mints that id **before** it asks and waits thirty seconds —
+past the three five-second waits a write can make — so a purge the node never
+answered, which may well have landed, still prints the `-op-id` to run it again
+with. Pass the id exactly as printed: it carries the instant it was minted, and
 a node whose operation ledger may have lost the first purge's row since — to
-the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older
-build — judges the retry by it, answering `unknown` again rather than purging
-twice.
+the ledger's thirty-day sweep — judges the retry by it, answering `unknown`
+again rather than purging twice. An id the engine did not print is refused
+(`op_id_invalid`), and so is one altered on the way back — trimmed, spaced or
+over 128 bytes — since the broker would carry it as a different id.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
 duration to state, and `crewlet retention status` names which nodes those are.
+
+## `crewlet objects`
+
+```
+crewlet objects status [-json] [<config.yaml>] [-url URL]
+```
+
+Where the company's files are kept, and what the
+[object store's](../concepts/object-store.md) collector last found. It talks to
+a running node, for `backup`'s reason: the collector's report is a record in
+the coordination store, which on the default topology is the engine's own
+embedded broker and binds no socket. `status` reads the fleet view's `objects`
+block ([`GET /fleet`](api-endpoints.md#get-fleet)), which every node answers
+from that one record.
+
+### `crewlet objects status`
+
+It prints the store the fleet's files are in — the fleet's own NATS bucket
+(`OBJ_crewlet_files`) or an S3 bucket with its endpoint, bucket and prefix —
+the node that ran the last passes of the `object-collector` duty, and one line
+for each pass:
+
+- **Last collection** — how many objects it listed in the store, how many it
+  deleted for being older than a day with no row naming them, and how many
+  uploads begun more than a day ago and never finished it abandoned.
+  A collection that stopped judging says why (`stopped judging: …` — the
+  node's view of the estate was incomplete, so a row it could not read might
+  name any object) beside what it had deleted before it stopped; one that
+  stopped says what stopped it, and one that did not finish says
+  `incomplete`. A sweep of unfinished uploads the store refused — on S3, an
+  identity without `s3:ListBucketMultipartUploads` or
+  `s3:AbortMultipartUpload` — is a line of its own beneath.
+- **Last audit** — from the last audit to run to its end: how many files the
+  company's rows name, how many the store does not hold (**missing**) and how
+  many it holds at the wrong size or digest (**damaged**). An audit that
+  failed after it is said beneath, never in its place. When any file cannot
+  be read it lists them — the file, whether it is missing or damaged, and its
+  object's key; the first hundred, and how many more — to restore from a
+  [backup](../guides/backup.md) or upload again.
+
+Before the collector has finished a pass — on a new fleet, in the minute or so
+before a data node first claims the duty — it says so. `-json` prints the block exactly as the node answered it,
+for a script. The exit status is non-zero when the node cannot say — its
+coordination store did not answer, the node runs no object store, or it
+answered a state this build does not know — and zero otherwise, files that
+cannot be read included: a store that lost bytes is an answer, and the
+[`objects_missing`](alarms.md) alarm is what pages for it.
+
+## `crewlet fleet broker`
+
+```
+crewlet fleet broker list [-json] [<config.yaml>] [-url URL]
+crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL]
+crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL]
+```
+
+The fleet broker's membership. Two records say who its members are: every node
+advertises its **broker kind** on its presence lease — derived from its
+`stream` block, never from its roles (see
+[Configuration](../concepts/configuration.md#noderoles)) — and the broker's
+**metadata group**, the raft group that places every stream and consumer,
+counts its voters for itself. Both verbs talk to a running node, and the node
+asks a member where it is not one: only a member holds the group, and a removal
+is answered only on its system account, which nothing outside its process can
+reach. They are clients of the routes in the
+[API reference](api-endpoints.md#the-brokers-membership).
+
+### `crewlet fleet broker list`
+
+The question it answers is **does the broker still count a member I have
+lost?** One row per live node — what it advertises, its roles, how the group
+counts it (`leader`, `current`, `offline, last heard 5m ago`, or `-` for a node
+that is no voter) and its **peer id** where it is a voter — then one row per
+voter no live node is, and under the table every disagreement in words.
+
+The group counts each voter by its raft peer id, which is derived from the
+node id. A member hears another's name only from that server, so a voter whose
+survivors have restarted since it died is listed as `(name unknown)` by its
+peer id alone; a voter is matched to its node by peer id, never by the name the
+answering member happens to have heard.
+
+- **DEAD MEMBER** — a voter no live node is, or whose node came back as a leaf
+  or a client. Every election and every create goes on counting it; the line
+  prints the `remove` command for once it is not coming back — by `-peer` for a
+  voter nobody can name, since it has no node id to give.
+- **NOT COUNTED** — a live node advertising a member the group does not count:
+  still joining, or removed while it ran.
+- **UNKNOWN** — a node whose presence does not say what its broker is, which a
+  capacity seal counts as a member.
+
+A group no member could report is said to be unread, never shown as empty. On a
+fleet whose broker is an external cluster it says so and lists nothing: that
+membership is the cluster's own operator's. `-json` prints the node's answer as
+it came.
+
+### `crewlet fleet broker remove`
+
+Stops the metadata group counting a member once the group has committed the
+change — printing which member's system account carried it and the voters that
+remain. Name it by **node id**, which reaches it by the peer id the id hashes
+to whether or not any member still remembers its name, or by **`-peer`** with
+the peer id `list` shows, for a voter nobody can name. **Refused while its node
+holds a live presence lease as a member** (or without saying what its broker
+is): it is still running, and a running member removed from the group rejoins
+it as a voter at its next restart, so stop it first. `-force` removes it anyway,
+for a member wedged in a way that still renews its lease. A node alive under
+the voter's name as a **leaf** or a **client** is removed without `-force`: the
+member it was is gone for good. The member being removed never carries its own
+removal — if it is the only live member, the command says so.
+
+The whole removal is bounded by one wait: the carrying member's commit budget
+and a round trip. A carrying member that does not answer ends it as an outcome
+nobody knows — it may have committed the change first — rather than another
+member proposing it again; `list` reads the group. So does an answer the node
+cannot believe: what it asks a member is signed under the fleet keyring and
+bound to that one request, and so is the member's answer, because the member
+carries a removal out through its system account and the broker authenticates
+nothing. A member that holds no key the request is signed under runs nothing
+and the next member is asked.
+
+Only the group's leader answers a removal, and a member removed because its
+host died was often that leader — so the removal asks again every second while
+the survivors elect another, and a removal made during an election waits it
+out rather than failing. A group that answers nobody for the whole wait (two
+minutes) has lost its quorum and can change nothing about itself, and the
+refusal says so: bring enough members back for a quorum, then ask again. A
+removal the node did not answer may still have been committed; `list` reads
+the group, and asking again for a member already removed is refused as not a
+member.
 
 ## `crewlet seats`
 
@@ -1089,12 +1269,16 @@ The command prints the watermark before and after and the instant the
 eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
-The gesture is **judged once, before any log is written**. A node that still
+The node you ran it on writes every log itself: every data node holds the
+whole estate, so one command reaches every log.
+
+The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
-drop everything it writes and move its seats. Stop it and wait for its `LIVE`
-column in `crewlet retention status` to read `no`, or pass `-force` for a node
-wedged in a way that still renews its lease — the refusal prints both. A node
+drop everything it writes and take its copy out of service. Stop it and wait
+for its `LIVE` column in `crewlet retention status` to read `no`, or pass
+`-force` for a node wedged in a way that still renews its lease — the refusal
+prints both. A node
 that cannot read the presence leases at all answers `503 eviction_unjudged`;
 `-force` takes the eviction past that as well, since the leases are all the
 judgement reads, and the refusal says so. A run that already passed `-force`
@@ -1146,11 +1330,10 @@ because the dashboard renders the same answer; the line under it is this
 command's rendering of the node's `actions` (see
 [the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
-The command mints the operation id **before** it asks, and waits two
-minutes and fifteen seconds for the answer — past the two minutes the node
-allows a gesture (one gate record per identity-claiming log, each allowed two
-five-second resolutions at a margin of three), which it finishes even if the
-connection drops. So a gesture that got
+The command mints the operation id **before** it asks, and waits a minute for
+the answer — past the fifty seconds the node takes at most to answer one
+gesture (twenty to judge it and thirty to write every log), which it finishes
+even if the connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it — and so does one
 whose answer the node did not write: a reverse proxy's 504 page, any status
 carrying no engine error code, or a 200 cut off part way through, each of
@@ -1198,6 +1381,17 @@ generation: one from a generation the log has left prints `left gen N` in place
 of a lag and is refused whatever its `SEQ` reads. The
 position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
+
+A readmission that cannot be **judged** is refused as well, with nothing
+written: `503 readmission_unjudged`, when the positions register, a published
+floor or a log's first surviving sequence could not be read. The node's
+position is not what is wrong there, so it is not told to catch up: the
+command is asked again, on this node or through another (`-url <that node>`).
+And either gesture on a node in a
+[capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
+before anything is judged; its line points at `crewlet retention status`, which
+leads with the window while it is open, since nothing is written to any log
+until the fleet is back in normal mode.
 
 The refusal is the truth about the node rather than the thing keeping your data
 safe. Readmitting a node below the floor used to succeed, and it put back the
@@ -1414,6 +1608,89 @@ invariant is one-directional and tested: everything the schema rejects,
 the validator also rejects. An editor that red-underlines a config the
 engine would happily run teaches authors to ignore it.
 
+So it accepts what the decoder reads, not merely what a field's type
+suggests, and a test offers every field of both tiers each such value to
+hold the two to the same verdict:
+
+- **An empty value** — `~` or `""` — anywhere the engine reads it as unset,
+  which is everywhere but the company document's root.
+- **A number or a boolean in a text field**, read as the text it was
+  written as (`name: 2024`, `org_webhook: false`).
+- **YAML 1.1's switch words** in a boolean field — `yes`, `no`, `on`, `off`,
+  `y` and `n`, each in YAML's three casings (`yes`, `Yes`, `YES`) — because
+  the decoder reads them there. A quoted `"true"` is not one of them: it is
+  text, and a boolean field refuses it.
+- **A `${VAR}` reference in Tier A** wherever the engine resolves one into
+  a value the field can take: anywhere in any text field, a patterned or
+  closed-set one included, since the value is judged only once it has
+  resolved; and as the **whole** value of a number or a boolean field, whose
+  resolved text is read as if it were written there. A reference with other
+  text around it in a number or a boolean is refused, by the schema and the
+  engine alike.
+- **A Tier B reference as the literal text it is.** The company keeps a
+  reference verbatim and resolves it only where a provider or transport is
+  built, so a field with a pattern or a closed set — an enum, a handle, a unit
+  id — refuses one as it would any other text that is not a value of it. The
+  exception is a field whose consumer resolves a **whole** reference, which
+  takes exactly one beside its own rule: today that is a Mattermost seat's
+  `username`. See
+  [Environment Variable References](../getting-started/configuration.md#environment-variable-references).
+
+### Credential positions: `x-crewlet-secret`
+
+Every position that holds a credential carries the annotation
+`"x-crewlet-secret": true` — on the field itself for a single value
+(`integrations.github.webhook_secret`), on `items` for each member of a
+list (`providers.llm.*.api_keys`), and on `additionalProperties` for each
+value of a map (`mcp_servers[].headers`, a seat's `sandbox.env`, and both
+levels down in `mcp_env`, whose values are per-server maps of variables).
+A map's **keys** are never marked: they are names (`GITHUB_TOKEN`,
+`Authorization`), and only what they map to is a credential. A position
+without the keyword holds none, and the keyword's only value is `true`.
+
+It is read from the same declaration on the config types that drives
+[redaction](../concepts/configuration.md#reads-and-export), and a test
+holds the two to one set in both directions: in the company schema, a
+position is marked exactly when `GET /config`, `crewlet config show` and
+`crewlet config export -redact` mask it. The Tier A schema marks its own by
+the same rule — the keyring's `secrets.keys[].material`,
+`api.auth.tokens[].token`, `stream.token` and
+`store.objects.s3.secret_access_key` — though no read surface serves Tier A
+to redact. `store.objects.s3.access_key_id` is not marked: AWS treats an
+access key id as an identifier rather than a secret — it travels in every
+signed request's `Authorization` header and appears in CloudTrail records
+and error messages — and only the secret access key proves possession. A
+consumer that prefers every value of that block to arrive by reference
+may still write a `${VAR}` there; the mark only says where a literal is
+wrong.
+
+It is an **annotation, not a rule**. The engine runs a literal credential
+in a marked position (it seals it at rest and masks it on every read), so
+the schema accepts one there, and a validator that does not know the
+keyword ignores it, as JSON Schema 2020-12 requires. What a consumer does
+with it is its own policy; the one the engine is built for:
+
+- **Write a whole `${VAR}` reference there, never the value.** In the company
+  document the reference is stored verbatim and resolved where the provider
+  or transport is built — from the [secret store](../concepts/secret-store.md)
+  first, then the environment — so a tool that renders a company (a
+  Kubernetes operator from its `Secret`s, a CI job from its vault) pushes the
+  value to the secret store with `PUT /secrets/{name}` and writes
+  `${NAME}` into the marked position. In Tier A the reference resolves from
+  the node's environment.
+- **Treat a literal in a marked position as a finding** — an editor warning,
+  a linter failure, or a refusal in tooling that must never hold a credential
+  in a document it versions.
+- **Mask it when displaying a document**, as the engine's own reads do,
+  unless the value is exactly one `${VAR}`, which names a credential and
+  carries none.
+
+The mark lives in the published schema, and a consumer acts on it there.
+It does not survive being copied into a Kubernetes CustomResourceDefinition:
+a CRD's schema accepts only its own `x-kubernetes-*` extensions (and no
+`$ref`), so a generator that builds one from fragments of these files has
+to strip `x-crewlet-secret` and keep the policy in its own code.
+
 Both documents are checked into [`schema/`](../../schema/); a test
 regenerates and compares them, so a config field added without a schema
 entry fails the build rather than leaving a stale file nobody opens.
@@ -1462,11 +1739,27 @@ same rows — or the node's own file with the engine stopped. With neither
 $ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
 corpus       118432 sources, text-embedding-3-large at 3072 dimensions
 measured     25 queries at depth 150 from 1200 candidates
+first stage  the semantic index: 128 of 1024 lists probed (generation 1099511744562)
+index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its worst shape (container:task), 0 head miss(es)
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-verdict      the two-stage search recovers the exact ranking at the shipped depth
+scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
+window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
+past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
+past window  page  9874 of 14224 sources (69.4%), 402.1 MiB of 518.6 MiB of text (77.5%)
 ```
+
+The last three lines are printed on every run: for each corpus, how many
+sources and how much of their text lie past the window each vector was
+computed from — what a search by meaning cannot see, which a keyword search
+still reads ([Knowledge System](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
+That part of the report reads every source's whole body.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -1477,12 +1770,14 @@ verdict      the two-stage search recovers the exact ranking at the shipped dept
 | `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
 | `-model NAME` | most populated | The embedding model to measure |
 | `-dimensions N` | the model's | The width to measure |
+| `-probes N` | the index's own | How many lists of the semantic index to probe. `0` takes the count the index's own training measured; a larger one shows what probing more lists would recall |
+| `-window BYTES` | the smaller of 8 192 and the model's own per-input bound | The bytes of each source the vectors were computed from, for the report of what lies past them. The store does not carry the company's configuration, so state it when `providers.embeddings.max_input_tokens` or `max_batch_tokens` lowers the per-input bound below the model's own — the embedding duty embeds the smaller of 8 192 bytes and that bound |
 | `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |
-| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell |
+| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell — the window report included, as `search_eval_window_bytes` and, labelled by `source`, `search_eval_window_sources`, `search_eval_window_beyond_sources`, `search_eval_window_text_bytes` and `search_eval_window_beyond_bytes` |
 
 **It exits non-zero** when the recall is below the floor for that corpus size,
-or when any document was dropped from the exact top ten — so it can go in a
-schedule. Both conditions matter: an aggregate of 0.98 is compatible with
+or when any document was dropped from the exact top ten, in any shape — so it
+can go in a schedule. Both conditions matter: an aggregate of 0.98 is compatible with
 losing exactly the documents that mattered, and a semantic-only document the
 first stage drops leaves the fused answer entirely.
 
@@ -1518,11 +1813,13 @@ a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
 the operator's Pro/Max plan instead of an API key, and the login that makes
 that work is established here rather than in the config document. `KEY` is the
 `providers.llm` key; commands that take one and are given none act on the only
-`cli-agent` provider when there is exactly one.
+`cli-agent` provider when there is exactly one. `doctor` also examines every
+`type: anthropic` entry; the other subcommands are `cli-agent` only, since an
+API entry has no login to broker, list or export.
 
-**`list`** is the inventory — provider key, CLI, model and whether it is
-logged in. **`doctor`** is the one to run before a company's first turn: it
-checks the CLI is installed, the credentials answer, and — unless you pass
+**`list`** is the inventory — provider key, CLI, model and how it is signed
+in. **`doctor`** is the one to run before a company's first turn: it
+checks the CLI is installed, that something signs it in, and — unless you pass
 `-no-smoke` — that a real completion comes back, which is the only check that
 catches a plan whose quota is exhausted, or a profile whose `text_paths` no
 longer find the answer in what the CLI prints. The same run measures two claims the
@@ -1532,6 +1829,54 @@ seat reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
+
+Both commands answer "signed in" the same way, from the environment the CLI is
+actually given rather than from the configuration: credential files a login
+wrote, a headless token, an `api_keys` value under `auth.mode: api-key`, a
+variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
+its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
+[credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
+variable in `cli.env`. `doctor`'s `sign-in` line names every one it found, and
+an entry with none is a `no sign-in` problem naming the route to take — unless
+the smoke test was answered, which proves the CLI authenticates some way the
+engine does not hand it (an endpoint that takes no key, a credential in its
+own configuration). A token `auth.mode: api-key` removes from the child is not
+counted. `${VAR}` references and the variables `inherit-env` forwards are
+resolved in the process running `crewlet llm` — the secret store first, then
+that shell's environment — so run it with the engine's environment to get the
+engine's answer.
+
+`llm list`'s `SIGN-IN` column is the first route `doctor` would name:
+`credentials` (files a login wrote), `token` (a headless token), `api key`
+(under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
+by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
+
+On an **`anthropic` entry** `doctor` checks the two things that make every
+call on it a 400 while the config validates clean. The request is
+[shaped from the model](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+by a capability table compiled into this build, so `doctor` reads the model's
+record from the vendor's Models API (`GET /v1/models/{id}`, under the id the
+table reads — a Bedrock or dated spelling is the model it spells) and compares
+the thinking types, the effort levels and the output ceiling with what the
+entry sends. A disagreement that puts a field the model refuses on the wire is
+a **problem**, naming what to change: a `claude_model` for an alias the table
+does not know, the row a `claude_model` names, or — for a model the table reads
+itself — a Crewlet whose table matches the API. One where the table is merely
+more cautious than the model is a note. A gateway that does not serve
+`/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
+reported as *not served* and is not a problem; any other failure of that read
+is. That read is made on one key and benches nothing, whatever it is answered:
+`/v1/models` is not the route a phase calls, and a gateway that refuses a key
+there (or rate-limits that route alone) while its messages route takes it
+would otherwise leave the round below with every key cooling. Then, unless you
+pass `-no-smoke`, it sends **one real round** in the shape
+a phase sends — a tool offered, no tool choice forced, the instruction naming
+it, the entry's own thinking, streamed, at effort `low` — and certifies that a
+call to that tool came back. The Models API read bills nothing, so it runs
+under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
+and an entry that does not build at all (a `${VAR}` model that resolved to
+nothing, a dial its resolved model refuses) is reported as one beside the
+others. `openai` entries are not examined.
 
 **`login`** has four shapes because the vendors do:
 
@@ -1655,7 +2000,7 @@ read as finished. A run that changed nothing prints no follow-up.
 |------|-------------|
 | `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the third-party app and prints none of them. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. **Overrides `api.external_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
+| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
 | `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** |
 | `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. That group scan is used in **both** modes and it is deliberate: every seat is made a member of `provisioning.group` whatever created it, so a managed account of this company is always in the group — while the instance's own service-account listing also holds every *other* company's accounts on the box, which a shared prefix would then sweep. Only the DELETE route differs by mode; sending one down the wrong route answers "no such account" for one that is still live. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
 | `-mode group\|instance` | Where service accounts are **owned**, for this run only; it defaults to `integrations.gitlab.provisioning.mode`, which is what the engine's own reconcile reads. `group` (the default, and all GitLab.com offers) creates them under `provisioning.group`; `instance` creates them on the instance itself, which needs an **instance-administrator** PAT and buys an account that is a member of nothing until this run adds it — so one company's seats can span several top-level groups, and an account survives its group being deleted. Everything downstream is identical: memberships are added the same way, and the token API is user-scoped on both. An unknown value is refused before the config is loaded. |
@@ -1685,7 +2030,7 @@ The Atlassian tracker's reconcile, and it is a different shape from its peers: *
 | Flag | Description |
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. **Overrides `api.external_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
+| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
 | `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. |
 | `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -1715,7 +2060,7 @@ The hosted code host's reconcile, and it is the same shape as Jira's for the sam
 | Flag | Description |
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. **Overrides `api.external_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
+| `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
 | `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. |
 | `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -1751,7 +2096,7 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 
 | Flag | Description |
 |------|-------------|
-| `-public-url` | Public HTTPS base URL of this deployment. **Required unless `api.external_url` is set**, which it overrides for this run: every app's Events API request URL and OAuth redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
+| `-public-url` | Public HTTPS base URL of this deployment. **Required unless the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) is set**, which it overrides for this run: every app's Events API request URL and OAuth redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-config-token` | The operator's app-configuration **refresh** token, from [api.slack.com/apps](https://api.slack.com/apps) → Your App Configuration Tokens. Falls back to `$SLACK_CONFIG_REFRESH_TOKEN`. Read from the environment alone, never from the secret store: it is the operator's credential rather than the company's. |
 | `-ledger` | The app ledger (default `slack-apps.json` beside the company document). It holds the client secrets Slack returns only at creation, so it is written `0600` — gitignore it like `.env`. |
@@ -1829,7 +2174,7 @@ is, and one event this instance refuses is reported without stopping the rest.
 | Flag | Meaning |
 |---|---|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes. The same three sinks every provisioning command takes; a run with none of them refuses rather than minting a credential it cannot record. |
-| `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides `api.external_url` for this run**, and registration is skipped only when both are empty. |
+| `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty. |
 | `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. |
 | `-dry-run` | Read and report; register nothing. |
 

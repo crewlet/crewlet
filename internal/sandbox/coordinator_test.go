@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,9 +11,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -74,12 +79,50 @@ type resumeSpy struct {
 	// the turn calling run_sandbox again (the box-reuse branch), or an event
 	// redelivered to the seat while the turn runs.
 	during func(ctx context.Context, run PendingRun)
+
+	// beforeTurn makes an [ErrResumeAbandoned] one that broke BEFORE the
+	// turn began — a panic re-entering the conversation — rather than one
+	// that broke after acting: [ResumeRequest.Begin] is never called.
+	beforeTurn bool
+
+	// begun counts the re-entries whose turn began ([ResumeRequest.Begin]
+	// answered nil).
+	begun int
+
+	// beforeBegin runs inside a re-entry whose turn is about to begin, before
+	// [ResumeRequest.Begin]: the window between a claim and its turn, which
+	// a stalled process can be caught in while the seat moves.
+	beforeBegin func(ctx context.Context)
+
+	// failsInTurn makes an ordinary error one the turn returned AFTER it
+	// began — it took the answer, then gave its claim back as a retry — rather
+	// than one that stopped the re-entry before its turn.
+	failsInTurn bool
 }
 
+// Resume is a re-entry as the engine makes one: a turn that runs — one that
+// returns nil, or breaks after acting — BEGINS first, and a Begin that refuses
+// stops it before it runs, with Begin's own error; every other failure is a
+// re-entry that never reached its turn.
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
-	err, during := s.err, s.during
-	if err == nil || errors.Is(err, ErrResumeAbandoned) {
+	err, during, beforeBegin := s.err, s.during, s.beforeBegin
+	acts := err == nil || (errors.Is(err, ErrResumeAbandoned) && !s.beforeTurn)
+	runs := acts || (err != nil && s.failsInTurn)
+	s.mu.Unlock()
+	if runs && beforeBegin != nil {
+		beforeBegin(ctx)
+	}
+	if runs && req.Begin != nil {
+		if beginErr := req.Begin(ctx); beginErr != nil {
+			return beginErr
+		}
+	}
+	s.mu.Lock()
+	if runs {
+		s.begun++
+	}
+	if acts {
 		s.owned++
 	}
 	if err == nil {
@@ -92,6 +135,13 @@ func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 		during(ctx, req.Run)
 	}
 	return err
+}
+
+// turnsBegun is how many re-entries began their turn. See begun.
+func (s *resumeSpy) turnsBegun() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.begun
 }
 
 // ownedHolds is how many re-entries ended their own hold. See owned.
@@ -134,36 +184,71 @@ func (a *audienceSpy) questions() []string {
 	return append([]string(nil), a.asked...)
 }
 
-// ledgerSpy records post-charges.
+// ledgerSpy records post-charges, on the company's counter and the seat's.
 //
 // IT RECORDS AN OVER-CAP CHARGE, which is what the engine's accountant does:
 // it is coord.Budgets.PostCharge underneath, which moves both counters whatever
 // the caps say, and answers whether the run took one PAST its cap. A spy that
 // dropped those tokens would certify a coordinator that offers an over-cap run
 // again on every retry.
+//
+// AND IT KEEPS A PARTIAL as the counter does: a charge that reaches the
+// company and fails on the seat leaves the company's share counted, and a
+// charge handed companyCharged records the seat's share alone. A spy that
+// counted one figure could not tell a retry that finished the seat from one
+// that counted the company twice.
 type ledgerSpy struct {
 	mu      sync.Mutex
-	charged int
+	charged int // the company's counter
+	seat    int // the seat's
 	calls   int
 	over    bool
 	err     error
+	// partial makes the next charge reach the company and fail on the seat.
+	partial bool
+	handed  []bool
 }
 
-func (l *ledgerSpy) Charge(_ context.Context, _, _ string, tokens int) (bool, error) {
+func (l *ledgerSpy) Charge(_ context.Context, agentID, _ string, tokens int, companyCharged bool) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls++
+	l.handed = append(l.handed, companyCharged)
 	if l.err != nil {
 		return false, l.err
 	}
-	l.charged += tokens
+	if !companyCharged {
+		l.charged += tokens
+	}
+	if l.partial {
+		l.partial = false
+		return false, fmt.Errorf("engine: %w", &coord.SeatUncountedError{
+			Seat: coord.AgentScope(agentID), Tokens: tokens, Err: errors.New("the seat's write failed"),
+		})
+	}
+	l.seat += tokens
 	return l.over, nil
 }
 
+// total is what the company's counter holds.
 func (l *ledgerSpy) total() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.charged
+}
+
+// seatTotal is what the seat's counter holds.
+func (l *ledgerSpy) seatTotal() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seat
+}
+
+// companyChargedHanded is the companyCharged each charge was handed, in order.
+func (l *ledgerSpy) companyChargedHanded() []bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]bool(nil), l.handed...)
 }
 
 func (l *ledgerSpy) set(over bool, err error) {
@@ -194,6 +279,30 @@ type coordRig struct {
 
 	mu      sync.Mutex
 	stopped []string
+
+	// spent is every delivery the coordinator recorded as worked
+	// ([CoordinatorOptions.Spent]), in order, with how many messages had
+	// reached the seat's inbox when it did.
+	spent []spentAt
+
+	// retries are the owed-answer attempts the coordinator scheduled, by
+	// the order it scheduled them: a test fires them when it chooses (see
+	// [coordRig.fireRetries]) rather than waiting out a real backoff.
+	retries scheduled
+}
+
+// spentAt is one delivery the coordinator recorded as worked.
+type spentAt struct {
+	handle, id      string
+	publishedBefore int
+}
+
+// spentDeliveries is every delivery the coordinator recorded as worked, in
+// order.
+func (r *coordRig) spentDeliveries() []spentAt {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]spentAt(nil), r.spent...)
 }
 
 // stoppedTurns is every turn the coordinator reported as stopped, in order,
@@ -222,14 +331,43 @@ func newCoordRig(t *testing.T) *coordRig {
 			defer rig.mu.Unlock()
 			rig.stopped = append(rig.stopped, handle+"/"+turnID)
 		},
-		Now: func() time.Time { return base.now },
+		Spent: func(_ context.Context, handle string, evs []*events.Event) {
+			published := len(rig.handedBack())
+			rig.mu.Lock()
+			defer rig.mu.Unlock()
+			for _, ev := range evs {
+				rig.spent = append(rig.spent, spentAt{
+					handle: handle, id: ev.ID.String(), publishedBefore: published,
+				})
+			}
+		},
+		Now:   func() time.Time { return base.now },
+		After: rig.retries.after,
+		// THE SEAT HELD UNDER THE LEASE EVERY RIG LAUNCH IS STAMPED WITH, as
+		// a real node's coordinator holds its seats: a case that hands the
+		// seat to a successor gives that successor its own, newer lease.
+		Lease: leased(rigLease),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	t.Cleanup(coordinator.Stop)
 	rig.coordinator = coordinator
 	return rig
 }
+
+// recoverSeat takes the seat for this rig's coordinator under owner and epoch,
+// as a seat host's acquisition does: the lease the coordinator writes on the
+// seat's behalf under from then on, and its recovery pass over the seat's runs.
+func (r *coordRig) recoverSeat(ctx context.Context, owner string, epoch int64) error {
+	r.coordinator.lease = leased(Fence{Owner: owner, Epoch: epoch})
+	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch)
+}
+
+// fireRetries runs every owed-answer attempt the coordinator has scheduled
+// and not cancelled, in order, and reports how many ran — the attempts they
+// schedule in turn included only on the next call.
+func (r *coordRig) fireRetries() int { return r.retries.fire() }
 
 // failures is every SandboxRunFailed the coordinator announced, deduped
 // across the two topics each one goes to.
@@ -267,6 +405,7 @@ func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events
 // A coding job can run for hours, far past any broker ack window, so its
 // seat's mail is parked rather than consumed and held.
 func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
@@ -291,6 +430,7 @@ func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 // At-least-once means the start event can arrive twice, and a double
 // increment would leave the seat parked forever after the run settled.
 func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
@@ -312,12 +452,13 @@ func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 // A person can take days to answer, and the answer arrives on the seat's own
 // inbox — which a parked seat would never read.
 func TestAParkedClarificationFreesTheSeat(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 
 	payload, ev := rig.completion("t1")
@@ -363,6 +504,7 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 // see [Coordinator.park] for why a question recorded but never announced is
 // the worse of the two orders.
 func TestAParkedRunIsReportedOnlyOnceItsQuestionIsOnTheRow(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -397,6 +539,7 @@ func TestAParkedRunIsReportedOnlyOnceItsQuestionIsOnTheRow(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -442,6 +585,7 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 // or the turn's work item is charged for the collection and never for the
 // coding run that asked.
 func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -462,7 +606,7 @@ func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	}
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil)
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("TryResumeFromAnswer = %q, %v", disposition, err)
 	}
@@ -483,6 +627,7 @@ func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 // resume and nothing touched it after the settle, so the seat stayed parked on
 // a run that no longer existed until the seat changed hands.
 func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -508,6 +653,7 @@ func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
 // Successive poll ticks can both fire before the first claim lands, and queue
 // delivery is at-least-once.
 func TestADuplicateCompletionResumesOnlyOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -524,6 +670,7 @@ func TestADuplicateCompletionResumesOnlyOnce(t *testing.T) {
 }
 
 func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -550,6 +697,7 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 // Without the revert the NAK'd completion redelivers, the claim refuses, and
 // the suspended conversation is permanently lost with the row stuck in resumed.
 func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -595,6 +743,7 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 // So the run is ENDED instead, under the same reason a stranded park takes:
 // nothing about the two failures differs once the claim is stuck.
 func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -635,6 +784,7 @@ func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
 // broker's whole delivery budget. The suspended turn is lost either way once
 // the phase breaks; only one of the two outcomes also repeats the writes.
 func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -687,12 +837,13 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 // as it is NOW and reclaims the box the relaunch is running in, rather than
 // reading it as a reuse to leave alone.
 func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 		// The relaunch's start event reaches the seat before the turn
@@ -732,6 +883,7 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 // the sentinel is shared: a turn that wrote outside the engine, and one that
 // panicked.
 func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
+	t.Parallel()
 	for name, cause := range map[string]string{
 		"after acting":    "the reviewer's provider went away",
 		"after panicking": "panic: assignment to entry in nil map",
@@ -776,6 +928,7 @@ func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 // Driven for BOTH tails from one table, because the defect was one shape
 // written twice and a case covering one of them is how the second survived.
 func TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		resume error
@@ -826,6 +979,7 @@ func TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway(t *testing.T) {
 // launching run. Doing nothing bought the same protection at the price of
 // stranding every run that had NOT relaunched, which is nearly all of them.
 func TestAnUnreadableSettleLeavesARelaunchedJobAlone(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -833,7 +987,7 @@ func TestAnUnreadableSettleLeavesARelaunchedJobAlone(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -858,29 +1012,33 @@ func TestAnUnreadableSettleLeavesARelaunchedJobAlone(t *testing.T) {
 	}
 }
 
-// The claim snapshots the EXACT prior status, so a run answered out of a
-// clarification reverts there rather than to running.
+// The claim snapshots the EXACT prior status, so a run resumed with a recorded
+// answer reverts to owing that answer's resume rather than to running — and
+// rather than to waiting on its question, which would hand it to the next
+// reply.
 func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	rig.resumer.err = errors.New("no seat here")
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil)
-	if err == nil {
-		t.Fatal("a failed resume reported success")
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
+	if err != nil || disposition != AnswerConsumed {
+		t.Fatalf("disposition = %q, %v, want %q: the answer is recorded on the run "+
+			"before the resume is tried, so the delivery is spent whatever the resume "+
+			"does", disposition, err, AnswerConsumed)
 	}
-	if disposition != AnswerDeferred {
-		t.Fatalf("disposition = %q, want %q: the run is awaiting this same "+
-			"answer again, so the delivery has to come back", disposition, AnswerDeferred)
-	}
-	if got := rig.get("t1"); got.Status != StatusAwaiting {
-		t.Fatalf("status = %q, want it back at %q", got.Status, StatusAwaiting)
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+		t.Fatalf("run = %q with answer %+v, want it back at %q with the answer still on it",
+			got.Status, got.Answer, StatusAnswered)
 	}
 }
 
@@ -893,6 +1051,7 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 // at all, and that path returned before the revert below it, stranding the row
 // in resumed where no retry could claim it.
 func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -923,9 +1082,10 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 //
 // No LIVE path produces one — a run holds [StatusLaunching] until its
 // conversation is written and a launching run is not claimable — so this
-// reaches the state by flipping the status by hand: the check is the
-// assertion that the launching state is doing its job.
+// reaches the state by writing the row directly, bypassing the launch path:
+// the guard is the assertion that the launching state does its job.
 func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusRunning, Fence{}); err != nil {
@@ -954,6 +1114,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 // The resumed Execute may call run_sandbox again, and re-provisioning would
 // throw away the working tree.
 func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
@@ -967,7 +1128,7 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -995,6 +1156,7 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 // resume, and its only honest answer to that is to fail the turn: the agent's
 // whole in-progress turn destroyed by a job that was too quick.
 func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -1039,13 +1201,14 @@ func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
 // of reaching it presented to the seat, the dashboard and the requester as an
 // identical silence. The first symptom was a wait that never ended.
 func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		derail func(*coordRig)
 		want   string
 	}{
 		{"the box cannot be read back", func(r *coordRig) {
-			r.runner.CollectErr = errors.New("the box died mid-read")
+			r.runner.CollectErr = errBoxGoneMidRead
 		}, types.SandboxFailureCollect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1110,6 +1273,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 // already acted on it, and a gate would be a second opinion about a question
 // the store has answered.
 func TestEveryWayARunStopsReportsIt(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		drive func(*testing.T, *coordRig)
@@ -1119,7 +1283,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
 			rig.runner.Finish(Result{Success: true})
-			rig.runner.CollectErr = errors.New("the box died mid-read")
+			rig.runner.CollectErr = errBoxGoneMidRead
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
@@ -1211,7 +1375,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// reclaim — so it is the ending most likely to be forgotten,
 			// and it was: the contract's own doc named two reporting
 			// sites and this was the third.
-			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		}, []string{"swe/t1"}},
@@ -1225,7 +1389,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// can tell. The retirement retries on its next tick, where a
 			// second report finds nothing left to drop — while staying
 			// quiet is the indicator standing over an agent that stopped.
-			_ = rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12)
+			_ = rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12)
 		}, []string{"swe/t1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1259,6 +1423,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 // store never recorded left the seat reading as free with an answer pending —
 // the exact state in which a person's reply is run as an unrelated turn.
 func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
+	t.Parallel()
 	asks := Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"}
 
 	t.Run("the claim goes back", func(t *testing.T) {
@@ -1358,10 +1523,12 @@ func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
 // party's to drop. Reporting it here would tell a node that is still running
 // the turn that its turn is over.
 func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending},
 		Manager: rig.manager, Resume: rig.resumer,
@@ -1374,7 +1541,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1389,10 +1556,11 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 // The recovery pass reaps a tail its previous owner abandoned, and that is a
 // turn lost too — the seat's new owner is about to open its mailbox.
 func TestAReapedAbandonedTailIsAnnounced(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launching("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	failed := rig.failures()
@@ -1406,10 +1574,11 @@ func TestAReapedAbandonedTailIsAnnounced(t *testing.T) {
 // Nothing else will ever look at that row, and taking the seat's lease is what
 // proves no live process is still driving it.
 func TestSeatRecoveryReapsALaunchNobodyFinished(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	rig.finished("t1")
@@ -1422,6 +1591,7 @@ func TestSeatRecoveryReapsALaunchNobodyFinished(t *testing.T) {
 }
 
 func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -1436,14 +1606,15 @@ func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 	rig.finished("t1")
 }
 
-// A collect that fails means the job is over regardless: the seat must not be
-// left parked on a run that finished.
+// A collect whose box is gone means the job is over regardless: the seat must
+// not be left parked on a run that finished.
 func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1460,9 +1631,11 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 // really lost. The seat is still freed here, and the loss is not announced a
 // second time under a reason it did not end for.
 func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -1471,7 +1644,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1486,16 +1659,25 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	}
 }
 
-// endedFirst is a store where another party always ends a run a moment
-// before this caller does.
+// endedFirst is a store where another party always ends a run — decides its
+// ending, finishes it and deletes the record — a moment before this caller
+// decides one.
 type endedFirst struct{ PendingStore }
 
-func (s endedFirst) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (s endedFirst) DecideEnding(ctx context.Context, turnID string, d Decision,
 ) (PendingRun, bool, error) {
-	if _, _, err := s.PendingStore.Finish(ctx, turnID, fence, whileIn); err != nil {
+	other := d
+	other.Reason, other.Detail = "", ""
+	decided, ok, err := s.PendingStore.DecideEnding(ctx, turnID, other)
+	if err != nil {
 		return PendingRun{}, false, err
 	}
-	return s.PendingStore.Finish(ctx, turnID, fence, whileIn)
+	if ok {
+		if _, _, err := s.PendingStore.Finish(ctx, turnID, decided.Ending.ID); err != nil {
+			return PendingRun{}, false, err
+		}
+	}
+	return s.PendingStore.DecideEnding(ctx, turnID, d)
 }
 
 // ---------------------------------------------------------------------
@@ -1529,12 +1711,13 @@ func (r *coordRig) failPublishes(err error) {
 // still running, and claimed it: it collected a half-written result, resumed
 // the turn on it and tore the new job's box down.
 func TestAStaleCompletionDoesNotClaimTheNextRun(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -1570,17 +1753,17 @@ func TestAStaleCompletionDoesNotClaimTheNextRun(t *testing.T) {
 // nor launching, and tore down the paused box holding that question's
 // checkout, then marked the run done under the question.
 func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
-		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: map[string]any{
-			"pending_tool_name": "run_sandbox",
-		}}); err != nil || !suspended {
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: json.RawMessage(
+			`{"pending_tool_name":"run_sandbox"}`)}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
 		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})
@@ -1616,12 +1799,13 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 // reclaim it: a paused box has no provider-side expiry, and the pause reaper
 // only looks at runs waiting on a person.
 func TestAFinishedTurnTearsDownTheBoxAFailedRelaunchLeftBehind(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		rig.provider.CreateErr = errors.New("no capacity")
 		defer func() { rig.provider.CreateErr = nil }()
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
 			t.Error("the relaunch got a box the fixture refuses")
 		}
 	}
@@ -1641,6 +1825,7 @@ func TestAFinishedTurnTearsDownTheBoxAFailedRelaunchLeftBehind(t *testing.T) {
 // the one the poll published, so the two cannot disagree about what names a
 // job without a test noticing that every run would then wait forever.
 func TestTheWaitersCompletionIsClaimed(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -1672,6 +1857,7 @@ func TestTheWaitersCompletionIsClaimed(t *testing.T) {
 // reconnected to the paused box, collected the same result and asked the same
 // question a second time.
 func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
@@ -1699,52 +1885,65 @@ func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
 	}
 }
 
-// staleFind answers the parked-run lookup from a snapshot taken before the
-// row moved on, which is what the lookup is by the time the claim lands.
+// staleFind answers the seat's FIRST run listing from a snapshot taken before
+// the row moved on, which is what the lookup is by the time the record lands,
+// and every later one from the store.
 type staleFind struct {
 	PendingStore
 	snapshot PendingRun
+	served   *atomic.Bool
 }
 
-func (s staleFind) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
-	return s.snapshot, true, nil
+func (s staleFind) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
+	if s.served.CompareAndSwap(false, true) {
+		return []PendingRun{s.snapshot}, nil
+	}
+	return s.PendingStore.ListActiveForSeat(ctx, handle)
 }
 
 // AN ANSWER BELONGS TO THE JOB THAT ASKED. The lookup that matched it is a
-// snapshot, and a claim that took whatever the row held by then handed the
-// answer to the job that had replaced the one asking: it resumed the turn with
-// a reply to a question nothing had asked, on top of a job still running.
+// snapshot, and a record or a claim that took whatever the row held by then
+// handed the answer to the job that had replaced the one asking: it resumed
+// the turn with a reply to a question nothing had asked, on top of a job still
+// running. The record names the asker's launch, so it is refused; the
+// listing is read again, finds nothing waiting, and the reply is the ordinary
+// message it now is.
 func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.park("t1")
 	asked := rig.get("t1")
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
 	rig.suspend("t1")
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
-		Queue:    rig.queue, Pending: staleFind{PendingStore: rig.pending, snapshot: asked},
-		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
+		Queue:    rig.queue,
+		Pending:  staleFind{PendingStore: rig.pending, snapshot: asked, served: &atomic.Bool{}},
+		Manager:  rig.manager, Resume: rig.resumer, Account: rig.accountant,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
+	t.Cleanup(coordinator.Stop)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
-	if handled != AnswerConsumed {
-		t.Fatalf("disposition = %q, want %q: an answer to a question already "+
-			"superseded was run as an unrelated message", handled, AnswerConsumed)
+	if handled != AnswerNotMine {
+		t.Fatalf("disposition = %q, want %q: the question this reply matched is gone, "+
+			"so it is an ordinary message", handled, AnswerNotMine)
 	}
 	if got := len(rig.resumer.calls()); got != 0 {
 		t.Fatalf("resumed %d times into a job that asked nothing", got)
 	}
-	if got := rig.get("t1"); got.Status != StatusRunning {
-		t.Fatalf("status = %q, want the replacing job left running", got.Status)
+	if got := rig.get("t1"); got.Status != StatusRunning || got.Answer != nil {
+		t.Fatalf("status = %q with answer %+v, want the replacing job left running",
+			got.Status, got.Answer)
 	}
 }
 
@@ -1771,12 +1970,14 @@ func (p *parkFails) MarkAwaiting(ctx context.Context, turnID string, q Clarifica
 // sat stranded with its box paused and its seat freed until the seat changed
 // hands and recovery reaped it as abandoned.
 func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
 		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
@@ -1833,6 +2034,7 @@ func (s *statusAtAsk) Publish(ctx context.Context, topic string, ev *events.Even
 // included: tearing the box down before the question is out would leave a
 // retry nothing to collect.
 func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
+	t.Parallel()
 	for _, ttl := range []float64{DefaultPauseTTL.Seconds(), 0} {
 		t.Run(fmt.Sprintf("pause ttl %gs", ttl), func(t *testing.T) {
 			rig := newCoordRig(t)
@@ -1847,6 +2049,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
 			coordinator, err := NewCoordinator(CoordinatorOptions{
+				Lease:    leased(rigLease),
 				Audience: &audienceSpy{},
 				Queue:    spy, Pending: rig.pending, Manager: rig.manager,
 				Resume: rig.resumer, Account: rig.accountant,
@@ -1873,6 +2076,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 // reach it: a question recorded but never asked would wait for an answer
 // nobody knew to give.
 func TestAQuestionThatCouldNotBeAnnouncedIsAskedAgain(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
@@ -1920,6 +2124,7 @@ func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error 
 func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    r.queue, Pending: r.pending, Manager: r.manager,
 		Resume: resume, Account: r.accountant,
@@ -1937,6 +2142,7 @@ func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 // that no poll would ever complete, and a seat re-marked busy on it, its mail
 // parked until the seat changed hands (where recovery re-marked it again).
 func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
@@ -1944,7 +2150,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 		rig.runner.StartErr = errors.New("the coding agent would not start")
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err == nil {
 			t.Error("the relaunch started a job the fixture refuses")
 		}
 	}})
@@ -1973,6 +2179,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 // second time and charged it again, the relaunch having cleared the record of
 // the first charge, before failing the turn for having nothing to resume.
 func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
@@ -1981,7 +2188,7 @@ func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
 		// could be had either.
 		rig.provider.CreateErr = errors.New("no capacity")
 		defer func() { rig.provider.CreateErr = nil }()
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
 			t.Error("the relaunch got a box the fixture refuses")
 		}
 	}})
@@ -2008,6 +2215,7 @@ func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
 // the run came back as running with no box, a turn announced lost and never
 // completed, holding its seat on every node that recovered it afterwards.
 func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
@@ -2058,12 +2266,14 @@ func (d drained) Resume(ctx context.Context, _ ResumeRequest) error {
 // resumed, and the node the drain handed the seat to reaped it as abandoned
 // rather than resuming it.
 func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	delivery, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
 		Resume: drained{cancel: cancel},
@@ -2079,7 +2289,7 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("status = %q, want the claim handed back for the seat's next owner", got.Status)
 	}
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 2); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 2); err != nil {
 		t.Fatalf("the next owner's recovery: %v", err)
 	}
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2109,36 +2319,38 @@ func (r *coordRig) deliverControl(t *testing.T) {
 	}
 }
 
-// A FAILED ANSWER DOES NOT PARK THE SEAT. The claim goes back to waiting on a
-// person, which does not hold the seat, and marking it busy regardless parked
-// every later delivery until something recounted the seat. Nothing did: the
-// answer's retry resumes and settles the run, and neither step takes back a
-// mark the failure left, so the seat stayed parked after its run was done.
+// A FAILED ANSWER DOES NOT PARK THE SEAT. The claim goes back to owing the
+// answer's resume, which does not hold the seat — the seat's later mail waits
+// behind it on an inbox HOLD instead, lifted when the resume returns — and
+// marking it busy regardless parked every later delivery until something
+// recounted the seat. Nothing did: the retry resumes and settles the run, and
+// neither step takes back a mark the failure left, so the seat stayed parked
+// after its run was done.
 func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.park("t1")
 	rig.resumer.failWith(errors.New("the model provider did not answer"))
 
-	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
-	if err == nil || handled != AnswerDeferred {
-		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer still owed to "+
-			"the run and sent back", handled, err)
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
+	if err != nil || handled != AnswerConsumed {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer recorded", handled, err)
 	}
-	if got := rig.get("t1"); got.Status != StatusAwaiting {
-		t.Fatalf("status = %q, want the run waiting on its answer again", got.Status)
+	if got := rig.get("t1"); got.Status != StatusAnswered {
+		t.Fatalf("status = %q, want the run owing its answer's resume again", got.Status)
 	}
-	if rig.coordinator.SeatHeldBySandbox("swe") {
-		t.Fatal("a seat whose run went back to waiting on a person was parked")
+	if held, _ := rig.coordinator.SeatRuns("swe"); held {
+		t.Fatal("a seat whose run went back to owing an answer's resume was parked")
 	}
 
 	rig.resumer.failWith(nil)
-	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil); err != nil {
-		t.Fatalf("the answer's retry: %v", err)
+	if fired := rig.fireRetries(); fired != 1 {
+		t.Fatalf("%d retries fired, want the one the failure scheduled", fired)
 	}
 	rig.finished("t1")
-	if rig.coordinator.SeatHeldBySandbox("swe") {
-		t.Fatal("the seat stayed parked after its only run settled")
+	if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
+		t.Fatalf("the seat is held=%v awaiting=%v after its only run settled", held, awaits)
 	}
 }
 
@@ -2146,12 +2358,13 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 // accounting
 // ---------------------------------------------------------------------
 
-// A cap cannot un-spend a collected run, so a charge it refuses does not stop
-// the turn: the tokens are spent and the work they bought continues. The
-// refusal itself moves no counter, which is the shared counter's answer to
-// every charge it refuses; this case used to assert the opposite of a spy
-// that recorded refused charges, which the real accountant never did.
+// A cap cannot un-spend a collected run, so a run that takes its seat past a
+// ceiling does not stop the turn: the tokens are spent and the work they
+// bought continues. The accountant post-charges — it records the run whole and
+// only reports that the counter went over — so "over" is a fact about the
+// counter, never a refusal of the run.
 func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.accountant.set(true, nil)
@@ -2175,6 +2388,7 @@ func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
 // as long as the resume kept failing: every poll tick, on a node that had lost
 // the seat.
 func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
@@ -2204,6 +2418,7 @@ func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
 // coordinator that never saw the first charge. Only the run's own row can tell
 // it the spend is already counted.
 func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
@@ -2218,6 +2433,7 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	// charging the same fleet counter.
 	successor := &ledgerSpy{}
 	next, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Account: successor,
@@ -2252,11 +2468,13 @@ func (onlyTheClaim) ReleaseBox(context.Context, string) error               { re
 // retry charged the same job again. Riding on the release, the run is handed
 // back with its record or not at all.
 func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
 	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
 		Resume: resumer, Account: rig.accountant,
@@ -2286,6 +2504,7 @@ func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
 // A duplicate completion of a run that parked on a question is the other way
 // one job reaches the charge twice.
 func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{
@@ -2309,12 +2528,13 @@ func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
 // even when the first job's completion was retried and its row carries the
 // first job's record into the relaunch.
 func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -2347,6 +2567,7 @@ func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 // answered left it where it was, so the retry offers the spend again rather
 // than inheriting an answer about a counter that may be reachable by then.
 func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
@@ -2375,6 +2596,7 @@ func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
 // completion retry, which is the double-charge the run's own record exists to
 // stop, reintroduced for exactly the companies a cap is binding on.
 func TestARunThatWentOverItsCapIsChargedOnceAcrossARetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
@@ -2395,9 +2617,101 @@ func TestARunThatWentOverItsCapIsChargedOnceAcrossARetry(t *testing.T) {
 	}
 }
 
+// A CHARGE THAT REACHED THE COMPANY AND NOT THE SEAT IS FINISHED, NOT REPEATED.
+//
+// The counter keeps the company's share of a post-charge whose seat write
+// failed, and names the partial. The compensation this replaced took the
+// company's share back, and a resume that then succeeded left the run on
+// neither counter, since only a failed resume brings a collected run back. Now
+// the partial rides the release, and the retry a failed resume brings records
+// the seat's share alone: the company is counted once and the seat once.
+func TestAChargeThatReachedOnlyTheCompanyIsFinishedOnTheRetry(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	run, found, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil || !found || run.Charged || !run.CompanyCharged {
+		t.Fatalf("the released row = (%+v, %v, %v), want the company's share recorded and "+
+			"the run not wholly charged", run, found, err)
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Errorf("the company was charged %d for one run of 1000: the retry counted it again", got)
+	}
+	if got := rig.accountant.seatTotal(); got != 1000 {
+		t.Errorf("the seat was charged %d for one run of 1000: the retry did not finish its share", got)
+	}
+	if got := rig.accountant.companyChargedHanded(); !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("the charges were handed companyCharged %v, want the retry told the company "+
+			"already holds the run", got)
+	}
+}
+
+// A NEW LAUNCH OWES ITS OWN SPEND WHOLE. The company's share of the previous
+// job is that job's record, and carried into the next one it would tell that
+// job's completion the company already holds it, so the company would never
+// be charged for the second job at all.
+func TestANewLaunchClearsThePreviousJobsCompanyCharge(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if !rig.get("t1").CompanyCharged {
+		t.Fatal("setup: the partial charge was not recorded on the row")
+	}
+
+	if _, err := rig.pending.BeginLaunch(t.Context(), rig.get("t1"), Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if run := rig.get("t1"); run.CompanyCharged || run.Charged {
+		t.Fatalf("the relaunched row carries the previous job's charge: charged=%v "+
+			"company_charged=%v", run.Charged, run.CompanyCharged)
+	}
+}
+
+// A PARTIAL WHOSE RESUME SUCCEEDS LEAVES ONLY THE SEAT SHORT. Nothing brings a
+// resumed run back to be charged, so the company's share is the one record
+// the run gets — which is why it is kept rather than taken back.
+func TestAChargeThatReachedOnlyTheCompanyKeepsItWhenTheResumeSucceeds(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if len(rig.resumer.calls()) != 1 {
+		t.Fatal("a partial charge cost the turn its resume")
+	}
+	if got, seat := rig.accountant.total(), rig.accountant.seatTotal(); got != 1000 || seat != 0 {
+		t.Errorf("company = %d and seat = %d, want the company's 1000 kept and the seat short", got, seat)
+	}
+}
+
 // Accounting is a store call that can fail on its own, and its failing is not
 // a reason to lose the turn.
 func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.accountant.err = errors.New("counter unreachable")
@@ -2425,11 +2739,12 @@ func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
 var answerOnTheDM = ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"}
 
 func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2437,7 +2752,7 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	}
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil)
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil))
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -2470,13 +2785,14 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 // inbox — and a DM is one conversation however it is threaded, which is what
 // the match runs on now.
 func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	// Parked from a thread on the DM line: conversation chat:D1, partition
 	// chat:D1:root-1.
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2487,7 +2803,7 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 	// batch — which is exactly the shape the row's own partition cannot
 	// match.
 	disposition, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		ConversationRef{Identity: "chat:D1", Partition: "chat:D1"}, "use main", nil)
+		chatReply(ConversationRef{Identity: "chat:D1", Partition: "chat:D1"}, "use main", nil))
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -2507,9 +2823,12 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 // The match has two keys on each side, and which one decided is the whole
 // diagnosis: a row whose conversation equals the delivery's was admitted on
 // the identity, and two questions parked on one direct-message line are told
-// apart by the partitions alone. Logging the identity by itself left the two
+// apart by the partitions alone. Logging the identity by itself — which is
+// what this line did once the match moved onto it — left the two
 // indistinguishable, on the exact path where the two values differ and an
 // operator is asking why THIS run woke.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
@@ -2527,8 +2846,7 @@ func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
 	// A TOP-LEVEL reply on the same line: same conversation, different
 	// batch, so the identity is what admitted this row.
 	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		ConversationRef{Identity: "chat:D1", Partition: "chat:D1"},
-		"use main", nil); err != nil {
+		chatReply(ConversationRef{Identity: "chat:D1", Partition: "chat:D1"}, "use main", nil)); err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
 
@@ -2558,8 +2876,8 @@ type blindStore struct {
 	err error
 }
 
-func (s blindStore) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
-	return PendingRun{}, false, s.err
+func (s blindStore) ListActiveForSeat(context.Context, string) ([]PendingRun, error) {
+	return nil, s.err
 }
 
 // AND SO DOES THE LINE FOR A LOOKUP THAT COULD NOT BE MADE.
@@ -2569,6 +2887,8 @@ func (s blindStore) FindAwaitingByConversation(context.Context, string, Conversa
 // the only trace that a parked run may have just missed its answer is this
 // line. With one key on it an operator cannot tell which read was attempted
 // against what, which on a direct message is two different values.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestTheLookupFailureNamesBothKeysOfTheDelivery(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
@@ -2578,8 +2898,7 @@ func TestTheLookupFailureNamesBothKeysOfTheDelivery(t *testing.T) {
 	}
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"},
-		"use main", nil)
+		chatReply(ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"}, "use main", nil))
 	if err != nil {
 		t.Fatalf("a lookup failure must not fail the delivery: %v", err)
 	}
@@ -2600,15 +2919,17 @@ func TestTheLookupFailureNamesBothKeysOfTheDelivery(t *testing.T) {
 	}
 }
 
-// A RESUME THAT BROKE LEAVES THE QUESTION OPEN, not the seat held.
+// A RESUME THAT BROKE LEAVES THE ANSWER OWED, not the seat held — and not the
+// question open.
 //
-// The claim takes a parked run out of the waiting set and gives its seat back
-// to the resume; a resume that fails puts the ROW back where it was —
-// [StatusAwaiting], still waiting for a person — so the counts have to go back
-// there too. Counted onto the seat instead, the run waited for an answer that
-// every delivery from then on was parked behind, for as long as this node kept
-// the seat: the person answered twice and neither reply reached anything.
-func TestAFailedResumeLeavesTheQuestionOpenRatherThanTheSeatHeld(t *testing.T) {
+// The claim takes an answered run out of [StatusAnswered] and gives its seat
+// back to the resume; a resume that fails puts the ROW back where it was —
+// still owing that answer's resume — so the counts have to go back there too.
+// Counted onto the seat instead, every delivery from then on was parked behind
+// a run the coordinator alone retries; counted as an open question instead,
+// the person's NEXT message would be taken as the answer the run already has.
+func TestAFailedResumeLeavesTheAnswerOwedRatherThanTheSeatHeld(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -2621,18 +2942,18 @@ func TestAFailedResumeLeavesTheQuestionOpenRatherThanTheSeatHeld(t *testing.T) {
 	}
 
 	rig.resumer.err = errors.New("the model never answered")
-	if _, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil); err == nil {
-		t.Fatal("TryResumeFromAnswer reported a resume that never happened")
+	if d, err := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil)); err != nil || d != AnswerConsumed {
+		t.Fatalf("TryResumeFromAnswer = %q, %v, want the answer recorded", d, err)
 	}
-	if got := rig.get("t1"); got.Status != StatusAwaiting {
+	if got := rig.get("t1"); got.Status != StatusAnswered {
 		t.Fatalf("status = %q, want the row back where the claim found it", got.Status)
 	}
 	held, awaits := rig.coordinator.SeatRuns("swe")
-	if held || !awaits {
-		t.Fatalf("SeatRuns = held %v / awaiting %v, want the question open again "+
-			"on a free seat — the person's next answer is the only thing that "+
-			"moves this run", held, awaits)
+	if held || awaits {
+		t.Fatalf("SeatRuns = held %v / awaiting %v, want neither: the run owes a "+
+			"resume the coordinator retries, which holds no seat and waits on nobody",
+			held, awaits)
 	}
 }
 
@@ -2648,7 +2969,7 @@ func parkOnAQuestion(t *testing.T, rig *coordRig) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2695,6 +3016,7 @@ func (c *Coordinator) answerAttemptsFor(handle, turnID string) int {
 // ordinary route: the run IS being resumed, by the winner, and a turn on this
 // copy would answer a question that is already being answered.
 func TestAnAnswerAnotherInboundAlreadyClaimedIsSpent(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	// THE RACE ITSELF: the lookup finds the run awaiting and the claim
@@ -2703,7 +3025,7 @@ func TestAnAnswerAnotherInboundAlreadyClaimedIsSpent(t *testing.T) {
 	rig.coordinator.pending = lostClaimStore{PendingStore: rig.pending}
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", answerFrom("use main"))
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", answerFrom("use main")))
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -2718,31 +3040,31 @@ func TestAnAnswerAnotherInboundAlreadyClaimedIsSpent(t *testing.T) {
 // lookup still matches: the race the at-most-once gate exists for.
 type lostClaimStore struct{ PendingStore }
 
-func (lostClaimStore) ClaimForResume(context.Context, string, Tail) (PendingRun, bool, error) {
+func (lostClaimStore) ClaimForResume(context.Context, string, Tail, Fence) (PendingRun, bool, error) {
 	return PendingRun{}, false, nil
 }
 
-// A CLAIM THE STORE COULD NOT WRITE REQUEUES THE ANSWER.
+// A RECORD THE STORE COULD NOT WRITE HANDS THE ANSWER BACK.
 //
 // The ambiguous one, and the reason the ambiguity is resolved towards the run:
-// a store that could not say whether the flip landed is not a store that said
-// no. Reported as "not the answer" — which is what an error used to mean at
-// the dispatcher — the person's reply went on to be consumed as an unrelated
-// turn while the run it was written for waited for a further message.
-func TestAClaimTheStoreCouldNotWriteRequeuesTheAnswer(t *testing.T) {
+// a store that could not say whether the record landed is not a store that
+// said no. Reported as "not the answer" — which is what an error used to mean
+// at the dispatcher — the person's reply went on to be consumed as an
+// unrelated turn while the run it was written for waited for a further
+// message.
+func TestARecordTheStoreCouldNotWriteHandsTheAnswerBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.coordinator.pending = &refusingStore{
-		inner: rig.pending, refuse: []string{"ClaimForResume"},
-	}
+	refuseTheRecord(rig)
 
 	disposition, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", answerFrom("use main"))
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", answerFrom("use main")))
 	if err == nil {
-		t.Fatal("a claim that could not be written reported success")
+		t.Fatal("a record that could not be written reported success")
 	}
 	if disposition != AnswerDeferred {
-		t.Fatalf("disposition = %q, want %q: the claim may or may not have "+
+		t.Fatalf("disposition = %q, want %q: the record may or may not have "+
 			"landed, and an answer that arrives twice is recoverable where one "+
 			"that is spent is not", disposition, AnswerDeferred)
 	}
@@ -2751,14 +3073,50 @@ func TestAClaimTheStoreCouldNotWriteRequeuesTheAnswer(t *testing.T) {
 	}
 }
 
-// A RUN THAT IS TERMINALLY GONE LETS ITS ANSWER BE AN ORDINARY MESSAGE.
+// A CLAIM THE STORE COULD NOT WRITE IS THE COORDINATOR'S TO RETRY.
+//
+// Past the record the delivery is spent: the answer is on the run, and a
+// resume whose claim could not be written is one failed attempt of the series
+// the coordinator retries on its own schedule — never a reason to hand the
+// person's message back.
+func TestAClaimTheStoreCouldNotWriteIsRetriedByTheCoordinator(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	refusing := &refusingStore{inner: rig.pending, refuse: []string{"ClaimForResume"}}
+	rig.coordinator.pending = refusing
+
+	disposition, err := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", answerFrom("use main")))
+	if err != nil || disposition != AnswerConsumed {
+		t.Fatalf("disposition = %q, %v, want %q", disposition, err, AnswerConsumed)
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered {
+		t.Fatalf("status = %q, want the answer recorded and its resume owed", got.Status)
+	}
+	if delays := rig.retries.delays(); !slices.Equal(delays, []time.Duration{answerRetrySeed}) {
+		t.Fatalf("scheduled %v, want one retry after %s", delays, answerRetrySeed)
+	}
+	rig.coordinator.pending = rig.pending
+	rig.fireRetries()
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times once the claim could be written, want 1", got)
+	}
+}
+
+// A RUN THAT IS TERMINALLY GONE HANDS ITS ANSWER BACK THROUGH ITS ROW, even on
+// the inline attempt that still holds the delivery.
 //
 // The other half of the classification, and the half a requeue would turn into
 // a loop with no end: these runs have been settled, announced and deleted, so
-// nothing is coming back for the delivery and nothing is owed it. Acking it
-// would be worse still — the person's message would be swallowed on behalf of
-// a turn that no longer exists.
-func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
+// nothing is coming back for the delivery. The reply is not swallowed with
+// them: the ending lets it go before it deletes the row, and its copy reaches
+// the seat as the ordinary message it is, once. The delivery itself is spent —
+// it used to be handed on as the ordinary message instead, which needed the
+// store to delete a row still holding the reply on the caller's word, and an
+// ending that could not land left the reply both on the row and handed on.
+func TestAnAnswerForATerminallyGoneRunGoesBackThroughItsRow(t *testing.T) {
+	t.Parallel()
 	for name, arrange := range map[string]func(*coordRig){
 		// The claim was taken and could NOT be given back, so the run was
 		// settled in its place rather than stranded in the claim.
@@ -2768,42 +3126,53 @@ func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
 				inner: rig.pending, refuse: []string{"ReleaseClaim"},
 			}
 		},
-		// A claimable row with nothing to resume into, so the run is
-		// failed.
+		// A row the launch path did not write: claimable, with nothing to
+		// resume into, so the run is failed.
 		"a row with no suspended conversation": func(rig *coordRig) {
 			rig.coordinator.pending = statelessStore{PendingStore: rig.pending}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newCoordRig(t)
+			holds := rig.withHold()
 			parkOnAQuestion(t, rig)
 			arrange(rig)
 
+			reply := answerFrom("use main")
 			disposition, err := rig.coordinator.TryResumeFromAnswer(
-				t.Context(), "swe", answerOnTheDM, "use main", answerFrom("use main"))
-			if err != nil {
-				t.Fatalf("TryResumeFromAnswer = %v, want no error: there is "+
-					"nothing left to come back to", err)
+				t.Context(), "swe", chatReply(answerOnTheDM, "use main", reply))
+			if err != nil || disposition != AnswerConsumed {
+				t.Fatalf("TryResumeFromAnswer = %q, %v, want %q: the answer is the run's, "+
+					"and its ending carries the reply back", disposition, err, AnswerConsumed)
 			}
-			if disposition != AnswerNotMine {
-				t.Fatalf("disposition = %q, want %q: the run has been ended and "+
-					"announced, so this is an ordinary message now",
-					disposition, AnswerNotMine)
+			if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(reply.ID).String()}) {
+				t.Fatalf("handed back %v, want the reply's copy exactly once", got)
 			}
-			if failed := rig.failures(); len(failed) != 1 {
-				t.Fatalf("announced %+v, want the one lost turn", failed)
+			rig.finished("t1")
+			if failed := rig.failures(); len(failed) != 1 ||
+				!strings.Contains(failed[0].Detail, "goes back to the seat") {
+				t.Fatalf("announced %+v, want the one lost turn, saying its reply went back", failed)
+			}
+			if spent := rig.spentDeliveries(); len(spent) != 1 || spent[0].id != reply.ID.String() ||
+				spent[0].publishedBefore != 0 {
+				t.Fatalf("spent %+v, want the reply's own delivery spent before its copy went out", spent)
+			}
+			if holds.holding("swe") {
+				t.Fatalf("the seat's inbox is held after the reply went back: %v", holds.log)
 			}
 		})
 	}
 }
 
 // statelessStore hands back a claimed run with no suspended conversation on
-// it, which is what a row written before [StatusLaunching] existed looks like
-// to this build.
+// it, which is what a row this build's launch path did not write looks like:
+// the resume has nothing to re-enter, and the run is failed as
+// no_execute_state.
 type statelessStore struct{ PendingStore }
 
-func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
-	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail)
+func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
 	run.ExecuteState = nil
 	return run, won, err
 }
@@ -2812,24 +3181,26 @@ func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail 
 //
 // Nothing outside this package bounds the loop: a run parked on a question
 // stays matchable for ever, since the pause reaper only moves it to reseed, so
-// a resume that fails the same way every time would circle the seat's inbox
+// a record that fails the same way every time would circle the seat's inbox
 // for the life of the process. The budget is [MaxAnswerAttempts], and what
 // happens at the end of it is the ordinary route: the run is left parked
 // rather than destroyed, because every failure that gets here is a statement
-// about THIS node.
+// about THIS node. (The resume of an answer that WAS recorded has its own
+// series under the same bound — see
+// TestAnAnswerThatCannotBeResumedIsHandedBackAfterItsAttempts.)
 func TestTheRequeueOfAnAnswerIsBounded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 	delivery := answerFrom("use main")
 
 	// Every attempt but the LAST asks for the delivery back.
 	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
 		disposition, err := rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 		if err == nil {
-			t.Fatalf("attempt %d: the resume reported success", attempt)
+			t.Fatalf("attempt %d: the record reported success", attempt)
 		}
 		if disposition != AnswerDeferred {
 			t.Fatalf("attempt %d of %d: disposition = %q, want %q — the run is "+
@@ -2839,9 +3210,9 @@ func TestTheRequeueOfAnAnswerIsBounded(t *testing.T) {
 	}
 
 	disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 	if disposition != AnswerNotMine {
-		t.Fatalf("disposition = %q on attempt %d, want %q: a resume that fails "+
+		t.Fatalf("disposition = %q on attempt %d, want %q: a record that fails "+
 			"for ever must not requeue for ever",
 			disposition, MaxAnswerAttempts, AnswerNotMine)
 	}
@@ -2859,16 +3230,16 @@ func TestTheRequeueOfAnAnswerIsBounded(t *testing.T) {
 // one's chances — and a run whose node was briefly unable to resume it would
 // answer nobody ever again.
 func TestASecondMessageGetsItsOwnRequeueBudget(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 
 	first := answerFrom("use main")
 	var last AnswerDisposition
 	for attempt := 1; attempt <= MaxAnswerAttempts; attempt++ {
 		last, _ = rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", first)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", first))
 	}
 	if last != AnswerNotMine {
 		t.Fatalf("the first message's budget did not run out (%q)", last)
@@ -2876,13 +3247,12 @@ func TestASecondMessageGetsItsOwnRequeueBudget(t *testing.T) {
 	// AND STAYS SPENT: a second copy of the same message does not buy the
 	// same delivery a second budget.
 	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", first); disposition != AnswerNotMine {
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", first)); disposition != AnswerNotMine {
 		t.Fatalf("a further copy of a spent message was requeued again (%q)", disposition)
 	}
 
 	disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "or the release branch",
-		answerFrom("or the release branch"))
+		t.Context(), "swe", chatReply(answerOnTheDM, "or the release branch", answerFrom("or the release branch")))
 	if disposition != AnswerDeferred {
 		t.Fatalf("disposition = %q, want %q: a different message is a new attempt "+
 			"at the question and starts its own budget", disposition, AnswerDeferred)
@@ -2899,16 +3269,16 @@ func TestASecondMessageGetsItsOwnRequeueBudget(t *testing.T) {
 // end was reachable with two messages. A budget per (run, delivery) is the
 // only shape that counts what the doc always claimed it counted.
 func TestTwoMessagesCirclingOneRunBothRunOutOfBudget(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 
 	first, second := answerFrom("use main"), answerFrom("or the release branch")
 	offer := func(delivery *events.Event) AnswerDisposition {
 		t.Helper()
 		disposition, _ := rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 		return disposition
 	}
 
@@ -2946,14 +3316,14 @@ func TestTwoMessagesCirclingOneRunBothRunOutOfBudget(t *testing.T) {
 // instead of two. A SPENT budget is different and does make room: its delivery
 // has already been let go to the ordinary route.
 func TestOneRunHoldsABoundedNumberOfAnswerBudgets(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 	offer := func(delivery *events.Event) AnswerDisposition {
 		t.Helper()
 		disposition, _ := rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 		return disposition
 	}
 
@@ -3004,14 +3374,14 @@ func TestOneRunHoldsABoundedNumberOfAnswerBudgets(t *testing.T) {
 // nowhere near reached and the message is let go all the same, because the
 // engine has stopped being willing to wait for it.
 func TestTheHandBackOfAnAnswerStopsAtTheRunsAwaitingWindow(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 	delivery := answerFrom("use main")
 
 	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", delivery,
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery),
 	); disposition != AnswerDeferred {
 		t.Fatalf("the first attempt answered %q, want %q", disposition, AnswerDeferred)
 	}
@@ -3022,7 +3392,7 @@ func TestTheHandBackOfAnAnswerStopsAtTheRunsAwaitingWindow(t *testing.T) {
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
 
 	disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 	if disposition != AnswerNotMine {
 		t.Fatalf("disposition = %q after the run's whole awaiting window, want "+
 			"%q: %d of its %d attempts were still unspent, and a count is not "+
@@ -3031,15 +3401,17 @@ func TestTheHandBackOfAnAnswerStopsAtTheRunsAwaitingWindow(t *testing.T) {
 	}
 }
 
-// AND NOTHING IS CHARGED WHILE ANOTHER RUN HOLDS THE SEAT.
+// AND A HELD SEAT'S HAND-BACK IS COUNTED LIKE ANY OTHER.
 //
-// There the delivery is requeued for the SEAT's sake whatever the offer says —
-// an immediate republish, at a rate nothing bounds, for as long as that job
-// runs — so a charge there would spend the whole budget inside a held run's
-// park loop within milliseconds and leave nothing for the attempts that are
-// actually spaced: the ones made once the seat is free, which is the state a
-// parked run leaves it in.
-func TestAHeldSeatsParkSpendsNoAnswerBudget(t *testing.T) {
+// It once was not: a held seat PARKED a delivery it did not consume — an
+// immediate republish, at a rate nothing bounds — so a charge there spent the
+// whole budget inside one held run's park loop. An answer still owed is never
+// parked now, because a republish lands at the tail of the inbox, behind the
+// person's next message; it is handed back by deferral wherever the seat
+// stands, spaced by the seat host's renew, and the bound that ends it there
+// has to end it here too.
+func TestAHeldSeatsHandBackIsCountedLikeAnyOther(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	// A SECOND RUN OF THE SAME SEAT, holding it while the first waits for a
@@ -3053,22 +3425,20 @@ func TestAHeldSeatsParkSpendsNoAnswerBudget(t *testing.T) {
 	if held, awaits := rig.coordinator.SeatRuns("swe"); !held || !awaits {
 		t.Fatalf("SeatRuns = %v, %v, want a seat both held and awaiting", held, awaits)
 	}
-	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
-		ErrResumeUnavailable, "swe")
+	refuseTheRecord(rig)
 
 	delivery := answerFrom("use main")
-	for attempt := 1; attempt <= MaxAnswerAttempts*3; attempt++ {
+	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
 		disposition, _ := rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 		if disposition != AnswerDeferred {
-			t.Fatalf("pass %d: disposition = %q, want %q — the park this "+
-				"delivery lands on is the held seat's, and it spaces nothing",
-				attempt, disposition, AnswerDeferred)
+			t.Fatalf("pass %d: disposition = %q, want %q", attempt, disposition, AnswerDeferred)
 		}
 	}
-	if counted := rig.coordinator.answerAttemptsFor("swe", "t1"); counted != 0 {
-		t.Fatalf("%d attempts were charged to a delivery the seat's own park "+
-			"was requeuing anyway", counted)
+	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery)); disposition != AnswerNotMine {
+		t.Fatalf("disposition = %q on attempt %d, want %q: the held seat's hand-back is "+
+			"bounded like every other", disposition, MaxAnswerAttempts, AnswerNotMine)
 	}
 }
 
@@ -3082,6 +3452,7 @@ func TestAHeldSeatsParkSpendsNoAnswerBudget(t *testing.T) {
 // the successor gets a clean set of attempts. Neither moment goes back through
 // the offer, so neither is covered by what the offer itself clears.
 func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
+	t.Parallel()
 	for name, finish := range map[string]func(*testing.T, *coordRig){
 		// THE RUN ENDS somewhere else entirely: the seat leaves the
 		// company while its run is still parked on a question, and the
@@ -3090,7 +3461,7 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 		// with it.
 		"a run whose record is deleted": func(t *testing.T, rig *coordRig) {
 			t.Helper()
-			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "node-a:1", 3); err != nil {
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Fatalf("RetireSeat: %v", err)
 			}
 		},
@@ -3101,11 +3472,10 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rig := newCoordRig(t)
 			parkOnAQuestion(t, rig)
-			rig.resumer.err = errors.New("the model never answered")
+			refuseTheRecord(rig)
 			if _, err := rig.coordinator.TryResumeFromAnswer(
-				t.Context(), "swe", answerOnTheDM, "use main",
-				answerFrom("use main")); err == nil {
-				t.Fatal("the resume reported success")
+				t.Context(), "swe", chatReply(answerOnTheDM, "use main", answerFrom("use main"))); err == nil {
+				t.Fatal("the record reported success")
 			}
 			if counted := rig.coordinator.answerAttemptsFor("swe", "t1"); counted != 1 {
 				t.Fatalf("the failed handoff was counted %d times, want once", counted)
@@ -3124,11 +3494,12 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 // A run whose box was reclaimed must not be told to continue in a working tree
 // that is gone — git is the durable state and the brief has to say so.
 func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		DeliveredRefs: []string{"wip/t1"},
+		WIPBranch: "wip/t1",
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -3139,7 +3510,7 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	rig.tick()
 
 	if _, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", nil); err != nil {
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil)); err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
 	calls := rig.resumer.calls()
@@ -3154,9 +3525,70 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	}
 }
 
+// A PARKED RUN'S BRANCH IS A BRANCH. It is what a re-seeded run is told to
+// check out, and it was taken from the run's first delivered ref — which is a
+// pull request's URL whenever the run opened one, so the brief said "check
+// out the existing branch `https://…/pull/42`", which git cannot. It is the
+// branch the ask recorded, and nothing the run delivered stands in for it.
+func TestAParkedRunsBranchIsNeverAPullRequestURL(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		recorded, want string
+	}{
+		"the ask recorded one":   {recorded: "wip/t1", want: "wip/t1"},
+		"the ask recorded none":  {recorded: "", want: ""},
+		"not a name git accepts": {recorded: "wip t1", want: ""},
+		"past what a row carries": {
+			recorded: "wip/" + strings.Repeat("b", MaxBranchBytes), want: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.runner.Finish(Result{
+				NeedsInput: true, Question: "which branch?", AskTo: "requester",
+				DeliveredRefs: []string{"https://github.com/acme/api/pull/42"},
+				WIPBranch:     tc.recorded,
+			})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if got := rig.get("t1").Branch; got != tc.want {
+				t.Fatalf("the parked branch is %q, want %q", got, tc.want)
+			}
+
+			// And what the re-seed is told once the box is gone.
+			rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+			rig.tick()
+			if _, err := rig.coordinator.TryResumeFromAnswer(
+				t.Context(), "swe", chatReply(answerOnTheDM, "use main", nil)); err != nil {
+				t.Fatalf("TryResumeFromAnswer: %v", err)
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want 1", len(calls))
+			}
+			answer := calls[0].Answer
+			if strings.Contains(answer, "pull/42") {
+				t.Errorf("the re-seed is pointed at a pull request: %q", answer)
+			}
+			want := "check out the work-in-progress branch it pushed earlier"
+			if tc.want != "" {
+				want = "check out the existing branch `" + tc.want + "`"
+			}
+			if !strings.Contains(answer, want) {
+				t.Errorf("the re-seed does not say %q: %q", want, answer)
+			}
+		})
+	}
+}
+
 // A zero TTL means "never hold a blocked box": tear it down the moment the run
 // blocks, and re-seed from the branch when the answer comes.
 func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
@@ -3181,6 +3613,7 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 // The question reaches the engine's audited announcement path; the sandbox
 // never posts anything itself.
 func TestAParkedQuestionIsAnnounced(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "team"})
@@ -3216,6 +3649,7 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 
 // A question with a credential in it becomes an announcement anyone can read.
 func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	secret := "glpat-" + strings.Repeat("e", 20)
@@ -3243,6 +3677,7 @@ func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
 
 // The findings become a tool message published as a phase record.
 func TestTheResumeAnswerIsRedacted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	secret := "ghp_" + strings.Repeat("b", 36)
@@ -3271,8 +3706,10 @@ func TestTheResumeAnswerIsRedacted(t *testing.T) {
 // deferred instead; see [Coordinator.answerLookupFailed] and the dispatcher
 // case that drives both.
 func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -3282,7 +3719,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	if _, awaits := coordinator.SeatRuns("swe"); awaits {
 		t.Fatal("the seat reports a run awaiting an answer, which is the other half")
 	}
-	disposition, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "hello", nil)
+	disposition, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", chatReply(answerOnTheDM, "hello", nil))
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -3299,16 +3736,17 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 // that is down for good holding a person's reply for ever, and the message is
 // let go to the ordinary route at the end of it exactly as a matched run's is.
 func TestAnUnreadableLookupOnAnAwaitingSeatIsBounded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.pending = &refusingStore{
-		inner: rig.pending, refuse: []string{"FindAwaitingByConversation"},
+		inner: rig.pending, refuse: []string{"ListActiveForSeat"},
 	}
 	delivery := answerFrom("use main")
 
 	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
 		disposition, err := rig.coordinator.TryResumeFromAnswer(
-			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+			t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery))
 		if disposition != AnswerDeferred {
 			t.Fatalf("attempt %d of %d: disposition = %q, want %q — a run on "+
 				"this seat is awaiting an answer and only the row could not be "+
@@ -3320,7 +3758,7 @@ func TestAnUnreadableLookupOnAnAwaitingSeatIsBounded(t *testing.T) {
 		}
 	}
 	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", answerOnTheDM, "use main", delivery,
+		t.Context(), "swe", chatReply(answerOnTheDM, "use main", delivery),
 	); disposition != AnswerNotMine {
 		t.Fatalf("disposition = %q on attempt %d, want %q: a store that never "+
 			"answers must not hold a person's reply for ever",
@@ -3332,8 +3770,8 @@ func TestAnUnreadableLookupOnAnAwaitingSeatIsBounded(t *testing.T) {
 // overriding only what the test exercises.
 type brokenStore struct{ PendingStore }
 
-func (brokenStore) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
-	return PendingRun{}, false, fmt.Errorf("store unreachable")
+func (brokenStore) ListActiveForSeat(context.Context, string) ([]PendingRun, error) {
+	return nil, fmt.Errorf("store unreachable")
 }
 
 // ---------------------------------------------------------------------
@@ -3342,10 +3780,11 @@ func (brokenStore) FindAwaitingByConversation(context.Context, string, Conversat
 
 // The waiter then drives the recovered job to completion.
 func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a:1", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a:1", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if !rig.coordinator.SeatHeldBySandbox("swe") {
@@ -3359,13 +3798,14 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 // Nothing will ever pick up a resumed row — the at-most-once claim already
 // flipped, so a redelivered completion is refused — and its box sits paused.
 func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID), rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	rig.finished("t1")
@@ -3379,15 +3819,17 @@ func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
 
 // A person's answer can arrive days later; the run waits for it.
 func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a:1", 1); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a:1", 1); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
@@ -3412,6 +3854,7 @@ func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
 // A detached run belongs to its row, not to this process. Reaping the box on
 // release would destroy work the successor is about to resume.
 func TestReleasingASeatTearsNothingDown(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -3433,6 +3876,7 @@ func TestReleasingASeatTearsNothingDown(t *testing.T) {
 // resumer is among them: every node that builds a coordinator runs the engine a
 // completion resumes into, and "not on this node" is the resumer's answer.
 func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
+	t.Parallel()
 	_, err := NewCoordinator(CoordinatorOptions{})
 	if err == nil {
 		t.Fatal("a coordinator with no queue, store, manager or resumer was accepted")
@@ -3465,6 +3909,7 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 // The two siblings — abandon() and Manager.discard() — already detach, with
 // comments saying why. This one did not.
 func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	if run.SandboxID == "" {
@@ -3495,6 +3940,7 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 // recovery pass and polled by no waiter: the box ran to its provider's TTL,
 // billed, with nothing left to reclaim it.
 func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -3522,6 +3968,7 @@ func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 // Only a run still launching is one nothing else will act on, so only that one
 // is settled; settling this one would destroy a turn that is fine.
 func TestFailingARunWhoseSuspensionLandedLeavesItAlone(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 
@@ -3543,6 +3990,7 @@ func TestFailingARunWhoseSuspensionLandedLeavesItAlone(t *testing.T) {
 // A run that is already gone was settled by somebody else, who reclaimed its
 // box and said so.
 func TestFailingARunThatIsAlreadyGoneDoesNothing(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	if err := rig.coordinator.FailRun(t.Context(), "never-launched",
 		types.SandboxFailureSuspensionUnrecorded, "gone"); err != nil {
@@ -3562,11 +4010,12 @@ func TestFailingARunThatIsAlreadyGoneDoesNothing(t *testing.T) {
 // topic that goes with it. Left alone they stayed in the ageless bucket for
 // good, a running job's box kept alive by the waiter on every tick.
 func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	running := rig.launch("running")
 	launching := rig.launching("launching")
 	parked := rig.launch("parked")
-	if err := rig.pending.MarkAwaiting(t.Context(), "parked", Clarification{Question: "which branch?"}); err != nil {
+	if err := rig.pending.MarkAwaiting(t.Context(), "parked", Clarification{Question: "which branch?", AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := rig.pending.MarkBoxPaused(t.Context(), "parked", rig.now); err != nil {
@@ -3574,11 +4023,11 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	claimed := rig.launch("claimed")
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "claimed",
-		CompletionTail(claimed.LaunchID)); err != nil || !won {
+		CompletionTail(claimed.LaunchID), rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.launch("reseed")
-	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{Question: "still?"}); err != nil {
+	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{Question: "still?", AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if won, err := rig.pending.ExpirePause(t.Context(), "reseed"); err != nil || !won {
@@ -3589,7 +4038,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "colleague", AgentHandle: "pm", CreatedAt: rig.now,
 	}, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -3600,7 +4049,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	rig.coordinator.countRun("swe", StatusRunning)
 
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat: %v", err)
 	}
 	for _, id := range []string{"running", "launching", "parked", "claimed", "reseed"} {
@@ -3632,17 +4081,69 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 }
 
+// A RETIREMENT ENDS THE RUNS OF THE SEAT IT NAMES BY ID, AND NO OTHER'S. The
+// mailbox it retires may have been found on the broker alone, with no handle
+// recorded, and a retirement that selected by the handle it held found none of
+// the seat's runs and let their subscriptions go from under them. Nor is a
+// handle what a seat is: the same one under a renamed organisation is another
+// seat, whose runs are not this retirement's to end. The handle the runs carry
+// is what the announcement and this node's own bookkeeping name.
+func TestRetiringASeatByItsIDEndsItsRunsAndNoNamesakes(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	running := rig.launch("running")
+	namesakeBox, err := rig.provider.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+		TurnID: "namesake", AgentHandle: "swe", AgentID: uuid.NewString(), CreatedAt: rig.now,
+	}, Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := rig.pending.AttachSandbox(t.Context(), "namesake",
+		BoxRef{SandboxID: namesakeBox.ID()}, Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	rig.coordinator.countRun("swe", StatusRunning)
+
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "", "retirement:1", 12); err != nil {
+		t.Fatalf("RetireSeat: %v", err)
+	}
+	rig.finished("running")
+	killed := rig.provider.KilledIDs()
+	if !slices.Contains(killed, running.SandboxID) {
+		t.Fatalf("killed %v: the retired seat's box %q is still billed", killed, running.SandboxID)
+	}
+	if slices.Contains(killed, namesakeBox.ID()) {
+		t.Fatalf("retiring a seat by its id killed box %q of another seat with the same handle",
+			namesakeBox.ID())
+	}
+	if got := rig.get("namesake"); got.Status != StatusLaunching {
+		t.Fatalf("another seat with the same handle had its run disturbed: %+v", got)
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureSeatRemoved || failed[0].AgentHandle != "swe" {
+		t.Fatalf("announced %+v, want the one run lost as %q under the handle it ran as",
+			failed, types.SandboxFailureSeatRemoved)
+	}
+	if rig.coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("the retired seat is still tracked as busy under the handle its runs carried")
+	}
+}
+
 // The retirement holds the seat's lease for a budget, and the lease is the
 // only thing keeping a returning seat's owner off these records. Work its
 // context no longer covers is reported rather than done, so the retirement is
 // retried instead of deleting records outside the lease that protects them.
 func TestRetiringASeatStopsWhenItsBudgetEnds(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := rig.coordinator.RetireSeat(ctx, "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(ctx, sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement past its budget reported every run ended")
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
@@ -3656,16 +4157,17 @@ func TestRetiringASeatStopsWhenItsBudgetEnds(t *testing.T) {
 // A run a newer lease has claimed belongs to that lease's holder, and neither
 // a recovery nor a retirement under an older one may kill its box.
 func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 	if won, err := rig.pending.ClaimOwnership(t.Context(), "t1", "node-c:1", 20); err != nil || !won {
 		t.Fatalf("ClaimOwnership = %v, %v", won, err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement under an older lease reported the newer lease's run ended")
 	}
 	if killed := rig.provider.KilledIDs(); slices.Contains(killed, run.SandboxID) {
@@ -3687,11 +4189,12 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 // exists: deleted anyway, the box would be billed with nothing naming it. The
 // retry that can reach the provider then ends the run once.
 func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.provider.KillErr = errors.New("the provider is unreachable")
 
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err == nil {
 		t.Fatal("a retirement that could not reclaim a box reported the run ended")
 	}
 	if got := rig.get("t1"); got.SandboxID != run.SandboxID {
@@ -3702,7 +4205,7 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	}
 
 	rig.provider.KillErr = nil
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
 	rig.finished("t1")
@@ -3717,10 +4220,12 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 // provider's TTL. So every ending kills first and deletes second, which only
 // the store can observe at the moment of the delete.
 func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	witness := &finishWitness{PendingStore: rig.pending, provider: rig.provider, box: run.SandboxID}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: witness, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -3751,9 +4256,63 @@ type finishWitness struct {
 	finished, killedFirst bool
 }
 
-func (w *finishWitness) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
-) (PendingRun, bool, error) {
+func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	w.finished = true
 	w.killedFirst = slices.Contains(w.provider.KilledIDs(), w.box)
-	return w.PendingStore.Finish(ctx, turnID, fence, whileIn)
+	return w.PendingStore.Finish(ctx, turnID, ending)
+}
+
+// EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK the row was launched for.
+//
+// A coding run is detached: the row is read minutes or days later, possibly
+// on another node, with no trigger left to re-derive the key from, so the
+// row's WorkKey is the only place it survives. The completion, the question
+// and the failure are the three gestures a resumed turn's identity travels
+// on, and an announcement that dropped it — or carried the turn id, which
+// names one run rather than the unit of work — files its writes against the
+// wrong identity.
+func TestAnAnnouncementCarriesTheRunsUnitOfWork(t *testing.T) {
+	t.Parallel()
+	const turnID = "turn-1"
+
+	t.Run("clarification", func(t *testing.T) {
+		rig := newCoordRig(t)
+		rig.launch(turnID)
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{
+			NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		})
+		payload, ev := rig.completion(turnID)
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		asked := rig.questions()
+		if len(asked) != 1 {
+			t.Fatalf("%d questions announced, want one", len(asked))
+		}
+		if asked[0].WorkKey != rigWorkKey {
+			t.Errorf("WorkKey = %q, want the run's unit of work %q", asked[0].WorkKey, rigWorkKey)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		rig := newCoordRig(t)
+		rig.launching(turnID)
+		if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
+			t.Fatalf("RecoverSeat: %v", err)
+		}
+		failed := rig.failures()
+		if len(failed) != 1 {
+			t.Fatalf("%d failures announced, want one", len(failed))
+		}
+		if failed[0].WorkKey != rigWorkKey {
+			t.Errorf("WorkKey = %q, want the run's unit of work %q", failed[0].WorkKey, rigWorkKey)
+		}
+	})
+}
+
+// refuseTheRecord makes the rig's store refuse every answer record, which is
+// the one failure that still hands a person's reply back to the inbox.
+func refuseTheRecord(rig *coordRig) {
+	rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"RecordAnswer"}}
 }

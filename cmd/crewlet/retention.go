@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -49,27 +50,27 @@ import (
 //     asking the thing under test to test itself.
 
 // runRetention dispatches the group.
-func runRetention(args []string, stdout, stderr io.Writer) error {
+func runRetention(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return retentionStatus(rest, stdout, stderr)
+		return retentionStatus(environ, rest, stdout, stderr)
 	case "snapshots":
-		return retentionSnapshots(rest, stdout, stderr)
+		return retentionSnapshots(environ, rest, stdout, stderr)
 	case "ack":
-		return retentionAck(rest, stdout, stderr)
+		return retentionAck(environ, rest, stdout, stderr)
 	case "evict":
-		return retentionGate(rest, stdout, stderr, true)
+		return retentionGate(environ, rest, stdout, stderr, true)
 	case "readmit":
-		return retentionGate(rest, stdout, stderr, false)
+		return retentionGate(environ, rest, stdout, stderr, false)
 	case "reanchor":
-		return retentionReanchor(rest, stdout, stderr)
+		return retentionReanchor(environ, rest, stdout, stderr)
 	case "verify":
 		return retentionVerify(rest, stdout, stderr)
 	case "set-capacity":
-		return retentionSetCapacity(rest, stdout, stderr)
+		return retentionSetCapacity(environ, rest, stdout, stderr)
 	case "maintenance":
-		return retentionMaintenance(rest, stdout, stderr)
+		return retentionMaintenance(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
 			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
@@ -304,9 +305,9 @@ type retentionAlarm struct {
 // own — see [statelog.Report.ExitNonZero]. A second rule here would be a
 // second definition of "is something wrong", and the cron watching this exit
 // code would be watching the one nobody maintained.
-func retentionStatus(args []string, stdout, stderr io.Writer) error {
+func retentionStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var domain *string
-	client, err := nodeClientFor(args, "retention status", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "retention status", stderr, func(fs *flag.FlagSet) {
 		domain = fs.String("domain", "",
 			"limit the log and watermark blocks to one domain; empty prints every one")
 	})
@@ -584,8 +585,8 @@ func retentionAlarms(stderr io.Writer, report retentionReport) error {
 // what they hold" is a disk question, and it is the one an operator asks when a
 // join has failed. Folding it into `status` would put it behind the trim's own
 // story, which is a different failure with a different remedy.
-func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
-	client, err := nodeClientFor(args, "retention snapshots", stderr, nil)
+func retentionSnapshots(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	client, err := nodeClientFor(environ, args, "retention snapshots", stderr, nil)
 	if err != nil {
 		return err
 	}
@@ -628,10 +629,10 @@ func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
 //
 // It exists because the engine cannot see a copy that has left the host, and
 // `backup_floor: operator` is the policy that says only such a copy counts.
-func retentionAck(args []string, stdout, stderr io.Writer) error {
+func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream *string
 	var position *uint64
-	client, err := nodeClientFor(args, "retention ack", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "retention ack", stderr, func(fs *flag.FlagSet) {
 		stream = fs.String("stream", "",
 			"the log this acknowledgement is about; required")
 		position = fs.Uint64("position", 0,
@@ -675,7 +676,7 @@ func retentionAck(args []string, stdout, stderr io.Writer) error {
 // did not reach every log exits non-zero and says how to finish it — the same
 // command with the operation id it answered with, which every log that already
 // holds the record answers from its own ledger rather than writing twice.
-func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
+func retentionGate(environ config.Source, args []string, stdout, stderr io.Writer, evict bool) error {
 	verb := "readmit"
 	if evict {
 		verb = "evict"
@@ -683,7 +684,7 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	node, rest := splitSubject(args)
 	var confirm, opID *string
 	var force *bool
-	client, err := nodeClientFor(rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id — this changes whether that machine's records apply")
 		opID = fs.String("op-id", "",
@@ -771,14 +772,20 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		}
 		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
 		// as the flags it has: the node's own sentence names no surface's
-		// controls, because the dashboard renders the same refusal.
+		// controls, because the dashboard renders the same refusal. It is
+		// the node's JUDGEMENT of the gesture, a 503 included
+		// ([nodeRefusal.asJudgement]), and what an action means can turn on
+		// which refusal it came with ([gateAdviceContext.refusal]).
 		var refused *nodeRefusal
 		if errors.As(err, &refused) {
+			refused = refused.asJudgement()
 			advice := gateAdvice(refused.Actions, gateAdviceContext{
-				again: again, forced: forced, readmit: !evict, node: node})
+				again: again, forced: forced, readmit: !evict, node: node,
+				refusal: refused.Code})
 			if len(advice) > 0 {
-				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+				return fmt.Errorf("%w\n  %s", refused, strings.Join(advice, "\n  "))
 			}
+			return refused
 		}
 		return err
 	}
@@ -945,6 +952,12 @@ type gateAdviceContext struct {
 	node    string
 	stream  string
 
+	// refusal is the code of the refusal the actions came with — empty
+	// for a log's line under a 200 — because one action names a
+	// different thing to wait for under each refusal that sends it
+	// ([waitAdvice]).
+	refusal string
+
 	// perLog is a line under one log of a 200, where the same gesture
 	// again is said once below for every log it finishes rather than on
 	// each.
@@ -987,18 +1000,39 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			out = append(out, "crewlet retention set-capacity "+c.stream+
 				" <bytes> -confirm <bytes>, then run this again with "+c.again)
 		case statelog.GateWait:
-			if c.readmit {
-				out = append(out, "its SEQ in `crewlet retention status`, at the "+
-					"domain's own GEN, says when it has caught up, and `crewlet "+
-					"retention snapshots` whether a peer can donate one; then run this "+
-					"again")
-			} else {
-				out = append(out, "its LIVE column in `crewlet retention status` reads "+
-					"no once the lease has lapsed; then run this again")
+			if line := waitAdvice(c.refusal); line != "" {
+				out = append(out, line)
 			}
 		}
 	}
 	return out
+}
+
+// waitAdvice is where to watch what a refusal's `wait` waits on — keyed on the
+// REFUSAL, never on the verb, because three refusals send it and each waits on
+// something else: an eviction's on the node's lease lapsing, a readmission's on
+// the node catching up, and either gesture's `not_publishing` on the fleet
+// leaving a capacity window. Keyed on the verb, a gesture refused
+// `not_publishing` was told to watch a lease or a position that had nothing to
+// do with it.
+//
+// Nothing for a refusal this build does not know: the node's own hint above
+// the line still says what it waits on, and a guess here would contradict it.
+func waitAdvice(refusal string) string {
+	switch refusal {
+	case "eviction_refused":
+		return "its LIVE column in `crewlet retention status` reads no once the " +
+			"lease has lapsed; then run this again"
+	case "readmission_refused":
+		return "its SEQ in `crewlet retention status`, at the domain's own GEN, " +
+			"says when it has caught up, and `crewlet retention snapshots` whether " +
+			"a peer can donate one; then run this again"
+	case "not_publishing":
+		return "`crewlet retention status` leads with the capacity window while it " +
+			"is open; once the fleet has been restarted into normal mode, run this " +
+			"again"
+	}
+	return ""
 }
 
 // evictionFenceWindow is how long an evicted node stays counted, as this

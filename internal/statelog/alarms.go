@@ -26,8 +26,9 @@ import (
 // # Why they are named here rather than at each condition
 //
 // Every one of them is a number some OTHER decision already made — a stall
-// grace is what sheds a node, a deferral grace is what moves its seats, a read
-// budget is what a caller was promised. An alarm that invented its own
+// grace is what takes a copy out of service, a deferral grace is what stops
+// a node serving a copy it cannot decode, a read budget is what a caller was
+// promised. An alarm that invented its own
 // threshold would be a second opinion about the same event, and the two would
 // drift: the plan this replaces tinted a dashboard row `caution` past one
 // apply linger (250 ms) on a position refreshed every 15 seconds, so every row
@@ -37,28 +38,61 @@ import (
 // So an alarm fires at the threshold that MATTERS, and where the constant
 // belongs to another package it is taken from there.
 const (
+	// PositionHeartbeat is how often a node running a state log republishes
+	// its row in the fleet's position register — the engine's position
+	// heartbeat, which the trim, the snapshot gate and a joiner's donor
+	// count all read.
+	//
+	// TEN SECONDS, taken from what the readers need rather than from what
+	// the writer can afford. The trim runs on a horizon of days and is
+	// conservative with a stale row; the snapshot gate's question — is
+	// there anybody else — changes when a node joins or leaves, which an
+	// operator expects to see reflected in seconds rather than minutes. Ten
+	// is well inside that and is a single small write per node per interval
+	// against a bucket with no age.
+	//
+	// DECLARED HERE rather than beside the loop that ticks on it, for
+	// [TrimInterval]'s reason: it is also the cadence of everything this
+	// package derives from the register — [AlarmInterval] IS it — so the
+	// one number lives where both of its readers can name it.
+	PositionHeartbeat = 10 * time.Second
+
 	// StallGrace is how far behind a node may be before its lag is worth
-	// a person's attention. Sixty seconds, which is four heartbeats: long
+	// a person's attention. Sixty seconds, which is four of the fleet's
+	// coordination heartbeats ([coord.ReconcileInterval]): long
 	// enough that a rolling restart or one oversized record passes
 	// through it, short enough that a node that has actually stopped is
 	// named within a minute.
 	StallGrace = 60 * time.Second
 
-	// AlarmInterval is how often every node evaluates the table: the
-	// fifteen-second heartbeat, [coord.ReconcileInterval], on which every
-	// other fleet fact is refreshed. It is what makes the thresholds here
-	// mean what they say — [StallGrace] is four of these, so a condition
-	// that has held past it is named within one more interval — and an
-	// evaluation paced by anything slower silently raises every threshold
-	// to its own period: the table ran on the trim's quarter-hour once,
-	// which made the sixty-second alarms fire up to fifteen minutes late.
-	AlarmInterval = coord.ReconcileInterval
+	// AlarmInterval is how often a node running a state log — every data
+	// node — evaluates the table: on its [PositionHeartbeat], and it IS that
+	// constant rather than a second spelling of its number. The two were
+	// once one declaration in the engine, then two literals in two packages
+	// that agreed only because nobody had retuned either — and the first
+	// retune of the heartbeat would have left the table evaluating at a
+	// cadence its inputs are not published at, with nothing to say so.
+	//
+	// THE HEARTBEAT, and never the trim's quarter-hour: the table ran on
+	// that once, so `apply_lag` — which fires at the one-minute
+	// [StallGrace] and whose remedy promises a stopped node is named
+	// within a minute — was named up to sixteen minutes after it stopped,
+	// and every surface fed by the evaluation lagged the condition by the
+	// same quarter hour. An evaluation paced by anything slower silently
+	// raises every threshold to its own period. FASTER BUYS NOTHING: the
+	// fastest input, this node's lag behind the log, is measured against
+	// positions the heartbeat publishes, so a tighter loop would
+	// re-evaluate the same facts. At the heartbeat's ten seconds
+	// [StallGrace] is six evaluations, so a condition that has held past
+	// it is named within one more.
+	AlarmInterval = PositionHeartbeat
 
 	// DeferralGrace is how long a node may hold records it could not
-	// apply before its seats move. The alarm and the seat move share the
-	// number deliberately: an operator who sees this alarm has thirty
-	// minutes, and one who sees a different number has no idea how long
-	// they have.
+	// apply before it stops serving its copy of the estate — its seats
+	// stay, and read the estate from the other data nodes. The alarm and
+	// that step share the number deliberately: an operator who sees this
+	// alarm has thirty minutes, and one who sees a different number has no
+	// idea how long they have.
 	DeferralGrace = 30 * time.Minute
 
 	// FloorCacheStale is how old a cached trim floor may be before the
@@ -123,20 +157,79 @@ const (
 	// that number, so at 2× they are describing a different company.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerDay is the read rate this engine's log sizing was
-	// derived from.
+	// LinearizableReadsPerSeatDay is the read rate this engine's log sizing
+	// was derived from, per agent seat.
 	//
-	// TWELVE AND A HALF THOUSAND, the census input every capacity decision
-	// under the log rests on: a `linearizable` read appends a barrier
-	// record, so this number is a term in the log's byte ceiling, in how
-	// often the trim has to run to stay under it, and in how long a
-	// rejoining node's replay takes. It is a DECLARED expectation rather
-	// than a measurement, which is exactly why it needs an alarm — nothing
-	// else notices when a company outgrows the assumptions its deployment
-	// was sized against, and the symptom arrives as a full log rather than
-	// as a slow one.
-	LinearizableReadsPerDay = 12_500
+	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
+	// linearizable reads a day over its 100 seats. It is the census input
+	// every capacity decision under the log rests on — a `linearizable`
+	// read appends a barrier record, so the rate is a term in a log's byte
+	// ceiling, in how often the trim has to run to stay under it, and in
+	// how long a rejoining node's replay takes — and it is PER SEAT because
+	// a seat's tools are what issue those reads: stated for the whole
+	// company it was a fixed 12 500 that a two-hundred-seat company doing
+	// exactly the reference company's work per seat exceeded twofold, so
+	// the alarm fired on the one company whose sizing was still right. It
+	// is a DECLARED expectation rather than a measurement, which is exactly
+	// why it needs an alarm — nothing else notices when a company outgrows
+	// the assumptions its deployment was sized against, and the symptom
+	// arrives as a full log rather than as a slow one.
+	//
+	// It is the SEATS' term of a log's census and not the whole of it: the
+	// engine's own periodic reads append barriers too, whatever the seats
+	// do, and [Census.Background] is where they are counted. [Census]
+	// turns both into one log's figure.
+	LinearizableReadsPerSeatDay = 125
 )
+
+// Census is what one log's expected read rate is derived from.
+type Census struct {
+	// Seats is the running company's agent seats.
+	Seats int
+
+	// Background is the barrier records a day the ENGINE'S OWN periodic
+	// reads put on this log, whatever the company's seats do — the object
+	// store's collector, which pins the estate on a fixed cadence from one
+	// data node at a time (the engine's figure is collect.PinsPerDay).
+	// Each pin is a barrier on every log it reads, so each log takes all
+	// of them.
+	//
+	// It exists because the seats' term alone is not what a log receives,
+	// and the engine's own reads do not shrink with the company: when every
+	// data node pinned the estate on its own passes, a one-seat company on
+	// one data node reading exactly its census put 293 barriers a day on a
+	// log expected to take 125, and census_drift fired on companies whose
+	// sizing was right — LOUDER the smaller the company.
+	Background int
+}
+
+// Expected is the log's census: the linearizable reads a day it was sized to
+// take.
+//
+// # Per seat, and at least one
+//
+// The seats' reads come from their tools, so the company's figure is
+// [LinearizableReadsPerSeatDay] times its seats. A company with NO agent seat
+// is counted as one: its operators still read through the dashboard and the
+// operator MCP, and an expectation of zero would be an alarm that could never
+// fire, on exactly the company whose first seat has not been hired yet.
+//
+// # The whole company's figure on every log, not a share of it
+//
+// The census says how many reads a company makes and not how they split
+// between the tracker and the knowledge base, so each log is sized for all of
+// them — which is how their ceilings are sized too: each domain's log has its
+// own budget. Divided across the logs instead, the tracker's log would be
+// expected to take a fraction of the census, and the reference company, whose
+// reads are mostly the tracker's, would fire the alarm doing exactly the work
+// it was sized for.
+//
+// # Plus what the engine reads on its own
+//
+// [Census.Background] is added to it, for the reason it gives.
+func (c Census) Expected() int {
+	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
+}
 
 // Kind names one alarm.
 //
@@ -156,28 +249,30 @@ type Kind string
 // things, and the reference suite is what refuses a rule whose meaning nobody
 // wrote.
 const (
-	KindApplyLag         Kind = "apply_lag"
-	KindReadRefusals     Kind = "read_refusals"
-	KindBarrierSlow      Kind = "barrier_slow"
-	KindLogHeadroom      Kind = "log_headroom"
-	KindBackupAge        Kind = "backup_age"
-	KindTrimBlocked      Kind = "trim_blocked"
-	KindDeferredOld      Kind = "deferred_old"
-	KindFloorUnknown     Kind = "floor_unknown"
-	KindPrefetchSlow     Kind = "prefetch_slow"
-	KindSearchSlow       Kind = "search_slow"
-	KindSearchDegraded   Kind = "search_degraded"
-	KindSearchScoped     Kind = "search_scoped"
-	KindHistoryPartial   Kind = "history_partial"
-	KindRecallBelowFloor Kind = "recall_below_floor"
-	KindRecordsGated     Kind = "records_gated"
-	KindFeedUnreadable   Kind = "feed_unreadable"
-	KindMaintenanceOpen  Kind = "maintenance_open"
-	KindVolumeLow        Kind = "volume_low"
-	KindWALLarge         Kind = "wal_large"
-	KindPoolStarved      Kind = "pool_starved"
-	KindCensusDrift      Kind = "census_drift"
-	KindLogCeilingShort  Kind = "log_ceiling_short"
+	KindApplyLag            Kind = "apply_lag"
+	KindReadRefusals        Kind = "read_refusals"
+	KindBarrierSlow         Kind = "barrier_slow"
+	KindLogHeadroom         Kind = "log_headroom"
+	KindLogCeilingShort     Kind = "log_ceiling_short"
+	KindBackupAge           Kind = "backup_age"
+	KindTrimBlocked         Kind = "trim_blocked"
+	KindDeferredOld         Kind = "deferred_old"
+	KindFloorUnknown        Kind = "floor_unknown"
+	KindPrefetchSlow        Kind = "prefetch_slow"
+	KindSearchSlow          Kind = "search_slow"
+	KindSearchDegraded      Kind = "search_degraded"
+	KindSearchScoped        Kind = "search_scoped"
+	KindHistoryPartial      Kind = "history_partial"
+	KindRecallBelowFloor    Kind = "recall_below_floor"
+	KindIVFRecallBelowFloor Kind = "ivf_recall_below_floor"
+	KindRecordsGated        Kind = "records_gated"
+	KindFeedUnreadable      Kind = "feed_unreadable"
+	KindMaintenanceOpen     Kind = "maintenance_open"
+	KindVolumeLow           Kind = "volume_low"
+	KindWALLarge            Kind = "wal_large"
+	KindPoolStarved         Kind = "pool_starved"
+	KindCensusDrift         Kind = "census_drift"
+	KindObjectsMissing      Kind = "objects_missing"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -258,24 +353,27 @@ type Reading struct {
 
 	// DeferredAge is how long this node has held the oldest record it
 	// could not apply on one log — from the position heartbeat's first
-	// sighting of it, the instant [Health.Healthy] sheds this node's seats
-	// from, through [DeferredSince.Age] — and DeferredRecord which record
-	// that is, in the words an operator upgrades by: its position and the
-	// record version it was written at against the one this build reads.
-	// Per DOMAIN, like HeadroomFraction, and filled by the report from
-	// [DomainInputs] rather than by a node-wide caller.
+	// sighting of it, the instant [Health.Healthy] measures the grace that
+	// takes this node's copy out of service from, through
+	// [DeferredSince.Age] — and DeferredRecord which record that is, in the
+	// words an operator upgrades by: its position and the record version it
+	// was written at against the one this build reads. Per DOMAIN, like
+	// HeadroomFraction, and filled by the report from [DomainInputs] rather
+	// than by a node-wide caller.
 	//
-	// DeferredSheds is whether that log is a [Domain.ReadinessInput] — the
-	// tracker's and the knowledge base's are; the identity
-	// estate's and the vectors' are not — which is whether the grace is ALSO
-	// when this node's seats move. The alarm fires at the grace either way,
-	// because an upgrade is the remedy either way; what it may not do is tell
-	// an operator a node's seats moved over a log that moves none — or that
-	// they did not, over the one log among several that moved them, which is
-	// why the three are a LOG's rather than the node's oldest.
-	DeferredAge    time.Duration
-	DeferredRecord string
-	DeferredSheds  bool
+	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
+	// the tracker's and the knowledge base's are; the identity estate's,
+	// the vectors' and the usage domain's are not — which is whether the
+	// grace is ALSO when this node stops serving its copy of the estate
+	// (its seats stay, and read it from the other data nodes). The alarm
+	// fires at the grace either way, because an upgrade is the remedy
+	// either way; what it may not do is tell an operator a node's copy was
+	// taken out of service over a log that judges none — or that it was
+	// not, over the one log among several that took it out, which is why
+	// the three are a LOG's rather than the node's oldest.
+	DeferredAge        time.Duration
+	DeferredRecord     string
+	DeferredJudgesCopy bool
 
 	// FloorUnknownFor is how long one log's trim floor has been unreadable
 	// on this node — from the first alarm heartbeat that could not read it
@@ -320,6 +418,24 @@ type Reading struct {
 	// alarm rather than the absence.
 	SemanticCoverage *float64
 
+	// IVFRecall is the recall the latest measurement of the semantic index
+	// found against the exact scan (ADR-0028) — its training's, or the
+	// duty's later re-measurement's — in the query shape nearest its floor,
+	// IVFShape; IVFRecallFloor is that shape's floor, and IVFMeasuredOn how
+	// many sources the corpus held.
+	//
+	// THE FLOOR IS SUPPLIED rather than named here, because the curve is
+	// internal/search's — its FloorAt, the same curve `crewlet search eval`
+	// judges against, at the size of the corpus each shape searches — and
+	// that package imports this one. A POINTER, for SemanticCoverage's
+	// reason: an index that was never trained, or was retired for the
+	// corpus's size, measured nothing, and zero recall is the alarm rather than
+	// the absence.
+	IVFRecall      *float64
+	IVFRecallFloor float64
+	IVFMeasuredOn  int
+	IVFShape       string
+
 	// RecordsGated and FeedUnreadable are counts over the last day. Any
 	// value above zero is an alarm: a gated record is recoverable by
 	// nothing, and a change record no build could translate is a wake
@@ -331,15 +447,32 @@ type Reading struct {
 	MaintenanceOpenFor time.Duration
 	MaintenancePhase   string
 
-	// FreeBytes and StoreBytes are the volume's free space and what this
-	// node's databases occupy. WALBytes is the write-ahead log's size.
+	// FreeBytes and StoreBytes are one volume's free space and what this
+	// node's databases occupy ON IT, and StoreVolume the directory that
+	// names it: of the volumes the databases are on — the two files need
+	// not share one — the one with the least room for a second copy of what
+	// it holds. WALBytes is the larger write-ahead log's size.
 	FreeBytes, StoreBytes, WALBytes int64
+	StoreVolume                     string
+
+	// StoreVolumeUnmeasured says which database, or which volume, could not
+	// be measured and why — empty when every one was. It is the alarm, not
+	// an absence: a volume nobody can measure is one nothing shows has
+	// room, and leaving it out would judge the node on its other volume,
+	// which is the blind spot measuring each file's own volume removed.
+	StoreVolumeUnmeasured string
 
 	// PoolWaitP95 is how long a caller queues for a database connection.
 	PoolWaitP95 time.Duration
 
-	// LinearizableReads and LinearizableReadsExpected are the observed and
-	// designed-for daily read rates.
+	// LinearizableReads and LinearizableReadsExpected are one log's
+	// observed and designed-for daily read rates — the barrier records
+	// committed to the log in the last day, from every node, and its census
+	// ([Census.Expected]). Per DOMAIN, like HeadroomFraction, and filled by
+	// the report from [DomainInputs]: a log over its census is over it
+	// however quiet the others are, and one reading naming only the log
+	// furthest past its census said nothing of a second log past its own
+	// until the first came back under.
 	LinearizableReads, LinearizableReadsExpected int
 
 	// LogBytesPerDay is what one log took in over the trailing day,
@@ -360,6 +493,16 @@ type Reading struct {
 	LogBytesPerDay *uint64
 	LogMaxBytes    uint64
 	ReplayWindow   time.Duration
+
+	// ObjectsMissing is how many files' bytes the object store does not
+	// hold, or holds wrong — at another size, or under another digest — as
+	// the collector's last audit to run to its end found: on the node
+	// holding the collector's duty, and zero on every other, since the
+	// store is one the whole fleet shares and one node's count of it is
+	// the fleet's. Files nobody can read. Any value above zero is an alarm,
+	// for the gated record's reason: there is no threshold below which a
+	// file that cannot be opened is acceptable.
+	ObjectsMissing int
 }
 
 // Alarm is one condition currently true on this node.
@@ -437,9 +580,11 @@ var table = []rule{
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
 			"domain and its position. A node that is behind keeps the seats it " +
-			"holds and claims no new ones; it gives them up only if its position " +
-			"stops moving for the stall grace, or it holds a record it cannot " +
-			"decode past the deferral grace.",
+			"holds and claims no new ones. Only if its position stops moving for " +
+			"the stall grace, or it holds a record it cannot decode past the " +
+			"deferral grace, is its copy wrong rather than behind: it then stops " +
+			"serving its copy of the estate, and its seats stay and read the " +
+			"estate from the other data nodes until the copy recovers.",
 	},
 	{
 		kind: KindReadRefusals,
@@ -597,7 +742,7 @@ var table = []rule{
 		// PER LOG, like the headroom, the ceiling and the blocked trim: the
 		// report evaluates it once for each log this node holds a record on,
 		// because what the grace does is the log's — see
-		// [Reading.DeferredSheds].
+		// [Reading.DeferredJudgesCopy].
 		kind:   KindDeferredOld,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
@@ -606,19 +751,20 @@ var table = []rule{
 				what += " (" + r.DeferredRecord + ")"
 			}
 			consequence := fmt.Sprintf("past the %s deferral grace, at which "+
-				"this node's seats move to a peer", spoken(DeferralGrace))
-			if !r.DeferredSheds {
+				"this node stops serving its copy of the estate", spoken(DeferralGrace))
+			if !r.DeferredJudgesCopy {
 				consequence = fmt.Sprintf("past the %s deferral grace; this log "+
-					"does not gate seat admission, so it moves no seats",
-					spoken(DeferralGrace))
+					"does not judge this node's copy of the estate, so nothing is "+
+					"taken out of service", spoken(DeferralGrace))
 			}
 			return fmt.Sprintf("%s has been held for %s, %s", what,
 					spoken(r.DeferredAge), consequence),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it. Where the record's log gates seat admission — " +
-			"the detail says — its seats have already moved to a peer.",
+			"are writing. Upgrade it. Where the record's log judges this node's copy " +
+			"of the estate — the detail says — the node has already stopped serving " +
+			"its copy, and its seats read the estate from the other data nodes.",
 	},
 	{
 		// PER LOG, for the same reason: a read of one log refuses on that
@@ -726,13 +872,51 @@ var table = []rule{
 			"corpus it does not cover.",
 	},
 	{
+		// THE FLOOR IS THE EVALUATION'S, borrowed (ADR-0015): the recall
+		// curve `crewlet search eval` judges a corpus against, at the size
+		// of the corpus the shape searched. A training installs the
+		// smallest probe count that meets it in every shape, and a
+		// re-measurement that finds none within the ceiling retrains in the
+		// same tick rather than recording the failure — so a recall below
+		// it was measured probing EVERY list, the full scan's own pool, and
+		// says the codes fail this corpus, not that the index was trained
+		// badly.
+		kind: KindIVFRecallBelowFloor,
+		fires: func(r Reading) (string, bool) {
+			if r.IVFRecall == nil {
+				return "", false
+			}
+			return fmt.Sprintf("the semantic index's latest measurement found "+
+					"recall %.4f against the exact scan in the %s shape over %d "+
+					"sources, below its %.4f floor", *r.IVFRecall, r.IVFShape,
+					r.IVFMeasuredOn, r.IVFRecallFloor),
+				*r.IVFRecall < r.IVFRecallFloor
+		},
+		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
+			"`crewlet search eval` against a backup's copy of the estate " +
+			"measures the full scan beside the index in every query shape and " +
+			"will say the same. The remedy is the evaluation's — raise " +
+			"BinaryOversample, then an int8 first stage, both code changes (see " +
+			"docs/guides/search.md). No index is installed meanwhile, so " +
+			"searches answer from the full scan at the recall the evaluation " +
+			"reports.",
+	},
+	{
 		kind: KindRecordsGated,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d record(s) were dropped by an apply gate in the "+
 				"last day", r.RecordsGated), r.RecordsGated > 0
 		},
-		remedy: "A gated record is recoverable by nothing. The log line names the " +
-			"gate, the operator and the position; this is worth reading today.",
+		// THE FIELDS BY THEIR KEYS ON THE LINE, because the one fact an
+		// operator needs from it — which node wrote what nothing will apply
+		// — is under `writer`, and a remedy that called it "the operator"
+		// sent the reader looking for a field no line carries.
+		// TestTheRecordsGatedRemedyNamesWhatItsLineCarries holds every field
+		// named here to the line the applier writes.
+		remedy: "A gated record is recoverable by nothing. Each drop's " +
+			"`statelog_record_gated` log line names the `gate` that dropped it, " +
+			"the record's `position` and `kind`, and the `writer` — the node " +
+			"that wrote it; this is worth reading today.",
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
@@ -766,13 +950,20 @@ var table = []rule{
 	{
 		kind: KindVolumeLow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%s free against %s of store, and the next restore, "+
-					"vacuum or snapshot needs room for a second copy",
-					bytesHuman(r.FreeBytes), bytesHuman(r.StoreBytes)),
+			if r.StoreVolumeUnmeasured != "" {
+				return fmt.Sprintf("a store volume could not be measured (%s), so nothing "+
+					"shows the next restore, vacuum or snapshot has room for a second "+
+					"copy", r.StoreVolumeUnmeasured), true
+			}
+			return fmt.Sprintf("%s free on the volume holding %s against %s of store "+
+					"there, and the next restore, vacuum or snapshot needs room for a "+
+					"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
+					bytesHuman(r.StoreBytes)),
 				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
 		},
-		remedy: "Add space. A backup, a vacuum and a peer's join all need it, and " +
-			"each fails partway through without it.",
+		remedy: "Add space to the volume the alarm names — or, where it could not be " +
+			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
+			"join all need the room, and each fails partway through without it.",
 	},
 	{
 		kind: KindWALLarge,
@@ -797,16 +988,35 @@ var table = []rule{
 		// decision under this framework — the log's ceiling, the trim's
 		// cadence, a joining node's transfer — was derived from a read
 		// rate. At twice it, they are describing a different company.
-		kind: KindCensusDrift,
+		//
+		// PER LOG, like the headroom: each log was sized for its own
+		// census and is past it on its own, so the report evaluates it once
+		// per log and the log's name is the alarm's [Alarm.Domain]. One
+		// alarm naming the log furthest past its census hid every other log
+		// past its own.
+		kind:   KindCensusDrift,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
-					"deployment was sized for", r.LinearizableReads, r.LinearizableReadsExpected),
+					"log was sized for", r.LinearizableReads,
+					r.LinearizableReadsExpected),
 				r.LinearizableReadsExpected > 0 &&
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
 			"rate. See `stream.tracker_retention` in " +
 			"docs/getting-started/configuration.md.",
+	},
+	{
+		kind: KindObjectsMissing,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d file(s) are missing from the object store or "+
+				"damaged in it", r.ObjectsMissing), r.ObjectsMissing > 0
+		},
+		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
+			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
+			"the S3 bucket) and restore those files from a backup, or upload them " +
+			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
 	},
 }
 
@@ -836,7 +1046,7 @@ func Frac(v float64) *float64 { return &v }
 func PerDay(v uint64) *uint64 { return &v }
 
 // PerLogKinds is every alarm raised once per log rather than once per node, in
-// the table's own order — the five a reader of the reference has to know carry
+// the table's own order — the six a reader of the reference has to know carry
 // a log's name ([Alarm.Domain]) and stand once for each log they hold on.
 func PerLogKinds() []Kind {
 	var out []Kind

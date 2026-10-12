@@ -174,6 +174,9 @@ type LiveCall struct {
 	// Rounds is the per-round timing the loop recorded — when each provider
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
+	// Empty on the opening frame, before the phase's first provider call —
+	// and for the whole of an agent-mode executor, whose rounds run inside
+	// the coding CLI.
 	Rounds []any `json:"rounds"`
 
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
@@ -233,6 +236,13 @@ type LiveCall struct {
 	// it is always about zero. They are different questions and need
 	// different fields.
 	StartedAt string `json:"started_at"`
+
+	// Versions numbers the copy of each heavy field — the prompt, the
+	// response, the narration, the tool calls, the rounds' timing — this
+	// call holds, so an `agents` push can leave out what a tab already has
+	// and a tab can tell when it missed a change (see detail.go). ALWAYS
+	// PRESENT, on every surface that carries a call.
+	Versions CallVersions `json:"versions"`
 }
 
 // BudgetMeter is a seat's or the org's live token meters: one entry per CAPPED
@@ -293,6 +303,20 @@ type Overlay struct {
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
 	LiveCall         *LiveCall `json:"live_call"`
+
+	// LiveCallSeq orders the live_call slot ACROSS calls and across a
+	// clear: this projection's own monotonic sequence ([CallVersions])
+	// read at the instant the seat's call last changed — set, folded,
+	// frozen or cleared to null. Every surface that carries the call
+	// carries it, null calls included, so a tab can drop a `live_call`
+	// answer that a clearing or newer-call push overtook on the wire
+	// (the answer runs on its own goroutine and can be delivered after a
+	// push that was generated later), and take from one the pushes of the
+	// same call overtook only the heavy fields it holds at a newer
+	// version. A tab resets it from each snapshot.
+	// Comparable only within one node's projection, which is the only one
+	// a tab's socket reads between snapshots — [CallVersions] says why.
+	LiveCallSeq int `json:"live_call_seq"`
 
 	// LastError is nil once the seat does real work again. It says WHY a
 	// seat stopped, rather than leaving a call on screen that never
@@ -476,12 +500,18 @@ const (
 	// SandboxReseed — the box was reclaimed past its pause TTL while the
 	// run waited. The question survives and an answer relaunches it.
 	SandboxReseed SandboxStatus = "reseed"
+	// SandboxAnswered — a person's reply is recorded as the answer to the
+	// question, and the resume it drives is owed: the engine is working on
+	// it, and nobody is being waited on any more.
+	SandboxAnswered SandboxStatus = "answered"
 )
 
 // SandboxStatuses is the closed set a live entry can carry. The record's
 // `resumed` is deliberately not in it: the run itself is over and the turn
 // that launched it has taken its result back, so it is not a run in flight.
-var SandboxStatuses = []SandboxStatus{SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed}
+var SandboxStatuses = []SandboxStatus{
+	SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed, SandboxAnswered,
+}
 
 // Valid reports whether s is a status a live entry can carry.
 func (s SandboxStatus) Valid() bool { return slices.Contains(SandboxStatuses, s) }

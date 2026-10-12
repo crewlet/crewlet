@@ -26,6 +26,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, setStepUpConfirmer, Store } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pick } from "~/testing.tsx";
@@ -77,16 +78,6 @@ const PEOPLE = {
       seat: "kai",
       // secrets:write is a grant ADMIN does not hold.
       grants: ["state:read", "secrets:write"],
-    },
-    // A PERSON RECORDED BEFORE EVERY PERSON HELD A SEAT — the one state the
-    // engine no longer creates, and the directory reports.
-    {
-      id: "p-ed",
-      kind: "person",
-      stage: "active",
-      login: "ed.vance",
-      name: "Ed Vance",
-      grants: ["state:read"],
     },
     {
       id: "p-ci",
@@ -242,7 +233,7 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
 function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
   const store = new Store();
   store.applyOrg(CHART_ORG);
-  store.applyHealth({ status: "ok", identity });
+  store.applyHealth(healthFrame({ identity }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     if (what === "viewer") return Promise.resolve(viewer);
@@ -717,43 +708,6 @@ test("a person's edit offers no 'No seat', and moving them sends the seat chosen
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([{ seat: "lee" }]);
-});
-
-// A PERSON RECORDED WITH NO SEAT — before every person held one — is told so,
-// starts on no choice rather than on "No seat", and an edit that chooses none
-// sends none: a person's `seat: ""` is refused, and sent beside an unrelated
-// change it failed the whole edit. Choosing one sends it. Mutation: start the
-// select on the row's empty seat and send it whenever it "differs".
-test("a person with no seat is warned, and the edit sends a seat only once one is chosen", async () => {
-  const eng = engine({
-    "PATCH /iam/people/p-ed": [json(200, { id: "p-ed", outcome: "applied", op_id: "k" })],
-  });
-  location.hash = "#/settings/access?person=p-ed";
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
-  const edit = await screen.findByRole("dialog", { name: "Edit Ed Vance" });
-  await settle();
-  expect(
-    within(edit).getByText(/Ed Vance holds no seat — recorded before every person held one/),
-  ).toBeTruthy();
-  expect(within(edit).getByLabelText("Seat").textContent).toMatch(/Choose a seat/);
-  fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
-  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
-  await settle();
-  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["work:write"] }]);
-  cleanup();
-
-  const again = engine({
-    "PATCH /iam/people/p-ed": [json(200, { id: "p-ed", outcome: "applied", op_id: "k" })],
-  });
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
-  const chosen = await screen.findByRole("dialog", { name: "Edit Ed Vance" });
-  await settle();
-  pick(within(chosen).getByLabelText("Seat"), /Lee Ops/);
-  fireEvent.click(within(chosen).getByRole("button", { name: "Save" }));
-  await settle();
-  expect(again.writes().map((w) => w.body)).toEqual([{ seat: "lee" }]);
 });
 
 // A SERVICE ACCOUNT MAY HOLD A SEAT OR NONE, so its edit keeps "No seat" and

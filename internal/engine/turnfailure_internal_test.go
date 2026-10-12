@@ -250,7 +250,7 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardMaxIter, Detail: "6 rounds, no done"},
-	}, nil)
+	}, nil, time.Now())
 
 	// All FOUR: the dashboard's summary, the learning record, and the guard
 	// that named the stop. Dropping any one of them takes a whole surface
@@ -288,7 +288,7 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardUnhandledException, Detail: "panic: nil map"},
-	}, cause)
+	}, cause, time.Now())
 
 	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
 	if !summary.Failed || summary.ErrorKind != string(types.GuardUnhandledException) {
@@ -303,5 +303,37 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	breach := only[*types.TurnGuardBreach](t, p, "turn.guard_breach")
 	if breach.Kind != types.GuardUnhandledException || breach.TurnID != "t-1" {
 		t.Errorf("breach = %+v, want unhandled_exception for run t-1", breach)
+	}
+}
+
+// A FAILED TURN NAMES ITS CLASS, the one its failed phase names. The field's
+// doc always promised the classified provider error and the code wrote
+// `error` for every failure, so a turn whose model refused and one whose key
+// was revoked read the same on the Turn screen while their phase records said
+// `refusal` and `auth`.
+func TestAFailedTurnNamesTheClassItsPhaseNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"a refusal", fmt.Errorf("turn: execute round 1: %w",
+			llm.Refused("anthropic", "m", &llm.Refusal{Category: "cyber"})), "refusal"},
+		{"a revoked key", fmt.Errorf("turn: review round 1: %w",
+			&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), "auth"},
+		{"an unclassified failure", errors.New("runner could not be built"), "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, p, tel := failing(t)
+			tel.startedAt = time.Now().UTC().Add(-time.Second)
+			e.publishTurnCompleted(context.Background(), tel, runner.Spend{},
+				turn.Result{Decision: phase.Failed}, tc.cause, time.Now())
+			summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+			if !summary.Failed || summary.ErrorKind != tc.want {
+				t.Errorf("summary = failed:%v kind:%q, want %q", summary.Failed, summary.ErrorKind, tc.want)
+			}
+		})
 	}
 }

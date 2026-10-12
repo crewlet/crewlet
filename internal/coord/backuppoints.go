@@ -93,11 +93,8 @@ type BackupPoint struct {
 	// Bytes is how large the artefact is — every database copy and every
 	// stream snapshot in it — as the taker measured what it wrote. Zero on
 	// an operator acknowledgement, which asserts a copy the engine never
-	// saw, and on a point an older build wrote: absent rather than empty,
-	// which a reader says rather than printing a size of nothing.
-	//
-	// ADDITIVE, on the envelope's rule for a record two builds share: an
-	// older peer re-writing its own point simply omits it.
+	// saw: absent rather than empty, which a reader says rather than
+	// printing a size of nothing.
 	Bytes int64 `json:"bytes,omitempty"`
 }
 

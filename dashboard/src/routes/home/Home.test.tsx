@@ -22,6 +22,8 @@ import { reloadForTest, setZone } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { healthFrame } from "~/test/health.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -208,7 +210,7 @@ function mount({
   page?: ReactNode;
 } = {}) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 3 } as never);
+  store.applyHealth(healthFrame({ nodes: 3 }));
   store.applyOrg(ORG as never);
   store.applySeats(agents as never);
   if (budget) store.applyBudget(budget as never);
@@ -339,6 +341,27 @@ describe("the figures", () => {
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
     expect(within(card).queryByRole("link")).toBeNull();
+  });
+
+  // NOR TO AN OPERATOR WHO IS NOT A WRITER OF A MANAGED DOCUMENT: Spend ›
+  // Budgets would hold every ceiling for them with the managed sentence.
+  test("on a managed document a non-writer is told there is no budget, with no way in", async () => {
+    mount({
+      viewer: { ...JANE, config_writer: false, config_managed_by: ["gitops"] },
+      budget: UNCAPPED,
+    });
+    await settle();
+    const card = tile(/^Tokens · /);
+    expect(card.textContent).toContain("No weekly budget");
+    expect(within(card).queryByRole("link")).toBeNull();
+    cleanup();
+
+    mount({
+      viewer: { ...JANE, config_writer: true, config_managed_by: ["gitops"] },
+      budget: UNCAPPED,
+    });
+    await settle();
+    expect(within(tile(/^Tokens · /)).getByRole("link", { name: "No weekly budget" })).toBeTruthy();
   });
 
   test("today is asked of the engine as one company day", async () => {
@@ -596,6 +619,22 @@ describe("the decisions", () => {
     expect(link?.textContent).toMatch(/1 condition needs a look/);
   });
 
+  // A MANAGED DOCUMENT (ADR-0030) TAKES THE CEILING OUT OF AN OPERATOR'S
+  // HANDS unless their token is one of its writers: the raise control is
+  // disabled with the managed sentence, so a seat stopped between turns —
+  // nothing to hand on — is a condition for them, never a decision.
+  test("on a managed document a stopped seat is not a non-writer's decision", async () => {
+    mount({
+      viewer: { ...JANE, config_writer: false, config_managed_by: ["gitops"] },
+      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
+    });
+    await settle();
+    expect(screen.queryByText(/DevRel stopped/)).toBeNull();
+    expect(tile("Waiting on your decision").textContent).not.toContain("1");
+    const link = document.querySelector<HTMLAnchorElement>(".home-status a");
+    expect(link?.textContent).toMatch(/1 condition needs a look/);
+  });
+
   // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, ON ITS ROW. The row linked
   // to the Inbox by the ask's comment id, which is not the id the Inbox opens
   // a row by — and the pane it would have opened has nowhere to write.
@@ -679,6 +718,7 @@ describe("live now", () => {
             work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
           },
           live_call: {
+            versions: ZERO_VERSIONS,
             turn_id: "run-7",
             work_key: "wk-notakey",
             phase: "execute",

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // The seed is the one piece of policy in this binary: a Tier B file on the
@@ -32,10 +33,7 @@ import (
 
 func seedStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "seed.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "seed.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -356,7 +354,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	// A PEER activated something else, later.
 	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "peer-revision", Summary: "from a peer",
-		Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(2 * time.Hour)})
+		Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(2 * time.Hour), Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}

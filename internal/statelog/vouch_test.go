@@ -14,17 +14,60 @@ import (
 // TIME.
 //
 // A ledger that LOST ROWS to its retention sweep holds none for an operation
-// minted before the loss, so a retry of one — a turn re-run, a caller repeating an
-// `unknown` under the same id — finds no row, takes a snapshot whose rows
-// already hold the first application, and decides again on top of it. The broker has no reason to refuse that: the expectation is current, and
-// the duplicate window is two minutes wide. So the refusal has to come from
-// here, before the append, and it has to read the instant the operation was
-// MINTED — which is the id's own, because every retry reuses the id and a
-// retry's own clock is always after the loss.
+// minted before the loss, so a retry of one — a turn re-run, a caller repeating
+// an `unknown` under the same id — finds no row, takes a snapshot whose rows
+// already hold the first application, and decides again on top of it. The
+// broker has no reason to refuse that: the expectation is current, and the
+// duplicate window is two minutes wide. So the refusal has to come from here,
+// before the append, and it has to read the instant the operation was MINTED —
+// which is the id's own, because every retry reuses the id and a retry's own
+// clock is always after the loss.
 func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 	t.Parallel()
 
-	t.Run("minted before a sweep, a row the ledger does hold still answers", func(t *testing.T) {
+	t.Run("minted before a sweep and retried after it, it answers unknown and publishes nothing", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		minted := time.Now().Add(-time.Hour)
+		op := statelog.NewOpID(minted, "write-a")
+		first, err := h.write(probeSubject("a"), op, "one")
+		if err != nil || first.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
+		}
+		// THE SWEEP, after the mint and before the retry: the ledger is
+		// empty, with the sweep's cutoff as its watermark — an operation
+		// whose id carries an old instant (a turn-derived id, or a
+		// caller's retry long after the first attempt) meets exactly this.
+		h.sweep(minted.Add(time.Minute))
+		appended := h.appends.appends.Load()
+
+		res, err := h.write(probeSubject("a"), op, "one")
+		if err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown {
+			t.Fatalf("outcome = %q, want unknown — the ledger that would say "+
+				"whether the first application landed was swept, and "+
+				"deciding again on rows that already hold it "+
+				"applies the operation twice", res.Outcome)
+		}
+		if got := h.appends.appends.Load() - appended; got != 0 {
+			t.Fatalf("the retry appended %d record(s) — an operation the "+
+				"ledger cannot vouch for must never reach the broker again", got)
+		}
+		if res.OpID != op {
+			t.Errorf("unknown carries op id %q, want %q to retry under", res.OpID, op)
+		}
+		// AND SAYS WHY, because the retry it needs is not this node's:
+		// the same id repeated here meets the same swept ledger.
+		if !res.Unvouched {
+			t.Error("an unknown the ledger could not vouch for is not marked " +
+				"unvouched — a caller cannot tell it from a lost " +
+				"acknowledgement, which the same id retried here resolves")
+		}
+	})
+
+	t.Run("minted before the loss, a row the ledger does hold still answers", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		minted := time.Now().Add(-time.Hour)
@@ -88,41 +131,6 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		}
 	})
 
-	// THE SWEEP IS HOW THE LEDGER LOSES ROWS. A row applied more than the
-	// ledger's retention ago is deleted by this node's own sweep, and a
-	// retry of its operation — an operator repeating an `unknown` a month
-	// on, a seat carrying an id across a long pause — finds silence, over
-	// rows that already hold the first application.
-	t.Run("minted before the ledger's sweep and retried after it, it answers unknown and publishes nothing", func(t *testing.T) {
-		t.Parallel()
-		h := newHarness(t)
-		minted := time.Now().Add(-time.Hour)
-		op := statelog.NewOpID(minted, "write-a")
-		first, err := h.write(probeSubject("a"), op, "one")
-		if err != nil || first.Outcome != statelog.OutcomeApplied {
-			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
-		}
-		h.sweep(minted.Add(time.Minute))
-		appended := h.appends.appends.Load()
-
-		res, err := h.write(probeSubject("a"), op, "one")
-		if err != nil {
-			t.Fatalf("the retry: %v", err)
-		}
-		if res.Outcome != statelog.OutcomeUnknown || !res.Unvouched {
-			t.Fatalf("outcome = %q (unvouched %v), want an unvouched unknown — "+
-				"the row that would say whether the first application landed "+
-				"was swept, and deciding again applies the operation twice",
-				res.Outcome, res.Unvouched)
-		}
-		if got := h.appends.appends.Load() - appended; got != 0 {
-			t.Fatalf("the retry appended %d record(s) past the sweep", got)
-		}
-		if res.OpID != op {
-			t.Errorf("unknown carries op id %q, want %q to retry under", res.OpID, op)
-		}
-	})
-
 	t.Run("minted after the sweep's cutoff, an absent row is conclusive and it publishes", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
@@ -152,9 +160,10 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 			t.Fatalf("an id with no instant on a node that swept: %v", err)
 		}
 		if res.Outcome != statelog.OutcomeUnknown {
-			t.Fatalf("on a node that swept, outcome = %q, want unknown — an id "+
-				"whose age nobody can read may predate the loss, and reading it "+
-				"as recent is the one reading that can re-decide it", res.Outcome)
+			t.Fatalf("on a node that swept, outcome = %q, want unknown — an "+
+				"id whose age nobody can read may predate the loss, and "+
+				"reading it as recent is the one reading that can "+
+				"re-decide it", res.Outcome)
 		}
 	})
 }
@@ -222,7 +231,9 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 		// The first copy lands on one subject and this node applies none
 		// of it; the retry is decided on another, where its expectation
 		// is current, so only the broker's dedupe can collapse it.
-		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil, []byte("one"))
+		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil,
+			signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-a"},
+				op, "one")))
 		if err != nil {
 			t.Fatalf("the first copy: %v", err)
 		}
@@ -246,9 +257,9 @@ const shortWindow = 200 * time.Millisecond
 type shortWindowDomain struct{ probeDomain }
 
 func (shortWindowDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.Duplicates = shortWindow
-	return spec
+	shape := probeDomain{}.Stream()
+	shape.Duplicates = shortWindow
+	return shape
 }
 
 // A REFUSAL IS NOT RETURNED FOR AN OPERATION THE LEDGER CANNOT VOUCH FOR —
@@ -382,8 +393,8 @@ func TestAnUnknownSaysWhetherTheLedgerCouldVouch(t *testing.T) {
 				// A PEER'S RECORD LANDS ABOVE THE ANCHOR, so the
 				// resolution has something to weigh...
 				seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a",
-					"peer-op", nil, probeRecord(statelog.Stamp{
-						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs"))
+					"peer-op", nil, signedByPeer(t, h, probeRecord(statelog.Stamp{
+						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs")))
 				if err != nil {
 					t.Errorf("land the peer's record: %v", err)
 					return

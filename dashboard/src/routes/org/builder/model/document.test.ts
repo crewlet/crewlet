@@ -87,8 +87,8 @@ describe("json", () => {
   });
 
   test("setPath removes and prunes the objects a removal emptied, and shares untouched branches", () => {
-    const record = { integrations: { jira: { project: "OPS" } }, keep: { deep: true } };
-    const removed = setPath(record, ["integrations", "jira", "project"], undefined);
+    const record = { integrations: { mattermost: { channel: "eng" } }, keep: { deep: true } };
+    const removed = setPath(record, ["integrations", "mattermost", "channel"], undefined);
     expect(removed).toEqual({ keep: { deep: true } });
     expect(removed.keep).toBe(record.keep);
     const added = setPath({}, ["integrations", "github", "tier"], "developer");

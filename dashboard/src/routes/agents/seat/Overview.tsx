@@ -68,6 +68,7 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useEngineHealth, useOrg, useSandboxes, useSchedules } from "~/lib/store-hooks.ts";
 import { turnSteps } from "~/lib/turnsteps.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
 import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
@@ -172,7 +173,7 @@ function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps
           <AssignedWork seat={seat} work={work} now={now} />
           <TurnsPerDay activity={activity} row={row} />
         </div>
-        <Reports seat={seat} index={index} />
+        <Reports seat={seat} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
         <About seat={seat} onboardedAt={memory.data?.onboarded_at} />
@@ -327,7 +328,7 @@ function CurrentTurn({
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
-  const turnId = turn?.turn_id ?? call?.turn_id ?? "";
+  const turnId = turnIdOf(agent);
   const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
   const key = ref?.key ?? "";
   // ASKED FOR BY ITS ADDRESS, shown by its key ([turnItem]): a key another
@@ -438,8 +439,10 @@ function CurrentTurn({
             </span>
           ) : undefined
         }
+        // A WATCH LINK, onto the Transcript with the running phase open —
+        // never the trace's Timeline, which is where "Open last turn" goes.
         actions={
-          <a className="t-link" href={href(["live", "turns", turnId])}>
+          <a className="t-link" href={watchHref(turnId)}>
             Watch live
           </a>
         }
@@ -621,11 +624,11 @@ function TurnsPerDay({
 }
 
 /** Who reports to this seat, when anybody does. */
-function Reports({ seat, index }: { seat: Seat; index: OrgIndex }) {
+function Reports({ seat }: { seat: Seat }) {
   if (seat.reports.length === 0) return null;
   return (
     <Card padding="none" className="prof-card">
-      <Card.Header count={seat.reports.length} subtitle={reportsCaption(seat, index.hierarchy)}>
+      <Card.Header count={seat.reports.length} subtitle={reportsCaption(seat)}>
         <Card.Title as="h3">Direct reports</Card.Title>
       </Card.Header>
       <div className="seat-grid prof-reports">
@@ -638,6 +641,7 @@ function Reports({ seat, index }: { seat: Seat; index: OrgIndex }) {
                   name={r.name}
                   size="sm"
                   kind={r.kind === "human" ? "human" : "agent"}
+                  avatar={r.avatar}
                   decorative
                 />
                 <span className="truncate t-cell prof-report-name">{r.name}</span>
@@ -786,7 +790,7 @@ function Setup({
       <Card.Header
         divided={false}
         actions={
-          <a className="t-link" href={href(["agents", "edit"], { seat: seat.handle || seat.name })}>
+          <a className="t-link" href={href(["agents", "edit"], { seat: seat.handle })}>
             Edit
           </a>
         }
@@ -1005,7 +1009,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
     { handle: seat.handle },
     { enabled: mayRead && seat.handle !== "", pollMs: 60_000 },
   );
-  const priorities = mine.data?.totals?.priorities;
+  const priorities = mine.data?.totals.priorities;
   const who = self ? "you" : "them";
   return (
     <div className="prof-overview">
@@ -1101,7 +1105,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
           </Card>
         )}
         <AssignedWork seat={seat} work={work} now={now} />
-        <Reports seat={seat} index={index} />
+        <Reports seat={seat} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
         {self && <YourAccount />}

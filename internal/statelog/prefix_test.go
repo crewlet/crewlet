@@ -39,7 +39,7 @@ func TestAPrefixIsAppliedOnlyBelowTheEarliestRetainedRecord(t *testing.T) {
 		atB, atD             statelog.Deferral
 		emptyErr             error
 	)
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		if prefix, err = statelog.PrefixIn(t.Context(), tx, probeDomain{}); err != nil {
 			return err
@@ -116,7 +116,7 @@ func TestAPrefixWithNothingRetainedIsAppliedAtItsCheckpoint(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	var prefix statelog.Prefix
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		prefix, err = statelog.PrefixIn(t.Context(), tx, probeDomain{})
 		return err

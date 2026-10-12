@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Taking a backup over HTTP.
@@ -102,11 +103,27 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// process, and sending them to the engine's logs to find it
 		// would be the wrong instruction.
 		status := backupStatus(err)
-		var detail map[string]string
-		if status == http.StatusBadRequest {
-			detail = map[string]string{"detail": err.Error()}
+		switch status {
+		case http.StatusServiceUnavailable:
+			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
+			// fixed hint, never the list of objects, which is the log's.
+			// The wait is the broker's own election: the default object
+			// store is the data nodes' NATS bucket, which answers again
+			// no sooner than its group elects a leader, and an S3 bucket
+			// that did not answer is a blip of no longer scale.
+			httpjson.UnavailableWith(w, httpjson.CodeObjectsUnreachable,
+				httpjson.RetrySeconds(statelog.ElectionRetryHint), httpjson.Detail{
+					"hint": "the company's files name objects the object store " +
+						"did not answer for; check that this node reaches the " +
+						"store store.objects names (the S3 bucket, or the data " +
+						"nodes' NATS bucket) and take the backup again",
+				})
+		case http.StatusBadRequest:
+			httpjson.FailWith(w, status, httpjson.CodeBackupFailed,
+				map[string]string{"detail": err.Error()})
+		default:
+			httpjson.Fail(w, status, httpjson.CodeBackupFailed)
 		}
-		httpjson.FailWith(w, status, httpjson.CodeBackupFailed, detail)
 		return
 	}
 	log.Info("backup_taken", "by", by.Name, "operator", by.OperatorID, "dir", dir,
@@ -120,9 +137,17 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 // a 400: nothing is wrong with the node, the request named somewhere it cannot
 // write, and answering 500 would send an operator looking at the engine
 // instead of at their own command.
+//
+// A copy naming objects the object store did not answer for is a 503: this
+// node is sound and so is the command, and what fails is the store holding the
+// company's files — which clears when it answers again, so it is the one
+// failure here that trying again later can fix.
 func backupStatus(err error) int {
-	if errors.Is(err, backup.ErrBadDestination) {
+	switch {
+	case errors.Is(err, backup.ErrBadDestination):
 		return http.StatusBadRequest
+	case errors.Is(err, backup.ErrObjectsUnreachable):
+		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError
 }

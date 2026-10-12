@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -175,11 +176,10 @@ func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 // unknown key it now is.
 //
 // `q` here is a substring of a key or a title — the item somebody half
-// remembers. Ranked search over the company's prose is `search_knowledge`'s,
-// behind the knowledge seam, which is where the analyzer, the inverted list
-// and the vectors are; `kb_docs` and `kb_postings` index PAGES and nothing has
-// ever put a task in them. Three modes over one behaviour is a knob whose
-// values cannot differ, and a caller that asked for `semantic` and got a
+// remembers. Ranked search over what an item says is the search index's
+// (`search_work_items`, `work_search`), which is where the analyzer, the
+// inverted list and the vectors are. Three modes over one behaviour is a knob
+// whose values cannot differ, and a caller that asked for `semantic` and got a
 // substring match was answered by a name rather than by a search.
 func TestThereIsNoSearchModeOnTheTaskGrammar(t *testing.T) {
 	t.Parallel()
@@ -192,6 +192,26 @@ func TestThereIsNoSearchModeOnTheTaskGrammar(t *testing.T) {
 	}
 	if got := mustParse(t, map[string]any{"q": "auth"}); got.Text != "auth" {
 		t.Errorf("the find text parsed as %q", got.Text)
+	}
+}
+
+// A FIND LONGER THAN ANY TITLE IS REFUSED NAMING THE BOUND, because it can
+// match nothing: run, it answers an empty board, which reads as "there is no
+// such item". At the longest title it is a find, and the refusal points at
+// the search that finds work by what it says.
+func TestAFindLongerThanAnyTitleIsRefused(t *testing.T) {
+	t.Parallel()
+	if got := mustParse(t, map[string]any{"q": strings.Repeat("t", tracker.MaxTitle)}); len(got.Text) != tracker.MaxTitle {
+		t.Fatalf("a find at the longest title parsed as %d bytes", len(got.Text))
+	}
+	_, err := parse(t, map[string]any{"q": strings.Repeat("t", tracker.MaxTitle+1)})
+	if err == nil {
+		t.Fatal("a find longer than any title was accepted")
+	}
+	for _, want := range []string{fmt.Sprint(tracker.MaxTitle), "search_work_items"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %s", err, want)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -77,13 +78,19 @@ type Options struct {
 	// comes from apps at all.
 	SeatApps int
 
-	// WebhookBase is this deployment's public base URL, or empty to skip
-	// webhook registration.
+	// WebhookBase is where GitHub reaches this deployment
+	// ([config.API.WebhookBase]: the public listener's address where
+	// `api.public` is set), or empty to skip webhook registration.
 	//
 	// SKIPPED RATHER THAN GUESSED: a hook pointing at the wrong host is
 	// worse than no hook, because GitHub then reports a healthy
 	// integration that delivers into the void.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a run with no address names as
+	// the setting to fill in. Empty is [setup.BaseKey]'s.
+	WebhookBaseKey string
 
 	// RecreateWebhooks deletes and remakes every hook to mint a fresh
 	// secret, for the case where the existing one's secret was lost.
@@ -279,6 +286,12 @@ type Result struct {
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
 
+	// NoIngressKey is the Tier A key this deployment's webhook address is
+	// read from, which NoIngress names as the setting an operator fills in
+	// to give GitHub an address — as [Options] handed it over. Empty is
+	// [setup.BaseKey]'s.
+	NoIngressKey string
+
 	// NoRegistrar says why this run could register no webhook AT ALL
 	// although the company asked for one, and is empty when it could.
 	//
@@ -376,7 +389,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			// and not only from [ensureWebhooks]: a company hooking each
 			// agent's own app has no organization credential by design, so
 			// the pass returns above ever registering anything.
-			Coverage: coverageFor(opts, nil),
+			Coverage:     coverageFor(opts, nil),
+			NoIngressKey: opts.WebhookBaseKey,
 		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
@@ -387,7 +401,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			integration.Reject(err, Status(err)))
 	}
 
-	res := &Result{Login: login}
+	res := &Result{Login: login, NoIngressKey: opts.WebhookBaseKey}
 	res.Seats = resolveSeats(ctx, opts)
 
 	in, err := ensureWebhooks(ctx, opts)
@@ -572,8 +586,8 @@ func noIngressReason(opts Options) string {
 	if webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "api.external_url is unset, so nothing at GitHub has " +
-		"an address to deliver to and no event reaches this deployment"
+	return setup.BaseKey(opts.WebhookBaseKey) + " is unset, so nothing at " +
+		"GitHub has an address to deliver to and no event reaches this deployment"
 }
 
 // noRegistrarReason says why a run with no organization credential could
@@ -1008,8 +1022,8 @@ func webhookSecret(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"clear both -public-url and api.external_url and "+
-				"register %s by hand", target)
+				"clear both -public-url and %s and register %s by hand",
+			setup.BaseKey(opts.WebhookBaseKey), target)
 	}
 	// rand.Text is 26 base32 characters over a 128-bit draw. GitHub
 	// accepts any string as a webhook secret and signs with it verbatim,

@@ -5,18 +5,22 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The usage domain's writer, armed — the loop that turns this node's own event
 // log into the replicated record of what its seats and schedules did each day.
 //
-// # Every node runs one, and no node runs anybody else's
+// # Every data node runs one, and no node runs anybody else's
 //
 // Unlike the embedding duty beside it this is not a fleet singleton: a node's
 // event log holds only what ITS seats did, so the node is the only thing that
 // can derive its own day, and the node in every subject it writes is what
-// keeps N writers from ever meeting on one. Without it the domain is
+// keeps N writers from ever meeting on one. A node without `data` keeps no
+// event log of its own — its events are written by a data node that keeps
+// them in custody (internal/observe) — so its seats' day is derived, and
+// published, inside that keeper's, and it runs no publisher at all. Without it the domain is
 // registered, applied and replicated over an empty stream — and every spend
 // answer is exactly as partial as it was before the domain existed, while
 // every surface reports a healthy log.
@@ -28,12 +32,12 @@ type usageLoop struct {
 }
 
 // startUsage arms this node's usage publisher, or does nothing on a node that
-// runs no state log.
+// runs no state log — a node without `data` among them.
 func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil || e.backends.Store == nil {
 		return
 	}
-	running := s.domains[usage.Domain{}.Name()]
+	running := s.Domain(usage.Domain{}.Name())
 	if running == nil || running.publisher == nil {
 		return
 	}
@@ -46,6 +50,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 		// the next day's cut with it.
 		Zone:   e.Zone,
 		Handle: e.seatHandle,
+		Every:  e.usageEvery,
 		// NO LOGGER: the publisher's own lines carry `component=usage`,
 		// the subsystem that wrote them, rather than this package's.
 	})
@@ -99,10 +104,14 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 // needs it — the spend answers' source (ADR-0020).
 //
 // RESOLVED ON EVERY READ through the node handle, never captured: an adoption
-// replaces the replicated peer, and a reader holding the handle it booted with
-// would answer every named spend window from a file no longer at that name.
-// The window in which there is no peer answers [store.ErrNoEstate], which the
-// query surface reports as "not available yet".
+// closes the file and reopens it, and a reader holding the handle it booted
+// with would answer every named spend window from a file no longer at that
+// name. An estate that is not open here — a node without `data` holds none —
+// answers [store.ErrNoEstate], which the query surface reports as "not
+// available yet".
 func (e *Engine) UsageEstate() usage.Estate {
-	return replicatedEstate{node: e.backends.Store}
+	if e.backends == nil || e.backends.Store == nil {
+		return store.ReplicatedReader{}
+	}
+	return e.backends.Store.Replicated().Reader()
 }

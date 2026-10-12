@@ -46,7 +46,6 @@ import {
   InlineCode,
   SegmentedControl,
 } from "@crewlethq/ui";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /** What each starting point gives the operator, in one line. */
 const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
@@ -259,7 +258,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
             Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
             then either import a company file or patch the configuration:
           </span>
-          <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
+          <CodeBlock plain wrap code={PROVIDER_SNIPPET} />
         </div>
       </div>
     </Card>
@@ -276,4 +275,4 @@ curl -X PATCH "$CREWLET_URL/config" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",
-       "model":"claude-sonnet-5","api_keys":["\${ANTHROPIC_API_KEY}"]}}}}'`;
+       "model":"claude-sonnet-5-5","api_keys":["\${ANTHROPIC_API_KEY}"]}}}}'`;

@@ -317,6 +317,17 @@ func FieldValueColumn(t FieldType) string {
 	return "text"
 }
 
+// fieldValueIndex is the partial index a filter on a field type's values
+// seeks: `(field_id, <its value column>) WHERE hidden = 0`, one per column,
+// declared by replicated migration 0002.
+//
+// DERIVED FROM [FieldValueColumn], so the column a filter compares and the
+// index it names cannot disagree — a filter naming another column's index
+// seeks `field_id` alone, which is the plan naming the index exists to stop.
+func fieldValueIndex(t FieldType) string {
+	return "tracker_field_values_" + FieldValueColumn(t) + "_idx"
+}
+
 // fieldRows turns one declared field's JSON value into its rows.
 //
 // A MULTI-VALUED FIELD IS N ROWS, one per member, because that is what makes

@@ -27,6 +27,19 @@
 // was an operator token and stopped being sound the day a person could sign
 // in holding `state:read` alone.
 //
+// # A managed document is refused before every side effect
+//
+// Where Tier A names the company document's writers (ADR-0030), a change to
+// it through any other credential is refused `config_managed` — by
+// internal/api/configapi's own check, asked here EARLIER than the write that
+// would ask it, because this surface acts before it writes: a connect seals a
+// credential, a disconnect queues a teardown at the vendor, and a GitHub App
+// is created once with a key GitHub never reissues. So it is asked after the
+// route's grants and before each of those, and again at the GitHub callback,
+// of the party the sealed state names, before the one-time code is spent. A
+// rotation of a value the document already names changes no byte of it and
+// stays open.
+//
 // # It never returns a value
 //
 // A requirement says whether a value is present and whether it resolved. It
@@ -134,8 +147,17 @@ type Options struct {
 	// resolved, through the engine's own chain.
 	Resolve func(string) (string, bool)
 
-	// ExternalBase is where a browser and a vendor reach this deployment:
-	// `api.external_url`, without its trailing slash.
+	// WebhookBase is where a THIRD-PARTY APP reaches this deployment,
+	// without its trailing slash: [config.API.WebhookBase] — the public
+	// listener's `api.public.external_url` where one is configured, and
+	// `api.external_url` otherwise.
+	//
+	// THE VENDOR'S ADDRESS AND NEVER THE PERSON'S, because every address
+	// this surface builds on it is one a vendor follows: a webhook's
+	// delivery URL, a Slack app's request URL, a GitHub App's manifest and
+	// the redirect GitHub sends a browser back on, all of which `/webhooks/`
+	// serves — and once there are two listeners, the person's answers 404
+	// for every one of them.
 	//
 	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
 	// is Tier A: it cannot change under a running process, so a surface
@@ -144,9 +166,16 @@ type Options struct {
 	// below carried the resolver and had to decide what to do with a
 	// reference that resolved to nothing.
 	//
-	// Empty is a deployment serving no HTTP at all, which this service is
-	// not mounted on.
-	ExternalBase string
+	// Empty is a deployment with no such address, which every gesture that
+	// would hand one to a vendor refuses by name.
+	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which the listing and every refusal
+	// about the address name, so an operator edits the setting in force.
+	// REQUIRED, because it is always knowable: a deployment with no address
+	// still has the key that would hold one.
+	WebhookBaseKey string
 
 	// Passes are the third-party apps this build can provision over the
 	// API.
@@ -204,9 +233,9 @@ type Service struct {
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
-	// externalBase is `api.external_url`, from Tier A. See
-	// [Options.ExternalBase].
-	externalBase string
+	// webhookBase and webhookBaseKey are the vendor's address and the Tier
+	// A key it is read from. See [Options.WebhookBase].
+	webhookBase, webhookBaseKey string
 	// slackApps is which Slack app each seat authenticates as, from the
 	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
@@ -240,6 +269,7 @@ func New(opts Options) (*Service, error) {
 		{"SlackApps", opts.SlackApps == nil},
 		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
+		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -260,17 +290,18 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Service{
-		company:      opts.Company,
-		config:       opts.Config,
-		resolve:      opts.Resolve,
-		externalBase: opts.ExternalBase,
-		secrets:      opts.Secrets,
-		passes:       opts.Passes,
-		sink:         opts.Sink,
-		status:       opts.Status,
-		slackApps:    opts.SlackApps,
-		clock:        now,
-		guard:        authz.ContextGuard(authz.NoChart{}),
+		company:        opts.Company,
+		config:         opts.Config,
+		resolve:        opts.Resolve,
+		webhookBase:    opts.WebhookBase,
+		webhookBaseKey: opts.WebhookBaseKey,
+		secrets:        opts.Secrets,
+		passes:         opts.Passes,
+		sink:           opts.Sink,
+		status:         opts.Status,
+		slackApps:      opts.SlackApps,
+		clock:          now,
+		guard:          authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{svc: opts.Config},
@@ -356,6 +387,14 @@ func (c configWriter) Apply(
 		Patch: patch, Summary: summary, By: by, Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
+}
+
+// Authorize is the config surface's own managed-document check
+// ([configapi.Service.Authorize]), so /setup refuses exactly the credentials
+// /config does — asked earlier, before a side effect, rather than by a second
+// reading of the list.
+func (c configWriter) Authorize(by iam.Actor) error {
+	return c.svc.Authorize(by)
 }
 
 func (c configWriter) Current(ctx context.Context) (string, error) {
@@ -643,13 +682,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// ONE FIELD WHERE THERE WERE FOUR. While this was a Tier B
 		// pointer the screen also needed `present`, `resolved` and the
 		// variable's `reference`, because "configured and resolving to
-		// nothing" was a state a banner had to name. `api.external_url`
-		// is Tier A and REQUIRED once the API is served, resolved before
-		// the document is decoded — so a node serving this screen at all
-		// has an address, and the three fields that described its
-		// absence described a state that can no longer occur.
+		// nothing" was a state a banner had to name. The address is Tier A
+		// and REQUIRED on a node serving this screen, resolved before the
+		// document is decoded — so a node serving it at all has one, and
+		// the three fields that described its absence described a state
+		// that can no longer occur. WHICH key it is read from rides beside
+		// it, because there are two once a public listener is set.
 		"external_url": map[string]any{
-			"value": s.externalBase, "config_path": "api.external_url",
+			"value": s.webhookBase, "config_path": s.webhookBaseKey,
 		},
 	})
 }
@@ -828,7 +868,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(roster, s.resolve, s.apps(), s.externalBase)
+		seats = slackSeats(roster, s.resolve, s.apps(), s.webhookBase, s.webhookBaseKey)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
@@ -937,7 +977,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := s.externalBase; base != "" && state.InboundPath != "" {
+	if base := s.webhookBase; base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
@@ -1610,7 +1650,7 @@ func (s *Service) apps() map[string]string { return s.slackApps() }
 
 func slackSeats(roster *org.Organization,
 	resolve func(string) (string, bool),
-	apps map[string]string, externalBase string,
+	apps map[string]string, webhookBase, webhookBaseKey string,
 ) []SeatState {
 	// WHAT IS BUILT FROM THIS IS COPIED INTO SLACK, which is why it was
 	// the sharpest case for moving the address into Tier A. As a Tier B
@@ -1621,7 +1661,7 @@ func slackSeats(roster *org.Organization,
 	// mistake measured on the Atlassian pass, which sent the literal
 	// `${ATLASSIAN_ORG_ID}` to Atlassian. Tier A resolves before it
 	// decodes, so there is no state in which this is a reference.
-	base := externalBase
+	base := webhookBase
 	out := []SeatState{}
 	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -1674,9 +1714,9 @@ func slackSeats(roster *org.Organization,
 		// instruction pointing at what is not there.
 		switch manifest, err := slack.ManifestJSON(role.Name, handle, base); {
 		case base == "":
-			state.ManifestNote = "no manifest yet: set `api.external_url` " +
-				"in this node's Tier A file to the address this agent's app " +
-				"delivers to, and restart the node"
+			state.ManifestNote = "no manifest yet: set `" + webhookBaseKey +
+				"` in this node's Tier A file to the address this agent's " +
+				"app delivers to, and restart the node"
 		case err != nil:
 			state.ManifestNote = err.Error()
 		default:
@@ -2061,13 +2101,10 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// ON THE INGRESS, not on whether this build runs a pass. Today that
 	// admits Slack alone: its Request URL is a field on a settings page with
 	// no write API behind it, so it holds whatever address a person last
-	// typed, however much of Slack's provisioning a pass does converge.
-	// Datadog used to be here too and is not any more — its webhook
-	// definition is writable through the organization credentials its block
-	// already carries, so no person holds that address. See
+	// typed, however much of Slack's provisioning a pass does converge. See
 	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, s.externalBase)
+		s.recordEndpoint(r.Context(), kind, s.webhookBase)
 	}
 	fresh := state
 	if after != nil {
@@ -2110,6 +2147,15 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		// caller's goal is a company without this integration, and it
 		// has one.
 		httpjson.Write(w, http.StatusOK, map[string]any{"key": kind, "removed": false})
+		return
+	}
+	// A DISCONNECT REMOVES A BLOCK FROM THE DOCUMENT — at once when forced,
+	// through the engine's teardown otherwise — so a managed document
+	// refuses it here, before the teardown is queued: queued, it would run
+	// at the third-party app and then remove a block the managing system
+	// puts straight back.
+	if err := s.config.Authorize(attributionOf(r)); err != nil {
+		s.refuse(w, r, err, setup.Result{})
 		return
 	}
 	var req disconnectRequest
@@ -2215,7 +2261,10 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var raced *configapi.RacedError
 	var invalid *configapi.ValidationError
 	var patchErr *configapi.PatchError
+	var managed *configapi.ManagedError
 	switch {
+	case errors.As(err, &managed):
+		configapi.RefuseManaged(w, managed)
 	case errors.As(err, &literal):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,

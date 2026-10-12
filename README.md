@@ -111,17 +111,24 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 # or grab a signed binary from the releases page, or run
 # ghcr.io/crewlet/crewlet
 
+crewlet secrets keygen -key-id 2026-01    # prints the export line below
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."     # or OpenAI, or any OpenAI-compatible endpoint
 export OPENAI_API_KEY="sk-..."            # embeddings
 
-./crewlet run          # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
+crewlet run            # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
 ```
 
 Those two filenames are the defaults, so nothing needs naming when they sit in
 the working directory; `-config` and `-company` point elsewhere. The Tier A
 file is the short one — where this node's store, stream and API live — and the
-[quickstart](docs/getting-started/quickstart.md) writes it out in full.
+[quickstart](docs/getting-started/quickstart.md) writes it out in full. Four
+things in it are not optional on a node that serves the dashboard: the
+**keyring** (`secrets.keys`, which signs every state-log record and every
+session cookie — every node needs it), `api.external_url`, the grant ceiling
+`api.auth.max_grants`, and at least one `api.auth.tokens` entry — the token
+above, which is how the first person is invited onto their seat.
 
 The company file is a **bootstrap seed**: it fills an empty store and is
 ignored once a company exists, so a restart never reverts a change made live.
@@ -130,7 +137,7 @@ The store is the source of truth at runtime. To change a running fleet, run
 node converges with no restart. To make the file win on a restart instead, pass
 `-import-company`.
 
-A four-agent company is about 40 lines of YAML:
+A four-agent company, with a seat for you, is about 40 lines of YAML:
 
 ```yaml
 name: "Acme AI"
@@ -140,25 +147,43 @@ providers:
   llm:
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
 roles:
+  - name: Your Name
+    handle: founder
+    kind: human          # your seat: a person joins the company on one
+    manages: [ceo]
   - name: CEO
+    handle: ceo
     goal: "Set product vision and make final calls"
-    manages: [CTO, PM]
+    manages: [cto, pm]
+  - name: PM
+    handle: pm
+    goal: "Turn business goals into clear specs and prioritized backlogs"
 
 units:
   - name: Core Engineering
+    id: core-eng
     type: team
-    lead: CTO
+    lead: cto
     roles:
       - name: CTO
+        handle: cto
         goal: "Set technical direction and unblock engineers"
-        manages: [Engineer]
+        manages: [eng]
       - name: Engineer
+        handle: eng
         goal: "Implement features, write tests, ship quality code"
 ```
+
+`manages:` and `lead:` name a seat by its **handle** and a unit by its **key**
+(`id`), never by a display name, and a handle is the seat's identity for good
+([ADR-0013](adr/0013-a-seats-identity-is-derived.md)). Every person holds a
+`kind: human` seat ([ADR-0032](adr/0032-every-person-holds-a-human-seat.md)) —
+you join on yours from the org chart, invited under the founder token — so a
+company that declares none admits nobody.
 
 The dashboard and webhook API come up with the engine, and the dashboard
 opens on **Home**: how the company is, and the decisions waiting on you. The full
@@ -270,12 +295,13 @@ live-editable company document in the store that can be
 
 ```bash
 crewlet run                                   # boot; seeds the store from company.yaml
-crewlet run -roles ingress                    # API + webhooks only (split deployments)
+crewlet run -roles data,ingress               # API + webhooks only (split deployments)
 crewlet validate                              # check both tiers before booting
 crewlet schema company                        # JSON Schema (editors, CI, agents)
 
 crewlet config import | show | export | revisions | diff | activate
-crewlet secrets keygen                        # a keyring key — installing it seals the config
+crewlet secrets keygen                        # a keyring key — REQUIRED on every node: it signs every
+                                              #   state-log record and session cookie, and seals the config
 crewlet secrets set LLM_API_KEY               # a secret the engine reads ${VAR} from
 
 crewlet confluence import company.yaml docs/  # publish knowledge docs + tool skills

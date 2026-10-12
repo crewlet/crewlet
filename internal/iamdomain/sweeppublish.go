@@ -168,7 +168,7 @@ func (w *Writer) PlanSweep(ctx context.Context, horizons Horizons) (SweepPlan, e
 	// comparison than it reads in the record.
 	now := w.Now().UTC().Truncate(time.Millisecond)
 	plan := SweepPlan{At: now, Expired: now.Add(-SessionRowGrace)}
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if plan.Changes, err = trailBound(ctx, tx, ClassChange,
 			now.Add(-horizons.Changes)); err != nil {

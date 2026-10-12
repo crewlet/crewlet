@@ -11,11 +11,19 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { AssignButton, EditProjectButton, PinButton, RestoreButton } from "./writes.tsx";
+import {
+  AssignButton,
+  EditProjectButton,
+  PinButton,
+  RestoreButton,
+  SaveViewButton,
+} from "./writes.tsx";
+import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -41,13 +49,22 @@ const JANE: ViewerState = {
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
-  acts: ["update_work_item", "restore_work_item", "set_pins", "mark_inbox", "write_project"],
+  acts: [
+    "update_work_item",
+    "restore_work_item",
+    "set_pins",
+    "mark_inbox",
+    "write_project",
+    "save_work_view",
+  ],
   project: "",
   kind: "human",
   unbound: false,
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];
@@ -56,13 +73,15 @@ beforeEach(() => {
   sent = [];
   vi.mocked(useViewer).mockReturnValue(JANE);
   vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Nimbus",
-    roles: [
-      { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
-      { name: "Jane Founder", handle: "jane", kind: "human" },
-    ],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Nimbus",
+      roles: [
+        { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+      ],
+    }) as never,
+  );
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
@@ -149,6 +168,30 @@ test("pinning adds the one view and unpinning removes it, never replacing the st
   fireEvent.click(screen.getByRole("button", { name: "Unpin" }));
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ views: { remove: ["v-1"] } });
+});
+
+// A VIEW'S NAME PAST THE ENGINE'S CAP IS HELD WHOLE AND SAID, NEVER CUT. The
+// field carried `maxLength={80}` — a figure the engine never held, in
+// characters rather than its 128 bytes — so a pasted name was cut by the
+// browser, silently, short of what the engine would take.
+test("a view's name past the engine's cap is held whole and said", async () => {
+  mount(<SaveViewButton container="workspace" type="list" params={{}} />);
+  fireEvent.click(screen.getByRole("button", { name: "View" }));
+  const name = (await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement;
+  const typed = "n".repeat(VIEW_NAME_MAX_BYTES + 20);
+  fireEvent.change(name, { target: { value: typed } });
+  expect(name.value).toBe(typed);
+  expect(document.body.textContent).toContain(
+    `${VIEW_NAME_MAX_BYTES + 20} bytes — a view's name holds at most ${VIEW_NAME_MAX_BYTES}.`,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save view" }));
+  expect(sent).toEqual([]);
+  // AND ONE THE OLD 80-CHARACTER CUT WOULD HAVE CLIPPED IS TAKEN WHOLE.
+  const long = "v".repeat(100);
+  fireEvent.change(name, { target: { value: long } });
+  fireEvent.click(screen.getByRole("button", { name: "Save view" }));
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]!.body.args.name).toBe(long);
 });
 
 // THE LEAD'S DAY, SET OR CLEARED, and nothing else about the project: an

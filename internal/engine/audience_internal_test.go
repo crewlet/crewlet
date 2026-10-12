@@ -80,7 +80,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 			t.Parallel()
 			r := run
 			r.Requester = tc.requester
-			got := resolveAudience(o, nil, r, tc.label)
+			got := resolveAudience(o, nil, nil, r, tc.label)
 			if !slices.Equal(got.Handles, tc.want) || got.Fallback != tc.fallback {
 				t.Errorf("%q resolved to %v (fallback %v), want %v (fallback %v)",
 					tc.label, got.Handles, got.Fallback, tc.want, tc.fallback)
@@ -93,7 +93,7 @@ func TestAQuestionIsPutToTheSeatsItsLabelNames(t *testing.T) {
 // never to a guess.
 func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	t.Parallel()
-	got := resolveAudience(audienceChart(t), nil,
+	got := resolveAudience(audienceChart(t), nil, nil,
 		sandbox.PendingRun{TurnID: "t1", AgentHandle: "left-the-company"}, "manager")
 	if len(got.Handles) != 0 || !got.Fallback {
 		t.Fatalf("resolved to %v (fallback %v), want nobody as a fallback", got.Handles, got.Fallback)
@@ -116,7 +116,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 		t.Fatalf("the brief does not name the seat's teammates and manager by handle:\n%s", brief)
 	}
 	for _, name := range []string{"cto", "ada", "qa"} {
-		if got := resolveAudience(o, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
+		if got := resolveAudience(o, nil, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
 			t.Errorf("a --to %q copied from the brief fell back", name)
 		}
 	}
@@ -170,7 +170,8 @@ func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
 	if d.AnswerByTurn == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")
 	}
-	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main"}
+	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main",
+		LaunchID: "launch-1"}
 	disposition, err := d.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{}))
 	if err != nil || disposition != sandbox.AnswerNotMine {
 		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",
@@ -192,7 +193,7 @@ func TestTheRequesterIsKeptByItsSeatsHandle(t *testing.T) {
 	if got := requesterIdentity(company, "nobody-we-know"); got != "" {
 		t.Errorf("a sender the org does not hold was recorded as %q, want nobody", got)
 	}
-	got := resolveAudience(o, nil, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
+	got := resolveAudience(o, nil, nil, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
 		Requester: "ada"}, "requester")
 	if !slices.Equal(got.Handles, []string{"ada"}) || got.Fallback {
 		t.Errorf("the requester resolved to %v (fallback %v), want ada",

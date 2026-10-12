@@ -71,8 +71,13 @@ func (p Prefix) Applied() Position {
 
 // PrefixIn reads d's prefix inside tx, which is the caller's own snapshot of
 // the estate d's rows live in.
+//
+// ON THE DOMAIN'S OWN LOG ([Domain.Stream]): every spec a node runs d under
+// names that log and its prefix ([StreamSpec.Instantiates]) and may differ only
+// in its byte ceiling, which nothing here reads — so a reader holding the
+// domain and no spec finds exactly the checkpoint its applier commits.
 func PrefixIn(ctx context.Context, tx *sql.Tx, d Domain) (Prefix, error) {
-	t, err := newTables(d)
+	t, err := newTables(d, d.Stream())
 	if err != nil {
 		return Prefix{}, err
 	}
@@ -111,7 +116,7 @@ func DeferredIn(ctx context.Context, tx *sql.Tx, d Domain, s ScopeSet) (
 			"%s names no objects, so nothing can be said about what a retained "+
 			"record would cover", d.Name())
 	}
-	t, err := newTables(d)
+	t, err := newTables(d, d.Stream())
 	if err != nil {
 		return Deferral{}, false, err
 	}

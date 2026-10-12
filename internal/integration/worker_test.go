@@ -708,7 +708,8 @@ func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	r := &fakeReconciler{kind: KindJira}
 	d := &fakeDisconnector{}
-	store := newStore(State{Kind: KindJira, Disconnecting: true, RemoveSeats: true})
+	asker := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator, OperatorID: "session:ana"}
+	store := newStore(AskTeardown(State{}, KindJira, true, asker))
 
 	w := at(t, now, store, nil, Registration{Reconciler: r, Disconnector: d})
 	w.Tick(context.Background())
@@ -726,10 +727,10 @@ func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 	if store.has(KindJira) {
 		t.Error("a finished teardown left its status row behind")
 	}
-	// A ROW THAT NAMES NOBODY hands the teardown nobody, and the
-	// disconnector records its own name — what an older build's ask means.
-	if d.by != (iam.Actor{}) {
-		t.Errorf("a row naming nobody handed the teardown %+v", d.by)
+	// WHOEVER ASKED is who the teardown is handed, so every write it makes
+	// is recorded under them rather than the loop that carried it out.
+	if d.by != asker {
+		t.Errorf("the teardown was handed %+v, want whoever asked: %+v", d.by, asker)
 	}
 }
 
@@ -895,12 +896,11 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 	const base = "https://now.example.com"
 	const stale = "https://old.example.com"
 
-	// The address a person set Slack up against, already on the row.
+	// The address a person set Slack up against, already on the row, and a
+	// surface with no inbound address at all.
 	store := newStore(
 		State{Kind: KindSlack, Endpoint: stale},
-		// A row an earlier build stamped on a surface with no inbound
-		// address at all.
-		State{Kind: KindMattermost, Endpoint: stale},
+		State{Kind: KindMattermost},
 	)
 	w, err := New(Options{
 		Registrations: []Registration{
@@ -925,9 +925,9 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 			"can move an address they typed at the third-party app", got, stale)
 	}
 	if got := store.get(t, KindMattermost).Endpoint; got != "" {
-		t.Errorf("mattermost endpoint = %q, want it cleared: nothing delivers "+
-			"to an address for this surface, so a stale one is a false alarm "+
-			"waiting for the next base change", got)
+		t.Errorf("mattermost endpoint = %q, want none: nothing delivers to an "+
+			"address for this surface, so one would be a false alarm waiting "+
+			"for the next base change", got)
 	}
 }
 
@@ -1047,11 +1047,10 @@ func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
 		"operator-typed is left exactly as it was": {
 			kind: KindSlack, start: "https://typed.example.com", want: "https://typed.example.com",
 		},
-		// Nothing delivers to an address, so carrying one is a false alarm
-		// waiting for the public base to move. Cleared, not merely skipped,
-		// so a row an earlier build stamped converges.
-		"a surface with no inbound is cleared": {
-			kind: KindAtlassian, start: "https://stale.example.com", want: "",
+		// Nothing delivers to an address, so none is recorded: one would be
+		// a false alarm waiting for the public base to move.
+		"a surface with no inbound records none": {
+			kind: KindAtlassian, start: "", want: "",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

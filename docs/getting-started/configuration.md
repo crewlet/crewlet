@@ -19,6 +19,12 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 > and warnings, see [the validation loop](ai-authoring.md#the-validation-loop));
 > it reads no environment, so it works before any secret is exported.
 >
+> **Credential positions are marked.** Every field, list member or map
+> value that holds a credential carries `"x-crewlet-secret": true` in the
+> schema, so an editor or a tool writing this file knows where a `${VAR}`
+> reference belongs instead of a value — see
+> [Credential positions](../reference/cli.md#credential-positions-x-crewlet-secret).
+>
 > **Unknown keys are rejected.** Every config model forbids extra
 > fields, at every level including roles and units — a mistyped
 > `backstroy:` fails validation naming the exact path rather than being
@@ -103,6 +109,12 @@ turn_engine:                            # optional — executor/reviewer turn co
     retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
+                                        #   Every `*budget_tokens` / `*_max_tokens` cap here
+                                        #   bounds the ANSWER of a call that does not think. A
+                                        #   thinking model spends its thinking from the same cap,
+                                        #   so a call to one is sent the model's own output cap
+                                        #   instead, and these passes ask for `low` effort to keep
+                                        #   it short (see "Claude models" under Providers)
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
     retrieval_limit: 5                  # default hits query_episodes returns when the
@@ -111,8 +123,10 @@ learning:                               # optional — agent-learning subsystem
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
     budget_tokens: 5000                 # soft cap on the decider's LLM call (0 disables)
-    summarize_episodes: true            # cheap-model summarisation of query_episodes hits
-    summarize_max_tokens: 400           # soft cap on summariser response length
+    summarize_episodes: true            # cheap-model briefing of the turn-start
+                                        # Similar prior work hits (query_episodes is
+                                        # never summarised)
+    summarize_max_tokens: 400           # soft cap on that briefing, in tokens
   counterparty:
     enabled: true                       # CounterpartyProfiler + auto-inject + lookup inline
     budget_tokens: 3000                 # soft cap on the profiler's LLM call per turn
@@ -348,14 +362,60 @@ providers:
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
                                         #   proxy instead of the vendor host
-      timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
+      timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
+                                        #   a streamed call (every anthropic call, and an executor's rounds
+                                        #   elsewhere) by its SILENCE — the longest
+                                        #   wait with nothing arriving, first byte included — never its length,
+                                        #   so a round thinking for many minutes is not cut off half-way
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
-      reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
-      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high | max (default: medium)
-      reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
-                                        #   All three are REFUSED on a cli-agent entry: a coding CLI driven
-                                        #   headlessly takes no per-call reasoning flag and carries its own
-                                        #   configuration. Pick the reasoning model with `model` instead
+      reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
+                                        #   model (default: false). REFUSED on anthropic, where thinking is
+                                        #   not a switch (see "Claude models" below), and on openai-compatible.
+                                        #   gpt-4o is not a reasoning model, so this entry sets no
+                                        #   reasoning_effort: with reasoning off it is refused (see `reasoner`)
+                                        # There is NO temperature field, on any type: the phases of a turn
+                                        #   send none, so every round runs at the vendor's own default
+                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
+                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
+                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
+                                        #   anthropic only where the model samples (see "Claude models" below)
+    reasoner:                           # an OpenAI reasoning model
+      type: openai
+      model: gpt-5
+      api_keys:
+        - "${OPENAI_API_KEY}"
+      reasoning: true
+      reasoning_effort: high            # optional — how hard the model thinks: low | medium | high | xhigh | max
+                                        #   openai: sent while `reasoning` is on (unset: nothing is sent, the
+                                        #     endpoint's own default, and no call can lower it, since that
+                                        #     default is not a level the engine can compare). Refused with
+                                        #     reasoning off, where it would do nothing
+                                        #   anthropic: output_config.effort on EVERY call (unset: high), on a
+                                        #     model that takes effort at all; a level the model does not take
+                                        #     is refused (see "Claude models" below)
+                                        #   A CEILING for every call on this entry: a call may ask for less (the
+                                        #   extension judge, the knowledge answer, the turn-start filters and every
+                                        #   learning pass ask for `low`) and never for more
+    claude:
+      type: anthropic
+      model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below
+      reasoning_effort: high            # optional (default: high)
+    claude-gateway:
+      type: anthropic
+      model: fast                       # a gateway's own alias for a model...
+      claude_model: claude-haiku-4-5    # optional, anthropic only — ...named here, so its requests are
+                                        #   shaped as that model's. An exact id from the table below;
+                                        #   refused beside a model the table already reads
+      base_url: "${CLAUDE_GATEWAY_URL}"
+      reasoning_budget_tokens: 8000     # optional, anthropic BUDGET-ERA models only (claude-haiku-4-5,
+                                        #   claude-sonnet-4-5, claude-opus-4-5 and older): the thinking
+                                        #   budget, at least 1024 and below the model's output cap.
+                                        #   Unset: that model does not think. Refused on every other model
+                                        #   and every other type
+                                        # reasoning, reasoning_effort and reasoning_budget_tokens are all
+                                        #   REFUSED on a cli-agent entry: a coding CLI driven headlessly takes
+                                        #   no per-call reasoning flag and carries its own configuration.
+                                        #   Pick the reasoning model with `model` instead
     budget:                             # multiple providers supported
       type: openai
       model: gpt-4o-mini
@@ -367,6 +427,8 @@ providers:
                                         # See concepts/subscription-llm-backends.md
       type: cli-agent
       model: sonnet                     # whatever the CLI's --model accepts
+                                        #   (opencode: <provider>/<model>,
+                                        #   e.g. anthropic/claude-sonnet-5)
       cli:
         agent: claude-code              # claude-code | codex | gemini-cli | qwen-code
                                         #   | opencode | cursor-agent | copilot | grok
@@ -392,26 +454,42 @@ providers:
                                         #   never the engine's, so declare anything else
                                         #   the CLI needs here
         auth:
-          mode: subscription            # subscription | api-key | inherit-env
+          mode: subscription            # subscription | api-key | inherit-env.
+                                        #   api-key puts the entry's ONE api_keys value
+                                        #   in the CLI's key variable, and a write is
+                                        #   refused for a CLI with none (hermes, pi,
+                                        #   opencode, kimi-code); api_keys is refused in
+                                        #   any other mode, since nothing would read it
           token: ""                     # optional — ${VAR} holding a headless
                                         #   subscription token; empty falls back to the
-                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN)
+                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN).
+                                        #   subscription mode only, and only on a CLI
+                                        #   that mints one (claude-code); a write is
+                                        #   refused elsewhere, where it would reach
+                                        #   nothing
           credential_bundle: ""         # optional — ${VAR} holding a `crewlet llm export`
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
         overrides: {}                   # optional — replace any profile field when a
                                         #   vendor renames a flag OR moves the field the
                                         #   answer lives in (`text_paths`); validated
-                                        #   here, so a typo fails `crewlet validate`.
+                                        #   here, so a typo is refused by `crewlet
+                                        #   validate` and by every API write.
                                         #   A moved answer field is the drift that
                                         #   passes validation and fails at a seat's
                                         #   first turn — `crewlet llm doctor` names it
 
-  embeddings:                           # optional — similarity search for the
+  embeddings:                           # optional — the semantic half of a native
+                                        #   knowledge search (the company's pages and
+                                        #   work items, embedded once for the fleet)
+                                        #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
                                         #   candidate selection AND episode recall).
-                                        #   Omit it and both fall back to recency;
-                                        #   nothing else changes.
+                                        #   Omit it and search is keyword only,
+                                        #   the diary's candidates are its recent
+                                        #   notes alone and episode recall renders
+                                        #   nothing (recent turns are not similar
+                                        #   work); nothing else changes.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
                                         #   one emits 3072, text-embedding-3-small
@@ -435,7 +513,19 @@ providers:
                                         #   A model this build does not know is
                                         #   REFUSED with `dimensions` unset rather
                                         #   than given a guess — name a known model
-                                        #   or state the width yourself
+                                        #   or state the width yourself. embed-v4.0
+                                        #   takes no override: Cohere's endpoint
+                                        #   does not support the parameter
+  # max_input_tokens: 512               # THE MODEL'S LIMITS, in tokens, and unset
+  # max_batch_inputs: 32                #   takes the ones its vendor documents.
+  # max_batch_tokens: 16384             #   Required where none is documented — a
+                                        #   model this build does not know, and the
+                                        #   request limits of gemini-embedding-001
+                                        #   and embed-v4.0, whose OpenAI-compatible
+                                        #   endpoints document none. A stated value
+                                        #   may only LOWER a documented one (a
+                                        #   gateway that accepts less); raising one
+                                        #   is refused naming the field
 ```
 
 **The width belongs to the model.** `text-embedding-3-large` emits 3072,
@@ -445,6 +535,59 @@ emits. There is no global default, because a number that was right for one
 model is silently wrong for the next — and a model this build does not know is
 refused rather than guessed at, naming both ways to fix it.
 
+Every request asks for the width, in the OpenAI `dimensions` parameter, where
+the endpoint takes it — so a shortened width is the width that comes back —
+and every answer is checked against it either way:
+
+| Model | `dimensions` at its endpoint | What the engine does |
+|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | Supported: the vector is shortened to the width asked ([OpenAI's reference](https://developers.openai.com/api/reference/resources/embeddings/methods/create)) | Sends it, so a width below the model's own is the width stored |
+| `gemini-embedding-001` | Not mentioned by [Google's compatibility page](https://ai.google.dev/gemini-api/docs/openai), whose examples send none | Sends it, as it always has; an endpoint that ignored it would answer 3072, which the width check refuses at any other width |
+| `embed-v4.0` | Listed as unsupported by [Cohere's Compatibility API](https://docs.cohere.com/docs/compatibility-api), which takes no other way to choose a width either, so it answers at the model's default, 1536 ([the model page](https://docs.cohere.com/docs/cohere-embed)) | Never sends it, and refuses any other `dimensions`, naming the field |
+| any other model | Unknown | Sends it |
+
+**So do its limits.** How many tokens one input may hold, how many inputs one
+request may carry and how many tokens one request may carry in all are facts
+about the model, and the engine carries what each vendor documents for the
+endpoint it calls:
+
+| Model | Tokens an input | Inputs a request | Tokens a request |
+|---|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | 8 192 | 2 048 | 300 000 |
+| `gemini-embedding-001` | 2 048 | *state it* | *state it* |
+| `embed-v4.0` | 128 000 | *state it* | *state it* |
+
+Google's and Cohere's OpenAI-compatible endpoints document no limit per
+request — Cohere's native API takes 96 texts a call, but that is a different
+endpoint's — so those two are refused until `max_batch_inputs` and
+`max_batch_tokens` are stated, and a model this build does not know states all
+three, exactly as it states its width. A stated limit may only *lower* a
+documented one, for a gateway or proxy in front of the model that accepts less;
+raising one is refused, naming the field, because the provider would refuse
+what the engine then sends.
+
+**A company that needs a limit states it.** A stored company naming
+`gemini-embedding-001`, `embed-v4.0` or a model this build does not know,
+without the limits it needs, is refused at boot as well as at an apply,
+exactly as a model with no known width is — and, the same way, `embed-v4.0`
+at any `dimensions` but 1536, which its endpoint cannot produce. No node
+starts on that revision, so state the limits in the same edit that names the
+model.
+
+The engine counts **bytes** against those token limits rather than shipping a
+tokenizer per vendor: every tokenizer these models use emits at most one token
+per byte of the text it is given, plus the few special tokens a server wraps an
+input in (none for OpenAI, whose count is the input's own; sixteen are set
+aside for every other model). So an input of 8 192 bytes is always inside
+OpenAI's 8 192-token window, whatever language it is in — at the price that
+ordinary prose, three to four bytes a token, is held to about a quarter of the
+window. An input past that bound is refused *before* anything is sent, and a
+batch is sent in as many requests as the model's limits need. What a text too
+long for one input becomes is each caller's choice: the knowledge corpus embeds
+a document's opening, while a turn's ask and an episode are split between words
+into pieces that each fit, embedded in one call, and pooled into one vector —
+so a long ask is still searched by meaning, all of it, rather than refused.
+
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is
 not a degraded search — it is a row that can be written and never read back,
@@ -453,18 +596,143 @@ than adapt:
 
 - **At the apply.** A revision whose `dimensions` differs from the width this
   store already holds is rejected, with an error naming both. Changing the
-  width means re-embedding what is stored, which is a decision for an operator
-  who is watching rather than a silent divergence discovered at the first
-  recall weeks later.
+  width is a restart, which is a decision for an operator who is watching
+  rather than a silent divergence discovered at the first recall weeks later:
+  after it the knowledge corpus re-embeds itself and each seat's diary and
+  episodes are re-filled by the node holding the seat.
+- **Per model, at recall.** Two models of one width are two spaces —
+  `text-embedding-3-small` and `embed-v4.0` both answer 1 536 floats — so
+  every diary and episode vector is stored with the model it came from and
+  recall compares only rows of the query's model. Changing `model` at the
+  same width is therefore an ordinary apply: each seat's diary and episodes
+  are re-filled in the new space by the node holding it — about a million
+  bytes of text a minute across the company — and until a row is, it is
+  reached by recency and by conversation rather than ranked against a space
+  it is not in, and `query_episodes` says how many of a seat's turns its
+  search could not reach.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.
 
-Everything else about an embedding failure is cheap: a timed-out or refused
-call is *no vector*, which every caller reads as "no similarity search this
-turn" and carries on with recency. Nothing here retries — the caller's
-degradation costs less than a retry spent inside a turn-start prefetch
-somebody is waiting on.
+**What a failure costs depends on who asked, so nothing in the provider
+retries.** For a turn starting — diary and episode recall, a search's query
+vector — a timed-out or refused call is *no vector*: personal memory keeps its
+recent half, `## Similar prior work` renders nothing and `query_episodes` says
+its search could not run (a recent turn is not similar work), and a hybrid
+search serves its keyword half — and a retry would be spent inside a prefetch
+somebody is waiting on. For the knowledge corpus, a failure is
+a backlog, and the duty asks again on its next tick. What the provider gives
+every caller instead is *which* failure it was, in three classes: **refused**
+(HTTP 400, 413 or 422, or an input past the bound — sent again unchanged it
+will be refused again, so a caller can set that one input aside rather than
+resend its whole batch for ever), **transient** (408, 409, 425, 429 and 5xx, a
+timeout or a network failure — asking again later may succeed) and
+**configuration** (401, 402, 403, 404 and the remaining 4xx, or a vector of the
+wrong width — nothing will succeed until `providers.embeddings` is fixed).
+
+**One call's ceiling is not another's.** A single embedding is held to 15
+seconds where nothing tighter bounds it — an episode embedded after its turn,
+for one. What a person or a turn waits on is held to two seconds instead: a
+search's query vector, whether a person or a seat's `search_knowledge` asked; a
+turn's ask as the turn starts; the hint `query_episodes` or `refresh_memory`
+passes; and a note `reflect_and_persist` keeps, which the seat's model is
+waiting on mid-turn (a note the reflection after the turn keeps is held to the
+same two seconds). Past it each degrades rather than waits. A hybrid search
+serves its keyword half and a semantic one answers nothing, each saying why.
+Personal memory is chosen from the recent half of its candidate pool alone. Similar prior work renders nothing, and
+`query_episodes` says its search could not run — by design, since a recent
+turn is not similar work and the block would offer it as precedent. The note
+is kept without a vector until the node holding the seat fills it. So a slow
+embeddings server shows up as `embedding_failed` searches, personal memory drawn
+from recent notes only and no similar prior work, not as slow searches, slow
+turn starts and stalled tool calls. A batch request carries up to
+the model's request total (300 000 tokens on OpenAI) and is held to 60 seconds,
+a fifth of the five minutes a corpus tick may go without progress. Nothing has
+measured how long a server takes over a full request — OpenAI's or a self-hosted
+one on CPU, the deployment most likely to need longer. If batches time out
+against a slow server, lower `max_batch_tokens`: a smaller request is a shorter
+one, and the ceiling a stuck call is held to does not move. Keep it at or above
+the model's per-input window (`max_input_tokens`, or the model's own) — one
+input must fit one request, so a request total below the window is also the most
+one input may hold, and the knowledge corpus would then embed a shorter opening
+of every long source, each under a new digest and so embedded again.
+
+### Claude models: thinking, effort and sampling
+
+An `anthropic` request's SHAPE is a function of its model, because the Claude
+generations accept different requests and a field a model does not accept is
+an HTTP 400 — which the [fallback chain](../concepts/architecture.md#2-inside-one-node) does not
+retry, since a refusal of the request itself is not something another attempt
+fixes. So the engine reads what each model accepts from one table
+(`internal/providers/llm/anthropic/claudemodel`) and sends nothing the model in
+front of it would refuse:
+
+| Models | Thinking | `reasoning_effort` | `reasoning_budget_tokens` | Output cap |
+|---|---|---|---|---|
+| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
+| `claude-opus-4-6`, `claude-sonnet-4-6` | adaptive, every call | low · medium · high · max | refused | 128K |
+| `claude-opus-4-5` | only with a budget | low · medium · high | 1024 to below the cap | 64K |
+| `claude-sonnet-4-5`, `claude-haiku-4-5` and older | only with a budget | refused | 1024 to below the cap | 64K (older: 32K–64K) |
+| any id the table does not know | adaptive, every call | every level | refused | 64K |
+
+- **There is no thinking switch.** On a model with adaptive thinking every
+  call sends `thinking: {type: adaptive, display: summarized}` — the summary
+  is what fills the round's reasoning and the live thinking text on the
+  dashboard, and it costs the same as the hidden default. Turning thinking off
+  is refused outright by Opus 5.5, Fable and Mythos, and on Opus 4.8 and 5 it
+  makes the model write a tool call into its prose instead of making it. How
+  hard the model thinks is `reasoning_effort`, which defaults to `high`: every
+  phase this engine runs is long-horizon agentic tool use, and Opus 5.5's own
+  default is `medium`, so an unset level would silently think less after a
+  model upgrade. The calls that need little — the round-cap judge, the
+  knowledge answer, the turn-start filters and the learning passes — ask for
+  `low` on their own, and no call can ask for more than the entry's level. A
+  call's level that falls on one the model skips (`xhigh` on Opus 4.6) is
+  sent as the next level down that it takes.
+- **A budget-era model thinks only with a budget.** `reasoning_budget_tokens`
+  turns thinking on with that many tokens; unset, it does not think.
+- **No temperature is sent by default.** A call that names one (the judge asks
+  for 0, the auxiliary passes for 0.2) gets it only on a model that takes a
+  sampling parameter and on a call that is not thinking — in practice a
+  budget-era model with no budget. Elsewhere it is dropped rather than
+  refused, because those models answer any temperature with a 400.
+- **`max_tokens` is the model's own cap.** Thinking is spent from the same
+  cap as the answer, so a smaller one truncates a round or empties it; an
+  unused cap costs nothing, and spend is bounded by
+  [token budgets](#token-budgets) instead. A call's own smaller cap is honoured
+  only on a call that is not thinking.
+- **No forced tool choice and no prefill** are ever sent: a phase that must
+  end in a call names it and is asked again when a round ends without it,
+  and a conversation always ends on a user turn or a tool result.
+- **Reasoning written under an earlier tool set is shed** on
+  `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5` and any id the
+  table does not know. Those models bind each thinking block to the system
+  prompt and the tools of the request that wrote it, and refuse it with a 400
+  once either has changed. A phase's tools do change: `activate_tool` adds
+  one, and a resumed run renders them again. So the rounds before a change
+  are replayed without their thinking, while their text and calls are
+  replayed whole. Every other model is replayed every block, because it runs
+  no such check. See
+  [the conversation only grows](../concepts/turn-engine.md#the-conversation-only-grows).
+
+A Bedrock or Vertex spelling of a model (`anthropic.claude-opus-5-5`,
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `claude-opus-4-5@20251101`)
+and a dated snapshot are read as the model they spell. An id the table does
+not know — most likely a model released after this build — gets the current
+generation's shape, and `crewlet validate` warns about it at `claude_model`:
+if it is a gateway alias for an older model, name that model there, or its
+calls may be refused. Every rule above is checked when the config is
+validated, and again when the provider is built, where a model written as a
+`${VAR}` is first known.
+
+The table is compiled into the build and the models are not, so
+`crewlet llm doctor <key>` checks an entry against the live model: it reads
+the model's record from the vendor's Models API, reports every place the
+table disagrees with it — a **problem** when the disagreement puts a field the
+model refuses on every call — and sends one real round in a phase's shape,
+which must come back as a tool call. A gateway that does not serve
+`/v1/models` is reported as *not served* rather than as a failure. See the
+[CLI reference](../reference/cli.md#crewlet-llm).
 
 ## Tier A
 
@@ -480,14 +748,20 @@ stream:
                                     #   an external server — the same client
                                     #   code either way, so it is a connection
                                     #   choice rather than a second backend
-  store_dir: "./crewlet-data/stream"  # REQUIRED for an embedded stream.
-                                    #   Empty would be in-memory, and every
-                                    #   node keeps its state logs here from
-                                    #   boot — the people who can sign in,
-                                    #   company or none — so
-                                    #   `crewlet validate` and the engine
-                                    #   both refuse it rather than lose them
-                                    #   at the first restart
+  store_dir: "./crewlet-data/stream"  # REQUIRED on a broker MEMBER — every
+                                    #   data node on an embedded stream, a
+                                    #   single node included. Empty would be
+                                    #   in-memory, and every data node keeps
+                                    #   its state logs here from boot — the
+                                    #   people who can sign in, company or
+                                    #   none — so `crewlet validate` and the
+                                    #   engine both refuse it rather than
+                                    #   lose them at the first restart. A
+                                    #   member of a fleet's broker also holds
+                                    #   the fleet's streams for every node
+                                    #   that reaches it. A leaf (a node
+                                    #   without `data`) is refused one: it
+                                    #   keeps no stream of its own
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -531,14 +805,24 @@ stream:
                                     #   on every server, and on the account
                                     #   the engine signs in to where that
                                     #   states one; nats-server's default is
-                                    #   1 MiB), or the node refuses to start
-                                    #   naming it — see Deployment
+                                    #   1 MiB): an event, or a node's answer
+                                    #   to another, may be that large, so the
+                                    #   node refuses to start naming it — see
+                                    #   Deployment. A file's bytes cross in
+                                    #   messages of 128 KiB, which a server's
+                                    #   default already carries
   # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
                                     #   cluster, where it is what makes a publish
-                                    #   quorum-durable before it returns. It is
-                                    #   checked against `cluster.peers`, so >1
-                                    #   without them is refused — this node has
-                                    #   nothing to replicate to
+                                    #   quorum-durable before it returns. At most
+                                    #   5, JetStream's own ceiling, and on an
+                                    #   embedded cluster at most its members —
+                                    #   this node and `cluster.peers` — so >1
+                                    #   without peers is refused: this node has
+                                    #   nothing to replicate to. It is the
+                                    #   BROKER's copies of its streams and
+                                    #   buckets — the company's files among
+                                    #   them under the default `nats` object
+                                    #   store (`store.objects`)
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
                                     #   one member of one cluster. REQUIRED once
@@ -554,7 +838,14 @@ stream:
   #   port: 6222                    #   `node.id` is
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
-  #     - "nats://node-2:6222"      #   this member's replicas every time
+  #     - "nats://node-2:6222"      #   this member's replicas every time.
+                                    #   `peers` lists the OTHER members, each
+                                    #   scheme://host:port: an entry that is
+                                    #   recognisably this node's own route
+                                    #   (host+port, or advertise) or a repeat
+                                    #   is not counted as a member, with a
+                                    #   warning, and one that is not dialable
+                                    #   is refused
   #   host: 10.0.0.11               #   the interface the route port binds.
                                     #   Unset binds EVERY interface, and a route
                                     #   port is unauthenticated cluster access —
@@ -571,6 +862,39 @@ stream:
                                     #   behind a NAT is unreachable or somebody
                                     #   else's. A bare host keeps this member's
                                     #   own route port
+  # leaf:                           # the LEAF LINK, and a node is on exactly
+                                    #   one side of it. WHICH SIDE is its
+                                    #   BROKER KIND, derived from this block and
+                                    #   nothing else: `urls` makes it a leaf,
+                                    #   and any other embedded broker is a
+                                    #   member. `node.roles` is a separate
+                                    #   question: what the node's DISK keeps.
+  #   urls:                         #   A LEAF dials the members' leaf
+  #     - "nats-leaf://node-1:7422" #   listeners here — any one that answers
+  #     - "nats-leaf://node-2:7422" #   will do — and its embedded broker runs
+                                    #   NO JetStream: no replica, no vote, no
+                                    #   stream store (`store_dir`, `cluster` and
+                                    #   a leaf `port` are refused beside it).
+                                    #   Every stream and bucket its clients use
+                                    #   is a member's, reached across this link.
+                                    #   A node without `data` must be a leaf
+                                    #   and a node with it must not: every data
+                                    #   node holds the whole estate as a member
+  #   port: 7422                    #   A MEMBER's listener, where leaves join.
+                                    #   A member that opens one is in a fleet
+                                    #   even with no peers, so it must persist
+                                    #   (`store_dir`, as above: the leaves that
+                                    #   join it keep nothing, so it keeps
+                                    #   everything they do) and needs
+                                    #   `coordination.type: embedded-kv`
+  #   host: 10.0.0.11               #   the interface the listener binds. Like
+                                    #   the route port it accepts any connection
+                                    #   that reaches it: the fleet is one trust
+                                    #   domain on a network its operator
+                                    #   controls, so bind it there
+  #   advertise: "node-1.internal:7422"
+                                    #   what leaves should dial for this member,
+                                    #   when it differs from what it binds
   # sync: always                    # what an acknowledged publish has actually
                                     #   reached. `always` (the default, at every
                                     #   replica count) fsyncs every write before
@@ -586,12 +910,15 @@ stream:
                                     #   window is refused where it would be
                                     #   recorded and not honoured: against an
                                     #   external cluster (which stores its own
-                                    #   data), below 3 replicas (no quorum to
-                                    #   trade the disk for), and on a cluster
-                                    #   whose peers are all on this host (one
-                                    #   failure domain). Declining it on a real
-                                    #   three-host fleet is a legitimate trade
-                                    #   and costs 1–3 ms per write on NVMe
+                                    #   data), on a leaf (which runs no
+                                    #   JetStream, so the members' own `sync`
+                                    #   decides), below 3 replicas (no quorum
+                                    #   to trade the disk for), and on a
+                                    #   cluster whose peers are all on this
+                                    #   host (one failure domain). Declining
+                                    #   it on a real three-host fleet is a
+                                    #   legitimate trade and costs 1–3 ms per
+                                    #   write on NVMe
   # debug: true                     # the EMBEDDED broker's OWN debug logging,
                                     #   which is a SEPARATE question from
                                     #   `logging.level` — that one is how loud
@@ -650,22 +977,36 @@ stream:
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
                                     #   the ceilings declared inside it
-  # tracker_vectors_max_bytes: 17179869184
-                                    #   the vector changelog's ceiling (default
-                                    #   16 GiB). SIZED FOR THE PEAK: the stream
-                                    #   keeps one message per source, so a
-                                    #   week's minting is ~91 MB — but changing
-                                    #   the embedding model rewrites EVERY source
-                                    #   in a few hours, and for the following
-                                    #   week all of them are in the window. A
-                                    #   ceiling sized from the steady state would
-                                    #   refuse the one operation it exists to
-                                    #   survive
+  # tracker_vectors_max_bytes: 68719476736
+                                    #   the vector changelog's ceiling
+                                    #   (1 GiB..2 TiB). SIZED FOR THE PEAK: the
+                                    #   stream keeps one message per source, so
+                                    #   a week's minting is ~91 MB — but
+                                    #   changing the embedding model rewrites
+                                    #   EVERY source in a few hours, and for the
+                                    #   following week all of them are in the
+                                    #   window: the whole corpus, ~17 MB per
+                                    #   agent seat per YEAR OF HISTORY. UNSET
+                                    #   DERIVES what the mutation log derives
+                                    #   from the volume (a quarter of its free
+                                    #   space, 4..64 GiB), whatever
+                                    #   tracker_log_max_bytes is set to: that
+                                    #   field bounds a trailing window of
+                                    #   records, and this log's peak is the
+                                    #   company's whole history. At 64 GiB it
+                                    #   holds a model change twice over for
+                                    #   ~2 000 seat-years (400 seats in their
+                                    #   fifth year); past that, set ~34 MB per
+                                    #   agent seat per year of history. A
+                                    #   ceiling sized from the steady state
+                                    #   would refuse the one operation it exists
+                                    #   to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
                                     #   stream every native page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a
-                                    #   quarter of the mutation log's derived
-                                    #   value, so 1..16 GiB: a knowledge base is
+                                    #   quarter of the mutation log's ceiling,
+                                    #   set or derived (so 1..16 GiB from a
+                                    #   volume alone): a knowledge base is
                                     #   a few thousand pages against a tracker's
                                     #   hundreds of thousands of items, so its
                                     #   log grows at about a quarter of the rate
@@ -709,7 +1050,9 @@ stream:
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
-                                    #   which is why it is Tier A
+                                    #   which is why it is Tier A. Read only on
+                                    #   a node with the `data` role, which is
+                                    #   where the trim and the snapshots run
   #   min_age: 7d                   #   the age floor NO trim may cross, whatever
                                     #   the other terms say (24h..90d). It can
                                     #   only make a trim more conservative, so it
@@ -781,26 +1124,46 @@ store:
                                     #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
-                                    #   state log's applier writes. Empty puts it
+                                    #   state log's applier writes, held whole
+                                    #   by every data node from boot, and by no
+                                    #   node without `data`. Empty puts it
                                     #   beside `path`, which is what makes "back
                                     #   up the data directory" true. It is a
-                                    #   second FILE rather than more tables
+                                    #   separate FILE rather than more tables
                                     #   because a snapshot for a joining node is
-                                    #   a copy of this one alone; separate it
-                                    #   only to put it on a different disk, and
-                                    #   never onto the same file as `path`
-  # max_open_conns: 0               #   connection-pool bound; 0 takes the
-                                    #   store's own default, which is
-                                    #   max(8, GOMAXPROCS) readers, plus ONE
-                                    #   connection reserved for identity work,
-                                    #   plus one pinned connection per
-                                    #   state-log domain. Setting it means you
-                                    #   own that arithmetic: the reserve and
-                                    #   the pins come OUT of the number rather
-                                    #   than being added to it. Raise it if the
-                                    #   `pool_starved` alarm fires — see
-                                    #   reference/alarms.md — which means reads
-                                    #   are queuing before they start
+                                    #   a copy of the estate's file alone;
+                                    #   separate it only to put it on a
+                                    #   different disk, and never onto the same
+                                    #   file as `path`
+  # scratch: false                  #   DELETE this node's store at every boot,
+                                    #   under the store's own lock, and open it
+                                    #   with no replicated estate at all.
+                                    #   REQUIRED on a node without the `data`
+                                    #   role and REFUSED on one with it, so the
+                                    #   deletion is never a surprise either way.
+                                    #   Explicit rather than derived from the
+                                    #   roles because it is the one setting here
+                                    #   that deletes something. The offline
+                                    #   `migrate`, `config`, `secrets` and
+                                    #   `search eval` commands refuse a scratch
+                                    #   store: what they wrote would be gone at
+                                    #   the next boot
+  # max_open_conns: 0               #   the ORDINARY READERS of this node's
+                                    #   own database and of the replicated
+                                    #   estate's (that one never fewer than
+                                    #   two). 0 takes the store's own default,
+                                    #   max(8, GOMAXPROCS): two dashboards'
+                                    #   worth of socket queries. ONE
+                                    #   connection reserved for identity work
+                                    #   on each file, and one pinned
+                                    #   connection per state log the
+                                    #   replicated estate carries, are ADDED
+                                    #   on top rather than taken out of the
+                                    #   number, so it is always the readers.
+                                    #   Raise it if the `pool_starved` alarm
+                                    #   fires — see reference/alarms.md —
+                                    #   which means reads are queuing before
+                                    #   they start
   # busy_timeout_seconds: 0         #   how long a WRITE waits for the
                                     #   database's write lock before giving up
                                     #   and retrying once; 0 takes the store's
@@ -811,6 +1174,46 @@ store:
                                     #   lock. Raise it on a node doing bulk
                                     #   applies, where `store_tx_retry` in the
                                     #   log names it; see guides/replication.md
+  # objects:                        # where the company's FILES are kept — see
+                                    #   concepts/object-store.md. EVERY node
+                                    #   carries the same block, a node without
+                                    #   `data` included: an upload or a download
+                                    #   goes to the store from the node serving
+                                    #   it. The first node to boot records the
+                                    #   store in the coordination store, and a
+                                    #   node configured with another refuses to
+                                    #   boot, naming both
+  #   backend: nats                 #   nats (the default, and what an absent
+                                    #   block means): a JetStream object store
+                                    #   bucket, `crewlet_files`, on the fleet's
+                                    #   own broker, kept at `stream.replicas`
+                                    #   copies on its members like every stream
+                                    #   and backed up with them. s3: an
+                                    #   S3-compatible bucket, named below
+  #   s3:                           #   REFUSED unless backend is s3
+  #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
+                                    #   S3's own for the region. R2, MinIO,
+                                    #   Ceph's gateway and GCS's interoperability
+                                    #   endpoint each name theirs here
+  #     region: eu-west-1           #   REQUIRED — every request is signed for
+                                    #   a region, even where the provider
+                                    #   ignores it (R2: auto, MinIO: us-east-1)
+  #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
+                                    #   cannot reach it, or whose credentials it
+                                    #   refuses, does not start
+  #     prefix: ""                  #   prepended to every key — an object is
+                                    #   `<prefix>files/<key>` — so one bucket
+                                    #   can hold more than one company; e.g.
+                                    #   `acme/`
+  #     path_style: false           #   address the bucket in the path rather
+                                    #   than the host name; MinIO and most
+                                    #   self-hosted gateways need it
+  #     access_key_id: ${S3_ACCESS_KEY_ID}         # both as ${VAR} references,
+  #     secret_access_key: ${S3_SECRET_ACCESS_KEY} #   or NEITHER, which takes
+                                    #   the SDK's own chain: the environment, a
+                                    #   shared profile, a web identity or the
+                                    #   instance's role. A private CA is read
+                                    #   from AWS_CA_BUNDLE
 
 coordination:
   type: local                       # one node holding its own seat leases;
@@ -829,7 +1232,9 @@ coordination:
                                     #   recover in. Shorter speeds failover and
                                     #   sheds healthy seats on ordinary jitter.
                                     #   Seats and presence only: a fleet duty
-                                    #   sizes its lease from its own tick.
+                                    #   sizes its lease from its own tick and
+                                    #   a tracker move, merge or bulk edit
+                                    #   from its own work.
                                     #   IT IS THE BUCKET'S TTL, set by whichever
                                     #   node created the lease bucket first and
                                     #   ADOPTED by every node after it — a peer
@@ -840,7 +1245,7 @@ coordination:
                                     #   the bucket's age is what expires a
                                     #   lease and a node claiming longer than
                                     #   it would have every acquire refused.
-                                    #   Its heartbeat and release budget are
+                                    #   Its heartbeat and a stop's allowance are
                                     #   fractions of the live value too. So
                                     #   make it agree across the fleet:
                                     #   changing it requires deleting the
@@ -848,11 +1253,17 @@ coordination:
 
 api:
   host: "0.0.0.0"       # what this node BINDS
-  port: 8000            # 0 serves no HTTP at all
+  port: 8000            # node.roles decides what it carries. With `ingress`:
+                        #   the dashboard, the REST API, the sign-in routes,
+                        #   the webhooks and the probes. Without it: /health
+                        #   and /ready only (plus a seats node's agent-mode
+                        #   tool bridge, unless api.public is set). 0 (the
+                        #   default) binds nothing at all
   external_url: "https://crewlet.example.com"
-                        # REQUIRED once port is set — where a BROWSER and a
-                        #   vendor REACH this deployment, which is rarely
-                        #   what the two lines above bind
+                        # REQUIRED once port is set on an ingress node — where
+                        #   a PERSON reaches this deployment, which is rarely
+                        #   what the two lines above bind; with no public
+                        #   listener, where vendors reach it too
   trusted_proxies: ["10.0.0.0/8"]
                         # whose X-Forwarded-For is believed. A CIDR list,
                         #   never a bool; 0.0.0.0/0 is refused. Empty with
@@ -860,6 +1271,18 @@ api:
                         #   terminates the TLS is then every caller's
                         #   source — in every audit row, and in the
                         #   sign-in throttle's key for every login
+  public:               # optional — a second listener for the routes outside
+    port: 8443          #   parties call: /webhooks/*, /otlp/{token}, /mcp/{token}.
+                        #   Once set they are served ONLY here (404 on api.port),
+                        #   and everything else — the dashboard, the REST API,
+                        #   the sign-in routes, /config, /secrets, the probes —
+                        #   ONLY on api.port. host defaults to every interface.
+                        #   0 / unset keeps every route on api.port
+    external_url: "https://hooks.example.com"
+                        # REQUIRED once public.port is set on an ingress node —
+                        #   where VENDORS and sandboxes reach this listener:
+                        #   every webhook, app manifest and per-run sandbox
+                        #   endpoint is built on it
   auth:
     max_grants:         # THE CEILING. Required once port is set
       [state:read, audit:read, config:read, secrets:read,
@@ -942,20 +1365,65 @@ separate on purpose: the exit code turns on refusals alone, so a CI step gates
 on what cannot run and still prints what its operator should read. A warning is
 a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
-somebody acknowledges a backup, an embedded stream with nowhere to persist, a
-unit keyed on a name somebody will rename, a company that declares no human
-seat and so can admit nobody.
+somebody acknowledges a backup, a `stream.cluster.peers` entry left out of the
+member count because it is this node's own route or a repeat, a node that
+declares the `ingress` role and binds no port, a unit keyed on a name somebody
+will rename, a company that declares no human seat and so can admit nobody.
+
+`api.port` is **one** listener per node, on every node, and `node.roles`
+decides what it carries rather than whether it exists. A node without the
+`ingress` role serves its two
+[probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) there
+and nothing else, so an orchestrator can probe a satellite exactly as it
+probes an ingress node, and one Tier A file serves both shapes. There is
+deliberately no separate probe port: on an ingress node the probes are already
+on this listener, and a second address for the same two routes would be one
+more thing to keep in step. `crewlet validate` warns about a node whose
+declared roles include `ingress` while its port is `0`: the node every
+integration, browser and probe looks for would bind nothing. It warns rather
+than refuses, because `crewlet run -api-port` sets the port at run time.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
 at `https://crewlet.example.com`. That outside address is **`api.external_url`**,
-and it is **required** once a port is set. It was `integrations.public_base_url`
-in the company document and moved here because it answers three questions at
-once, two of which happen before a company document has been loaded at all:
-the session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its
-host is the origin every write and every socket handshake is checked against,
-and it is what every webhook URL and pasted app manifest is built on. The engine sits behind a TLS-terminating proxy and cannot
-read any of that off the request it receives.
+and it is **required** once a port is set on a node serving the API. It is in
+Tier A rather than in the company document because it answers questions that
+come before a company document has been loaded at all: the session cookie's
+`Secure` flag and `__Host-` prefix follow its scheme, and its host is the
+origin every write and every socket handshake is checked against. It is also
+where every link the engine composes for a person points — what tool-skill
+prose reaches as `${crewlet_base_url}`, a page change's `url`, an invitation
+or a password link — and, on a deployment with no public listener, the base
+every webhook URL and pasted app manifest is built on. The engine sits behind a
+TLS-terminating proxy and cannot read any of that off the request it receives.
+
+**`api.public` splits the routes outside parties call onto a socket of their
+own.** With `api.public.port` set, the vendor webhooks and app landings
+(`/webhooks/*`) and the sandbox endpoints (`/otlp/{token}`, `/mcp/{token}`) are
+served on that listener and nowhere else, and every other route — the
+dashboard, the REST API, the sign-in routes under `/auth`, `/config`,
+`/secrets`, `/setup`, `/iam`, `/operator`, the live socket and the `/health` and
+`/ready` probes — only on `api.port`. `api.port` answers a public route with a
+`404 no_route` whose hint names `api.public`; the public listener answers every
+other route exactly as it answers a path nothing serves, with no hint, so the
+published socket says nothing about an admin port behind it, and it does so
+whatever credential is sent, since it requires none. Its own outside address is
+**`api.public.external_url`**, required once the port is set on an ingress
+node: every webhook URL, vendor app manifest and per-run sandbox endpoint is
+built on it, while every link a person follows stays on `api.external_url`.
+Publish `api.public.port`, keep `api.port` private, and point
+`CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
+sandboxes at the public address — see
+[Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
+On a node without the `ingress` role, whose only route is its seats' tool
+bridge, the bridge moves to `api.public` too, so one file still serves every
+role. `crewlet validate` refuses a public listener beside `api.port: 0` on a node
+with the `ingress` role (that is no HTTP surface at all, and no probe would
+answer); on a node without it `api.port: 0` stays the hard off switch and binds
+nothing, the bridge included. It also refuses any two listeners the
+file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
+and `stream.leaf.port` — when they bind the same address or either binds every
+interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
 
 **`api.auth.max_grants` is the ceiling**, and it is required once a port is set.
 A person's grants live in the replicated store and are written by whoever holds
@@ -1104,6 +1572,9 @@ units:
         roles:
           - name: Tech Lead             # required — unique agent identity
             goal: "..."                 # optional — individual mission
+            avatar:                     # optional (agent seats only): how the
+              character: hexlet         #   dashboard draws this seat. One of the
+              color: cyan               #   30 Crewlet characters and 6 colours
             backstory: "..."            # optional — personality, background, expertise
             llm: default                # optional — named LLM provider
             token_budget: {day: 200000} # optional — this seat's own ceilings per window
@@ -1136,8 +1607,9 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. It is also where a person joins: every person holds exactly one human seat, invited onto it or created on it from that seat in **Agents › Org chart** (or `crewlet iam invite -seat`), so a company that declares no `kind: human` seat at all can admit nobody — legitimate for a company its agents run alone through Tier A tokens, and named in an `advisory` warning at `roles` by `crewlet validate` and every `/config` write. Its `contact` identities are optional: a seat with none is legitimate, and the same two name it in an `advisory` warning at the seat's `contact` |
-| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
+| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` reference, resolved at use time through the [secret store](../concepts/secret-store.md) and then the environment, by every consumer alike; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
+| `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
 | `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `sandbox` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it |
@@ -1145,17 +1617,22 @@ units:
 | `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
+| `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat alone. Unset inherits it; `false` skips reflection for this seat's turns while still writing its episodes, which are cheap and useful to a person regardless |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
 | `email` | string | no | Seat email address. **No two seats may declare the same one** — the party registry keys on it and the first seat wins, so all but one silently stop being findable by address and mail meant for one person resolves to another. Compared case-insensitively, the way the registry folds it |
+| `unit` | string | no | **Root-level seats only.** The **key** of the unit this seat belongs to; the seat is moved into that unit's members before anything else reads the org chart, exactly as if it had been written under the unit. It is what `PUT /config/roles/{handle}` writes, so an API-created seat can land in a team without rewriting the unit's block; a hand-written file normally nests the seat under its unit instead. A name that matches no unit leaves the seat at the root and is reported by `crewlet validate` as a dangling reference. On a seat already nested in a unit it moves nothing, and one naming a *different* unit is refused |
 | `manages` | list[string] | no | Seat **handles** or unit **keys** this agent manages; a unit key expands to that unit's seats. Never a display name — a name is prose that gets renamed and a handle is not |
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here. **Every key must name a declared [`mcp_servers`](#mcp-servers) entry**, because the engine looks credentials up per *server*: a block keyed on a name nothing declares is never read by anything, so it sits in the document looking configured while the server it was meant for starts with none. Six names are the exception and need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence` |
-| `integrations.slack` | dict | no | This seat's own Slack app: `bot_token`, `signing_secret`, optional `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
+| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes two fields: `tier` (`read_only`, the default, `review` or `full_access`; a hyphen is accepted for the underscore) and `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers). `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
+| `integrations.slack` | dict | no | This seat's own Slack app: `bot_token` and `signing_secret`, and nothing else: the seat speaks in its unit's `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
+| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — when the seat's code work resolves to a `cli-agent` entry it must be that entry's own CLI ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. A block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read |
+| `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
 ### Worker templates
@@ -1295,7 +1772,7 @@ integrations:
 
 ```
 
-> **`public_base_url` moved out of this block**, to [`api.external_url`](#tier-a) in the operator's own Tier A file, and the key here is refused by name. One address now answers three questions that used to be answered separately: the session cookie's `Secure` flag and `__Host-` prefix, the origin every write is checked against, and the base every webhook URL and pasted app manifest is built on. It had to move tiers rather than only change name — the cookie and the origin check are decided *before* a company document is loaded, and they are part of what authenticates the request that would go on to load one. It is also what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
+> **There is no address in this block.** Where people reach this deployment is [`api.external_url`](#tier-a), and where vendors and sandboxes reach it, when it publishes a listener for them alone, is `api.public.external_url` — both in the operator's own Tier A file, because the session cookie and the origin check are decided *before* a company document is loaded, and are part of what authenticates the request that would go on to load one. `api.external_url` is also what [tool-skill](../concepts/tool-skills.md#skill-variables) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
@@ -1335,7 +1812,7 @@ tracker:
   backend: native                        # native (default) | jira | none
 ```
 
-Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company where schedules and chat are the only things that wake a seat.
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else — chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
@@ -1357,9 +1834,9 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
-**Every node needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot.
+**Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
-It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
 
 ---
 
@@ -1428,7 +1905,10 @@ the company still starts.
 
 ## Environment Variable References
 
-All string values in YAML support `${ENV_VAR}` syntax, keeping secrets out of config files. Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then `os.environ`. An unanswered reference resolves to the empty string.
+String values support `${ENV_VAR}` syntax, keeping secrets out of config files. An unanswered reference resolves to the empty string. The two tiers resolve references differently, and it decides where one works:
+
+- **Tier B (the company)** keeps every reference verbatim — in the store, in a backup, on `GET /config` — and resolves it where the provider, transport or integration that uses it is constructed: from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then the environment. It validates what is **written**, not what a reference resolves to, so a field with a closed set of values or a pattern — an enum, a seat handle, a unit id — takes a reference only where that field's own entry says so. Three fields are resolved only when the **whole** value is one reference — a seat's Slack `bot_token`, its Mattermost `bot_token` and its Mattermost `username` — because their transports take anything else as the literal it looks like: write one `${VAR}`, or the value itself, and never a reference inside other text (`bot-${SUFFIX}`), which validation refuses rather than letting it reach the server braces and all. A Mattermost `username` written as a whole reference is the one patterned field that takes one.
+- **Tier A (`crewlet.yaml`)** resolves from the **environment only** — it holds the keys to the secret store, so it can never read a value out of it — and does so at startup, **before** the file is decoded. What a reference becomes depends on the field it lands in. In a **text** field it is substituted whole or embedded (`edge-${ZONE}`) and the result is that text, character for character — so it works in any text field, one with a pattern or a closed set included (`node.id: "${HOSTNAME}"`, `logging.level: "${LOG_LEVEL}"`), which is then judged on the value it resolved to. One nothing answers leaves the text empty, which a text field reads exactly as unset — its default where it has one (`stream.type` and `coordination.type` fall back to `embedded` and `local`), and a refusal where a value is required — with one exception: `logging.file.path`, where empty is the setting "write no file", so a path whose variable nothing answered stops the boot rather than silently running with no durable log. In a **number** or **boolean** field — a port, a replica count, anything `*_seconds`, `*_bytes` or `*_hours`, a count, a switch — a reference must be the **whole** value, and what it resolves to is read exactly as the same characters written there would be, trimmed of the space around it as every Tier A string is: `api.port: "${API_PORT}"` with `API_PORT=8080` is `api.port: 8080`, with `API_PORT` read from a file ending in a newline too, and `stream.debug: "${DEBUG}"` with `DEBUG=true` is `stream.debug: true` (a switch also takes `yes`, `no`, `on` and `off`, as it does written out). Two shapes are refused there by name rather than guessed at: a reference with other text around it (`"80${N}"`), and one that resolves to nothing, since a number that quietly fell back to its default because a variable was missing would run with a value nobody chose. `crewlet schema bootstrap` encodes exactly that.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) pass through untouched, so config-authored script content — a sandbox setup step's helper script, say — survives intact.
 

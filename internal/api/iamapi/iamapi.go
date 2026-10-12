@@ -229,6 +229,13 @@ type Options struct {
 	// with nothing to bind, which no serving node is.
 	TokenIDs func() []string
 
+	// CompanyWriters is THIS NODE's `api.auth.company_writers`: the Tier A
+	// token ids a managed company document names as its only writers
+	// (ADR-0030), which `GET /iam/node-tokens` answers beside the labels.
+	// Empty where the document is not managed — a real posture, and the
+	// default.
+	CompanyWriters []string
+
 	// Audit records what this surface changed. REQUIRED: the directory is
 	// where credentials are minted and sessions ended by somebody else,
 	// and a surface that announced none of it would leave the live feed
@@ -249,6 +256,7 @@ type Service struct {
 	seats     Seats
 	ceiling   []iam.Grant
 	tokens    func() []string
+	writers   []string
 	audit     Audit
 	now       func() time.Time
 }
@@ -287,13 +295,26 @@ func New(opts Options) (*Service, error) {
 		opener:   opts.Opener,
 		external: opts.ExternalBase, bindings: opts.Bindings, seats: opts.Seats,
 		ceiling: slices.Clone(opts.Ceiling), tokens: opts.TokenIDs,
-		audit: opts.Audit,
-		now:   opts.Now,
+		writers: sortedWriters(opts.CompanyWriters),
+		audit:   opts.Audit,
+		now:     opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	return s, nil
+}
+
+// sortedWriters is a managed document's writer ids as `GET /iam/node-tokens`
+// answers them: sorted like the labels beside them, and an empty list rather
+// than null where the document is not managed, so the field is always a list.
+func sortedWriters(ids []string) []string {
+	out := slices.Clone(ids)
+	if out == nil {
+		out = []string{}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // writerFor is the caller's own authority to change this estate.

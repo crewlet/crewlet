@@ -6,12 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // The CLI runs on the ENGINE host. A provider whose binary is missing there
 // must say exactly that, because the config looks correct and the failure
 // otherwise surfaces as an unexplained turn failure much later.
 func TestDoctorReportsAMissingBinary(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -40,8 +43,8 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	}
 }
 
-// "No login" on a machine where the CLI plainly works must explain itself, or
-// an operator goes looking for a bug that is a missing --from-host.
+// "No sign-in" on a machine where the CLI plainly works must explain itself, or
+// an operator goes looking for a bug that is a missing -from-host.
 func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
@@ -53,12 +56,16 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 		Key: "sub", Agent: "custom", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": os.Args[0], "complete_args": []any{"-p"}, "output": "text",
-			"model_args": []any{}, "version_args": []any{"-test.run=NoSuchTest"},
+			"model_args": []any{}, "version_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"credential_paths":      []any{".fake/creds.json"},
 			"host_credential_paths": []any{".fake/creds.json"},
 			"token_env":             "FAKE_OAUTH_TOKEN",
 			"capture_token_args":    []any{"setup-token"},
 		},
+		// The version probe runs the binary, so it is the fake CLI answering
+		// as a real one would — not this suite re-run with no test selected,
+		// whose testing-package warning was being read as a version.
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "fake-cli 1.0.0"}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -71,7 +78,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 		t.Fatal("the host login was not found, so the report cannot explain itself")
 	}
 	joined := strings.Join(d.Problems, "\n")
-	for _, want := range []string{"--from-host", "--capture-token", "FAKE_OAUTH_TOKEN"} {
+	for _, want := range []string{"login sub -from-host`", "with `-capture-token`", "FAKE_OAUTH_TOKEN"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the problem does not offer %q:\n%s", want, joined)
 		}
@@ -82,6 +89,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 // vendor's own counts, so the report must not let the difference pass
 // silently.
 func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -113,9 +121,11 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 }
 
 // The one failure nothing else catches: the CLI answers, and answers with
-// PROSE. A seat on such a provider burns a corrective round every single
-// turn, and the config looks perfect.
+// PROSE. Every phase a seat runs on such a provider spends corrective rounds
+// asking again — and ends without its submission when the model never manages
+// one — while the config looks perfect.
 func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -124,7 +134,7 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"model_args": []any{}, "output": "text",
 		},
-		Env: map[string]string{helperEnv: "1", "FAKE_STDOUT": "I would read the file."},
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "I would read the file."}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -151,6 +161,7 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 // that produced silence. Reporting silence as `It said: ""` sends them to the
 // envelope contract for a problem only a bigger model fixes.
 func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -161,10 +172,9 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 			"text_paths": []any{[]any{"result"}},
 			"usage":      map[string]any{"output": []any{[]any{"usage", "output_tokens"}}},
 		},
-		Env: map[string]string{
-			helperEnv:     "1",
+		Env: fakeChildEnv(map[string]string{
 			"FAKE_STDOUT": `{"result":"","usage":{"output_tokens":627}}`,
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -189,6 +199,7 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 
 // And it passes on one that can, or the check is a permanent red light.
 func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	reply := "```json\n{\"message\":\"\",\"tool_calls\":" +
@@ -200,7 +211,7 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 			"model_args": []any{}, "output": "text",
 			"usage": map[string]any{"input": []any{[]any{"in"}}},
 		},
-		Env: map[string]string{helperEnv: "1", "FAKE_STDOUT": reply},
+		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": reply}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -208,6 +219,33 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Smoke, "ok") {
 		t.Fatalf("Smoke = %q", d.Smoke)
+	}
+}
+
+// THE SMOKE TEST ASKS THE WAY A PHASE ASKS. It certifies that a call arrives
+// when the conversation names the tool and nothing forces it — the shape every
+// phase, and the tool loop's finishing corrective, relies on. It used to force
+// the call, which rendered the envelope's "MUST" contract no phase receives,
+// so a CLI that called a tool only when told it must passed here.
+func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
+	t.Parallel()
+	req := smokeRequest()
+	prompt, err := RenderPrompt(req)
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	if !strings.Contains(prompt, RenderContract()) {
+		t.Errorf("the smoke prompt does not carry the contract a phase gets:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "MUST") {
+		t.Errorf("the smoke prompt demands a call no phase demands:\n%s", prompt)
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != llm.RoleUser || !strings.Contains(last.Content, "crewlet_smoke") {
+		t.Errorf("the instruction does not name the tool: %+v", last)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "crewlet_smoke" {
+		t.Errorf("tools = %+v, want crewlet_smoke offered", req.Tools)
 	}
 }
 
@@ -219,14 +257,15 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		Provider: "subscription", Agent: "claude-code", Binary: "/usr/local/bin/claude",
 		BinaryPath: "/usr/local/bin/claude", Version: "2.0.31 (Claude Code)",
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
-		Credentials: "present", TokenEnv: "set", TokenUsage: "reported by CLI",
-		Smoke: "ok — 812 in / 34 out",
+		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
+		TokenUsage: "reported by CLI",
+		Smoke:      "ok — 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
 	for _, want := range []string{
 		"provider", "cli agent", "binary", "version", "written for",
-		"state dir", "credentials", "token env", "token usage", "smoke test", "problems",
+		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())

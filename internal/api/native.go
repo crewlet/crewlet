@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -35,7 +36,8 @@ import (
 // questions, and the halves the operator surface builds its catalogue from for
 // every call ([NativeOperatorHalves]). The identity estate and the org chart
 // need none of this: they are the engine's CORE, running from boot on every
-// node, and are wired once like everything else.
+// node that holds the estate — which a node serving this API always is — and
+// are wired once like everything else.
 //
 // # Three answers, and why a half that is not up is not a half that is absent
 //
@@ -58,18 +60,28 @@ import (
 // [httpjson.NativeHalvesNotUp] as its words.
 var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoCompany)
 
-// NativeSources are the read surface's four native sources — the board, the
-// knowledge base, the links between its pages and ranked item search — each
-// resolved per question.
+// NativeSources are the read surface's five native sources — the board, the
+// knowledge base, the links between its pages, ranked item search and a
+// project's file listing — each resolved per question.
 //
 // ONE CONSTRUCTOR for `crewlet run` and the end-to-end suite, for
 // [NewHumanSurfaces]' reason: a copy of the rule in either would be a harness
 // agreeing with itself.
+//
+// THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
+// ([engine.OperatorWork], [engine.OperatorPages], [engine.WorkSearcher]), so an
+// operator and an agent looking at one item see one item: answered from this
+// node's copy while it serves and from another data node's while it does not.
+// Read off this node's copy directly, a data node whose copy was out of
+// service — wrong rather than behind, or its file shut — went on drawing its
+// operator's board from rows it would not vouch for to its own seats. The
+// links between pages are the exception, and deliberately: they are this
+// node's own lexical index, which no peer answers for.
 func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
-	queries.PageBacklinks, queries.WorkSearcher) {
+	queries.PageBacklinks, queries.WorkSearcher, queries.FileReader) {
 
 	return liveWork{engine: e}, livePages{engine: e}, liveBacklinks{engine: e},
-		liveWorkSearch{engine: e}
+		liveWorkSearch{engine: e}, liveFiles{engine: e}
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
@@ -86,12 +98,12 @@ func nativeAbsent(started bool, half string) error {
 // liveWork is the tracker's read side, resolved per question.
 type liveWork struct{ engine *engine.Engine }
 
-func (l liveWork) reader() (queries.WorkReader, error) {
+func (l liveWork) reader() (estate.Work, error) {
 	started := l.engine.NativeStarted()
-	if r := l.engine.Tracker(); r != nil {
+	if r, ok := engine.OperatorWork(l.engine); ok {
 		return r, nil
 	}
-	return nil, nativeAbsent(started, "tracker")
+	return estate.Work{}, nativeAbsent(started, "tracker")
 }
 
 func (l liveWork) Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error) {
@@ -266,12 +278,12 @@ func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 
-func (l livePages) reader() (queries.PageReader, error) {
+func (l livePages) reader() (estate.Pages, error) {
 	started := l.engine.NativeStarted()
-	if r := l.engine.Pages(); r != nil {
+	if r, ok := engine.OperatorPages(l.engine); ok {
 		return r, nil
 	}
-	return nil, nativeAbsent(started, "knowledge base")
+	return estate.Pages{}, nativeAbsent(started, "knowledge base")
 }
 
 func (l livePages) List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (
@@ -340,18 +352,33 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 //
 // ITS OWN SOURCE, as [queries.Sources.WorkSearch] is, and present exactly
 // where the tracker is: the index is built for either native backend, but the
-// search reads the tracker's corpus alone, so the engine builds it only for a
-// company that keeps its tracker here ([engine.Engine.WorkSearch]).
+// search reads the tracker's corpus alone, so the engine serves it only for a
+// company that keeps its tracker here ([engine.WorkSearcher]) — through the
+// router, where a node holding no index of its own is answered by one that
+// does.
 type liveWorkSearch struct{ engine *engine.Engine }
 
 func (l liveWorkSearch) Search(ctx context.Context, q tracker.SearchQuery) (
 	tracker.SearchAnswer, error) {
 	started := l.engine.NativeStarted()
-	s := l.engine.WorkSearch()
+	s := engine.WorkSearcher(l.engine)
 	if s == nil {
 		return tracker.SearchAnswer{}, nativeAbsent(started, "tracker")
 	}
 	return s.Search(ctx, q)
+}
+
+// liveFiles is a project's file listing — the rows only, never the bytes,
+// which the human write surface streams — resolved per question, from the
+// tracker's own half for [liveWork]'s reason.
+type liveFiles struct{ engine *engine.Engine }
+
+func (l liveFiles) Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error) {
+	r, err := liveWork(l).reader()
+	if err != nil {
+		return tracker.FileListing{}, err
+	}
+	return r.Files(ctx, q)
 }
 
 // NativeOperatorHalves are the halves the operator surface builds its

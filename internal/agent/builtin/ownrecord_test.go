@@ -64,7 +64,7 @@ func ownRecordTools(t *testing.T, person *personSpy, views *viewStore) map[strin
 			Reader: trk, Writer: trk.as,
 			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
 			ViewWriter:   func(builtin.Actor) builtin.ViewWriter { return views },
-			Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil) },
+			Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil, nil) },
 			Actor:        builtin.PrincipalActor,
 		},
 		Authorize: builtin.Decide(handleChart{}),
@@ -291,7 +291,7 @@ func personDeps(person *personSpy, dir *directory) builtin.WorkDeps {
 	return builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Inbox: trk,
 		PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
-		Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil) },
+		Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil, nil) },
 		Actor:        builtin.PrincipalActor,
 		Holders:      dir,
 		Authorize:    builtin.Decide(handleChart{}),

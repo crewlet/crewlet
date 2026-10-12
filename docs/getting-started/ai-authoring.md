@@ -166,14 +166,28 @@ binary**: an assistant fetches it from a URL and validates against it
 with any standards-compliant JSON Schema validator (`jsonschema`,
 `ajv`), or by reading it.
 
-It carries more than field names. Because the config models forbid
-unknown keys and the cross-field rules are generated from the same Go
-types the engine parses with, a schema-only check catches:
+It carries more than field names. Because it is generated from the same
+Go types the engine parses with, and those forbid unknown keys, a
+schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
-- wrong types, and bad enums (`kind: robot`, `type: openaii`)
-- malformed handles, and cron expressions with the wrong field count
-- a `knowledge.*` scope list naming a backend the config does not configure
+- wrong shapes — a list where a map belongs, text where a number belongs —
+  and bad enums (`kind: robot`, `type: openaii`)
+- malformed handles and unit ids, and numbers out of range
+
+It also says where a credential goes: every field, list member or map
+value that holds one carries `"x-crewlet-secret": true`. That is an
+annotation rather than a check — a literal there still validates — so it
+is the assistant that reads it and writes a `${VAR}` reference instead of
+a value, without guessing from a field's name. See
+[Credential positions](../reference/cli.md#credential-positions-x-crewlet-secret).
+
+It does **not** flag a number or a boolean written into a text field:
+YAML reads `name: 2024` as a number and `org_webhook: false` as a
+boolean, the engine takes each as the text it was written as, and the
+schema does too — an editor that underlined a config the engine runs
+would teach its author to ignore it. An empty value (`~` or `""`) is
+accepted wherever the engine reads it as unset.
 
 A human seat with no `contact` identity passes both checks, because it is a
 legitimate seat: a person who works only through the dashboard has no chat
@@ -184,14 +198,16 @@ the deployment's API tokens — and `crewlet validate` warns at `roles` that
 nobody can be invited into it or created in it, since every person holds a
 human seat.
 
-Three things still need the binary, and the skill tells the assistant to
-check them by reading:
+Everything that turns on more than one field, or on what a value
+*means*, still needs the binary, and the skill tells the assistant to
+check it by reading:
 
 | Gap | Why the schema can't |
 |---|---|
-| `lead` / `manages` naming a seat handle or unit key that exists | Reference integrity across the document — not expressible in JSON Schema |
+| `lead` / `manages` naming a seat handle or unit id that exists | Reference integrity across the document — not expressible in JSON Schema |
+| A `knowledge.*` scope naming a backend the config configures | A rule that turns on whether a block is present at all, which JSON Schema can state only by enumerating every shape the block can take — and one stated subtly wrong would flag configs the engine runs |
 | Real IANA timezone | Needs the timezone database |
-| Cron *semantics* (`99 * * * *` has the right shape) | Needs a cron parser |
+| A cron expression — its field count as well as its values (`99 * * * *`) | The schema takes a cron as text; checking one needs a cron parser, which `crewlet validate` runs |
 
 The two encodings are held in sync by
 `internal/config/schema_test.go`, which runs every rule through

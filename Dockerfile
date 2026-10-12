@@ -73,8 +73,14 @@ COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
-# The API's port. The engine serves nothing on it unless Tier A sets
-# `api.port`, so publishing it is a convenience, not a promise.
+# The node's HTTP port, bound whenever Tier A's `api.port` is set — the
+# operator's choice rather than the company's; `api.port: 0` serves no HTTP at
+# all, so publishing it is a convenience, not a promise. `node.roles` decides
+# what it carries: with `ingress`, the whole API (the dashboard, the REST API
+# and every webhook route); without it, only the /health and /ready probes,
+# and a seats node's agent-mode tool bridge. A deployment that sets
+# `api.public.port` moves the webhook, OTLP and bridge routes to that second
+# listener, which is the operator's to publish beside this one.
 #
 # 8000 RATHER THAN 8080, because there were two numbers. The examples, the
 # quickstart and the configuration guide all bind 8000; this line and four

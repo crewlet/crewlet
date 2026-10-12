@@ -15,11 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/scheduletest"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // TestMain silences the engine logger for the whole test binary: every Open
-// logs a line per applied schema file and the suite opens a database per
-// subtest, which buries the one line that says what failed.
+// logs the file it opened and the suite opens a database per subtest, which
+// buries the one line that says what failed.
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
 	os.Exit(m.Run())
@@ -81,7 +82,7 @@ func TestAClaimAgainstNoTableIsUnknownNotARefusal(t *testing.T) {
 	t.Parallel()
 	// A MIGRATED STORE WITH THE TABLE DROPPED, not a raw sql.Open on a
 	// bare file. The driver loads a native library on its first connection
-	// and PANICS on a half-written cache unless store.Open has prepared it
+	// and PANICS on a half-written cache unless store.OpenNode has prepared it
 	// (internal/store/turso.go), so a second way into a connection is a
 	// second way to take the test binary down — the same defect
 	// store.Pending had. Dropping the table is the honest way to reach
@@ -136,16 +137,14 @@ func TestTheStatementsNameTheirColumns(t *testing.T) {
 	}
 }
 
-// open builds a migrated store on its own file. Each one is exclusive: the
-// engine owns its file, and sharing one between parallel subtests would
-// exercise an arrangement nothing runs in.
+// open builds a migrated store on its own file — a copy of the image
+// storetest migrates once per binary, since the ledger's statements are the
+// subject here and the migrator is not. Each one is exclusive: the engine owns
+// its file, and sharing one between parallel subtests would exercise an
+// arrangement nothing runs in.
 func open(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "schedule.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "schedule.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -133,13 +134,10 @@ func TestATriggerWithNoThreadRendersNoBlock(t *testing.T) {
 	}
 }
 
-// THE BOUND DROPS WHOLE MESSAGES, OLDEST FIRST, AND SAYS HOW MANY.
-//
-// Never a cut inside one, which would leave half of what somebody said
-// reading as the whole of it. The ROOT survives every bound because it is
-// what the thread is about, and the NEWEST survives because it is the message
-// that woke the turn.
-func TestTheBoundDropsWholeMessagesAndReportsThem(t *testing.T) {
+// A THREAD OF SHORT REPLIES IS CARRIED WHOLE, however many there are: the
+// bound is on bytes, and eighty one-line replies are well inside it. The cap
+// on a COUNT this replaced dropped fifty of them.
+func TestManyShortMessagesAreCarriedWhole(t *testing.T) {
 	t.Parallel()
 	const total = 80
 	msgs := []notify.Message{said("U1", "the root question")}
@@ -147,27 +145,67 @@ func TestTheBoundDropsWholeMessagesAndReportsThem(t *testing.T) {
 		msgs = append(msgs, said("U2", "reply "+strconv.Itoa(i)))
 	}
 	blocks := fetch(t, prefetch.Sources{Threads: &threads{messages: msgs}}, threadRequest(t))
+	if blocks.ThreadContextPosts != total {
+		t.Fatalf("the block rendered %d of %d short messages", blocks.ThreadContextPosts, total)
+	}
+	if strings.Contains(blocks.ThreadContext, "not shown") || strings.Contains(blocks.ThreadContext, "condensed") {
+		t.Fatalf("a thread inside its bound claimed something was missing:\n%s", blocks.ThreadContext)
+	}
+}
 
-	if blocks.ThreadContextPosts != 30 {
-		t.Fatalf("the block rendered %d messages, want the item cap", blocks.ThreadContextPosts)
+// PAST THE BOUND, THE MIDDLE IS CONDENSED — never cut, never silently gone.
+// The root and the newest render whole, the messages between them as one
+// rewrite marked as one, and the model is shown all of them.
+func TestTheMiddleOfALongThreadIsCondensed(t *testing.T) {
+	t.Parallel()
+	msgs := []notify.Message{said("U1", "the root question")}
+	for i := 1; i < 60; i++ {
+		msgs = append(msgs, said("U2", "reply "+strconv.Itoa(i)+" "+strings.Repeat("detail ", 30)))
 	}
-	if !strings.Contains(blocks.ThreadContext, "the root question") {
-		t.Fatalf("the root was dropped:\n%s", blocks.ThreadContext)
+	model := &aux{answers: []string{"ana and bo agreed to ship on Friday"}}
+	blocks := fetch(t, prefetch.Sources{
+		Threads: &threads{messages: msgs},
+		Compact: compact.New(models{provider: model}, compact.NewCache()),
+	}, threadRequest(t))
+	text := blocks.ThreadContext
+	for _, want := range []string{"the root question", "reply 59 ", "condensed by a model",
+		"ana and bo agreed to ship on Friday"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q:\n%s", want, text)
+		}
 	}
-	if !strings.Contains(blocks.ThreadContext, "reply "+strconv.Itoa(total-1)) {
-		t.Fatalf("the newest message was dropped:\n%s", blocks.ThreadContext)
+	if strings.Contains(text, "not shown") {
+		t.Fatalf("a condensed thread also claimed messages were not shown:\n%s", text)
 	}
-	// Whole messages: the oldest reply is gone entirely rather than
-	// appearing shortened.
-	if strings.Contains(blocks.ThreadContext, "reply 1:") ||
-		strings.Contains(blocks.ThreadContext, "reply 1\n") {
-		t.Fatalf("the oldest reply survived the cap:\n%s", blocks.ThreadContext)
+	if model.calls() != 1 || !strings.Contains(model.prompts()[0], "reply 1 ") {
+		t.Fatalf("the oldest reply never reached the rewrite (%d calls)", model.calls())
 	}
-	if !strings.Contains(blocks.ThreadContext, "50 earlier message(s)") {
-		t.Fatalf("the drop was not reported:\n%s", blocks.ThreadContext)
+	if len(text) > 8000+600 {
+		t.Fatalf("the block is %d bytes, past its bound", len(text))
 	}
-	if lines := strings.Count(blocks.ThreadContext, "\n- "); lines != 30 {
-		t.Fatalf("the block carries %d bullets, want 30", lines)
+}
+
+// AND WITH NO REWRITE, THE MIDDLE IS LEFT OUT AND COUNTED: whole messages,
+// oldest first, root and newest kept — the old behaviour, now the fallback.
+func TestTheMiddleIsCountedWhenItCannotBeCondensed(t *testing.T) {
+	t.Parallel()
+	msgs := []notify.Message{said("U1", "the root question")}
+	for i := 1; i < 60; i++ {
+		msgs = append(msgs, said("U2", "reply "+strconv.Itoa(i)+" "+strings.Repeat("detail ", 30)))
+	}
+	blocks := fetch(t, prefetch.Sources{Threads: &threads{messages: msgs}}, threadRequest(t))
+	text := blocks.ThreadContext
+	if !strings.Contains(text, "the root question") || !strings.Contains(text, "reply 59 ") {
+		t.Fatalf("the root or the newest was dropped:\n%s", text)
+	}
+	if strings.Contains(text, "reply 1 ") {
+		t.Fatalf("the oldest reply survived the bound:\n%s", text)
+	}
+	if !strings.Contains(text, "earlier message(s) in this thread are not shown") {
+		t.Fatalf("the drop was not reported:\n%s", text)
+	}
+	if strings.Contains(text, "…") {
+		t.Fatal("a message was cut rather than kept whole or left out")
 	}
 }
 
@@ -378,25 +416,28 @@ func TestAnUnrenderableRootIsSaidRatherThanReplaced(t *testing.T) {
 		t.Error("a thread that was read reported itself unread")
 	}
 
-	// AND THE BOUNDS KEEP THE SLOT rather than trimming it away with the
+	// AND THE BOUND KEEPS THE SLOT rather than trimming it away with the
 	// oldest replies: the whole point of exempting the root is that the
-	// block says what the thread is about, and a stand-in that the item
-	// cap deleted would leave the newest replies reading as the opening.
+	// block says what the thread is about, and a stand-in that the bound
+	// deleted would leave the newest replies reading as the opening.
 	long := &threads{messages: []notify.Message{{SenderID: "B-alerts"}}}
 	for i := 1; i < 80; i++ {
-		long.messages = append(long.messages, said("U2", "reply "+strconv.Itoa(i)))
+		long.messages = append(long.messages,
+			said("U2", "reply "+strconv.Itoa(i)+" "+strings.Repeat("detail ", 30)))
 	}
 	capped := fetch(t, prefetch.Sources{Threads: long}, threadRequest(t))
 	cappedLines := strings.Split(capped.ThreadContext, "\n")
 	if cappedLines[1] != prefetch.UnrenderableRootLine {
-		t.Fatalf("the item cap dropped the root's slot:\n%s", capped.ThreadContext)
+		t.Fatalf("the bound dropped the root's slot:\n%s", capped.ThreadContext)
 	}
-	if capped.ThreadContextPosts != 29 {
-		t.Fatalf("posts = %d, want the cap less the root's stand-in",
-			capped.ThreadContextPosts)
+	// The stand-in is not a message: the posts are the replies that
+	// rendered, and the notice counts only the replies left out.
+	shown := strings.Count(capped.ThreadContext, "**U2**: reply ")
+	if capped.ThreadContextPosts != shown {
+		t.Fatalf("posts = %d, want the %d replies shown", capped.ThreadContextPosts, shown)
 	}
-	if !strings.Contains(capped.ThreadContext, "50 earlier message(s)") {
-		t.Fatalf("the drop was not reported:\n%s", capped.ThreadContext)
+	if !strings.Contains(capped.ThreadContext, strconv.Itoa(79-shown)+" earlier message(s)") {
+		t.Fatalf("the drop was not reported as the %d replies left out:\n%s", 79-shown, capped.ThreadContext)
 	}
 }
 
@@ -530,14 +571,14 @@ func TestTheBackendsOwnDropsAreCountedInTheNotice(t *testing.T) {
 	blocks := fetch(t, prefetch.Sources{Threads: &threads{messages: msgs, older: 610}},
 		threadRequest(t))
 
-	// 610 the backend dropped, plus the 10 this renderer drops to reach its
-	// own thirty.
-	if !strings.Contains(blocks.ThreadContext, "620 earlier message(s)") {
+	// 610 the backend dropped; the forty it did hand over are short and
+	// all fit, so the notice is the backend's number exactly.
+	if !strings.Contains(blocks.ThreadContext, "610 earlier message(s)") {
 		t.Fatalf("the notice does not account for the backend's own drops:\n%s",
 			blocks.ThreadContext)
 	}
-	if blocks.ThreadContextPosts != 30 {
-		t.Fatalf("the block rendered %d messages, want the item cap",
-			blocks.ThreadContextPosts)
+	if blocks.ThreadContextPosts != read {
+		t.Fatalf("the block rendered %d of the %d messages read",
+			blocks.ThreadContextPosts, read)
 	}
 }

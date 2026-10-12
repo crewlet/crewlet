@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -28,7 +30,9 @@ import (
 // order differs from the claim order, which is exactly what a purge that
 // hands the key on produces here — and what a donated snapshot's copy does to
 // row order in general. A purge of the claimant HANDS THE KEY ON, or the
-// survivors stay flagged, and the key unclaimed, until their own next write.
+// survivors stay flagged, and the key unclaimed, for good: only a create, a
+// re-key and a purge write the directory, so no later edit of theirs claims
+// it.
 func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -60,12 +64,12 @@ func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 		}
 	}
 
-	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db,
 		statelog.Position{Stream: tracker.Domain{}.Stream().Name})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(h.db, log)
+	reader, err := tracker.NewReader(h.db.Reader(), log)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
@@ -83,7 +87,8 @@ func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 	}
 
 	// A LATER WRITE TO A DUPLICATE KEEPS ITS FLAG: the flag is derived from
-	// the directory on every apply, not set once by the create.
+	// the directory, and an edit moves neither the directory nor who holds
+	// the key, so it leaves the flag as the create derived it.
 	patch := taskRecord("t-3", tracker.OpPatch,
 		tracker.TaskPatch{Title: ptr("still a duplicate")}, nil)
 	patch.OpID = "t-3-rename"
@@ -123,8 +128,20 @@ func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 // asked, so a case about what a HIT carries does not depend on the index.
 type fixedRanking []tracker.RankedDoc
 
-func (f fixedRanking) RankItems(context.Context, tracker.SearchQuery) (tracker.RankedDocs, error) {
-	return tracker.RankedDocs{Docs: f}, nil
+// Candidates ranks the documents it holds in the order it holds them, as a
+// keyword ranking keyed the way an index keys an item.
+func (f fixedRanking) Candidates(context.Context, tracker.SearchQuery) (tracker.RankedCandidates, error) {
+	out := tracker.RankedCandidates{
+		Docs:    make(map[string]tracker.RankedDoc, len(f)),
+		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword},
+	}
+	for i, doc := range f {
+		key := "task:" + doc.ID
+		out.Candidates.Lexical = append(out.Candidates.Lexical,
+			search.Scored{Key: key, Score: float64(len(f) - i)})
+		out.Docs[key] = doc
+	}
+	return out, nil
 }
 
 func (fixedRanking) Building(context.Context) bool { return false }
@@ -224,12 +241,12 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		Project: ptr("OPS"), FormerKeys: &former, Mint: &tracker.KeyMint{N: 1},
 	}, nil))
 
-	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db,
 		statelog.Position{Stream: tracker.Domain{}.Stream().Name})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(h.db, log)
+	reader, err := tracker.NewReader(h.db.Reader(), log)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
@@ -272,7 +289,7 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		t.Fatalf("the board answered %v, want both holders of ENG-7", seen)
 	}
 
-	found, err := tracker.NewSearcher(h.db, fixedRanking{{ID: "t-1"}, {ID: "t-2"}}).
+	found, err := tracker.NewSearcher(h.db.Reader(), fixedRanking{{ID: "t-1"}, {ID: "t-2"}}).
 		Search(ctx, tracker.SearchQuery{Text: "which", Limit: 10})
 	if err != nil {
 		t.Fatalf("the ranked search: %v", err)

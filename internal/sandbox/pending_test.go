@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -44,10 +45,14 @@ func TestPendingStoreContract(t *testing.T) {
 // and a wake that could not name one carries none either — so two absences
 // comparing equal would make every such delivery the answer to every such run,
 // and the first thing a person said to a seat would splice into somebody
-// else's coding job. [sandbox.CoordStore.FindAwaitingByConversation] refuses an
-// empty reference before it reads the bucket at all, which is why this case
-// cannot be reached through the store and is asserted here instead: the rule
-// has to hold for the next caller too.
+// else's coding job. A store only hands over a seat's parked runs as
+// candidates and the value decides which of them a delivery answers
+// ([sandbox.ConversationRef.Best]), so the rule is asserted here, on the value,
+// where every caller that matches a delivery to a run inherits it.
+//
+// A ROW NAMING ONLY A PARTITION IS ANSWERED BY NOTHING, a reply in the very
+// thread it was launched from included: the identity is what admits a
+// delivery, and the partition only picks between rows the identity admitted.
 func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 	t.Parallel()
 	keyless := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"}
@@ -79,6 +84,35 @@ func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 	for _, tc := range cases {
 		if tc.conv.Answers(tc.run) {
 			t.Errorf("%s: matched", tc.name)
+		}
+	}
+}
+
+// A REPLY IS ADMITTED ON ITS CONVERSATION ALONE. A direct message is one line
+// however it is threaded, so a reply in the thread the question was asked in
+// and a top-level reply on the same line both answer the run parked there —
+// and a reply on another conversation answers it in neither shape, whatever
+// its partition.
+func TestAReplyIsAdmittedOnItsConversationAlone(t *testing.T) {
+	t.Parallel()
+	parked := sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe",
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
+	}
+	for name, reply := range map[string]sandbox.ConversationRef{
+		"in the thread it asked in":  {Identity: "chat:D1", Partition: "chat:D1:root-1"},
+		"top-level on the same line": {Identity: "chat:D1", Partition: "chat:D1"},
+	} {
+		if !reply.Answers(parked) {
+			t.Errorf("a reply %s did not answer the run", name)
+		}
+	}
+	for name, reply := range map[string]sandbox.ConversationRef{
+		"on another line":                    {Identity: "chat:D2", Partition: "chat:D2:root-1"},
+		"on another line, in the same batch": {Identity: "chat:D2", Partition: "chat:D1:root-1"},
+	} {
+		if reply.Answers(parked) {
+			t.Errorf("a reply %s answered the run", name)
 		}
 	}
 }
@@ -143,7 +177,7 @@ func TestADecidedFieldWinsOverACarriedOne(t *testing.T) {
 	ctx := t.Context()
 	runs := memory.NewFleet()
 	store := sandbox.NewCoordStore(runs)
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe",
 		Extra: map[string]json.RawMessage{"status": json.RawMessage(`"resumed"`)},
 	}, sandbox.Fence{}); err != nil {
@@ -160,7 +194,7 @@ func TestADecidedFieldWinsOverACarriedOne(t *testing.T) {
 	// A DECIDED ABSENCE WINS TOO. The work item is omitted when it is nil,
 	// so a check of what the marshal emitted would find no "work_item" and
 	// let the carried one write back the item this build cleared.
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t2", AgentHandle: "swe",
 		Extra: map[string]json.RawMessage{
 			"work_item": json.RawMessage(`{"backend":"native","id":"t-9","key":"ENG-9","project":"ENG"}`),
@@ -175,5 +209,51 @@ func TestADecidedFieldWinsOverACarriedOne(t *testing.T) {
 	if cleared.WorkItem != nil {
 		t.Fatalf("work item = %+v: a carried key brought back a field this "+
 			"build left empty", *cleared.WorkItem)
+	}
+}
+
+// vanishingRuns is a run store whose record disappears between a launch's
+// create and its reset: the first create of a turn finds the row there, and the
+// read the reset makes next finds it gone — the turn's previous run finishing
+// as the next one opens.
+type vanishingRuns struct {
+	runStore
+	creates int
+}
+
+// runStore names the embedded store, whose own name is one of its methods.
+type runStore = coord.SandboxRuns
+
+func (v *vanishingRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+	v.creates++
+	if v.creates == 1 {
+		return false, nil
+	}
+	return v.runStore.CreateSandboxRun(ctx, turnID, value)
+}
+
+// A ROW THAT VANISHES UNDER A LAUNCH IS CREATED AGAIN, not reported open. The
+// reset that found nothing used to report success, so the launch went on to
+// start a job — in a box — on a row that did not exist, which nothing would ever
+// collect or reclaim.
+//
+// Mutation: return from the reset whatever it found, and the launch answers a
+// job no row holds.
+func TestALaunchWhoseRowVanishesCreatesItAgain(t *testing.T) {
+	t.Parallel()
+	runs := &vanishingRuns{runStore: memory.NewFleet()}
+	store := sandbox.NewCoordStore(runs)
+	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t-vanished", AgentHandle: "swe",
+	}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	got, found, err := store.Get(t.Context(), "t-vanished")
+	if err != nil || !found {
+		t.Fatalf("the launch reported job %q open on no row (found %v, %v)", opened.LaunchID, found, err)
+	}
+	if got.LaunchID != opened.LaunchID || got.Status != sandbox.StatusLaunching {
+		t.Fatalf("the row holds job %q in %q; the launch answered %q", got.LaunchID, got.Status, opened.LaunchID)
 	}
 }

@@ -74,7 +74,8 @@ const (
 // per-person scope path cannot: a scope term a deferring node can compute, and a
 // sweep that is sixty-four bounded transactions rather than one unbounded one.
 //
-// It is not routed on. Every node holds every bucket and reads every bucket.
+// It is not routed on. Every node holding the estate holds every bucket and
+// reads every bucket.
 const Buckets = 64
 
 // Bucket is one partition of the identity estate.

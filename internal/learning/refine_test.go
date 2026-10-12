@@ -396,6 +396,7 @@ func TestThePromptShowsTheSkillsAndTheTurn(t *testing.T) {
 	if req.MaxTokens != 1234 {
 		t.Fatalf("MaxTokens = %d, want the company's budget_tokens", req.MaxTokens)
 	}
+	wantLowEffort(t, req)
 	user := req.Messages[len(req.Messages)-1].Content
 	for _, want := range []string{"cut-a-release", "1. run the pipeline", "failed", "ship the release"} {
 		if !strings.Contains(user, want) {

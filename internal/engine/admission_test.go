@@ -17,7 +17,7 @@ import (
 
 // duplicateStepsRevision is a stored company that breaks an admission rule
 // and none of the runnable ones: two sandbox setup steps under one name. A
-// build before that rule admitted it, and it runs.
+// newer peer may admit it under rules this build does not share, and it runs.
 //
 // The rule is a real one and its consequence is a write: a step's `env` and
 // `files` are credentials restored by the step's NAME, so two steps of one
@@ -63,16 +63,16 @@ func (b *logBuffer) records(t *testing.T, msg string) []map[string]any {
 	return out
 }
 
-// A REVISION AN OLDER PEER ACTIVATED IS APPLIED, AND WARNED ABOUT ONCE.
+// A REVISION ADMITTED UNDER OTHER RULES IS APPLIED, AND WARNED ABOUT ONCE.
 //
-// The rolling-upgrade shape: an older node, which has no admission rules,
-// activates a company with duplicate names. The payload reaches this node
-// only through the coordination store, never through its own database. When
-// applying validated every rule, the newer half of the fleet refused the
-// company the older half was running, and every upgrade of a company carrying
-// a duplicate was an outage. It runs, and each violation is logged once for
-// the epoch rather than once per tick.
-func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.T) {
+// The rolling-upgrade shape: a newer peer, whose admission rules differ from
+// this build's, activates a company with two setup steps of one name. The
+// payload reaches this node only through the coordination store, never
+// through its own database. Were applying to validate every rule, this half
+// of the fleet would refuse the company the other half is running, splitting
+// the fleet's epoch. It runs, and each violation is logged once for the epoch
+// rather than once per tick.
+func TestARevisionAdmittedUnderOtherRulesIsAppliedWithAdmissionWarnings(t *testing.T) {
 	t.Parallel()
 	logs := &logBuffer{}
 	p := newPlane(t, func(o *engine.ReconcilerOptions) {
@@ -80,8 +80,9 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	})
 
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-an-older-peer", Summary: "written before the rule",
+		RevisionID: "from-a-newer-peer", Summary: "admitted under other rules",
 		Payload: p.seal(t, duplicateStepsRevision), At: pinnedNow,
+		Origin: anOrigin,
 	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -97,8 +98,8 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	}
 	// THE REVISION IS SERVED, which is the point: an admission violation is
 	// a warning on a stored revision, never a refusal. Asserted on the
-	// epoch this node published rather than on its seats — the chart is a
-	// log of its own now, and a config apply carries no chart to count.
+	// epoch this node published, since this fixture declares no seat to
+	// count.
 	if p.engine.Company() == nil {
 		t.Fatal("the apply reported success and published no epoch")
 	}
@@ -113,7 +114,7 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	// so a person can change the field rather than search for it.
 	placed := map[string][]string{}
 	for _, w := range warnings {
-		if w["revision"] != "from-an-older-peer" {
+		if w["revision"] != "from-a-newer-peer" {
 			t.Errorf("a warning does not name the revision: %v", w)
 		}
 		detail, _ := w["detail"].(string)
@@ -145,9 +146,9 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 
 // A NODE BOOTS ON A STORED COMPANY THAT BREAKS AN ADMISSION RULE.
 //
-// Building an epoch is the other half of applying one. A store holding such a
-// revision is the ordinary state of a company written before the rule, and a
-// node that refused to build it would not start at all after an upgrade.
+// Building an epoch is the other half of applying one. A store can hold such a
+// revision when a newer peer admitted it under rules this build does not
+// share, and a node that refused to build it would not start at all.
 func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 	t.Parallel()
 	company, err := config.DecodeCompany(duplicateStepsRevision)

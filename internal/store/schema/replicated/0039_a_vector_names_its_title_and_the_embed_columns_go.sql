@@ -1,0 +1,54 @@
+-- A vector names the title it was computed from, and the tracker's embed
+-- columns that nothing ever wrote go.
+--
+-- # kb_vectors.title
+--
+-- The embedding duty selects a PAGE again when what its vector was computed
+-- from has moved, and until now it could only ask about the body: a page's
+-- `edit_version` moves when a save changes the body, while a rename and a
+-- retitle move the title — which is the first thing the vector embeds — and a
+-- rename across containers moves the CONTAINER, which is copied onto both
+-- vector rows because every scoped search filters on it. Keyed on the edit
+-- number alone, a renamed page kept a vector of its old title, and a moved one
+-- kept answering scoped semantic searches from the container it left — inside
+-- an org's knowledge scope it had been moved out of, and missing from the one
+-- it had been moved into — while the lexical half, which keys on the page's
+-- log version, had already moved it.
+--
+-- The obvious key, MAX(version, scoped_through), would select a page on every
+-- comment, watcher change and child re-parent too, and publish a ~17 KB vector
+-- record for each. So the predicate is EXACT instead — the body changed, the
+-- title changed, or the container differs — and the title is the one of those
+-- the vector rows did not carry. It rides additively on the embed record (an
+-- older build keeps it as a field it does not know and writes no column for
+-- it) and lands here. A row written before this column, or by an older build,
+-- holds '' and reads as a title mismatch once: the source is selected, and is
+-- restamped with no provider call where its stored digest is still that of the
+-- text it would send — embedded again otherwise.
+--
+-- Class: kb_vectors stays DIVERGENT. The column is written only by applying a
+-- committed record, travels in a snapshot, and claims no identity, like every
+-- other column of the row.
+ALTER TABLE kb_vectors ADD COLUMN title TEXT NOT NULL DEFAULT '';
+
+-- # tracker_tasks.search_rev, tracker_tasks.embed_rev, tracker_tasks_embed_idx
+--
+-- 0002 declared both columns for a staleness design that never shipped: the
+-- applier inserts a literal 0 into each and no statement ever updated or read
+-- either, and the embed duty selects by an anti-join on `version` ordered by
+-- `updated_at`. The partial index on `embed_rev` claimed "the embed duty's
+-- selection" as its reader and was kept certified by the tracker's index gate
+-- against a statement written for it that nothing runs — a write cost on every
+-- task commit on every node for a plan no reader takes. The gate now plans the
+-- statements the duty actually runs.
+--
+-- The index goes first: Turso drops a column no index, view or trigger names.
+-- Dropping is safe across a rolling upgrade because no build ever wrote either
+-- column anything but its default, and no statement any build runs names them
+-- outside the applier's own INSERT, which is this binary's.
+--
+-- 0002 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+DROP INDEX IF EXISTS tracker_tasks_embed_idx;
+ALTER TABLE tracker_tasks DROP COLUMN embed_rev;
+ALTER TABLE tracker_tasks DROP COLUMN search_rev;

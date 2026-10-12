@@ -26,15 +26,35 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
+// bootstrap is a node's Tier A for a case, its store in the case's own
+// directory and MIGRATED ALREADY, from the image this binary builds once, when
+// the store is still where this put it: a boot here is about the engine, never
+// about the migration chain, which internal/store certifies. A case that moves
+// the store — onto a directory, or a path two boots share — decides for itself
+// ([engine.SeedStore]).
 func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
+	t.Helper()
+	b, chosen := unseededBootstrap(t, mutate)
+	if b.Store.Path == chosen {
+		engine.SeedStore(t, b)
+	}
+	return b
+}
+
+// unseededBootstrap is [bootstrap] with nothing written at the store's path,
+// for a case whose subject is what a node does before anything exists there,
+// and the path it chose for the store.
+func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bootstrap, string) {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	// The default store path is relative, so a test that took it would
 	// create a database in the package directory and share it with every
 	// other test in the run. One process owns a store file exclusively.
-	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	chosen := filepath.Join(t.TempDir(), "crewlet.db")
+	b.Store.Path = chosen
 	// AND A KEYRING, because every record on every state log is signed
 	// under one and a node that has none refuses to start. It is not in
 	// [config.DefaultBootstrap] and must not be: a default key is a key
@@ -45,7 +65,7 @@ func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
 	if mutate != nil {
 		mutate(&b)
 	}
-	return &b
+	return &b, chosen
 }
 
 // testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
@@ -134,7 +154,7 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	t.Cleanup(func() { back.Close(t.Context()) })
 
 	// It is a real store: a lease acquired through it is held.
-	lease, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	lease, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -145,7 +165,7 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	// And it is EXCLUSIVE, which a memory backend standing in for it would
 	// also be — so the test above is what says it is the KV store, and this
 	// is what says it works.
-	if got, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	if got, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
 		t.Fatalf("second Acquire: %v", err)
 	} else if got != nil {
@@ -210,7 +230,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 	if back.Coord == nil {
 		t.Fatal("local coordination produced no backend")
 	}
-	if _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	if _, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second}); err != nil {
 		t.Errorf("Acquire: %v", err)
 	}
@@ -420,10 +440,11 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 // This was REFUSED while the width was fixed at open, and rightly: a store
 // stuck at the wrong width refuses every write from the right one, and recall
 // stops returning anything with no reason in the log. What makes it safe now
-// is that the width is re-stated by every apply (see
-// TestTheEmbeddingWidthFollowsAConfigApply), so the first revision this node
-// applies corrects it. If that ever stops being true, this has to go back to
-// being a refusal.
+// is that a store never told a width LEARNS it from the first revision this
+// node applies, and holds it from then on (see
+// TestTheEmbeddingWidthIsLearnedOnceAndHeld) — so 0 here is "not yet told",
+// which the first apply settles, never a width a write is checked against. If
+// that ever stops being true, this has to go back to being a refusal.
 func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -524,6 +545,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(dir, "stream")
 		b.Store.Path = path
 	})
+	engine.SeedStore(t, b)
 	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
@@ -572,7 +594,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		t.Fatal("Close never returned")
 	}
 
-	again, err := store.Open(t.Context(), path, store.Options{})
+	again, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -642,8 +664,18 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	if busyMS != 11_000 {
 		t.Errorf("busy_timeout = %dms, want the configured 11000", busyMS)
 	}
-	if got := back.Store.SQL().Stats().MaxOpenConnections; got != 3 {
-		t.Errorf("max open conns = %d, want the configured 3", got)
+	// THE CONFIGURED READERS, with what the store keeps beside them on top:
+	// `max_open_conns` bounds ORDINARY readers, and the connection a store
+	// reserves for resolving who is acting is added to it rather than taken
+	// from it. Read off a store opened with the same knob, so this holds the
+	// engine to passing the knob through and the store to what it adds.
+	reference := storetest.OpenNode(t, filepath.Join(t.TempDir(), "reference.db"),
+		store.Options{MaxOpenConns: 3})
+	t.Cleanup(func() { _ = reference.Close() })
+	want := reference.SQL().Stats().MaxOpenConnections
+	if got := back.Store.SQL().Stats().MaxOpenConnections; got != want {
+		t.Errorf("max open conns = %d, want the %d a store makes of the configured 3",
+			got, want)
 	}
 }
 
@@ -879,7 +911,7 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 // which the reader can match neither of. Zero is "no declared width", and
 // EncodeVector checks nothing against it, so nothing would report this.
 func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
-	// Not parallel: t.Setenv resolves the ${K} these documents reference.
+	t.Parallel()
 	const noVectors = `
 name: Acme
 providers:
@@ -914,8 +946,8 @@ roles:
 	narrow := strings.Replace(wide, "dimensions: 3072", "dimensions: 1536", 1)
 	narrow = strings.Replace(narrow, "text-embedding-3-large", "text-embedding-3-small", 1)
 
-	t.Setenv("K", "test-key")
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors),
+		Environment: config.MapSource{"K": "test-key"}})
 	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
 		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
 	}

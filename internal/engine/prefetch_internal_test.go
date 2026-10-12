@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -254,10 +255,13 @@ var _ = learning.Subject{}
 
 // ── the prefetch's only signal ──
 
-// EVERY BLOCK DEGRADES TO EMPTY BY DESIGN (internal/agent/prefetch), so a
-// seat whose diary is unreachable, whose auxiliary model is misconfigured and
-// whose knowledge base genuinely has nothing to say all build the same
-// prompt. Without this event an operator has no way to tell them apart —
+// EVERY BLOCK BUT TWO DEGRADES SILENTLY BY DESIGN (internal/agent/prefetch):
+// only the knowledge and chat-thread blocks say in words when their source
+// could not be read. So a seat whose diary is unreachable and one whose
+// auxiliary model is misconfigured both start their turns with no memory,
+// exactly like a seat that has never stored one, and nothing the seat then
+// does says which. Without this event an operator has no way to tell them
+// apart —
 // which is what the type spent its whole life doing: it was registered,
 // categorised and documented as "published once per turn", and nothing ever
 // published it.
@@ -295,7 +299,7 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		RunID:   "run-1",
 		WorkKey: "work-1",
 		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment")
+	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"})
 
 	select {
 	case summary := <-got:
@@ -385,7 +389,7 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 			"transport": "slack", "channel": "C0ENG",
 			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
 		}, true)},
-	}, "+1")
+	}, "+1", auxspend.Use{Stage: types.AuxStageTurn})
 
 	select {
 	case summary := <-got:
@@ -442,6 +446,7 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 			ThreadContextPosts:        12,
 			ThreadContextRead:         true,
 			ThreadContextStoppedShort: true,
+			TurnEmbedding:             types.EmbedFailed,
 		}, began, 1850*time.Millisecond)
 
 	select {
@@ -457,6 +462,11 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 		}
 		if !summary.ThreadContextStoppedShort {
 			t.Error("a read that stopped short arrived as a complete one")
+		}
+		// An empty episode block after a failed embed is not "nothing
+		// similar", and the summary is the only place that says so.
+		if summary.TurnEmbedding != types.EmbedFailed {
+			t.Errorf("the turn's vector arrived as %q, want the failure", summary.TurnEmbedding)
 		}
 		if !summary.StartedAt.Equal(began) || summary.DurationMS != 1850 {
 			t.Errorf("the assembly's timing arrived as %v / %dms, want %v / 1850ms",
@@ -502,7 +512,7 @@ func TestPrefetchSummaryIsTimed(t *testing.T) {
 	e.prefetchFor(t.Context(), company, Request{
 		Handle: "lead", RunID: "run-4", WorkKey: "work-4",
 		Events: []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment")
+	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"})
 	after := time.Now().UTC()
 
 	select {

@@ -100,7 +100,7 @@ func TestConfluenceResyncReportsWhatTheNextBootWouldLoad(t *testing.T) {
 	t.Setenv("CONFLUENCE_TOKEN", "secret")
 
 	var out, errs bytes.Buffer
-	err := runConfluenceResync(
+	err := runConfluenceResync(noEnviron,
 		[]string{confluenceCompany(t, stub.URL, "SKILLS"), "-config", filepath.Join(t.TempDir(), "absent.yaml")},
 		&out, &errs)
 	if err != nil {
@@ -131,7 +131,7 @@ func TestConfluenceResyncFailsOnAPageThatMeantToBeASkill(t *testing.T) {
 	t.Setenv("CONFLUENCE_TOKEN", "secret")
 
 	var out, errs bytes.Buffer
-	err := runConfluenceResync(
+	err := runConfluenceResync(noEnviron,
 		[]string{confluenceCompany(t, stub.URL, "SKILLS"), "-config", filepath.Join(t.TempDir(), "absent.yaml")},
 		&out, &errs)
 	if err == nil {
@@ -149,7 +149,7 @@ func TestConfluenceResyncHonoursTheSpaceFlag(t *testing.T) {
 	t.Setenv("CONFLUENCE_TOKEN", "secret")
 
 	var out, errs bytes.Buffer
-	if err := runConfluenceResync([]string{
+	if err := runConfluenceResync(noEnviron, []string{
 		confluenceCompany(t, stub.URL, "SKILLS"), "-space", "OTHER",
 		"-config", filepath.Join(t.TempDir(), "absent.yaml"),
 	}, &out, &errs); err != nil {
@@ -163,13 +163,14 @@ func TestConfluenceResyncHonoursTheSpaceFlag(t *testing.T) {
 // A COMPANY WITH NO CONFLUENCE BLOCK IS TOLD SO, rather than reaching an
 // empty URL and reporting a transport failure.
 func TestConfluenceResyncNeedsAConfiguredInstance(t *testing.T) {
+	t.Parallel()
 	doc := "name: Nimbus\nroles:\n  - name: SWE\n    handle: swe\n    goal: ship\n"
 	path := filepath.Join(t.TempDir(), "company.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	err := runConfluenceResync([]string{path}, &out, &errs)
+	err := runConfluenceResync(noEnviron, []string{path}, &out, &errs)
 	if err == nil || !strings.Contains(err.Error(), "integrations.confluence") {
 		t.Fatalf("error = %v, want one naming integrations.confluence", err)
 	}

@@ -585,3 +585,22 @@ func TestAnInstantIsTheDayItFallsOnOnTheCompanysClock(t *testing.T) {
 			"naming the value and both spellings", err)
 	}
 }
+
+// A REJECTED VALUE IS QUOTED WHOLE OR NAMED BY ITS SIZE — NEVER A FRAGMENT.
+// A document pasted into a number field used to be quoted back as its first
+// four kilobytes and an ellipsis, which a caller reads as the value it sent.
+func TestARefusalQuotesWholeOrNamesTheSize(t *testing.T) {
+	t.Parallel()
+	if got := clip("seven"); got != "seven" {
+		t.Errorf("a short value was altered: %q", got)
+	}
+	at := strings.Repeat("x", MaxRefusalQuote)
+	if got := clip(at); got != at {
+		t.Error("a value at the cap was not quoted whole")
+	}
+	doc := strings.Repeat("a pasted document ", 1000)
+	got := clip(doc)
+	if strings.Contains(got, "pasted") || !strings.Contains(got, strconv.Itoa(len(doc))+"-byte value") {
+		t.Errorf("an oversized value was quoted as %q, want its size and no fragment", got)
+	}
+}

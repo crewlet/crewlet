@@ -233,22 +233,6 @@ describe("a person's own page", () => {
     expect(engineIs.reads("/auth/session")).toHaveLength(1);
   });
 
-  // EVERY PERSON HOLDS A HUMAN SEAT, so one with none was recorded before that
-  // held — a fault only an administrator mends, said as one and naming who
-  // to ask. "Bound to no seat" read as a choice. The CONTROL is the seated
-  // profile above, which links its seat. Mutation: draw the empty seat as a
-  // blank and the warning is gone.
-  test("a person with no seat is told it is a fault, and whom to ask", async () => {
-    const { seat: _seat, ...seatless } = ROW;
-    const { seat: _none, ...session } = PERSON;
-    engine({ session: session as SessionAnswer, row: seatless });
-    mount();
-    await screen.findByText("ada@example.com");
-    expect(screen.getByText("No seat")).toBeDefined();
-    expect(screen.getByText(/ask whoever manages people to give you one/)).toBeDefined();
-    expect(screen.queryByText("Bound to no seat")).toBeNull();
-  });
-
   // THE CONTROL is the other live session, which IS offered a named sign-out;
   // an ended one is not listed at all.
   test("marks this browser, and signs another session out by its lineage", async () => {

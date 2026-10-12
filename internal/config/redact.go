@@ -22,13 +22,26 @@ import (
 // drift, and the drift is a working credential replaced by twelve characters.
 const Redacted = redact.FieldMask
 
-// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag, read through
-// [secrets.Field] and nothing else — the one definition this document's mask
-// and its restore share, so they cannot come to disagree about which values
-// are secret. A tag rather than a list of
-// paths, because a path list is maintained by whoever remembers it exists, and
-// [TestEveryCredentialFieldIsTagged] fails the build when a field that looks
-// like a credential does not carry one.
+// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag — `secret:"content"`
+// for a body read whole — read through [secrets.Field] and nothing else.
+//
+// A TAG rather than a list of paths, and that is the whole point: a path list
+// is maintained by whoever remembers it exists, so the day somebody adds
+// integrations.newthing.token the config surface starts publishing it and
+// nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
+// fails the build when a field that looks like a credential does not carry one.
+//
+// It has TWO READERS and one predicate, [secrets.Field]: the redaction below,
+// which runs over the company (Tier B) because that is the tier a read
+// serves — its mask and its restore share the predicate, so they cannot come
+// to disagree about which values are secret — and the schema generator, which
+// marks every position the tag covers in BOTH tiers with [secretKeyword] —
+// Tier A's keyring and API tokens are what tooling rendering a node's file
+// most needs to know not to write in clear. Both read the tag the same way — a
+// tagged field covers every string beneath it, a list's members and a map's
+// values included — so what a read masks and what the published schema calls
+// a credential cannot disagree; TestSchemaMarksExactlyWhatRedactionMasks holds
+// the two to one set.
 
 // Redact returns a copy of the company with every credential masked.
 //
@@ -122,6 +135,12 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 			copyMasking(src.Index(i), s.Index(i), secret)
 		}
 		dst.Set(s)
+	case reflect.Array:
+		// A fixed-length list is a value, not a reference, so dst is
+		// already its own storage and each element is masked in place.
+		for i := range src.Len() {
+			copyMasking(src.Index(i), dst.Index(i), secret)
+		}
 	case reflect.Map:
 		if src.IsNil() {
 			return
@@ -190,12 +209,13 @@ type restorer struct {
 // document, at any depth, by identity.
 //
 // AN IDENTITY THAT IS EMPTY OR NOT UNIQUE IS NOT IN THE INDEX. Two units
-// answering to the key "platform" in a stored revision (which a build before
-// the key rules admitted) are two members with no identity between them: picking either
-// hands one team's credentials to the other, and so does falling back to
-// position, which is exactly what the previous restore did for a duplicated
-// or empty identity. Left out, their masks stay standing and validation names
-// the field, which is the one outcome that invents nothing.
+// answering to the key "platform" in a prior — an identity shared by two
+// members, which an apply admits since the key rule is an admission one, as an
+// empty one is shared by every member without one — are two members with no
+// identity between them: picking either hands one team's credentials to the
+// other, and so does falling back to position. Left out, their masks stay
+// standing and validation names the field, which is the one outcome that
+// invents nothing.
 func indexDocumentWide(prior reflect.Value) map[reflect.Type]map[string]reflect.Value {
 	seen := map[reflect.Type]map[string]reflect.Value{}
 	ambiguous := map[reflect.Type]map[string]bool{}
@@ -282,7 +302,7 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 			}
 			r.restore(target.Field(i), previous, secret || secrets.Field(field))
 		}
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		r.restoreSlice(target, prior, secret)
 	case reflect.Map:
 		for _, key := range target.MapKeys() {

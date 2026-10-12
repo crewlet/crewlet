@@ -547,13 +547,13 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 		}, "at least one token is required"},
 		{"no ceiling on what the directory may confer", func(b *config.Bootstrap) {
 			b.API.Auth.MaxGrants = nil
-		}, "required once `api.port` is set"},
+		}, "required once this node serves the API"},
 		{"no address a browser reaches this on", func(b *config.Bootstrap) {
 			b.API.ExternalURL = ""
-		}, "required once `api.port` is set"},
+		}, "required once this node serves the API"},
 		{"no keyring to sign a session with", func(b *config.Bootstrap) {
 			b.Secrets = config.Secrets{}
-		}, "signs every session cookie"},
+		}, "every session cookie"},
 		{"a credential short enough to guess", func(b *config.Bootstrap) {
 			b.API.Auth.Tokens[0].Token = "short"
 		}, "at least"},
@@ -575,7 +575,8 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 }
 
 // THE COUNTERFACTUAL. A node that serves no HTTP at all needs none of the
-// API's own rules — each is gated on `api.port`, and a worker node that had to
+// API's own rules — each is gated on this node SERVING the API (`api.port` set
+// and the ingress role among `node.roles`), and a worker node that had to
 // declare a ceiling, an address and a token for a surface it does not bind
 // would be three settings of ceremony for nothing. The keyring is not one of
 // them: every node needs it, because every node runs state logs whose records

@@ -745,6 +745,44 @@ func TestTwoNodesConvergeOnAChangeOnlyOneHeard(t *testing.T) {
 	}
 }
 
+// A CONTAINER ONE NODE SAW MOVE IS WALKED BY EVERY NODE. The native knowledge
+// base's appliers know a skill page moved but not which one, and a node that
+// holds no copy of the knowledge base runs no applier at all — so without the
+// announcement it heard of a skill edit only on its periodic walk.
+func TestAnAnnouncedContainerIsWalkedByANodeThatSawNothing(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	w := newWiki()
+	w.put("1", "TS", skillText("deploy", "tag the release"))
+
+	start := func(name string) (*Syncer, *skills.Registry) {
+		q := broker.Client()
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatalf("queue Start: %v", err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		s, r := syncer(t, q, name, nil)
+		s.SetSource(w.source("TS"))
+		serves(t, r, "deploy", "tag the release")
+		return s, r
+	}
+	applier, applierRegistry := start("data-a")
+	_, statelessRegistry := start("agent-1")
+
+	w.put("1", "TS", skillText("deploy", "tag and sign the release"))
+	applier.Announce("confluence")
+	serves(t, applierRegistry, "deploy", "tag and sign the release")
+	serves(t, statelessRegistry, "deploy", "tag and sign the release")
+
+	// ONE WALK EACH, and the announcer did not walk again on hearing its
+	// own announcement.
+	settle()
+	if walks, _ := w.counts(); walks != 4 {
+		t.Fatalf("one announced edit on a two-node fleet brought the walks to "+
+			"%d, want the two boot walks and one more per node (4)", walks)
+	}
+}
+
 // A NUDGE A NODE NEVER HEARD CONVERGES ON THE PERIODIC WALK. The nudge is best
 // effort by design, so what bounds a missed one has to be something that asks
 // the wiki again without being told to.

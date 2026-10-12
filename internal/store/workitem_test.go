@@ -107,7 +107,7 @@ func TestTheTurnListNarrowsToOneItemWithTheWholeTurn(t *testing.T) {
 	appendAsWritten(t, log, "x", "turn_completed", at.Add(3*time.Minute), map[string]any{
 		"turn_id": "run-other", "duration_ms": 1})
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{WorkItem: "native:task-7"}, time.Now())
+	got, err := log.Turns(t.Context(), store.TurnQuery{WorkItem: "native:task-7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func completion(t *testing.T, log *store.EventLog, id, turn string, at time.Time
 
 func onlyTurn(t *testing.T, log *store.EventLog) store.Turn {
 	t.Helper()
-	got, err := log.Turns(t.Context(), store.TurnQuery{}, time.Now())
+	got, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,15 +230,16 @@ func TestASegmentedTurnSumsItsDurations(t *testing.T) {
 	}
 }
 
-// AN OLDER COMPLETION FOLDS AS BEFORE.
+// A COMPLETION THAT DID NOT PARK IS AN END.
 //
-// `suspended` is omitempty, and a build that predates it never writes it: a
-// completion naming no flag, or naming it false, is an END, exactly as it was
-// read before the flag existed.
-func TestAnOlderCompletionFoldsAsBefore(t *testing.T) {
+// `suspended` is omitempty, so every completion that did not park names no
+// flag at all — the absent case is the ordinary one. An explicit false is not
+// a shape this build writes; it is read the same way as a robustness case,
+// since nothing about a false flag says the turn parked.
+func TestACompletionThatDidNotParkIsAnEnd(t *testing.T) {
 	t.Parallel()
 	no := false
-	for name, flag := range map[string]*bool{"absent": nil, "false": &no} {
+	for name, flag := range map[string]*bool{"absent": nil, "explicitly false": &no} {
 		log := open(t).Events()
 		completion(t, log, "c1", "run-1", time.Now().UTC().Add(-time.Hour), 4200, flag)
 		turn := onlyTurn(t, log)

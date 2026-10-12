@@ -18,6 +18,8 @@ import { FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { textBudget } from "~/lib/format.ts";
+import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 
 export function NewPageDialog({
   container,
@@ -36,11 +38,14 @@ export function NewPageDialog({
   const titleID = useId();
   const bodyID = useId();
   const name = title.trim();
+  const titleBudget = textBudget(title, PAGE_TITLE_MAX_BYTES, "a page's title");
   const blocked = !name
     ? "Give the page a title."
-    : !body.trim()
-      ? "Write the page first."
-      : undefined;
+    : titleBudget.over
+      ? `Shorten the title: it is ${titleBudget.bytes} bytes and a page's title holds at most ${titleBudget.limit}.`
+      : !body.trim()
+        ? "Write the page first."
+        : undefined;
 
   const create = async () => {
     const result = await write.run(
@@ -90,13 +95,18 @@ export function NewPageDialog({
       <FormField
         label="Title"
         htmlFor={titleID}
-        helper="How people will refer to it — unique in its space."
+        helper={
+          titleBudget.over
+            ? undefined
+            : (titleBudget.line ?? "How people will refer to it — unique in its space.")
+        }
+        error={titleBudget.over ? titleBudget.line : undefined}
       >
         <Input
           id={titleID}
           value={title}
           autoFocus
-          maxLength={200}
+          error={titleBudget.over}
           onChange={(event) => setTitle(event.target.value)}
         />
       </FormField>

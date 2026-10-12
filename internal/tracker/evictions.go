@@ -21,14 +21,15 @@ import (
 // Each domain answers for its own log now, and the trim asks the domain it is
 // trimming.
 //
-// THROUGH THE NODE HANDLE'S REPLICATED PEER, and that is a correctness property
-// rather than a style: the peer is a legitimate nil while an adoption swaps the
-// file and after `Close`, and a statement issued on a nil pool panics inside
-// database/sql — which is what an earlier shape of this did when the trim's own
-// tick raced a shutdown. [store.DB.Read] answers [store.ErrNoEstate] instead.
-func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+// THROUGH THE REPLICATED ESTATE'S HANDLE, resolved on this call, and that is a
+// correctness property rather than a style: the estate is legitimately not
+// open while an adoption swaps its file and after the node closes, and a
+// statement issued on a closed pool panics inside database/sql — which is what
+// an earlier shape of this did when the trim's own tick raced a shutdown.
+// [store.ReplicatedReader.Read] answers [store.ErrNoEstate] instead.
+func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT node_id, at, by, from_position, readmitted_position
 			FROM tracker_evictions WHERE log_stream = ?
@@ -45,8 +46,8 @@ func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionR
 				at, from   int64
 				readmitted sql.NullInt64
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
-				return err
+			if scanErr := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); scanErr != nil {
+				return scanErr
 			}
 			e.At = store.DecodeTime(at)
 			e.From = uint64(from)

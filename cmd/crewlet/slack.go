@@ -27,7 +27,7 @@ import (
 // takes the code back — and when there is no operator to ask (-dry-run, or a
 // pipe), it prints the URLs and stops rather than pretending.
 
-func runSlackProvision(args []string, stdout, stderr io.Writer) error {
+func runSlackProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("slack provision", flag.ContinueOnError)
@@ -36,7 +36,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	publicURL := fs.String("public-url", "",
 		"this deployment's public HTTPS base URL; every app's request URL "+
 			"and redirect URL are built from it. Defaults to "+
-			"api.external_url")
+			publicURLDefault)
 	refreshToken := fs.String("config-token", "",
 		"a Slack app-configuration REFRESH token; empty reads SLACK_CONFIG_REFRESH_TOKEN")
 	ledgerPath := fs.String("ledger", "",
@@ -77,7 +77,8 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	// into an app manifest is a URL, and while it was a Tier B pointer a
 	// manifest could carry "${PUBLIC_URL}/webhooks/slack/<handle>" where
 	// an address belongs — Slack refuses such an app and names nothing.
-	// `api.external_url` is Tier A, resolved before the file is decoded.
+	// The address is Tier A's now ([webhookBase]), resolved before the file
+	// is decoded.
 	resolveCtx := context.Background()
 	_, boot, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
 	if err != nil {
@@ -128,19 +129,17 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if base == "" {
-		// THREE WAYS TO BE EMPTY, and they need different work. The flag
-		// is one source and api.external_url is the other,
-		// and the second can be SET and still resolve to nothing — a
-		// whole ${VAR} this process cannot see becomes "" rather than a
-		// literal, deliberately, because registering the text of a
-		// variable is worse than registering nothing. The message named
-		// only the flag, so an operator who had set the field went
-		// looking for a flag they did not need.
+		// TWO WAYS TO BE EMPTY, and they need different work: no Tier A
+		// file was read, so only the flag could have supplied one, or the
+		// file names no webhook address — and which key that is depends
+		// on whether it sets a public listener. The message named only the
+		// flag once, so an operator who had set the field went looking for
+		// a flag they did not need; see [noPublicBase] for the rest.
 		return errors.New(noPublicBase(boot))
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout)
+	sink, closeSink, err := sinks.open(ctx, environ, stdout)
 	if err != nil {
 		return err
 	}

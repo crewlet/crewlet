@@ -62,17 +62,6 @@ writes FAIL OPEN: `ON CONFLICT DO NOTHING` simply stops firing. A retry would
 write a second episode, re-count an interaction, post a second comment and
 file a second tracker operation, and nothing would report it.
 
-## The event store's history
-
-The event store's `work_key` COLUMN is backfilled from `turn_id` by
-`schema/0029`; the `tags` blob beside it is not, because that blob records
-what the writer extracted from an event whose JSON carried no such field, and
-rewriting every one would restate history and still leave the stored payload
-disagreeing. The column is therefore the single authority — `EventRecord`
-reads it directly, which makes it the one promoted value that is not a copy of
-a tag — and a reader going through the tags answers "no unit of work" for
-exactly the history the backfill exists to preserve.
-
 ## What this does not decide
 
 It does not make a turn id meaningful outside this engine, and it does not
@@ -87,5 +76,6 @@ It says nothing about a SUSPENDED turn, which is not a re-run: a detached
 coding run re-enters the run that parked it, keeping the id from its own row.
 
 And it does not decide the `turn_id` column's history. Rows written before the
-split carry a work key there, which is what `schema/0029` backfills across
-rather than reinterprets.
+split carry a work key there, which is what `schema/0029` backfilled into the
+`work_key` column rather than reinterpreted — so that column, never the `tags`
+blob, is what every reader of a stored row's work key reads.

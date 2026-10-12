@@ -1,6 +1,10 @@
 package steer
 
-import "github.com/crewlet/crewlet/internal/iam"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
+)
 
 // The wire a note crosses to reach the node running its turn.
 //
@@ -20,6 +24,23 @@ import "github.com/crewlet/crewlet/internal/iam"
 // nobody answers leaves nothing behind, and the asker says so — `unknown`, not
 // a delivery nobody made.
 //
+// # Signed, because a note is an instruction
+//
+// The running node offers a note to the turn AS THE PERSON IT NAMES, and it
+// does so on the asking node's word: who may steer a turn is decided where
+// the person's request landed, against the seat a probe named, and the
+// running node decides nothing about it. So a note anybody who can reach the
+// fleet's broker could write would put words in front of a running agent
+// under anybody's name. Every request and every reply is therefore a channel
+// of internal/signedask's ([Channel]), signed under the fleet keyring in
+// domains of its own and bound by an id and a deadline ([Request.Binding])
+// that the answer names ([Reply.Answers]). A request the fleet did not sign,
+// one past its deadline and one whose id the node has taken already are
+// answered by nobody — the asker hears what it hears from a node the turn is
+// not on — and one signed under a key the running node does not hold is
+// answered [Reply.Unverified], so the person is told what to fix rather than
+// that nobody knows.
+//
 // # Evolution
 //
 // Additive only, [WireVersion] stamped on both halves. Two builds share this
@@ -29,6 +50,12 @@ import "github.com/crewlet/crewlet/internal/iam"
 // WireVersion is the shape this build writes.
 const WireVersion = 1
 
+// Channel is the steer wire's name among the fleet's signed channels, and so
+// the stem of the two key domains a note and its answer are signed under —
+// its own, so no estate envelope, broker request or state-log record verifies
+// as one.
+const Channel = "seat.steer"
+
 // Request asks the node running a turn to hand it one note.
 //
 // WHO SENT IT travels as [Note]'s three halves — By, ByKind and OperatorID,
@@ -36,7 +63,14 @@ const WireVersion = 1
 // note exactly as the serving node's guard resolved its sender, and never a
 // second "bound seat" field beside the author that could name somebody else.
 type Request struct {
-	Version    int           `json:"version"`
+	Version int `json:"version"`
+
+	// ID and Deadline bind the request ([Request.Binding]): minted per ask,
+	// so a probe and the offer after it are two requests, and a retry of
+	// one note is another request carrying the same [Request.NoteID].
+	ID       string    `json:"id"`
+	Deadline time.Time `json:"deadline"`
+
 	TurnID     string        `json:"turn_id"`
 	NoteID     string        `json:"note_id"`
 	Note       string        `json:"note"`
@@ -58,6 +92,10 @@ type Request struct {
 	Probe bool `json:"probe,omitempty"`
 }
 
+// Binding is the request's id and deadline, as its envelope binds them
+// (internal/signedask).
+func (r Request) Binding() (string, time.Time) { return r.ID, r.Deadline }
+
 // Reply is the running node's answer. Only the node holding the turn sends
 // one.
 //
@@ -66,9 +104,20 @@ type Request struct {
 // person reading the answer. An authority decision is taken on Agent; the
 // handle is a label. Empty where the running node could not resolve the seat.
 type Reply struct {
-	Version     int    `json:"version"`
+	Version int `json:"version"`
+	// Request is the id of the request this answers ([Reply.Answers]).
+	Request     string `json:"request,omitempty"`
 	TurnID      string `json:"turn_id"`
 	Agent       string `json:"agent_id,omitempty"`
 	AgentHandle string `json:"agent_handle"`
 	Status      Status `json:"status"`
+
+	// Unverified is set, and Status and the seat are empty, where the
+	// running node took nothing because it could not verify the request —
+	// signed under a key it does not hold. The sentence names the keys it
+	// holds; an operator adding the key is what changes the answer.
+	Unverified string `json:"unverified,omitempty"`
 }
+
+// Answers is the id of the request this reply answers (internal/signedask).
+func (r Reply) Answers() string { return r.Request }

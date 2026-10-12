@@ -17,11 +17,7 @@ const seedNow = "2026-06-14T12:00:00Z"
 
 func seededState(t *testing.T) *livestate.LiveState {
 	t.Helper()
-	at, err := time.Parse(time.RFC3339Nano, seedNow)
-	if err != nil {
-		t.Fatalf("parse the pinned clock: %v", err)
-	}
-	return livestate.New(livestate.WithClock(func() time.Time { return at }))
+	return stoppedAt(t, seedNow)
 }
 
 func storedRow(id, ts string) livestate.FeedRow {
@@ -35,7 +31,7 @@ func storedSpend(id, ts string, total int) tokens.Record {
 	return tokens.Record{
 		EventID: id, Timestamp: ts, AgentRole: "Lead", AgentID: "a-1",
 		Phase: "execute", Model: "claude-sonnet-5", TurnID: "tn-" + id,
-		InputTokens: total / 2, OutputTokens: total / 2, TotalTokens: total,
+		InputTokens: total / 2, OutputTokens: total / 2, TotalTokens: total, Calls: 1,
 	}
 }
 
@@ -84,13 +80,13 @@ func TestAFullSeedDoesNotRecountTheLiveRowsItAlreadyHolds(t *testing.T) {
 		recs = append(recs, tokens.Record{
 			EventID:   fmt.Sprintf("S%d", i),
 			Timestamp: base.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
-			AgentRole: "Lead", Phase: "execute", TotalTokens: 1,
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 1, Calls: 1,
 		})
 	}
 	for i := 0; i < 10; i += 2 {
 		recs = append(recs, tokens.Record{
 			EventID: live[i], Timestamp: newest,
-			AgentRole: "Lead", Phase: "execute", TotalTokens: 7,
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 7, Calls: 1,
 		})
 	}
 	s.Seed(livestate.History{Spend: recs})
@@ -262,6 +258,40 @@ func TestSeedingRespectsTheRingAndTheWindow(t *testing.T) {
 	records := s.SpendRecords()
 	if len(records) != 1 || records[0].EventID != "inside" {
 		t.Errorf("records = %+v, want only the one inside the window", records)
+	}
+}
+
+// A STORED RECORD STAMPED AHEAD IS AGED FROM THE SEED, as a record off the
+// stream is aged from its arrival: it lands in the window's order behind a
+// record that arrives after it, however far ahead its stamp, and leaves a day
+// after the seed rather than a day after a stamp the clock may never reach.
+//
+// Mutation: seed by the record's own stamp (newStamp in seedSpend), and the
+// record sorts behind the later arrival and is still held a day later.
+func TestASeededRecordStampedAheadIsAgedFromTheSeed(t *testing.T) {
+	t.Parallel()
+	seeded := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	now := seeded
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	if !s.Seed(livestate.History{Spend: []tokens.Record{
+		storedSpend("far", "2099-01-01T00:00:00Z", 1000),
+	}}).Tokens {
+		t.Fatal("a stored record stamped ahead was not seeded")
+	}
+
+	now = seeded.Add(time.Minute)
+	s.Apply(phaseSpend("next", now.Format(time.RFC3339Nano), 10))
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"far", "next"}) {
+		t.Errorf("records = %v, want the seeded record first: it was aged from the seed, "+
+			"before the record that arrived a minute later", ids)
+	}
+
+	now = seeded.Add(livestate.LiveSpendWindow + 30*time.Second)
+	if !s.ExpireSpend() {
+		t.Error("the expiry found nothing to drop a day after the seed")
+	}
+	if ids := spendIDs(s); !slices.Equal(ids, []string{"next"}) {
+		t.Errorf("records = %v, want the seeded record gone a day after the seed", ids)
 	}
 }
 

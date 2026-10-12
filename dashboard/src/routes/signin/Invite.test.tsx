@@ -85,7 +85,7 @@ const SPENT: Answer = {
   },
 };
 
-function mount(link = `${ID}.${SECRET}`) {
+async function mount(link = `${ID}.${SECRET}`) {
   location.hash = `#/invite/${link}`;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -93,13 +93,19 @@ function mount(link = `${ID}.${SECRET}`) {
   // lands; `reconnect` is nothing a redemption may call.
   const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <App />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
+  // (`app/lazyScreen.ts`), and a synchronous act stops flushing at the first
+  // render that used a promise, settled or not — so the screen's first effects,
+  // and every answer the stubbed engine gives them, would be left unflushed.
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
   return { dial, reconnect };
 }
 
@@ -145,7 +151,7 @@ describe("reading the link", () => {
 
   test("the view is asked with the secret beside the id, and never in a URL", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
 
     const view = sent.find((s) => s.url.includes("/auth/invite/"));
@@ -154,9 +160,9 @@ describe("reading the link", () => {
     for (const request of sent) expect(request.url).not.toContain(SECRET);
   });
 
-  test("a link cut short says so, and asks the engine nothing", () => {
+  test("a link cut short says so, and asks the engine nothing", async () => {
     const sent = engine({});
-    mount(ID);
+    await mount(ID);
     expect(screen.getByText("Part of the link is missing.")).toBeDefined();
     expect(sent.filter((s) => s.url.includes("/auth/invite/"))).toEqual([]);
   });
@@ -165,7 +171,7 @@ describe("reading the link", () => {
 describe("what the screen shows before anything is spent", () => {
   test("who it is for, who sent it, the seat it binds, and the login it proposes", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     expect((await screen.findByLabelText("Login")) as HTMLInputElement).toHaveProperty(
       "value",
       "jane.doe",
@@ -186,7 +192,7 @@ describe("what the screen shows before anything is spent", () => {
         body: { ...(VIEW.body as object), signed_in_as: "dave.lee" },
       },
     });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     expect(screen.getByText("dave.lee")).toBeDefined();
     expect(screen.getByText(/Joining signs that session out/)).toBeDefined();
@@ -206,7 +212,7 @@ describe("what the screen shows before anything is spent", () => {
     ["names no seat at all", { seat: undefined }],
   ])("a link that %s warns before any password that redeeming is refused", async (_, seat) => {
     engine({ [`GET ${PATH}`]: { status: 200, body: { ...(VIEW.body as object), ...seat } } });
-    mount();
+    await mount();
     const login = await screen.findByLabelText("Login");
     const warning = screen.getByText(/so redeeming it will be refused/);
     expect(warning.compareDocumentPosition(login) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -215,7 +221,7 @@ describe("what the screen shows before anything is spent", () => {
 
   test("a link naming a seat says the person will hold it, and warns nothing", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     expect(screen.getByText(/You will hold the seat/)).toBeDefined();
     expect(screen.queryByText(/so redeeming it will be refused/)).toBeNull();
@@ -223,7 +229,7 @@ describe("what the screen shows before anything is spent", () => {
 
   test("a browser signed in as nobody is told nothing about a session", async () => {
     engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     expect(screen.queryByText(/Joining signs that session out/)).toBeNull();
   });
@@ -232,7 +238,7 @@ describe("what the screen shows before anything is spent", () => {
   // engine's own words, and with no form to fill in for nothing.
   test("a link that no longer works is one answer, with nothing to fill in", async () => {
     engine({ [`GET ${PATH}`]: SPENT });
-    mount();
+    await mount();
     expect(
       await screen.findByText(
         "This invitation is no longer valid. Ask whoever sent it for a new one.",
@@ -253,7 +259,7 @@ describe("what the screen shows before anything is spent", () => {
         VIEW,
       ],
     });
-    mount();
+    await mount();
     const again = await screen.findByRole("button", { name: "Try again" });
     expect(alerts().join(" ")).toContain("it has not been used");
     fireEvent.click(again);
@@ -264,7 +270,7 @@ describe("what the screen shows before anything is spent", () => {
 describe("redeeming it", () => {
   test("a password under the floor is refused here, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     type("Password", "too-short");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
@@ -279,7 +285,7 @@ describe("redeeming it", () => {
   // login fits and is posted.
   test("a login outside the grammar is refused under the field, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     type("Login", "Frank");
     type("Password", "correct horse battery staple");
@@ -295,7 +301,7 @@ describe("redeeming it", () => {
   // the same way twice, which is posted.
   test("a password typed differently the second time is refused here, and nothing is posted", async () => {
     const sent = engine({ [`GET ${PATH}`]: VIEW });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
     type("Confirm password", "correct horse battery stable");
@@ -330,7 +336,7 @@ describe("redeeming it", () => {
         },
       },
     });
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     await screen.findByLabelText("Login");
     type(/your name/i, "Jane Doe");
     type("Password", "correct horse battery staple");
@@ -359,7 +365,7 @@ describe("redeeming it", () => {
         body: { error: "bad_params", detail: "that login is already taken — choose another" },
       },
     });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
     type("Confirm password", "correct horse battery staple");
@@ -375,7 +381,7 @@ describe("redeeming it", () => {
 
   test("a link spent between the view and the post becomes the one answer", async () => {
     engine({ [`GET ${PATH}`]: VIEW, [`POST ${PATH}`]: SPENT });
-    mount();
+    await mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
     type("Confirm password", "correct horse battery staple");
@@ -402,7 +408,7 @@ describe("redeeming it", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { dial, reconnect } = mount();
+    const { dial, reconnect } = await mount();
     await screen.findByLabelText("Login");
     // THE REAL BROWSER'S STATE: the socket's refusal probe records that
     // nobody is signed in on every load of this screen. This suite's socket

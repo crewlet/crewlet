@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,18 +18,31 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // joinHarness is a donor holding a real replicated estate and a joiner about
 // to replace its own with it.
 type joinHarness struct {
-	t        *testing.T
-	nc       *nats.Conn
-	donorDB  *store.DB
-	joiner   *store.DB
-	joinPath string
-	manifest statelog.Manifest
-	snapPath string
+	t       *testing.T
+	nc      *nats.Conn
+	donorDB *store.DB
+	joiner  *store.DB
+	// joinEstate is the joiner's replicated estate, as the runtime would
+	// hand it: resolved through the joiner's node handle on every call, so
+	// it reads whatever file the adoption left open.
+	joinEstate store.ReplicatedHandle
+	joinPath   string
+	manifest   statelog.Manifest
+	snapPath   string
+
+	// donors is every donor the harness runs, which its adopter names to
+	// the join so the collection ends on their answers rather than at the
+	// offer window ([statelog.AdoptDeps.Donors]).
+	donors []string
+	// listDonors, nil by default, is how the adopter lists them instead
+	// of answering donors at once: a case that times the listing sets it.
+	listDonors func(context.Context) ([]string, error)
 
 	held     atomic.Int64
 	released atomic.Int64
@@ -42,12 +56,6 @@ type joinHarness struct {
 	// the row really written sets it to [statelog.RecordAdoption].
 	record func(ctx context.Context, began time.Time, donor string,
 		m statelog.Manifest, phase statelog.AdoptionPhase) error
-	// answered is when the harness's donor first answered an ask since the
-	// adopter was built, in Unix nanoseconds: the latest instant it can
-	// have finished the artefact it offered the join. Cleared when the
-	// adopter is built, because the harness's own readiness probes are asks
-	// too; a later call is the transfer's, which re-reads what to send.
-	answered atomic.Int64
 
 	// stillUsable is step 7's re-check, nil by default. A case sets it to
 	// stage the one thing the hold is a belt against: a fleet that
@@ -85,15 +93,13 @@ type joinHarness struct {
 
 func newJoinHarness(t *testing.T) *joinHarness {
 	t.Helper()
-	return newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}})
+	return newJoinHarnessFrom(t, joinDonor{})
 }
 
-// joinDonor is how the harness's donor is built: the domain it declares — the
-// probe as this build declares it, or as a build from before the ledger
-// travelled did — and anything written into its estate before the snapshot.
+// joinDonor is how the harness's donor is built: anything written into its
+// estate before the snapshot.
 type joinDonor struct {
-	domain statelog.Domain
-	seed   func(t *testing.T, db *store.DB)
+	seed func(t *testing.T, estate store.ReplicatedHandle)
 }
 
 func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
@@ -110,16 +116,13 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 	// The DONOR, with a snapshot of its own replicated estate.
 	donorDir := t.TempDir()
-	donorDB, err := store.Open(t.Context(), filepath.Join(donorDir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorDB, donorEstate := storetest.OpenEstate(t, filepath.Join(donorDir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := donorDB.Close(); err != nil {
 			t.Errorf("close the donor's store: %v", err)
 		}
 	})
-	if err := donorDB.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := donorEstate.Tx(t.Context(), func(tx *sql.Tx) error {
 		// A statement BATCH takes no arguments on this driver, so the
 		// schema and the parameterised row go separately.
 		if _, err := tx.ExecContext(t.Context(), probeDDL+`
@@ -130,22 +133,22 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		}
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-				VALUES (?, 1, 4200, 0, 0)`, probeStream)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+				VALUES (?, 1, 4200, 0, 0, 0)`, probeStream)
 		return err
 	}); err != nil {
 		t.Fatalf("seed the donor: %v", err)
 	}
 	if from.seed != nil {
-		from.seed(t, donorDB)
+		from.seed(t, donorEstate)
 	}
 
-	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
+	h := &joinHarness{t: t, nc: q.Conn(), broker: q, donors: []string{"donor"}}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: from.domain,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -154,11 +157,11 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 				}
 			},
 		}},
-		DB:            donorDB,
+		File:          donorEstate,
 		Dir:           snapDir,
 		NodeID:        "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 3, nil },
+		Recipients:    func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -178,11 +181,8 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) {
-			h.answered.CompareAndSwap(0, time.Now().UnixNano())
-			return h.manifest, true
-		},
-		Path: func(statelog.Manifest) string { return h.snapPath },
+		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Path:   func(statelog.Manifest) string { return h.snapPath },
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
@@ -195,24 +195,26 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 	// The JOINER, whose own replicated estate is about to be replaced.
 	joinDir := t.TempDir()
-	joiner, err := store.Open(t.Context(), filepath.Join(joinDir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the joiner's store: %v", err)
-	}
-	h.joiner = joiner
-	h.joinPath = joiner.ReplicatedPath()
+	joiner, joinEstate := storetest.OpenEstate(t, filepath.Join(joinDir, "node.db"), store.Options{}, 1)
+	h.joiner, h.joinEstate = joiner, joinEstate
+	h.joinPath = storetest.ReplicatedDB(t, joinEstate).Path()
 	t.Cleanup(func() { _ = h.joiner.Close() })
 	return h
 }
 
 func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
-	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}},
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
+		Donors: func(ctx context.Context) ([]string, error) {
+			if h.listDonors != nil {
+				return h.listDonors(ctx)
+			}
+			return slices.Clone(h.donors), nil
+		},
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{
 				Need:        map[string]uint64{"probe": 4_000},
@@ -228,7 +230,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.onClose != nil {
 				h.onClose()
 			}
-			if err := h.joiner.Close(); err != nil {
+			if err := h.joiner.CloseReplicated(); err != nil {
 				return err
 			}
 			return h.closeErr
@@ -240,13 +242,8 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.reopenErr != nil {
 				return h.reopenErr
 			}
-			db, err := store.Open(ctx, filepath.Join(filepath.Dir(h.joinPath), "node.db"),
-				store.Options{})
-			if err != nil {
-				return err
-			}
-			h.joiner = db
-			return nil
+			_, err := h.joiner.OpenReplicated(ctx, 1)
+			return err
 		},
 		Record: func(ctx context.Context, began time.Time, donor string,
 			m statelog.Manifest, phase statelog.AdoptionPhase) error {
@@ -265,18 +262,6 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		t.Fatalf("NewAdopter: %v", err)
 	}
 	return a
-}
-
-// answeredAt is when the harness's donor answered the join's ask, at the
-// precision the store keeps an instant.
-func (h *joinHarness) answeredAt(t *testing.T) time.Time {
-	t.Helper()
-	n := h.answered.Load()
-	if n == 0 {
-		t.Fatal("the donor never answered an ask, so this case has no answer " +
-			"to hold the adoption's start against")
-	}
-	return time.Unix(0, n).UTC().Truncate(time.Microsecond)
 }
 
 // debris is every file of the fetched artefact's set beside the live file: the
@@ -332,7 +317,7 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	// THE ROWS ARRIVED and the checkpoint with them, which is the whole
 	// point: the position inside the file is what describes the file.
 	var rows, seq int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
@@ -385,24 +370,62 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			t.Fatalf("the adoption recorded %v, want %v", h.phases, want)
 		}
 	}
-	// ALL UNDER ONE START, so one join is one row — and a start that
-	// follows the donor's answer, which is what makes it the bound for a
-	// join that stops partway: see
-	// TestAJoinThatStoppedAfterItsInstallStillBoundsTheLedger.
+	// ALL UNDER ONE START, so one join is one row.
 	for _, began := range h.began {
 		if !began.Equal(h.began[0]) {
 			t.Fatalf("one join recorded its phases under the starts %v — each "+
 				"is a row of its own", h.began)
 		}
 	}
-	if asked := h.answeredAt(t); h.began[0].Before(asked) {
-		t.Fatalf("the adoption starts at %s, before its donor answered at %s",
-			h.began[0], asked)
-	}
 	// AND NOTHING OF THE PART FILE SURVIVES, the lock its inspection took
 	// included.
 	if left := h.debris(t); len(left) != 0 {
 		t.Errorf("%v survive beside the live database", left)
+	}
+}
+
+// A JOIN LISTS THE DONORS IT EXPECTS WHILE THEIR OFFERS ARRIVE, NOT BEFORE.
+//
+// The listing is a coordination read, and a joining node refuses every read
+// and write until its join ends: listed first, a store slow to answer held the
+// node for the whole listing and then the whole offer window after it. Here
+// the listing answers only once the joiner's ask is on the wire — which a join
+// that listed first never sends — and with its answer in, the collection ends
+// as soon as the donor it names has offered rather than at the window.
+func TestAJoinListsItsDonorsWhileTheirOffersArrive(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	asks, err := h.nc.SubscribeSync(statelog.SubjectOffer)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = asks.Unsubscribe() })
+	if err := h.nc.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	h.listDonors = func(ctx context.Context) ([]string, error) {
+		if _, err := asks.NextMsgWithContext(ctx); err != nil {
+			return nil, err
+		}
+		return slices.Clone(h.donors), nil
+	}
+	// BOUNDED, so a join that lists first — whose listing waits for an ask
+	// it has not sent — fails here rather than hanging the run.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*statelog.OfferWindow)
+	defer cancel()
+	started := time.Now()
+	if _, err := h.adopter(t).Join(ctx); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	// THE INSTANT THE ADOPTION BEGAN is when the collection ended, and
+	// half the window separates a collection that ended on its listing
+	// from one that waited the window out.
+	if len(h.began) == 0 {
+		t.Fatal("the join recorded no adoption")
+	}
+	if collected := h.began[0].Sub(started); collected >= statelog.OfferWindow/2 {
+		t.Fatalf("the join collected offers for %v: its listing's answer, after "+
+			"every donor it named had offered, did not end the collection", collected)
 	}
 }
 
@@ -519,7 +542,7 @@ func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 			"was already %v — the failure it undoes is that very cancellation, "+
 			"so it fails too and the node is left with no estate", h.reopenCtxErr)
 	}
-	if err := h.joiner.Replicated().SQL().PingContext(t.Context()); err != nil {
+	if err := storetest.ReplicatedDB(t, h.joinEstate).SQL().PingContext(t.Context()); err != nil {
 		t.Fatalf("the live database is not usable after the rollback: %v", err)
 	}
 }
@@ -666,12 +689,8 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	t.Parallel()
 	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	h := newJoinHarnessFrom(t, joinDonor{
-		domain: probeDomain{},
-		seed: func(t *testing.T, db *store.DB) {
-			if err := statelog.RecordLedgerLoss(t.Context(), db.Replicated(),
-				probeDomain{}, swept); err != nil {
-				t.Fatalf("record the donor's sweep: %v", err)
-			}
+		seed: func(t *testing.T, estate store.ReplicatedHandle) {
+			markLedgerLost(t, estate, swept)
 		},
 	})
 	if _, err := h.adopter(t).Join(t.Context()); err != nil {
@@ -683,11 +702,30 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	}
 }
 
+// markLedgerLost records, in estate, that the probe's operation ledger may
+// have lost every row applied before before — the watermark a sweep leaves,
+// written as [tables.markLost] writes it, never backwards.
+func markLedgerLost(t *testing.T, estate interface {
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+}, before time.Time) {
+	t.Helper()
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_ops_lost (ops_table, lost_before) VALUES (?, ?)
+			ON CONFLICT (ops_table) DO UPDATE SET
+				lost_before = MAX(lost_before, excluded.lost_before)`,
+			probeDomain{}.OpsTable(), store.EncodeTime(before))
+		return err
+	}); err != nil {
+		t.Fatalf("move the operation ledger's watermark: %v", err)
+	}
+}
+
 // joinerOps is how many rows the joiner's operation ledger holds.
 func (h *joinHarness) joinerOps(t *testing.T) int64 {
 	t.Helper()
 	var ops int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_ops`).Scan(&ops)
 	}); err != nil {
 		t.Fatalf("read the operation ledger: %v", err)
@@ -699,7 +737,7 @@ func (h *joinHarness) joinerOps(t *testing.T) int64 {
 // publisher asks it through.
 func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 	t.Helper()
-	rows, err := statelog.NewRows(h.joiner, probeDomain{}, nil)
+	rows, err := statelog.NewRows(h.joinEstate.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -727,6 +765,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	served := make(chan struct{})
 	go func() { defer close(served); _ = donor.Serve(ctx) }()
 	t.Cleanup(func() { cancel(); <-served })
+	h.donors = append(h.donors, nodeID)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

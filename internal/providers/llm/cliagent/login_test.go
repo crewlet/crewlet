@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // loginProvider builds a provider over a temp state dir, with a profile whose
@@ -53,6 +55,7 @@ func writeHostLogin(t *testing.T, home, body string) {
 // for months. Adopting is a COPY, so their own login is never written to by a
 // fleet of agents refreshing tokens.
 func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"personal"}`)
@@ -75,6 +78,7 @@ func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
 // "No login found" must name the directory it looked in, or an operator
 // running as a different user than the one who logged in has nothing to go on.
 func TestAdoptingWithNoHostLoginSaysWhereItLooked(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
 	_, err := p.AdoptHostLogin(home)
@@ -93,6 +97,7 @@ func TestAdoptingWithNoHostLoginSaysWhereItLooked(t *testing.T) {
 // byte — a credential that round-trips almost correctly is a login that fails
 // at the vendor with no explanation.
 func TestACredentialBundleRoundTrips(t *testing.T) {
+	t.Parallel()
 	source := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"exported","refresh":"r1"}`)
@@ -121,6 +126,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 // An archive is an execution surface if it is unpacked on trust, and a bundle
 // arrives from the secret store, which every node holding the keyring shares.
 func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	for _, name := range []string{
 		"../../.ssh/authorized_keys",
@@ -148,6 +154,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 // files fitted and report success, leaving a partial credential directory that
 // HasLogin then reads as a login and declines to repair.
 func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	err := p.RestoreBundle(bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
 	if err == nil {
@@ -165,6 +172,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // reject mid-archive, and writing as the loop went left the rejected bundle's
 // earlier entries behind.
 func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	// A good entry FIRST, then one the name check refuses.
 	var raw bytes.Buffer
@@ -201,6 +209,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 // A node that has been running holds the FRESHER refresh token; restoring a
 // boot-time blob over it is how a fleet logs itself out at the next expiry.
 func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"current"}`)
@@ -222,6 +231,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 // Exporting nothing must say what to run, not produce an empty archive that
 // looks like a working credential in the secret store.
 func TestExportingWithNoLoginRefuses(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	_, err := p.ExportBundle()
 	if err == nil {
@@ -235,6 +245,7 @@ func TestExportingWithNoLoginRefuses(t *testing.T) {
 // Logout removes the local credential even when the vendor's own command
 // fails: a login the operator believes they removed must not still work.
 func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"x"}`)
@@ -243,7 +254,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	}
 	// A logout command that cannot possibly succeed.
 	p.profile.LogoutArgs = []string{"-test.run=TestCLIAgentFakeCLI"}
-	p.env = map[string]string{helperEnv: "1", "FAKE_EXIT": "3"}
+	p.env = fakeChildEnv(map[string]string{"FAKE_EXIT": "3"})
 
 	err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {
@@ -257,6 +268,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 // The three CLIs whose login is browser OAuth must say so in a sentence an
 // operator can act on, rather than hanging on a prompt or failing obscurely.
 func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
+	t.Parallel()
 	p := loginProvider(t)
 	err := p.CredentialLogin(t.Context(), "ops@example.com", "hunter2",
 		&bytes.Buffer{}, &bytes.Buffer{})
@@ -276,11 +288,11 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 // serve.
 func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
 	t.Parallel()
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			continue
 		}
-		p, err := Load(name, nil)
+		p, err := cliprofile.Load(name, nil)
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
@@ -327,11 +339,11 @@ func bundleOf(t *testing.T, name, body string) string {
 // A leading "/" is how that mistake is spelled for every CLI here.
 func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 	t.Parallel()
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
 			continue
 		}
-		p, err := Load(name, nil)
+		p, err := cliprofile.Load(name, nil)
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
@@ -358,7 +370,7 @@ func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 // vendor — an operator who believed they had revoked a login had not.
 func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -384,6 +396,7 @@ func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 // stderr therefore left them at a blank terminal, waiting to paste a code from
 // a URL they had never been shown, on the route the docs call preferred.
 func TestCapturingATokenStillShowsTheOperatorTheVendorsPrompts(t *testing.T) {
+	t.Parallel()
 	ui := "Browser didn't open? Use the url below to sign in\nhttps://example.com/oauth?code=true\n"
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ui + "sk-ant-oat01-EXAMPLE\n"},
 		map[string]any{"capture_token_args": []any{"-test.run=TestCLIAgentFakeCLI"},
@@ -431,7 +444,7 @@ func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
 // fallback chain never carried the seat onto another model.
 func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 	t.Parallel()
-	p, err := Load("claude-code", nil)
+	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -456,12 +469,12 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Usage limit reached", `"type":"rate_limit_error"`} {
-		if !slices.ContainsFunc(p.LimitMarkers, func(m LimitMarker) bool { return m.Sentinel == want }) {
+		if !slices.ContainsFunc(p.LimitMarkers, func(m cliprofile.LimitMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("limit_markers lacks %q: %+v", want, p.LimitMarkers)
 		}
 	}
 	for _, want := range []string{"Invalid API key", "OAuth token has been revoked", "Please run /login"} {
-		if !slices.ContainsFunc(p.AuthMarkers, func(m AuthMarker) bool { return m.Sentinel == want }) {
+		if !slices.ContainsFunc(p.AuthMarkers, func(m cliprofile.AuthMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
 		}
 	}

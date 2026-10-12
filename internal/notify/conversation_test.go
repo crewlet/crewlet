@@ -169,21 +169,21 @@ func TestBothKeysRoundTripIndependently(t *testing.T) {
 	}
 }
 
-// A PARTITION KEY IS NEVER READ AS AN IDENTITY. Every producer stamps both
-// through notify.Stamp, so an event carrying only the partition is one no
-// producer writes — and inferring the identity from it would file a direct
-// message's thread reply under the thread, the batch its next turn never
-// looks up.
-func TestAPartitionKeyAloneNamesNoConversation(t *testing.T) {
+// THE PARTITION IS NEVER READ AS THE IDENTITY. The partition function reads
+// its own field and nothing else, and the identity read reads ITS own field
+// and nothing else: an event that states a partition and no identity names no
+// conversation, and falls back per event rather than being filed under a batch
+// key its next turn would never look up.
+func TestThePartitionIsNeverReadAsTheIdentity(t *testing.T) {
 	ev := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
-	if got := notify.ConversationIdentityOf(ev); got != notify.Fallback(ev.ID.String()) {
-		t.Errorf("a partition-only event resolved to %q, want its own fallback", got)
-	}
-	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "" {
-		t.Errorf("a partition-only batch resolved to %q, want none", got)
-	}
 	if got := notify.KeyOf(ev); got != "chat:D1:root-1" {
 		t.Errorf("the partition function reads %q", got)
+	}
+	if got, want := notify.ConversationIdentityOf(ev), notify.Fallback(ev.ID.String()); got != want {
+		t.Errorf("identity = %q, want the event's own fallback %q", got, want)
+	}
+	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "" {
+		t.Errorf("the partition resolved to %q, want no identity", got)
 	}
 }
 

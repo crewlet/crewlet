@@ -16,7 +16,7 @@ import (
 // (the checksum), when the join began and whether it finished — the record an
 // operator reads when a node is behaving oddly and the question is what it is
 // actually running. Nothing on the write path reads it: the operation ledger
-// travels inside the artefact with its own watermark ([RecordLedgerLoss]), so
+// travels inside the snapshot with its own watermark ([Rows.LostBefore]), so
 // an adoption bounds nothing.
 
 // RecordAdoption writes or advances this node's adoption row.

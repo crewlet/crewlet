@@ -22,13 +22,11 @@ import (
 // A SEMANTIC twin, held to the same suite as the KV backend, which means it
 // has to model the things a naive map would not:
 //
-//   - Expiry against the BUCKET's age rather than a per-write TTL, because
-//     that is the only expiry a KV has (see internal/coord/kv) and a twin
-//     that honoured a caller's own TTL would certify a contract the backend a
-//     fleet runs on cannot keep. A record carries the instant it was written
-//     and lapses when [FleetAges] says, judged against the clock the caller
-//     passes in — which is this twin's one honest divergence: it has no store
-//     of its own to ask.
+//   - Expiry against a stored deadline, so a claim that has lapsed is gone
+//     whether or not anything has swept — judged against the clock the
+//     caller passes in, as the KV judges a claim's own deadline, and refused
+//     beyond [coord.MaxClaimTTL] as the KV's bucket refuses it, so the twin
+//     certifies no horizon the backend a fleet runs on cannot keep.
 //   - A monotonic activation epoch that survives every write, because the
 //     epoch is a fencing token: a counter that restarted would hand a node a
 //     number an older revision already used.
@@ -38,14 +36,8 @@ import (
 type Fleet struct {
 	mu sync.Mutex
 
-	// ages is what expires an aged record here, standing in for the
-	// bucket a KV gives the same record. Set once at construction and
-	// never written again, so it needs no lock.
-	ages FleetAges
-
 	windows      map[windowKey]int
 	claims       map[string]time.Time
-	setup        map[string]time.Time
 	worked       map[string]workedEntry
 	cooldowns    map[string]time.Time
 	applies      map[string]coord.NodeApply
@@ -53,19 +45,27 @@ type Fleet struct {
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	fires        map[string]time.Time
+	custody      map[string]string
+	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[uuid.UUID]coord.MailboxRecord
-	pauses       map[uuid.UUID]coord.SeatPause
-	positions    map[string]coord.NodePositions
-	holds        map[string]coord.TrimHold
-	floors       map[string]coord.TrimFloor
-	backups      map[string]coord.BackupPoint
-	maintenance  map[string]coord.MaintenanceOperation
-	admissions   map[string]coord.Admission
-	maintAcks    map[string]coord.MaintenanceAck
-	maintRev     uint64
+
+	// objectBackend is the fleet's recorded object backend, empty until a
+	// node records one, and objectCollection the collector's last report.
+	objectBackend    string
+	objectCollection []byte
+
+	pauses      map[uuid.UUID]coord.SeatPause
+	positions   map[string]coord.NodePositions
+	holds       map[string]coord.TrimHold
+	floors      map[string]coord.TrimFloor
+	backups     map[string]coord.BackupPoint
+	maintenance map[string]coord.MaintenanceOperation
+	admissions  map[string]coord.Admission
+	maintAcks   map[string]coord.MaintenanceAck
+	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, each told of every
 	// change under the lock that made it.
@@ -95,44 +95,19 @@ type workedEntry struct {
 	detail string
 }
 
+// rebaseEntry is one recorded rebase and the version it was written at.
+type rebaseEntry struct {
+	at      time.Time
+	version uint64
+}
+
 var _ coord.Fleet = (*Fleet)(nil)
 
-// FleetAges are the bucket ages this twin expires its aged records on.
-//
-// THE CONTRACT SUITE IS WHY THIS IS SETTABLE. A record here lapses with its
-// bucket exactly as it does on the KV, so a case that must outlast one cannot
-// travel around it — and waiting out a production horizon is fifteen minutes
-// of test. A backend built for the suite is built at the suite's advertised
-// ages; everything else takes [DefaultFleetAges].
-type FleetAges struct {
-	// Claim is the delivery-claim bucket's age — coord.ClaimTTL.
-	Claim time.Duration
-
-	// Setup is the setup-state bucket's age — coord.SetupOnceRetention.
-	Setup time.Duration
-}
-
-// DefaultFleetAges are the horizons coord itself declares: what every caller
-// but the contract suite runs at.
-func DefaultFleetAges() FleetAges {
-	return FleetAges{Claim: coord.ClaimTTL, Setup: coord.SetupOnceRetention}
-}
-
-// NewFleet returns an empty twin at [DefaultFleetAges].
-func NewFleet() *Fleet { return NewFleetWithAges(DefaultFleetAges()) }
-
-// NewFleetWithAges returns an empty twin whose aged records expire on ages.
-// A zero field takes its [DefaultFleetAges] value, so a caller may name only
-// the horizon it cares about.
-func NewFleetWithAges(ages FleetAges) *Fleet {
-	defaults := DefaultFleetAges()
-	ages.Claim = cmp.Or(ages.Claim, defaults.Claim)
-	ages.Setup = cmp.Or(ages.Setup, defaults.Setup)
+// NewFleet returns an empty twin.
+func NewFleet() *Fleet {
 	return &Fleet{
-		ages:         ages,
 		windows:      map[windowKey]int{},
 		claims:       map[string]time.Time{},
-		setup:        map[string]time.Time{},
 		worked:       map[string]workedEntry{},
 		cooldowns:    map[string]time.Time{},
 		applies:      map[string]coord.NodeApply{},
@@ -140,6 +115,8 @@ func NewFleetWithAges(ages FleetAges) *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
+		custody:      map[string]string{},
+		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
@@ -179,40 +156,32 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 }
 
 // Claim records a key, reporting whether this caller was first.
-func (f *Fleet) Claim(_ context.Context, key string, now time.Time) (bool, error) {
-	return f.claimOnce(f.claims, f.ages.Claim, key, now)
-}
-
-// ClaimSetup records a spent setup-callback state, reporting whether this
-// caller was first.
 //
-// A MAP OF ITS OWN, which is this twin's whole model of a second bucket: the
-// two registries differ in their horizon and in nothing else, and a twin that
-// shared one map would certify a backend that put both in one bucket — which
-// is the mistake the setup bucket exists to end.
-func (f *Fleet) ClaimSetup(_ context.Context, key string, now time.Time) (bool, error) {
-	return f.claimOnce(f.setup, f.ages.Setup, key, now)
-}
-
-// claimOnce is first-claim-wins against one register with one age.
-func (f *Fleet) claimOnce(into map[string]time.Time, age time.Duration,
-	key string, now time.Time) (bool, error) {
-
+// An empty key is an ERROR rather than (false, nil), as [coord.Claims] states:
+// a caller that named nothing has not lost a race to anybody.
+func (f *Fleet) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
 	if key == "" {
 		return false, errors.New("coord/memory: a claim needs a key")
+	}
+	if ttl <= 0 {
+		return false, errors.New("coord/memory: a claim needs a positive ttl")
+	}
+	// REFUSED as the KV backend refuses it, whose claims bucket keeps a
+	// record for coord.MaxClaimTTL and no longer: a twin that honoured any
+	// ttl would certify a dedupe window production cannot keep.
+	if ttl > coord.MaxClaimTTL {
+		return false, fmt.Errorf("coord/memory: a %v claim exceeds coord.MaxClaimTTL (%v): %w",
+			ttl, coord.MaxClaimTTL, coord.ErrTTLTooLong)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// THE BUCKET'S AGE, never a TTL the caller passed: what is stored is
-	// when the claim was made, and it lapses when the bucket would have
-	// reaped it.
-	if at, held := into[key]; held && now.Sub(at) < age {
+	if until, held := f.claims[key]; held && until.After(now) {
 		return false, nil
 	}
 	// A LAPSED claim is re-claimable, which is what makes a deliberate
 	// replay work: the record is not a tombstone, it is a window.
-	into[key] = now
+	f.claims[key] = now.Add(ttl)
 	return true, nil
 }
 
@@ -296,6 +265,9 @@ func (f *Fleet) Since(_ context.Context, now time.Time) (map[string]time.Time, e
 func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
+	}
+	if err := req.Origin.Check(); err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: activate %s: %w", req.RevisionID, err)
 	}
 	// THE KV's OWN FORM, so a body reads back here as the broker would
 	// hand it back — see [coord.CanonicalPayload].
@@ -423,16 +395,21 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 
 // ---- the token counters ------------------------------------------------ //
 
-// Charge checks and increments the org's counter and the seat's, in every
-// window.
+// Charge records a round in the org's counter and the seat's, in every
+// window, and judges whether it fitted.
 //
-// The twin holds ONE mutex for the whole call, so the compensation the KV
-// backend needs never runs here. That is not a shortcut around the contract —
-// the observable behaviour is identical, and the suite asserts the behaviour
-// — it is what a single process can honestly offer: there is no second writer
-// to race, so building a compensation nothing could ever exercise would be a
-// path with no test that could reach it. The arithmetic is [coord.Tally]'s,
-// the same the KV backend runs.
+// The twin holds ONE mutex for the whole call, so the partial the KV backend
+// reports for a seat write that fails after the company's
+// ([coord.SeatUncountedError]) never arises here. That is not a shortcut
+// around the contract — the observable behaviour is identical, and the suite
+// asserts the behaviour — it is what a single process can honestly offer:
+// there is no second writer to race and no write that can fail, so a partial
+// nothing could ever produce would be a path with no test that could reach
+// it. The arithmetic is [coord.Tally]'s, the same the KV backend runs: the
+// company counted and judged first, then the seat — with no verdict of its
+// own when the company refused, since the round is counted there all the
+// same — and every answer, a refusal's included, carries both counters as the
+// charge left them ([coord.Spend.Org]).
 func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -443,27 +420,28 @@ func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// ORG FIRST for the REFUSAL, whichever order the writes go in: "the
-	// company is out" is the fact an operator has to see when both scopes
-	// are out of room.
 	now := time.Now().UTC()
-	org := f.budgets[coord.OrgScope].Roll(req.Windows)
-	seat := f.budgets[req.Seat].Roll(req.Windows)
-	for _, scope := range []struct {
-		name, key string
-		tally     coord.Tally
-		caps      coord.Caps
-	}{{"org", coord.OrgScope, org, req.OrgCaps}, {"agent", req.Seat, seat, req.SeatCaps}} {
-		if refusing := scope.tally.Refusing(req.Tokens, scope.caps); len(refusing) > 0 {
-			// The refusal is recorded on the windows of the scope that
-			// made it, and on no other: see coord.WindowUsage.RefusedAt.
-			f.budgets[scope.key] = scope.tally.Stamp(refusing, scope.tally, now)
-			return scope.tally.Refusal(scope.name, refusing, scope.caps, req.Windows), nil
-		}
+	org, refusing := f.budgets[coord.OrgScope].Count(req.Tokens, req.OrgCaps, req.Windows, now)
+	f.budgets[coord.OrgScope] = org
+	if len(refusing) > 0 {
+		// The refusal is stamped on the windows of the scope that made it,
+		// and on no other: see coord.WindowUsage.RefusedAt.
+		seat, _ := f.budgets[req.Seat].Count(req.Tokens, nil, req.Windows, now)
+		f.budgets[req.Seat] = seat
+		refused := org.Refusal("org", refusing, req.OrgCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
+	}
+	seat, refusing := f.budgets[req.Seat].Count(req.Tokens, req.SeatCaps, req.Windows, now)
+	if len(refusing) > 0 {
+		f.budgets[req.Seat] = seat
+		refused := seat.Refusal("agent", refusing, req.SeatCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 	// ADMITTED, which is also what clears both scopes' refusals: each has
 	// just had room in every window.
-	org, seat = org.Add(req.Tokens, now).ClearAll(), seat.Add(req.Tokens, now).ClearAll()
+	org, seat = org.ClearAll(), seat.ClearAll()
 	f.budgets[coord.OrgScope], f.budgets[req.Seat] = org, seat
 	return coord.Spend{
 		OK: true, Org: org.Usage(coord.OrgScope, req.Windows), Agent: seat.Usage(req.Seat, req.Windows),
@@ -494,6 +472,26 @@ func (f *Fleet) PostCharge(_ context.Context, seat string, tokens int, windows c
 	}, nil
 }
 
+// PostChargeSeat adds spend that already happened to one seat's counter
+// alone, refusing nothing and leaving its refusal stamps as they were. See
+// [coord.Budgets.PostChargeSeat].
+func (f *Fleet) PostChargeSeat(_ context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if seat == "" {
+		return coord.Usage{}, errors.New("coord/memory: a charge needs a seat scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	agent := f.budgets[seat].Roll(windows).Add(tokens, time.Now().UTC())
+	f.budgets[seat] = agent
+	return agent.Usage(seat, windows), nil
+}
+
 // PostChargeOrg adds spend that already happened to the company's counter
 // alone, refusing nothing and leaving its refusal stamps as they were. See
 // [coord.Budgets.PostChargeOrg].
@@ -509,6 +507,31 @@ func (f *Fleet) PostChargeOrg(_ context.Context, tokens int, windows coord.Windo
 	org := f.budgets[coord.OrgScope].Roll(windows).Add(tokens, time.Now().UTC())
 	f.budgets[coord.OrgScope] = org
 	return org.Usage(coord.OrgScope, windows), nil
+}
+
+// Refuse stamps every full window of one scope with a refusal the gate made
+// without a charge, counting nothing. See [coord.Budgets.Refuse].
+//
+// The arithmetic is [coord.Tally.Refuse], the KV backend's too, and a scope
+// it stamps nothing on is left out of the map exactly as a scope nothing has
+// charged is, so a listing never gains a row for a refusal that wrote nothing.
+func (f *Fleet) Refuse(_ context.Context, scope string, caps coord.Caps, windows coord.Windows) (coord.Usage, error) {
+	if scope == "" {
+		return coord.Usage{}, errors.New("coord/memory: a refusal needs a scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err := caps.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stamped, full := f.budgets[scope].Refuse(caps, windows, time.Now().UTC())
+	if len(full) > 0 {
+		f.budgets[scope] = stamped
+	}
+	return stamped.Usage(scope, windows), nil
 }
 
 // Used reports one scope's counter against the given windows.
@@ -674,6 +697,63 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 		return false, nil
 	}
 	f.fires[key] = at.UTC()
+	return true, nil
+}
+
+// ---- the custody claims ----------------------------------------------- //
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper. The bucket's age is not modelled, for the completion
+// ledger's reason.
+func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if held, ok := f.custody[batch]; ok {
+		return held, nil
+	}
+	f.custody[batch] = node
+	return node, nil
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// Rebase reads the instant recorded for a seed and its version.
+//
+// The bucket's age is not modelled, for the reason the completion ledger's is
+// not: it is a property of the bucket the KV backend creates, held there, and
+// a twin inside one test process never runs for a month.
+func (f *Fleet) Rebase(_ context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	if !ok {
+		return time.Time{}, 0, nil
+	}
+	return entry.at, entry.version, nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the version read.
+func (f *Fleet) RecordRebase(_ context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	switch {
+	case version == 0 && ok, version != 0 && (!ok || entry.version != version):
+		return false, nil
+	}
+	// DRAWN FROM THE STORE-WIDE COUNTER, like every versioned write here, so
+	// a version a caller holds can never name a later record.
+	f.version++
+	f.rebases[seed] = rebaseEntry{at: at.UTC(), version: f.version}
 	return true, nil
 }
 
@@ -945,25 +1025,6 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 	return entry.reason, true, nil
 }
 
-// FollowIfAbsent records a follow only where none exists, reporting whether
-// this call created it.
-//
-// ONE MUTEX ACROSS THE CHECK AND THE WRITE, which is what the KV backend buys
-// with Create — see [coord.Follows.FollowIfAbsent] for what depends on it.
-func (f *Fleet) FollowIfAbsent(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, errors.New("coord/memory: a follow needs a backend, a handle and a thread")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := followKey(backend, handle, channel, thread)
-	if _, held := f.follows[key]; held {
-		return false, nil
-	}
-	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
-	return true, nil
-}
-
 // Unfollow drops a follow, reporting whether one was there.
 func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
 	if backend == "" || handle == "" || thread == "" {
@@ -978,3 +1039,10 @@ func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread str
 	delete(f.follows, key)
 	return true, nil
 }
+
+// SweepMarkers removes nothing, because the twin keeps no markers: a delete
+// here removes the entry from its map, so the state a KV backend reaches only
+// after its sweep is the state this one is always in. That is the contract's
+// promise read from the other side — sweeping changes no answer — and the
+// suite holds both backends to it.
+func (f *Fleet) SweepMarkers(context.Context, time.Time) (int64, error) { return 0, nil }

@@ -198,7 +198,7 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES
 // `deferred_old` ONCE FOR EACH LOG HOLDING ONE — from a real deferral on a real
 // applier, dated by the real position heartbeat — and each says whether this
-// node's seats move for it.
+// node's copy of the estate goes out of service for it.
 //
 // The alarm could not fire before: the report stood the grace in for the age
 // whenever a record was held, and the rule fires past the grace. The records
@@ -206,8 +206,9 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // fleet's keyring, at a record version this build does not read — so the
 // appliers retain them exactly as a rolling upgrade makes them. And the node
 // holds one on TWO logs at once, which is what a build that moved two record
-// versions leaves behind: one gates seat admission and one gates none, so the
-// grace moves this node's seats for the first and moves nothing for the second.
+// versions leaves behind: one judges this node's copy of the estate and one
+// judges none, so the grace takes the copy out of service for the first and
+// takes nothing out for the second — the seats stay where they are for both.
 // A single alarm naming the node's oldest record said one of those about both.
 func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
@@ -236,7 +237,7 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "at which this node's seats move to a peer",
+			says: "at which this node stops serving its copy of the estate",
 		},
 		{
 			domain: iamdomain.Domain{}.Name(), version: iamdomain.RecordVersion,
@@ -255,10 +256,11 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "this log does not gate seat admission, so it moves no seats",
+			says: "this log does not judge this node's copy of the estate, " +
+				"so nothing is taken out of service",
 		},
 	} {
-		running := r.state.domains[tc.domain]
+		running := r.state.Domain(tc.domain)
 		if running == nil {
 			t.Fatalf("the node runs no %s domain", tc.domain)
 		}
@@ -313,9 +315,11 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		version int
 		says    string
 	}{
-		{tracker.Domain{}.Name(), tracker.RecordVersion, "at which this node's seats move to a peer"},
+		{tracker.Domain{}.Name(), tracker.RecordVersion,
+			"at which this node stops serving its copy of the estate"},
 		{iamdomain.Domain{}.Name(), iamdomain.RecordVersion,
-			"this log does not gate seat admission, so it moves no seats"},
+			"this log does not judge this node's copy of the estate, " +
+				"so nothing is taken out of service"},
 	} {
 		fired, found := byLog[tc.domain]
 		if !found {
@@ -323,7 +327,7 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				"raised no deferred_old of its own (raised: %v)", tc.domain, byLog)
 			continue
 		}
-		stream := r.state.domains[tc.domain].domain.Stream().Name
+		stream := r.state.Domain(tc.domain).spec.Name
 		version := fmt.Sprintf("written at record version %d against the %d "+
 			"this build reads", tc.version+1, tc.version)
 		if !strings.Contains(fired.Detail, "at "+stream+"@") ||
@@ -361,7 +365,7 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 		t.Fatal("the node's retention loop keeps no floor watch")
 	}
 	name := tracker.Domain{}.Name()
-	generation := r.state.domains[name].runner.Committed().Generation
+	generation := r.state.Domain(name).runner.Committed().Generation
 	ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
 		At: time.Now().UTC(), By: "node-b"}
 	if err := r.fleet.PutFloor(ctx, ahead); err != nil {

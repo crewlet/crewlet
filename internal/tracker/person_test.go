@@ -779,23 +779,23 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 	}
 }
 
-// A POSITION STORED AS THE BARE SEQUENCE READS AS GENERATION ZERO: the packed
-// form of a zero generation is the bare sequence, which is what a log no
-// reanchor has moved holds.
-func TestABareSequenceRowReadsAsGenerationZero(t *testing.T) {
+// A GENERATION-ZERO POSITION IS THE BARE SEQUENCE: a position in generation
+// zero packs to its bare sequence, so a row in the stream's first generation
+// reads back unchanged.
+func TestAGenerationZeroPositionIsTheBareSequence(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	stream := tracker.Domain{}.Stream().Name
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_persons
 			(handle, seen_through, seen_through_stream, version)
-			VALUES ('old', 42, ?, 1)`, stream)
+			VALUES ('ana', 42, ?, 1)`, stream)
 		return err
 	}); err != nil {
 		t.Fatalf("plant a row: %v", err)
 	}
-	if got := r.person("old").SeenThrough; got.Generation != 0 || got.Seq != 42 {
-		t.Fatalf("a bare-sequence row reads back as %+v", got)
+	if got := r.person("ana").SeenThrough; got.Generation != 0 || got.Seq != 42 {
+		t.Fatalf("a generation-zero position reads back as %+v", got)
 	}
 }
 

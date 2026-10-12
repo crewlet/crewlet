@@ -15,6 +15,7 @@ import { useSeatSetup } from "./seats.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -32,6 +33,8 @@ const READER: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: false,
+  configManagedBy: [],
 };
 
 class InertWebSocket {
@@ -57,7 +60,7 @@ afterEach(() => {
 
 function probe() {
   const store = new Store();
-  store.applyOrg({ name: "Acme", roles: [{ name: "PM", handle: "pm" }], units: [] });
+  store.applyOrg(withDerived({ name: "Acme", roles: [{ name: "PM", handle: "pm" }], units: [] }));
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -127,27 +130,15 @@ test("a lead of the seat's unit reads the seat and its unit, and never the docum
     }),
   );
   const store = new Store();
-  store.applyOrg({
-    name: "Acme",
-    units: [
-      { id: "product", name: "Product", lead: "boss", roles: [{ name: "PM", handle: "pm" }] },
-    ],
-    derived: {
-      seats: [],
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Boss", handle: "boss", kind: "human" }],
       units: [
-        {
-          id: "product",
-          name: "Product",
-          type: "unit",
-          lead: "boss",
-          lead_inherited: false,
-          channel: "",
-          channel_inherited: false,
-          seats: ["pm"],
-        },
+        { id: "product", name: "Product", lead: "boss", roles: [{ name: "PM", handle: "pm" }] },
       ],
-    },
-  });
+    }),
+  );
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {

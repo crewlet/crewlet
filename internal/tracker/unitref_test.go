@@ -129,6 +129,35 @@ func TestAUnitColumnIsHeadedWithTheTeamsName(t *testing.T) {
 	}
 }
 
+// A COLUMN IS HEADED BY THE UNIT ITS KEY NAMES, never by a unit that merely
+// shares the word. A unit's name is prose, so one unit may be named what
+// another is keyed — and the column holds keys, so the rows filed under `ops`
+// are the unit keyed `ops`, headed with that unit's name. A label resolved by
+// name would head one team's work with another team's.
+func TestAUnitColumnIsHeadedByTheUnitItsKeyNames(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ambiguous := chart{
+		{Key: "ops", Name: "Operations"},
+		{Key: "infra", Name: "ops"},
+	}
+	unitTask(t, r, "mine", "ops")
+
+	answer := r.askWith(ambiguous, map[string]any{
+		"container": "project:ENG", "group_by": "unit",
+	})
+	if ops := groupOf(t, answer, "ops"); ops.Count != 1 || ops.Label != "Operations" {
+		t.Errorf("the row filed under the key \"ops\" is drawn as %+v, want it in "+
+			"Operations' own column", ops)
+	}
+	for _, group := range answer.Groups {
+		if group.Key == "infra" {
+			t.Errorf("the row filed under Operations' key was folded into the unit "+
+				"merely named ops: %+v", group)
+		}
+	}
+}
+
 // AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING, because a caller
 // writes the one it has: a board's own column hands back the key, and a person
 // or a model types the name.

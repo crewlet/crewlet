@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A golden company: two seats, one scripted model, one embedded broker.
@@ -71,9 +75,19 @@ turn_engine:
   max_tool_rounds: 3
 `
 
-// tickInterval is the shared tick's cadence here. Short enough that the spend
-// rollup lands inside a test, long enough not to drown the capture in health
-// frames.
+// tickInterval is the shared tick's cadence on a single node here. Short enough
+// that the spend rollup lands inside a test, long enough not to drown the
+// capture in health frames.
+//
+// NOT A FLEET MEMBER'S, which runs the production cadence
+// ([stream.HealthInterval]; see [buildMember]). On a cluster every tick is
+// several certified coordination listings — the live nodes and their apply
+// status for the health envelope, the seat leases for placement — and each
+// listing creates and deletes an ordered consumer through the broker's
+// metadata group, which every member has to apply. Measured on a fleet that
+// only idled for thirty seconds: 113 cpu-s at 25 ms against 61 at five
+// seconds, close to two cores spent on ticks nobody reads — no fleet case
+// reads a push; every one reads REST or the engines.
 const tickInterval = 25 * time.Millisecond
 
 // harnessActivation is the instant this harness's company was "activated".
@@ -87,6 +101,104 @@ const tickInterval = 25 * time.Millisecond
 // every RESTART boots with it too: a value read off a clock per node or per
 // boot is exactly what the stamp exists to rule out.
 var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+
+// middayZone names a fixed-offset zone whose local time is within half an hour
+// of noon when it is called, spelled as a company's `timezone` takes it.
+//
+// FOR A CASE WHOSE PREMISE IS ONE COMPANY DAY. A token budget's windows are cut
+// on the company's clock at the instant each charge is made (ADR-0019), so a
+// turn that runs across the company's midnight charges its later rounds to the
+// next day — correctly. A case that sizes a ceiling to bite partway through one
+// turn, or reads back the day a refusal was stamped in, therefore holds only
+// while no midnight falls inside it, and on the wall clock and UTC one falls
+// inside some run every night: the onboarding round charged at 23:59:59.95 and
+// the execute round at 00:00:00.03 each fit a fresh day, nothing is refused,
+// and the case waits out its budget for a refusal that never comes. With the
+// company's local time at noon when the case starts, the nearest boundary of
+// every window — a day, an ISO week and a month all turn over at a local
+// midnight — is eleven and a half hours away, which no case here outlives.
+//
+// THE ZONE MOVES AND THE CLOCK DOES NOT. Pinning the engine's clock to a
+// synthetic noon was the other way to put the run mid-day, and it splits the
+// process in two: the engine shares it with the API, the live projection and
+// the coordination store, which all read the wall clock — the projection
+// judges whether a refused window has ended against it, and the store stamps a
+// refusal with it — so the gate would count a day the screens beside it had
+// already seen end, a node no deployment produces. Moving where the company's
+// day falls keeps every reader on the one calendar a deployment runs: the
+// gate, the park, the live meter, the budgets answer, a refusal's stamp and
+// the case's own read, each on the wall clock and the company's zone. A case
+// reads the zone back from the engine ([engine.Engine.Zone]) rather than
+// loading this name itself, so it judges the day on the clock the gate cut.
+//
+// Etc/GMT names count WEST as positive, so Etc/GMT-5 is five hours ahead of
+// UTC; every offset this takes, -12 to +12, has one.
+func middayZone() string { return middayZoneAt(time.Now()) }
+
+// middayZoneAt is [middayZone] at the instant now.
+func middayZoneAt(now time.Time) string {
+	now = now.UTC()
+	sinceMidnight := now.Sub(now.Truncate(24 * time.Hour)).Hours()
+	switch ahead := int(math.Round(12 - sinceMidnight)); {
+	case ahead > 0:
+		return fmt.Sprintf("Etc/GMT-%d", ahead)
+	case ahead < 0:
+		return fmt.Sprintf("Etc/GMT+%d", -ahead)
+	default:
+		return "Etc/GMT"
+	}
+}
+
+// companyMidday is the zone e cuts its company's windows on, failing the case
+// unless the company's local time is mid-day: the premise [middayZone] is
+// there to make true, held where the case depends on it, so a company whose
+// `timezone` did not take fails at its first line rather than on the one night
+// a midnight falls inside its turn.
+func companyMidday(t *testing.T, e *engine.Engine) *time.Location {
+	t.Helper()
+	zone := e.Zone()
+	if local := time.Now().In(zone); local.Hour() < 11 || local.Hour() > 12 {
+		t.Fatalf("the company's clock reads %s on %s as the case starts; the case "+
+			"holds only inside one company day, which it is guaranteed only from "+
+			"mid-day (middayZone)", local.Format("15:04"), zone)
+	}
+	return zone
+}
+
+// THE ZONE IS MID-DAY WHATEVER THE HOUR. [middayZone] is what keeps the cases
+// that need one company day inside one, and an offset it got wrong would put
+// the company's midnight back inside the very runs it is there for — so a whole
+// day is asked, every name is loaded the way a company's `timezone` is, and the
+// local time each gives must be within half an hour of noon.
+func TestMiddayZoneIsMiddayAtEveryHour(t *testing.T) {
+	t.Parallel()
+	zones := map[string]*time.Location{}
+	day := time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC)
+	// A prime step, so the instants asked fall on every second of a minute
+	// as well as every minute of an hour.
+	for at := day; at.Before(day.Add(24 * time.Hour)); at = at.Add(37 * time.Second) {
+		name := middayZoneAt(at)
+		zone, loaded := zones[name]
+		if !loaded {
+			var err error
+			if zone, err = period.LoadZone(name); err != nil {
+				t.Fatalf("at %s UTC the zone is %q, which a company cannot run on: %v",
+					at.Format("15:04:05"), name, err)
+			}
+			zones[name] = zone
+		}
+		local := at.In(zone)
+		noon := time.Date(local.Year(), local.Month(), local.Day(), 12, 0, 0, 0, zone)
+		if off := local.Sub(noon); off < -30*time.Minute || off > 30*time.Minute {
+			t.Fatalf("at %s UTC, %s reads %s — %v from noon, want within half an hour",
+				at.Format("15:04:05"), name, local.Format("15:04:05"), off)
+		}
+	}
+	if len(zones) != 25 {
+		t.Errorf("a day asked for %d zones, want one per whole-hour offset from -12 to +12",
+			len(zones))
+	}
+}
 
 // node is a running node: engine and API in one process, wired as
 // `crewlet run` wires them.
@@ -121,27 +233,57 @@ type node struct {
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
 // wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
-func start(t *testing.T) *node { return startWith(t, nil) }
+func start(t *testing.T) *node { return startNode(t, nodeSpec{}) }
 
 // startWith stands a node up over a company document the caller may amend, for
 // the cases whose subject is a config field rather than a turn.
 func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
-	return startBooted(t, amend, nil)
+	return startNode(t, nodeSpec{company: amend})
 }
 
-// startBooted stands a node up over a company document and a bootstrap the
-// caller may both amend, for the cases that need the operator's own half of
-// the configuration too — a bearer token a person writes with.
-func startBooted(
-	t *testing.T, amend func(doc string) string, amendBoot func(*config.Bootstrap),
-) *node {
+// nodeSpec is what a case may vary about the node it stands up. The zero value
+// is the golden company on the harness's own environment.
+type nodeSpec struct {
+	// company amends the golden company document.
+	company func(doc string) string
+	// boot amends the operator's half of the configuration, for the cases
+	// that need it — a bearer token a person writes with.
+	boot func(*config.Bootstrap)
+	// env is what the node's `${VAR}` references resolve to beyond the
+	// harness's own ([nodeEnvironment]).
+	env map[string]string
+}
+
+// nodeEnvironment is the environment a node in this package resolves its
+// `${VAR}` references from: the harness's own variables and the case's,
+// HANDED to the engine ([engine.Options.Environment]) and never read from the
+// process.
+//
+// HANDED because the process environment is the one input every case in a
+// binary shares. A case that configured a node through it had to set it with
+// t.Setenv, which Go refuses beside t.Parallel, so eight cases ran alone for
+// no other reason — and a case asserting that a reference resolves to NOTHING
+// held only on a runner that happened not to export the variable.
+//
+// The scripted endpoint takes any key, so CREWLET_TEST_KEY is a placeholder,
+// set so every node runs on a key as a deployment does rather than on whatever
+// the runner exports.
+func nodeEnvironment(vars map[string]string) config.MapSource {
+	env := config.MapSource{"CREWLET_TEST_KEY": "sk-ant-e2e-placeholder"}
+	maps.Copy(env, vars)
+	return env
+}
+
+// startNode stands a node up as spec describes.
+func startNode(t *testing.T, spec nodeSpec) *node {
 	t.Helper()
+	logs.attribute(t)
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
-	if amend != nil {
-		doc = amend(doc)
+	if spec.company != nil {
+		doc = spec.company(doc)
 	}
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
@@ -151,12 +293,14 @@ func startBooted(
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	withServingTierA(t, &boot)
-	if amendBoot != nil {
-		amendBoot(&boot)
+	if spec.boot != nil {
+		spec.boot(&boot)
 	}
+	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+		Environment: nodeEnvironment(spec.env),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -169,6 +313,33 @@ func startBooted(
 	app, srv := serveAPI(t, e, &boot, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
+}
+
+// seedStore writes the migrated store image where boot's store will open, so a
+// node boots onto a store this binary migrated once rather than running every
+// migration again for every node it stands up — the cost [storetest.Seed]
+// exists to remove, and none of these cases is about migrating.
+//
+// THE ENGINE'S OWN RULE for what a fresh node holds, so a seeded node is one a
+// fresh boot would have produced: the node file unless the store is scratch
+// (discarded at open, so a seed would only be deleted), and the replicated file
+// only on a node that holds the estate ([engine.HoldsEstate]) — a node without
+// `data` has none, and a backup or an estate check would find one that was put
+// there. A file already there is left as it is, which is what lets the restart
+// case boot twice on one path and reopen its own.
+//
+// Call it once boot is final and before engine.New, ON THE TEST'S GOROUTINE:
+// a seed that cannot be written fails the test, which only that goroutine may.
+func seedStore(t *testing.T, boot *config.Bootstrap) {
+	t.Helper()
+	if boot.Store.Scratch {
+		return
+	}
+	storetest.Seed(t, store.EstateNode, boot.Store.Path)
+	if engine.HoldsEstate(boot) {
+		storetest.Seed(t, store.EstateReplicated,
+			store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath))
+	}
 }
 
 // scriptedModel is an Anthropic Messages endpoint that answers by PHASE.
@@ -216,6 +387,37 @@ type scriptedModel struct {
 	// assertions elsewhere are written against a one-round executor.
 	searchQuery string
 	searched    bool
+
+	// calls are tool calls the executor makes, one per round, before it
+	// submits — the scripted half of a turn whose subject is what a tool
+	// did rather than what the model said.
+	scripted []scriptedCall
+}
+
+// scriptedCall is one tool call the executor makes.
+type scriptedCall struct {
+	tool  string
+	input map[string]any
+}
+
+// callOnExecute makes the next executor rounds call a tool, once each, in the
+// order given, before the round that submits.
+func (m *scriptedModel) callOnExecute(tool string, input map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scripted = append(m.scripted, scriptedCall{tool: tool, input: input})
+}
+
+// nextCall is the executor's next scripted call, if one is left.
+func (m *scriptedModel) nextCall() (scriptedCall, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.scripted) == 0 {
+		return scriptedCall{}, false
+	}
+	call := m.scripted[0]
+	m.scripted = m.scripted[1:]
+	return call, true
 }
 
 // engageOnExecute makes the next turn's executor call a tool.
@@ -301,6 +503,11 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			"final_artifact": "Three PRs merged, one incident, zero regressions.",
 		})
 	case offered["submit_work"]:
+		if call, ok := m.nextCall(); ok {
+			saw("execute")
+			reply = toolUse(call.tool, call.input)
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
@@ -587,23 +794,17 @@ func textReply(text string) string {
 	}`, body, textReplyUsage.json())
 }
 
-// waitFor polls until cond holds, failing the test if it never does.
-//
-// diag, when given, is rendered INTO the failure. A timeout here reports that
-// something the engine should have done was not done, and on CI that one line
-// is the entire artefact: a run of this suite failed with nothing but "timed
-// out waiting for the suspended turn to be resumed", which named the symptom
-// and not one fact about the state that produced it. A condition worth waiting
-// on is worth saying what it saw instead.
 // waitBudget is how long every wait in this suite gets.
 //
 // # Why it is this large
 //
 // The conditions here are not in-process flags: they are a seat claimed
 // through a lease, an engine booted, a detached sandbox run recovered from a
-// row. And the machine they run on is not this one — CI runs the WHOLE suite
-// under the race detector, so an e2e engine boots while a dozen other
-// packages compete for the same cores.
+// row. And the machine they run on is not this one — CI runs the suite under
+// the race detector, with this package's single-engine cases running beside
+// each other, as many at once as the runner has cores ([testing.T.Parallel]),
+// so an engine here boots while three others do. This package is alone on the
+// runner ([solo.Run]); its own cases are what it competes with.
 //
 // # What a long budget does NOT fix
 //
@@ -622,6 +823,14 @@ func textReply(text string) string {
 // to raise.
 const waitBudget = 90 * time.Second
 
+// waitFor polls until cond holds, failing the test if it never does.
+//
+// diag, when given, is rendered INTO the failure. A timeout here reports that
+// something the engine should have done was not done, and on CI that one line
+// is the entire artefact: a run of this suite failed with nothing but "timed
+// out waiting for the suspended turn to be resumed", which named the symptom
+// and not one fact about the state that produced it. A condition worth waiting
+// on is worth saying what it saw instead.
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
 	deadline := time.Now().Add(waitBudget)
@@ -635,4 +844,11 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 		t.Logf("state when %q timed out: %s", what, d())
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// hydrated is [engine.Engine.StateLogHydrated] — the one gate a node admits
+// its seats on — as the condition a wait polls, under the test's own context.
+func hydrated(t *testing.T, e *engine.Engine) func() bool {
+	t.Helper()
+	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

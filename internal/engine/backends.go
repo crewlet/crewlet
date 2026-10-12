@@ -7,16 +7,22 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -50,6 +56,18 @@ type Backends struct {
 	// for what each was doing while it was per-node.
 	Fleet coord.Fleet
 
+	// Objects is where the company's files are kept — the backend Tier A's
+	// store.objects names, opened here and checked against the fleet's
+	// recorded one before anything can write to it (see [openObjects]).
+	Objects objstore.Backend
+
+	// objectsIdentity names that backend as the fleet records it, and
+	// objectsStream the broker stream it lives in — empty for a backend
+	// outside the broker — for the backup, which copies no object a stream
+	// snapshot already carries.
+	objectsIdentity string
+	objectsStream   string
+
 	// Store is this node's local materialized index — the third thing a
 	// node runs on, and the one that is not replicated. It is opened here
 	// with the other two because everything that writes to it is driven by
@@ -74,6 +92,20 @@ type Backends struct {
 	// topology: conn above on an embedded broker, the queue's own on an
 	// external one. Not owned here — see [Backends.CoordinationConn].
 	rides *nats.Conn
+
+	// coordination is the JetStream client over rides, in the API this
+	// node's broker is addressed in — what the coordination stores were
+	// opened with, and what [Backends.CoordinationJetStream] hands the
+	// subsystems that ride the same connection.
+	coordination natsjs.JetStream
+
+	// api is the JetStream API this node's broker is addressed in.
+	api jsapi.API
+
+	// broker is this node's own embedded broker, for the one question only
+	// a member can answer in process: the metadata group's membership. Nil
+	// on an external stream, and on backends a caller lent without one.
+	broker brokerMembership
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -99,6 +131,9 @@ func (b *Backends) Complete() error {
 	if b.Store == nil {
 		missing = append(missing, "Store")
 	}
+	if b.Objects == nil {
+		missing = append(missing, "Objects")
+	}
 	if len(missing) == 0 {
 		return nil
 	}
@@ -106,6 +141,11 @@ func (b *Backends) Complete() error {
 		"OpenBackends, which builds the stream, coordination and the store together",
 		strings.Join(missing, ", "))
 }
+
+// API is the JetStream API every client of this node's broker speaks — the
+// one a subsystem reaching past the client (the backup's stream snapshot)
+// has to address too. See [jsapi].
+func (b *Backends) API() jsapi.API { return b.api }
 
 // Conn exposes the broker connection this node's coordination store rides
 // on an EMBEDDED broker, and nil on an external one.
@@ -141,6 +181,19 @@ func (b *Backends) Conn() *nats.Conn { return b.conn }
 // mailbox consumes through. The caller takes no ownership.
 func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
 
+// CoordinationJetStream is the JetStream client over [Backends.CoordinationConn],
+// in the API this node's broker is addressed in ([jsapi]) — the client the
+// coordination stores themselves were opened with — or nil where there is no
+// broker at all.
+//
+// THE CLIENT AND NOT THE CONNECTION, because the client is where the API is
+// decided: one built over the connection with the defaults reaches a member's
+// JetStream and times out on a leaf's, whose JetStream is the members' under
+// their domain. A subsystem that rides this connection — the seat memory
+// changelog — rides it in the API the stores do, on every topology. The
+// caller takes no ownership.
+func (b *Backends) CoordinationJetStream() natsjs.JetStream { return b.coordination }
+
 // Close releases both slots, in the reverse order of acquisition.
 //
 // THE ORDER IS THE POINT and each step depends on the one before:
@@ -163,7 +216,9 @@ func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
 //     queue, because a node that released its broker while still holding
 //     leases looks alive to its peers: renewals keep succeeding against a
 //     store it can no longer reach work through, and its seats stay
-//     unclaimable for a full TTL.
+//     unclaimable for a full TTL. The lease store's own background watch —
+//     the view its gates are judged by — is stopped first, while its
+//     connection is still open, so it ends rather than failing.
 //
 //  3. Shut down the embedded SERVER, if this node started one. Last of the
 //     three broker steps, because everything above it is a client of it.
@@ -187,6 +242,9 @@ func (b *Backends) Close(ctx context.Context) {
 		if err := b.Queue.Stop(ctx); err != nil {
 			log.WarnContext(ctx, "queue_stop_failed", "error", err)
 		}
+	}
+	if closer, ok := b.Coord.(backgroundCloser); ok {
+		closer.Close()
 	}
 	if b.conn != nil {
 		b.conn.Close()
@@ -220,6 +278,12 @@ func (b *Backends) abandon(ctx context.Context, err error) error {
 	err = lostDuring(b.Queue, err)
 	b.Close(ctx)
 	return err
+}
+
+// backgroundCloser is a coordination store that runs something in the
+// background of its own — the KV store's gate view — and stops it.
+type backgroundCloser interface {
+	Close()
 }
 
 // OpenBackends builds everything a node runs on.
@@ -289,55 +353,52 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	// still keeps a record of its turns. The other half of the pipeline —
 	// feeding a live projection — is the API's, and is a broadcast
 	// subscription for reasons observe.Projector states.
-	out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
+	//
+	// ONLY WHERE THE STORE OUTLIVES THE PROCESS. A node without `data`
+	// deletes its store at every boot, so rows written into it would be
+	// gone at its next restart with nothing able to read them in between
+	// — it hands them to a data node instead ([observe.Custody], armed by
+	// [New] once the estate client exists).
+	if HoldsEstate(b) {
+		out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
+	}
 	return out, nil
 }
 
-// openStore opens this node's local database.
+// openStore opens this node's own database. The replicated estate it holds is
+// opened on the handle this returns when the engine is built ([holdEstate]),
+// whichever caller opened the store.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
-	db, err := store.Open(ctx, b.Store.Path, storeOptions(b, c))
+	db, err := store.OpenNode(ctx, b.Store.Path, storeOptions(b, c))
 	if err != nil {
 		return nil, fmt.Errorf("engine: store: %w", err)
 	}
 	return db, nil
 }
 
-// storeOptions is what this node's store is opened with, decided from Tier A
-// and the company.
+// storeOptions is what this node's own database is opened with, decided from
+// Tier A and the company.
 //
-// APART FROM THE OPEN so that what the pool is sized for can be asked of a
-// node's configuration without a file.
+// APART FROM THE OPEN so that what the file is opened as can be asked of a
+// node's configuration without one.
+//
+// NO PINS: the writers the state log's apply loops pin are on the REPLICATED
+// estate's pool, which [holdEstate] sizes for the register ([estateLogs]) on a
+// node that holds it — never on this file, which no apply loop writes.
 func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
 		BusyTimeout:    b.Store.BusyTimeout(),
-		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN, and nothing
-		// else. Each domain's apply loop holds one for its life: it is
-		// the single writer of that domain's tables, and a loop that
-		// had to reacquire one per batch would be competing with the
-		// readers it is applying for. The count is DECLARED rather
-		// than discovered so the pool is sized for them: an undeclared
-		// pin is a reader starved out of the pool by a writer that
-		// never gives its connection back.
-		//
-		// It carried a `+ sweepWriterPins` term for the maintenance
-		// worker, whose inbox sweep and duplicate-rank repair each took
-		// a pin of their own and were refused on every tick of a
-		// running node, the apply loops having taken every declared pin
-		// before the first sweep asked. That term was the pool sized
-		// for a job list in another package, holding on an invariant
-		// nothing enforces — a tick runs its jobs in series, so at most
-		// one pin at a time — and a third pinning job, or a tick that
-		// ran two in parallel, would have under-declared it silently.
-		// Neither sweep is a long-lived writer, so neither wants a pin:
-		// both take a pooled write transaction now, which reaches the
-		// same lock through the same queue.
-		//
-		// EVERY REGISTERED DOMAIN, because every node runs every one of
-		// them whatever its roles, so every pin declared here has an
-		// apply loop that takes it.
-		PinnedWriters: len(register()),
+	}
+	// A NODE WITHOUT `data` HOLDS NO REPLICATED ESTATE and keeps nothing
+	// that has to outlive it. Its own file is discarded and recreated at
+	// every boot, and it holds nothing ([HoldsEstate]), so no replicated
+	// estate is ever opened on it — a path that reaches for one is told
+	// [store.ErrNoEstate] rather than handed an empty database that reads as
+	// a company with nothing in it.
+	if !HoldsEstate(b) {
+		opts.Scratch = b.Store.Scratch
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -389,11 +450,20 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		ClusterPort:      b.Stream.Cluster.Port,
 		ClusterHost:      b.Stream.Cluster.Host,
 		ClusterAdvertise: b.Stream.Cluster.Advertise,
-		ServerName:       nodeID,
-		Replicas:         b.Stream.Replicas,
-		Credentials:      b.Stream.Credentials,
-		Token:            b.Stream.Token,
-		TLS:              streamTLS(b.Stream.TLS),
+		// THE LEAF LINK, from whichever side of it this node is: a node
+		// without `data` dials the members' listeners and runs no
+		// JetStream of its own, and a member opens one for them. Tier A
+		// has already refused a node that is both, or neither where it
+		// has to be one — see [config.Bootstrap.ValidateRoles].
+		LeafURLs:      b.Stream.Leaf.URLs,
+		LeafPort:      b.Stream.Leaf.Port,
+		LeafHost:      b.Stream.Leaf.Host,
+		LeafAdvertise: b.Stream.Leaf.Advertise,
+		ServerName:    nodeID,
+		Replicas:      b.Stream.Replicas,
+		Credentials:   b.Stream.Credentials,
+		Token:         b.Stream.Token,
+		TLS:           streamTLS(b.Stream.TLS),
 
 		// The BROKER's own verbosity, which is not the engine's — see
 		// jetstream.Config.Debug. Read by the embedded branch only; the
@@ -424,10 +494,72 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		return nil, err
 	}
 	out.rides = conn
-	if err = attachCoordination(ctx, b, out, conn); err != nil {
+	out.api = cfg.API()
+	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection
+	// coordination rides — see [jsapi] for why a client built any other
+	// way reaches a member's JetStream and times out on a leaf's.
+	js, err := out.api.Client(conn)
+	if err != nil {
+		return nil, out.abandon(ctx, fmt.Errorf("engine: coordination: %w", err))
+	}
+	out.coordination = js
+	if err = attachCoordination(ctx, b, out, js); err != nil {
+		return nil, out.abandon(ctx, err)
+	}
+	if err = openObjects(ctx, b, out, js); err != nil {
 		return nil, out.abandon(ctx, err)
 	}
 	return out, nil
+}
+
+// openObjects opens the backend the company's files are kept in, once the
+// fleet has agreed it is the fleet's.
+//
+// AGREED BEFORE OPENED. The first node to open a store records which backend
+// it is ([coord.ObjectStores]), and every node after compares its own Tier A
+// against that record: a node pointed at another bucket — or at the broker
+// where the fleet uses a bucket — would split the company's files between two
+// stores, each side's uploads readable on that side alone, with nothing
+// failing. Refused here, by name, it is a node that does not start.
+func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
+	objects := b.Store.Objects
+	identity := objects.Identity()
+	agreed, err := out.Fleet.AgreeObjectBackend(ctx, identity)
+	if err != nil {
+		return fmt.Errorf("engine: check store.objects against the fleet's object store: %w", err)
+	}
+	if agreed != identity {
+		return fmt.Errorf("engine: store.objects names %q and the fleet keeps its files in %q: "+
+			"every node must name the same object store, or the company's files split "+
+			"between the two — set store.objects on this node to match the others",
+			identity, agreed)
+	}
+	out.objectsIdentity = identity
+	switch objects.BackendOrDefault() {
+	case config.ObjectBackendS3:
+		s3 := objects.S3
+		backend, err := s3obj.Open(ctx, s3obj.Config{
+			Endpoint: s3.Endpoint, Region: s3.Region, Bucket: s3.Bucket, Prefix: s3.Prefix,
+			PathStyle: s3.PathStyle, AccessKeyID: s3.AccessKeyID, SecretAccessKey: s3.SecretAccessKey,
+		})
+		if err != nil {
+			return fmt.Errorf("engine: the object store (store.objects.s3): %w", err)
+		}
+		out.Objects = backend
+	default:
+		openCtx, cancel := context.WithTimeout(ctx,
+			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
+		defer cancel()
+		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
+			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
+		}
+		out.Objects = backend
+		out.objectsStream = natsobj.Stream
+	}
+	return nil
 }
 
 // openStream dials or starts the broker, and answers the connection
@@ -448,6 +580,13 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 // WATCHED ([jetstream.Queue.DialWatched]): NATS closing either connection for
 // good stops the node ([Engine.Fatal]), and the split lasts no longer than a
 // reconnect.
+//
+// A NODE WITHOUT `data` IS THE EMBEDDED BRANCH TOO, as a LEAF: its in-process
+// server runs no JetStream of its own and links to the members' listeners
+// (ADR-0025), so both its connections reach JetStream through that link, under
+// the members' domain — which is why every client built over them is built in
+// the API the stream speaks ([jetstream.Config.API]) rather than with the
+// client's defaults.
 //
 // EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
 // it publishes is stamped with ([queue.WithNode]) — on both branches, so an
@@ -485,7 +624,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
-	out := &Backends{Queue: q, stopServer: server.Shutdown}
+	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server}
 	// WATCHED, through the queue: this connection holds every lease the
 	// node renews, so NATS closing it for good is the node's loss exactly
 	// as the queue's own connection closing is, and the queue reports both
@@ -528,12 +667,11 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
-func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
+func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
-	// sequence actually is: nineteen replicated buckets across two calls —
-	// the fleet store's sixteen and the lease store's three —
-	// each of which would otherwise discover a wedged cluster on its own
-	// budget. Without it the real bound is the PRODUCT rather than the
+	// sequence actually is: every replicated bucket of both coordination
+	// stores, across two calls, each of which would otherwise discover a
+	// wedged cluster on its own budget. Without it the real bound is the PRODUCT rather than the
 	// term — a number nobody declared, which is the shape of a limit that
 	// is not a decision. Each create below still takes the lesser of its
 	// own budget and what is left of this one, because WithTimeout only
@@ -542,7 +680,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 	defer cancel()
 
-	shared, err := openFleet(ctx, conn, b.Stream.Replicas, clusteredStream(b))
+	shared, err := openFleet(ctx, js, b.Stream.Replicas, clusteredStream(b))
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
@@ -552,7 +690,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		out.Coord = coordmem.New()
 		return nil
 	}
-	leases, err := kv.Open(ctx, conn, kv.Config{
+	leases, err := kv.Open(ctx, js, kv.Config{
 		TTL:       leaseTTL(b),
 		Replicas:  b.Stream.Replicas,
 		Clustered: clusteredStream(b),
@@ -570,19 +708,20 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // is a BUCKET's age, fixed when the bucket is created, so a silent default
 // would decide it at the moment nobody was looking. Every number is the one
 // the subsystem that reads it already uses, named at its own package.
-func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered bool) (coord.Fleet, error) {
-	return kv.OpenFleet(ctx, conn, kv.FleetConfig{
-		RateWindow:         coord.RateWindow,
-		ClaimTTL:           coord.ClaimTTL,
-		SetupOnceRetention: coord.SetupOnceRetention,
-		LedgerRetention:    coord.LedgerRetention,
-		FireRetention:      coord.FireRetention,
-		FollowRetention:    coord.FollowRetention,
-		CooldownMax:        coord.CooldownMax,
-		BudgetRetention:    coord.BudgetRetention,
-		StatusFreshness:    coord.StatusFreshness,
-		Replicas:           replicas,
-		Clustered:          clustered,
+func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
+	return kv.OpenFleet(ctx, js, kv.FleetConfig{
+		RateWindow:       coord.RateWindow,
+		MaxClaimTTL:      coord.MaxClaimTTL,
+		LedgerRetention:  coord.LedgerRetention,
+		FireRetention:    coord.FireRetention,
+		FollowRetention:  coord.FollowRetention,
+		RebaseRetention:  coord.RebaseRetention,
+		CooldownMax:      coord.CooldownMax,
+		BudgetRetention:  coord.BudgetRetention,
+		StatusFreshness:  coord.StatusFreshness,
+		CustodyRetention: coord.CustodyRetention,
+		Replicas:         replicas,
+		Clustered:        clustered,
 	})
 }
 
@@ -647,7 +786,7 @@ type leaseTTLInForce interface {
 // company's work sits unclaimed on a node that looks healthy.
 //
 // Taking the live value is also what keeps the derived timings coherent: the
-// heartbeat and the release budget are fractions of this number, so a node
+// heartbeat and a stop's allowance are fractions of this number, so a node
 // renewing on a 90-second cadence against a 45-second bucket would lose every
 // seat it held between beats.
 //
@@ -679,6 +818,34 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 // A topology question rather than a replica count: an external NATS is
 // somebody else's cluster, and an embedded member that names one is clustered
 // whatever replica count it asks for — see [jsprovision.Clustered].
+//
+// A LEAF IS CLUSTERED TOO: it holds nothing of its own, so every object it
+// provisions is a replicated create on the members it reaches, and the solo
+// budget would fail it against peers that are themselves still forming.
 func clusteredStream(b *config.Bootstrap) bool {
-	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != ""
+	return b.BrokerKind() != placement.BrokerMember || b.Stream.Cluster.Name != ""
+}
+
+// HoldsEstate reports whether a node configured as b holds the company's
+// durable state — the replicated estate, opened from boot and held whole: a
+// node with the `data` role holds it, and a node without holds nothing.
+//
+// It is a fact about the NODE, not about the company it applies, and it is the
+// one answer two callers read here rather than deriving it: the engine opening
+// the file, and a backup copying it ([backup.HoldingFor]). The operator's
+// `crewlet migrate` reaches the same answer by another road — Tier A requires
+// a node without `data` to be scratch and refuses one with it, and the command
+// refuses a scratch store before it reaches the replicated estate at all.
+//
+// Through the profile, which is the one parse of `node.roles`: an unreadable
+// role list has already been refused by Tier A, and every other reader of the
+// roles asks the same accessor.
+//
+// A NIL BOOTSTRAP IS EVERY ROLE, on the rule an unset role list follows: an
+// engine assembled without one declares nothing to subtract.
+func HoldsEstate(b *config.Bootstrap) bool {
+	if b == nil {
+		return true
+	}
+	return b.Profile("").HoldsData()
 }

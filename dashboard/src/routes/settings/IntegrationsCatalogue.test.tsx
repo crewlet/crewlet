@@ -85,6 +85,7 @@ function tool(key: string, over: Partial<SetupToolState> = {}): SetupToolState {
     configured: false,
     enabled: false,
     satisfied: false,
+    form_complete: false,
     requirements: [
       {
         field: "admin_token",
@@ -102,8 +103,8 @@ function tool(key: string, over: Partial<SetupToolState> = {}): SetupToolState {
 
 const listing: SetupListing = {
   tools: [
-    tool("gitlab", { configured: true, enabled: true, satisfied: true }),
-    tool("datadog", { configured: true, enabled: true, satisfied: true }),
+    tool("gitlab", { configured: true, enabled: true, satisfied: true, form_complete: true }),
+    tool("datadog", { configured: true, enabled: true, satisfied: true, form_complete: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
   external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
@@ -166,7 +167,7 @@ function controls(el: HTMLElement): HTMLElement[] {
   return [...el.querySelectorAll<HTMLElement>("button, a[href]")];
 }
 
-// ONE ACTION EACH. A tile in a grid of eight is read in one glance, and the
+// ONE ACTION EACH. A tile in a grid is read in one glance, and the
 // card it replaced carried a tag, a Connect, a Disconnect, a settings square
 // and a chevron — five controls to learn that nothing was owed.
 test("every tile carries exactly one action, and which one follows the engine", async () => {
@@ -191,6 +192,19 @@ test("every tile carries exactly one action, and which one follows the engine", 
   const slack = await tile("Slack");
   expect(controls(slack).map((c) => c.getAttribute("aria-label"))).toEqual(["Connect Slack"]);
   expect(within(slack).getByText("Not in use")).toBeTruthy();
+});
+
+// A TOOL NOBODY SET UP KEEPS ITS MARK, DRAINED: the kit's `muted` mark is the
+// glance that says "available, not connected" down the grid, and a tool that
+// is set up draws its own colours whatever its state.
+test("an unconfigured tool's mark is muted and a configured one's is not", async () => {
+  stubFetch({ status: 200, body: listing });
+  mount();
+  const mark = async (name: string) =>
+    (await tile(name)).querySelector(".int-brand .crewlet-vendor-mark") as Element;
+  expect((await mark("Slack")).classList.contains("crewlet-vendor-mark--muted")).toBe(true);
+  expect((await mark("GitLab")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
+  expect((await mark("Datadog")).classList.contains("crewlet-vendor-mark--muted")).toBe(false);
 });
 
 // ROTATE TOKEN OPENS THE SETTINGS FORM, SAYING WHY.
@@ -234,4 +248,27 @@ test("a reader refused /setup sees every form action disabled with the grants it
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
   expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+});
+
+// A MANAGED DOCUMENT HOLDS WHAT WRITES IT (ADR-0030). Connect would add a
+// block the managing system removes again, so it is disabled naming who
+// manages the document; Rotate token seals a value the document already
+// names and changes nothing in it, so it stays — the break-glass a person
+// keeps when a key leaks.
+test("a managed document holds Connect and keeps Rotate token", async () => {
+  stubFetch({ status: 200, body: listing });
+  mount({ ...OPERATOR, config_writer: false, config_managed_by: ["gitops"] });
+  // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
+  expect(
+    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+      (el) => el.closest(".crewlet-callout") !== null,
+    ),
+  ).toBe(true);
+  const connect = await screen.findByRole("button", { name: "Connect Slack" });
+  await waitFor(() => expect(connect.getAttribute("aria-disabled")).toBe("true"));
+  fireEvent.click(connect);
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Rotate token for GitLab" }));
+  expect(await screen.findByRole("dialog", { name: "Rotate the GitLab token" })).toBeTruthy();
 });

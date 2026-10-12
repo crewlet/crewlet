@@ -36,7 +36,12 @@ import (
 //   - the delivery is DEFERRED with a reason naming the window — `budget: day
 //     window 2026-09-23 resets 2026-09-24T07:00:00Z` — which hands it back
 //     unacked for one of its deliveries, and quiesces the attachment;
-//   - an alarm is armed for the window's end.
+//   - an alarm is armed for the window's end;
+//   - and the refusal is recorded on the shared counter as the gate's
+//     ([meter.turnAway]), so the window's `refused_at` says when its seats
+//     were last turned away — a window a coding run or a background pass
+//     filled used to park every delivery it was sent while reading as one
+//     that had refused nothing.
 //
 // The hold is released at the reset, or at once by an apply that changes what
 // the park was decided under (a ceiling of either scope, or the company's
@@ -94,9 +99,12 @@ type budgetParks struct {
 	// armed after [Engine.stopBudgetParks] would fire into a closed queue.
 	stopped bool
 
-	// now and after are the clock and the alarm, injectable for tests; nil
-	// is the wall clock and time.AfterFunc.
-	now   func() time.Time
+	// after is the alarm, injectable for tests; nil is time.AfterFunc.
+	//
+	// THE ALARM AND NOT THE CLOCK. What it waits for is measured against
+	// the engine's clock ([Engine.now]), the one the meter that decided the
+	// park cut its windows on: a park with a clock of its own could arm its
+	// alarm for the end of a window the meter beside it was not in.
 	after func(d time.Duration, f func()) alarm
 }
 
@@ -107,13 +115,6 @@ type budgetParking struct {
 	basis    budgetBasis
 	resetsAt time.Time
 	alarm    alarm
-}
-
-func (p *budgetParks) clock() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
 }
 
 func (p *budgetParks) arm(d time.Duration, f func()) alarm {
@@ -130,15 +131,16 @@ func (p *budgetParks) arm(d time.Duration, f func()) alarm {
 // lets the delivery through, logged, because the turn's own meter is the gate
 // and fails closed — parking on a read that failed would hold a seat's mail on
 // a store blip that the meter would have ridden out. The error it returns is
-// the hold that could not be taken, which the dispatcher NAKs.
+// the hold that could not be taken, which the dispatcher DEFERS (see
+// [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
+// the delivery's place at the head of the seat's inbox.
 func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
 	c := e.Company()
-	m, ok := e.meterFor(c, handle).(*meter)
-	if !ok || m == nil || !m.basis.capped() {
+	m := e.meterFor(c, handle)
+	if m == nil || !m.basis.capped() {
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	m.now = e.budgetParks.clock
 	r, refusing, err := m.refusing(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
@@ -171,6 +173,13 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	if err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
+	// THE PARK IS THE GATE SAYING NO, and it is recorded as the window's
+	// refusal ([meter.turnAway]): the delivery it defers is the turn whose
+	// first charge would have been refused, and stamped the window, had it
+	// run. Recorded once the hold is taken, so a park that could not be made
+	// — the delivery NAKed and asked about again — is one refusal and not
+	// two.
+	m.turnAway(ctx, r)
 
 	reason := fmt.Sprintf("budget: %s window %s resets %s",
 		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
@@ -183,6 +192,26 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		e.releaseBudgetPark(ctx, seat, "the ceilings changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// budgetRefusing reports whether one of a seat's capped windows is refusing,
+// the reason naming it and the instant that window turns over — the budget
+// stage's question, ASKED WITHOUT PARKING. For a caller that is not a delivery
+// (a retried resume) and so has no mail of its own to hold: it waits for the
+// window's end rather than parks, and a delivery that arrives meanwhile takes
+// the park itself. An unreadable counter is not a refusal, for the reason
+// [Engine.budgetPark] gives.
+func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
+	m := e.meterFor(e.Company(), handle)
+	if m == nil || !m.basis.capped() {
+		return "", time.Time{}, false
+	}
+	r, refusing, err := m.refusing(ctx)
+	if err != nil || !refusing {
+		return "", time.Time{}, false
+	}
+	return fmt.Sprintf("budget: %s window %s resets %s",
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), r.Window.End, true
 }
 
 // recordBudgetParkLocked records a park and arms its reset. The caller holds
@@ -211,12 +240,12 @@ func (e *Engine) recordBudgetParkLocked(ctx context.Context, seat uuid.UUID, han
 	if p.stopped {
 		return
 	}
-	// Never a negative wait: a window cut on this clock contains the moment
-	// it was cut at, so its end is ahead of it, but the alarm is measured on
-	// the monotonic clock and a wall clock stepped forward between the two
-	// reads must not arm an alarm that has already passed as though it had
-	// not.
-	wait := max(resetsAt.Sub(p.clock()), 0)
+	// Never a negative wait: a window cut on the engine's clock contains the
+	// moment it was cut at, so its end is ahead of it, but the alarm is
+	// measured on the monotonic clock and a wall clock stepped forward
+	// between the two reads must not arm an alarm that has already passed as
+	// though it had not.
+	wait := max(resetsAt.Sub(e.now()), 0)
 	released := context.WithoutCancel(ctx)
 	parking.alarm = p.arm(wait, func() {
 		e.releaseBudgetParking(released, seat, parking, "the window turned over")

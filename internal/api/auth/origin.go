@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
@@ -110,36 +109,25 @@ func (c *CSRF) Permits(origin string) bool {
 	return slices.Contains(c.origins, origin)
 }
 
-// serverEdges are the paths this check does not judge, and they are exactly
-// the ones a SERVER reaches rather than a browser: a vendor's webhook delivery
-// and the two per-run token paths a sandbox box calls. Each verifies a
-// credential of its own that no browser attaches — a signature over the body,
-// a signed token in the path — so a page on another site cannot make one
-// travel, and refusing a delivery for the `Origin` a server never sends would
-// take every integration off the air.
+// THE PATHS THIS CHECK DOES NOT JUDGE ARE [Public]'s, and exactly those: the
+// ones a SERVER reaches rather than a browser — a vendor's webhook delivery and
+// the two per-run token paths a sandbox box calls. Each verifies a credential
+// of its own that no browser attaches — a signature over the body, a signed
+// token in the path — so a page on another site cannot make one travel, and
+// refusing a delivery for the `Origin` a server never sends would take every
+// integration off the air. One list rather than a copy here, so the edges this
+// check skips and the routes the public listener serves cannot drift apart.
 //
 // NOT [Unguarded], which it used to be, and the difference is the sign-in
 // surface. The routes that are unguarded because a login cannot require a
-// login — the sign-in, the first operator's bootstrap, an invitation's
-// redemption — are BROWSER routes that change state, and exempting them here
-// left login CSRF open: a form on somebody else's page could post an
-// attacker's credentials to `/auth/login`, or redeem an attacker's invitation,
-// and leave the victim's browser signed in as the attacker, doing their work in
-// an account the attacker can read. What stands in for the guard on those
-// routes is the throttle AND this check; the guard is what they are exempt
-// from, never the cross-site rule.
-var serverEdges = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
-
-// serverEdge reports whether a path is one this check does not judge — see
-// [serverEdges].
-func serverEdge(path string) bool {
-	for _, prefix := range serverEdges {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
+// login — the sign-in, an invitation's redemption, a password reset — are
+// BROWSER routes that change state, and exempting them here left login CSRF
+// open: a form on somebody else's page could post an attacker's credentials to
+// `/auth/login`, or redeem an attacker's invitation, and leave the victim's
+// browser signed in as the attacker, doing their work in an account the
+// attacker can read. What stands in for the guard on those routes is the
+// throttle AND this check; the guard is what they are exempt from, never the
+// cross-site rule.
 
 // Middleware refuses a cross-site state change.
 //
@@ -149,10 +137,10 @@ func serverEdge(path string) bool {
 // arrived.
 func (c *CSRF) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if IsRead(r.Method) || serverEdge(r.URL.Path) {
-			// A READ CHANGES NOTHING, and a server edge is reached by
-			// a server verifying a credential of its own — see
-			// [serverEdges] for why that list is not [Unguarded].
+		if IsRead(r.Method) || Public(r.URL.Path) {
+			// A READ CHANGES NOTHING, and a public route is reached by
+			// a server verifying a credential of its own — see above
+			// for why that list is not [Unguarded].
 			next.ServeHTTP(w, r)
 			return
 		}

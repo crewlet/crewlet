@@ -37,6 +37,7 @@ import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
 import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from "./writes.tsx";
@@ -45,7 +46,6 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
-import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -60,7 +60,7 @@ export interface SeatCondition {
   row: AgentRow;
   /** The window that is spent: the seat's own, or the company's. */
   window: BudgetWindow | undefined;
-  /** When it last turned a charge away, where the gate recorded it. */
+  /** When it last turned a call away, where the gate recorded it. */
   at?: string;
 }
 
@@ -90,7 +90,7 @@ export function decisionsHref(): string {
 /**
  * The seats the engine stopped for a spent budget, each with the window that
  * is spent — the seat's own where it names one, else the company's the gate
- * refused on — and when the gate last turned a charge away.
+ * refused on — and when the gate last turned a call away.
  */
 export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
   const out: SeatCondition[] = [];
@@ -114,7 +114,11 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  *    also from whoever leads it (`lib/leadScope.ts`) — so the reader's grant
  *    or the units they lead decide it, never a binding of their own. The
  *    company's ceiling, which stops a seat whose own window has room, is the
- *    grant's alone;
+ *    grant's alone. Where another system manages the document (ADR-0030),
+ *    only its writers raise anything: `configWrite` is `mayChangeConfig`
+ *    (`lib/useWriteAccess.ts`), the same answer the raise control is disabled
+ *    by, and the caller passes no leads — so a seat is never counted as a
+ *    decision whose control then refuses the reader;
  *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
  *    engine to serve that write for them (`viewer.acts`) AND an item the seat
  *    was on: a seat stopped between turns has nothing to hand on.
@@ -126,17 +130,23 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  */
 export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindow }>(
   conditions: readonly T[],
-  viewer: { grants: readonly string[]; acts: readonly string[] },
-  /** The handles of the seats the reader leads ([LeadScope.seats]). */
+  reader: {
+    /** Whether the reader may change the company's configuration: `mayChangeConfig`. */
+    configWrite: boolean;
+    acts: readonly string[];
+  },
+  /**
+   * The handles of the seats the reader leads ([LeadScope.seats]) — EMPTY
+   * on a managed document, where a lead's raise is refused like anybody's.
+   */
   leads: { has(handle: string): boolean } = new Set(),
 ): { mine: T[]; others: T[] } {
   const mine: T[] = [];
   const others: T[] = [];
-  const grant = viewer.grants.includes(CONFIG_WRITE_GRANT);
   for (const c of conditions) {
-    const raises = grant || (c.window !== undefined && leads.has(c.row.handle ?? ""));
+    const raises = reader.configWrite || (c.window !== undefined && leads.has(c.row.handle ?? ""));
     const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
-    const reassign = item !== null && viewer.acts.includes("update_work_item");
+    const reassign = item !== null && reader.acts.includes("update_work_item");
     (raises || reassign ? mine : others).push(c);
   }
   return { mine, others };
@@ -246,7 +256,7 @@ function Row({
   line,
   actions,
 }: {
-  who: { name: string; kind: "agent" | "human" };
+  who: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
   ring: "warning" | "danger";
   title: ReactNode;
   sub: ReactNode;
@@ -255,7 +265,7 @@ function Row({
 }) {
   return (
     <li className="decision-row">
-      <SeatAvatar name={who.name} kind={who.kind} ring={ring} size="md" />
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} ring={ring} size="md" />
       <div className="decision-body">
         <span className="decision-title">{title}</span>
         <span className="decision-sub">{sub}</span>
@@ -266,9 +276,12 @@ function Row({
   );
 }
 
-function seatOf(index: OrgIndex, handle: string): { name: string; kind: "agent" | "human" } {
+function seatOf(
+  index: OrgIndex,
+  handle: string,
+): { name: string; kind: "agent" | "human"; avatar: AgentAvatar | null } {
   const seat = index.byHandle.get(handle);
-  return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent" };
+  return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent", avatar: seat?.avatar ?? null };
 }
 
 /**
@@ -399,8 +412,10 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
 /**
  * WHO THE QUESTION IS PUT TO, as the chart names them: the handles the engine
  * resolved when the run parked — the seat's lead chain, where the audience
- * the run wrote named nobody the chart has — or that audience as written
- * before any were resolved. Nothing where it named no audience at all.
+ * the run wrote named nobody the chart has. Where that resolved to nobody
+ * either (a seat with no lead chain, a park on a node holding no company), or
+ * the row reached this screen before its durable record was read, the
+ * audience as the run wrote it. Nothing where it named no audience at all.
  */
 export function audienceOf(run: SandboxRun, index: OrgIndex): string {
   const handles = run.audience_handles ?? [];

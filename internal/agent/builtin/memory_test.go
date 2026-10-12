@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,10 +12,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -344,53 +347,179 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 	}
 }
 
-// "Nothing resembles this" and "this deployment cannot search by meaning" send
-// a model to opposite places: the second has a fallback it can still use, so
-// it must not read as the first — and it is a CONDITION of what this
-// deployment runs, never a fault of the node, whose sentence tells a model the
-// call fails the same way whatever it asks.
+// "Nothing resembles this" and "this company cannot search by meaning" send
+// a model to opposite places, and so does a search that FAILED: each says
+// which it is. They were one sentence, "no embeddings are configured", which
+// every embedder timeout told a model on a company that has them.
 //
-// The recaller answers it itself for a company with no embeddings (and for a
-// provider that did not answer), and it is the same fact as a registry wired
-// with no recaller at all; only the recaller's own store failing is a fault.
+// AND ONLY A FAILURE THAT MAY CLEAR IS CALLED ONE. Every failure that was not
+// "no embeddings" used to answer "calling again may answer" — a revoked key
+// too, which the embeddings package classifies as a configuration no request
+// will avoid, so an executor asked again, was refused identically, and spent
+// rounds of every turn on it until an operator fixed providers.embeddings.
+// Each case is the error as the recall path really hands it over: the
+// provider's classified error, wrapped twice on the way.
 //
-// Mutation: drop prefetch.ErrNoSimilarity from query_episodes' switch and the
-// recaller's case goes red as internal_error; class the store's failure as
-// unavailable and its case does.
-func TestQueryEpisodesSaysWhenItCannotSearchByMeaning(t *testing.T) {
+// AND THE CLASS SAYS THE SAME AS THE SENTENCE, for a reader that is not a
+// model: what this deployment runs, or an embedder's answer, is a CONDITION
+// (or, for a query the embedder refuses, the argument's); only an episode store
+// that broke is a FAULT of the node — internal_error, its error in the node's
+// log and never in the sentence, where a database path reaches a model's
+// prompt and a person's screen and helps neither.
+//
+// Mutation: class the store's failure through similarityFailure's embedder
+// arms and its case goes red as unavailable with the path in the sentence;
+// drop the learning.ErrNoEmbeddings arm and the no-embeddings case does.
+func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	t.Parallel()
-	disk := errors.New("learning: recall: open /var/lib/crewlet/node.db: disk I/O error")
-	for _, c := range []struct {
-		name   string
-		recall builtin.Recaller
-		class  tools.Refusal
-		says   string
+	const retry = "calling again may answer"
+	// failed is an embed failure as prefetch.RecallEpisodes wraps it.
+	failed := func(err error) builtin.Recaller {
+		return &fakeRecall{err: fmt.Errorf("%w: embedding the query: %w", prefetch.ErrSimilarityFailed, err)}
+	}
+	for _, tc := range []struct {
+		name    string
+		recall  builtin.Recaller
+		class   tools.Refusal
+		want    string
+		wantNot string
 	}{
-		{"no recaller is wired", nil, tools.RefusalUnavailable, "without `query`"},
-		{"the recaller has no embeddings", &fakeRecall{err: fmt.Errorf("wrapped: %w",
-			prefetch.ErrNoSimilarity)}, tools.RefusalUnavailable, "without `query`"},
-		{"the recaller's store broke", &fakeRecall{err: disk},
-			tools.RefusalInternalError, "node's log"},
+		{
+			name:   "a company with no embeddings",
+			recall: &fakeRecall{err: fmt.Errorf("prefetch: a similarity search cannot run: %w", prefetch.ErrNoSimilarity)},
+			class:  tools.RefusalUnavailable,
+			want:   "configures no embeddings", wantNot: "again",
+		},
+		{
+			name: "a provider that rejects the key",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 401,
+				Class: embeddings.ErrConfiguration, Err: errors.New("invalid api key")}),
+			class: tools.RefusalUnavailable,
+			want:  "until an operator fixes providers.embeddings", wantNot: retry,
+		},
+		{
+			name: "a vector of a width the store was not sized for",
+			recall: failed(fmt.Errorf("%w: text-embedding-3-small returned a 3072-wide vector but "+
+				"providers.embeddings.dimensions says 1536", embeddings.ErrConfiguration)),
+			class: tools.RefusalUnavailable,
+			want:  "misconfigured on this deployment", wantNot: retry,
+		},
+		{
+			name: "a provider that refuses this query",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 400,
+				Class: embeddings.ErrRefused, Err: errors.New("invalid input")}),
+			class: tools.RefusalInvalid,
+			want:  "will refuse it again unchanged", wantNot: retry,
+		},
+		{
+			name: "a provider that is overloaded",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 503,
+				Class: embeddings.ErrTransient, Err: errors.New("service unavailable")}),
+			class: tools.RefusalUnavailable,
+			want:  retry, wantNot: "no embeddings",
+		},
+		{
+			name:   "an embedder that did not answer in time",
+			recall: failed(context.DeadlineExceeded),
+			class:  tools.RefusalUnavailable,
+			want:   retry, wantNot: "no embeddings",
+		},
+		{
+			name: "an episode store that could not be read",
+			recall: &fakeRecall{err: fmt.Errorf("%w: reading ceo's episodes: %w", prefetch.ErrSimilarityFailed,
+				errors.New("learning: recall: open /var/lib/crewlet/node.db: database disk image is malformed"))},
+			class: tools.RefusalInternalError,
+			want:  "node's log", wantNot: "/var/lib",
+		},
+		{
+			name:  "a registry with no search wired",
+			class: tools.RefusalUnavailable,
+			want:  "not available here", wantNot: "no embeddings",
+		},
 	} {
-		t.Run(c.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{},
-				Recall: c.recall}, builtin.QueryEpisodesTool)
-
+			deps := builtin.Deps{Episodes: &countingEpisodes{}}
+			if tc.recall != nil {
+				deps.Recall = tc.recall
+			}
+			tool := registered(t, deps, builtin.QueryEpisodesTool)
 			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
 			if !res.Failed {
-				t.Fatalf("a query that could not search reported success: %q", res.Output)
+				t.Fatalf("a search that could not run reported success: %q", res.Output)
 			}
-			if got := tools.RefusalOf(res); got != c.class {
-				t.Errorf("classed %q, want %q: %q", got, c.class, res.Output)
+			if got := tools.RefusalOf(res); got != tc.class {
+				t.Errorf("classed %q, want %q: %q", got, tc.class, res.Output)
 			}
-			if !strings.Contains(res.Output, c.says) {
-				t.Errorf("the refusal does not say %q: %q", c.says, res.Output)
+			if !strings.Contains(res.Output, tc.want) || strings.Contains(res.Output, tc.wantNot) {
+				t.Errorf("refusal = %q, want it to say %q and not %q", res.Output, tc.want, tc.wantNot)
 			}
-			if strings.Contains(res.Output, "/var/lib") {
-				t.Errorf("the store's own error reached the sentence: %q", res.Output)
+			if !strings.Contains(res.Output, "`conversation`") {
+				t.Errorf("the refusal does not name the path that still works: %q", res.Output)
 			}
 		})
+	}
+}
+
+// A SEARCH THAT COULD NOT REACH A SEAT'S TURNS NEVER CALLS ITS WORK NEW. After
+// a model change every turn the seat took has a vector of the old model, which
+// recall does not compare, so a search finding nothing told the seat "This is
+// new work" about work it did last week. What it did not search is said, with
+// where those turns can be read; "new work" is kept for a seat whose whole
+// history was searched.
+func TestQueryEpisodesSaysWhatItCouldNotSearch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		hits       []learning.Hit
+		unsearched int
+		want       []string
+		wantNot    string
+	}{
+		{name: "nothing found, history unsearched", unsearched: 214,
+			want:    []string{"214 earlier turns have no vector", "`conversation`"},
+			wantNot: "new work"},
+		{name: "one turn unsearched", unsearched: 1,
+			want: []string{"1 earlier turn has no vector"}, wantNot: "new work"},
+		{name: "hits beside unsearched turns", unsearched: 9,
+			hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "rotated the certs"}}},
+			want: []string{"rotated the certs", "9 earlier turns have no vector"}, wantNot: "new work"},
+		{name: "nothing found, everything searched",
+			want: []string{"This is new work"}, wantNot: "no vector"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recall := &fakeRecall{hits: tc.hits, unsearched: tc.unsearched}
+			tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
+				builtin.QueryEpisodesTool)
+			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+				"query": "rotate the staging certs",
+			})
+			if res.Failed {
+				t.Fatalf("query_episodes failed: %q", res.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(res.Output, want) {
+					t.Errorf("output = %q, want it to say %q", res.Output, want)
+				}
+			}
+			if strings.Contains(res.Output, tc.wantNot) {
+				t.Errorf("output = %q, must not say %q", res.Output, tc.wantNot)
+			}
+		})
+	}
+}
+
+// A SIMILARITY ANSWER SAYS IT IS RANKED BY SIMILARITY. It was headed "your N
+// most recent turns", so a model read the closest match as its latest work.
+func TestQueryEpisodesHeadsASimilaritySearchAsMostSimilar(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "a past turn"}}}}
+	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
+		builtin.QueryEpisodesTool)
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "deploys"})
+	if !strings.HasPrefix(res.Output, "Your 1 most similar turns like deploys") {
+		t.Fatalf("output = %q, want it headed as a similarity ranking", res.Output)
 	}
 }
 
@@ -448,6 +577,47 @@ func TestRefreshMemoryRefiltersOnAHint(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "semantic commit messages") {
 		t.Errorf("output = %q, want the selected note", res.Output)
+	}
+}
+
+// THE RE-FILTER IS TOLD WHO IS ASKING, as the turn-start filter was. Its one
+// hard rule is per subject — a preference about somebody not party to the task
+// does not apply — and a re-filter built without the turn's senders could not
+// tell the person asking from anybody else, so a note about one colleague
+// surfaced on a turn another one started.
+func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{}
+	tool := registered(t, builtin.Deps{Diary: &countingDiary{}, Recall: recall},
+		builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+	turn.Senders = []types.CanonicalIdentity{
+		{ExternalID: "U1", Platform: "slack", DisplayName: "Miles"},
+	}
+	callFor(t, tool, turn, map[string]any{"context_hint": "the deploy freeze"})
+	want := []learning.Subject{{ExternalID: "U1", Platform: "slack", Name: "Miles"}}
+	if !slices.Equal(recall.senders, want) {
+		t.Fatalf("the re-filter was told the senders were %+v, want %+v", recall.senders, want)
+	}
+}
+
+// THE RE-FILTER IS THE TURN'S OWN SPEND: its model call runs mid-turn for the
+// turn's work, so it is filed under the turn's attribution — its run, its unit
+// of work and the tally its work item is charged from — exactly as the
+// turn-start filter is. Handed nothing, the seam would refuse it and the tool
+// would recall nothing at all.
+func TestRefreshMemoryFilesTheFilterUnderTheTurn(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{}
+	tool := registered(t, builtin.Deps{Diary: &countingDiary{}, Recall: recall},
+		builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+	turn.AuxSpend = auxspend.NewTally()
+	callFor(t, tool, turn, map[string]any{"context_hint": "the deploy freeze"})
+	want := auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1", WorkKey: "wk-1",
+		Tally: turn.AuxSpend}
+	if recall.aux != want {
+		t.Fatalf("the re-filter was filed as %+v, want the turn's %+v", recall.aux, want)
 	}
 }
 
@@ -655,26 +825,33 @@ func notesIn(out string) string {
 
 // fakeRecall stands in for the turn-start prefetch's searches.
 type fakeRecall struct {
-	hits  []learning.Hit
-	notes []learning.DiaryEntry
-	err   error
-	text  string
-	hint  string
-	limit int
+	hits []learning.Hit
+	// unsearched is how many of the seat's turns the search says it could
+	// not reach.
+	unsearched int
+	notes      []learning.DiaryEntry
+	err        error
+	text       string
+	hint       string
+	senders    []learning.Subject
+	aux        auxspend.Use
+	limit      int
 	// memoryCalls counts what the ledger's cache is there to avoid.
 	memoryCalls int
 }
 
-func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) ([]learning.Hit, error) {
+func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) (learning.EpisodeSearch, error) {
 	f.text, f.limit = text, limit
 	if f.err != nil {
-		return nil, f.err
+		return learning.EpisodeSearch{}, f.err
 	}
-	return f.hits, nil
+	return learning.EpisodeSearch{Hits: f.hits, Unsearched: f.unsearched}, nil
 }
 
-func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string) ([]learning.DiaryEntry, error) {
-	f.hint = hint
+func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string,
+	senders []learning.Subject, aux auxspend.Use,
+) ([]learning.DiaryEntry, error) {
+	f.hint, f.senders, f.aux = hint, senders, aux
 	f.memoryCalls++
 	if f.err != nil {
 		return nil, f.err

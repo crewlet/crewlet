@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -31,7 +33,7 @@ import (
 // # What is on the list, and what is deliberately NOT
 //
 // The list is the names and phrases whose ONLY correct number of occurrences
-// is zero. Four words that read like them are deliberately absent, and adding
+// is zero. Five words that read like them are deliberately absent, and adding
 // any of them would break working code:
 //
 //   - `partition` survives on its own, as the LexoRank shape partition and as
@@ -43,6 +45,11 @@ import (
 //   - `original_max_bytes` survives as a field of the capacity record, where
 //     it is the value the pending classification compares against — deleting
 //     it would delete the reconcile.
+//   - `chunk` survives on its own in four live senses — a JetStream snapshot
+//     arrives in chunks, a statelog snapshot transfer is sent in chunks, a
+//     batched SQL statement binds a chunk of ids (`slices.Chunk`), and the
+//     dashboard's bundle is split into chunks. Only the names the
+//     content-addressed file store spelled are gone.
 //
 // # What it can and cannot see
 //
@@ -62,7 +69,6 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"tracker.partitions: 4",
 		"the SearchPlan is computed from",
 		"partitions_answered",
-		"func partitionOf(project string) int",
 		"tracker_task_home",
 		"a task's home partition is its filed project",
 		"this record is a cross-partition write",
@@ -71,6 +77,34 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"the projection_keys table",
 		"coord.FamilyPages",
 		"a frozen read is served from",
+		"func (Domain) PartitionOf(env Envelope) (PartitionID, bool)",
+		"the partitionOf helper",
+		"statelog.EstateStream(tracker.Domain{})",
+		"the estate map names the holders",
+		"CREWLET_L1_TRACKER_TRACKER_007",
+		"crewlet.l1.tracker.007.tracker.>",
+		"map_epoch",
+		"DELETE FROM tracker_file_chunks WHERE project = ?",
+		"store.LockChunk(ctx, hash, owner)",
+		"defer store.UnlockChunk(ctx, hash, owner)",
+		"coord.ChunkLockTTL",
+		"memory.SetChunkLockTTL(time.Second)",
+		`"missing_chunks": 3`,
+		"data, err := store.GetChunk(ctx, h)",
+		"if len(chunks) > tracker.MaxFileChunks {",
+		"tracker.FileChunkReferences",
+		"objstore.Split(r, sink)",
+		"make([]byte, objstore.ChunkSize)",
+		"var m objstore.Manifest",
+		"the collector takes the chunk's lock under the chunk locks bucket",
+		"a chunk lock held by the writer",
+		"crewlet_chunk_locks",
+		"Crewlet seat, presence and object-store membership leases",
+		"nothing said so until the object store's membership, a lease,",
+		// The folded expression reads U+017F as `s`; the hand-rolled
+		// prefilter this gate once had lowered the line with
+		// strings.ToLower, which does not, and skipped this line.
+		"the tracker_taſk_home column",
 	} {
 		if hits := matchWithdrawn(positive); len(hits) == 0 {
 			t.Errorf("control: %q carries a withdrawn name and the matcher did "+
@@ -91,6 +125,26 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"so a crash leaves a numbering GAP rather than two tasks sharing a",
 		"LimitMarkerTTL: time.Minute",
 		"tracker_rank_duplicates_cleared",
+		// Live senses of the same words: an owed wake partitioning a
+		// task's notices, the cluster harness's partitioned broker, the
+		// notification key, a struct field named for its state, and the
+		// engine's own environment variables.
+		"func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T)",
+		"jetstreamtest.PartitionDB(t, i)",
+		"Prompt.PartitionKey",
+		"ExecuteState json.RawMessage",
+		"CREWLET_LOG_LEVEL",
+		"crewlet.log",
+		// The fleet's BROKER membership is live: an operator reads and
+		// changes it through `crewlet fleet`.
+		"serve the fleet's broker membership",
+		"the object store's collector",
+		// The live senses of `chunk`: a snapshot's and a transfer's
+		// pieces, a batched statement and the dashboard's bundle.
+		"a JetStream snapshot arrives in chunks",
+		"the transfer sends the snapshot in 1 MiB chunks",
+		"for chunk := range slices.Chunk(ids, ScanBatch) {",
+		"a chunk per workspace, and the next one fetched",
 	} {
 		if hits := matchWithdrawn(negative); len(hits) > 0 {
 			t.Errorf("control: %q is live and the matcher flagged it on %v",
@@ -98,23 +152,28 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		}
 	}
 
-	// THE PREFILTER IS WHAT MAKES THIS CHECK AFFORDABLE, and a prefilter
-	// that rejects a line its regex would have matched is a guard that has
-	// silently stopped guarding. Every core must be non-empty, and short
-	// enough to be a substring of what it filters for.
-	for i, core := range cores() {
-		if core == "" || len(core) < 4 {
-			t.Fatalf("pattern %q reduced to the literal core %q — a core this "+
-				"short filters nothing and a prefilter that admits every line "+
-				"is the seventeen seconds this exists to avoid",
-				patternOrder()[i], core)
+	// THE PREFILTER IS WHAT MAKES THIS CHECK AFFORDABLE. It is derived
+	// from the patterns (sourcetree.Required), whose own suite certifies
+	// that it never rejects a text a pattern matches; what is held here is
+	// that it still filters: a pattern that yields nothing to look for — or
+	// only a fragment a few characters long — makes the prefilter admit
+	// nearly every line of the tree, which is the seventeen seconds it
+	// exists to avoid.
+	for _, pattern := range withdrawnScan().order {
+		need := sourcetree.Required(regexp.MustCompile("(?i)" + pattern))
+		clauses := need.Clauses()
+		if len(clauses) == 0 || shortestLiteral(clauses[0]) < 4 {
+			t.Fatalf("pattern %q yields the prefilter %v — one that filters "+
+				"nothing, and a prefilter that admits every line is the "+
+				"seventeen seconds this exists to avoid; write the pattern "+
+				"around a literal of four characters or more", pattern, need)
 		}
 	}
 
 	// AND THE SUPPRESSION PATH ITSELF, on inputs whose verdict is known.
 	// The walk below only ever reaches it with real occurrences, so a
 	// suppression that has swallowed everything would report a clean tree.
-	if !offends("internal/somewhere/live.go", `partitionOf\b`) {
+	if !offends("internal/somewhere/live.go", `home_partition`) {
 		t.Error("control: an unallowed occurrence is not reported as one, so " +
 			"every hit in the tree is being suppressed and this guard reports " +
 			"a clean repository whatever it finds")
@@ -153,6 +212,14 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		// A FILE IS SPLIT ONLY IF A LINE OF IT COULD MATCH, which the
+		// prefilter settles for the whole file at once; one that cannot
+		// still counts every line it holds, so the floor below measures
+		// what was read rather than what was matched.
+		if !withdrawnScan().needs.Admits(body) {
+			scanned += bytes.Count(body, []byte("\n")) + 1
+			return nil
 		}
 		for i, line := range strings.Split(string(body), "\n") {
 			scanned++
@@ -201,23 +268,37 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 // A pattern rather than a literal wherever a bare word would catch a live one:
 // the compound forms of `partition` are gone and the word itself is not, so
 // each is anchored to the compound that left.
+//
+// # Two designs divided the estate, and both are gone
+//
+// A withdrawn design once divided the tracker's log, and a later one divided
+// the whole replicated estate into numbered partitions under a layout, each
+// with its own file, its own logs and an estate map saying which node held
+// which. Every data node holds the ONE estate whole now, every domain names
+// its own stream, and nothing maps an object, a record or a log to a part of
+// it — so both vocabularies are listed here, each with the reason it stays
+// gone.
 var withdrawn = map[string]string{
-	// The tracker's log was never partitioned: there is one mutation
-	// stream, arbitrated per subject, so there is no partition count to
-	// configure and nothing to route between.
-	`tracker\.partitions`:      "the tracker's log is one stream, arbitrated per subject",
-	`partition_linearizable`:   "a read level per partition, of a log that has one",
-	`partitions_answered`:      "a fan-out over partitions; buckets_answered is the surviving name",
-	`partitions_missing`:       "as above; buckets_missing survives",
-	`partitionOf\b`:            "nothing maps an object to a partition",
-	`home_partition`:           "an object has no home; every node holds the whole corpus",
+	// THE ESTATE IS ONE, held whole by every data node: there is no count
+	// of parts to configure, and a field for one would describe a division
+	// nothing performs.
+	`tracker\.partitions`: "the estate is not divided, so there is no partition count",
+	// The four read levels are per LOG, and every log is read whole.
+	`partition_linearizable`: "the read levels are per log, and a log is not divided",
+	`partitions_answered`:    "the search fan-out's coverage is buckets_answered",
+	`partitions_missing`:     "as above; buckets_missing survives",
+	// Nothing homes an object anywhere: every row of the estate is on
+	// every data node.
+	`home_partition`:           "an object has no home; every data node holds every row",
 	`tracker_task_home`:        "as above",
 	`tracker_task_placement`:   "as above",
 	`scoped_through_partition`: "scoped_through survives; its partition sibling does not",
 	`\bhome partition\b`:       "prose for the same withdrawn idea",
 	`\bhome stream\b`:          "prose for the same withdrawn idea",
 	`\bmixed-home\b`:           "prose for the same withdrawn idea",
-	`\bcross-partition\b`:      "there is one log, so no write crosses anything",
+	// A record is on its domain's one log, and the estate it lands in is
+	// not divided, so there is no second part for a write to cross into.
+	`\bcross-partition\b`: "the estate is one; there is nothing for a write to cross",
 
 	// The search planner: withdrawn entirely, because every query
 	// consults every bucket and there is nothing to plan.
@@ -246,6 +327,61 @@ var withdrawn = map[string]string{
 
 	// Read levels: four, and `frozen` is not one of them.
 	`\bfrozen\b\s+read|read\s+level\s+.?frozen`: "the level is consistent_prefix",
+
+	// THE PARTITIONED ESTATE: a layout of numbered partitions, each a file
+	// with one log per domain, placed on nodes by an estate map. Every data
+	// node holds the one estate whole, and a domain declares its own
+	// stream ([Domain.Stream]), so nothing names a part of it.
+	`\bpartitionOf\b`:     "nothing maps an object or a record to a part of the estate",
+	`ScopePartition`:      "a record's scope is checked against its own log, which is the domain's",
+	`OnlyPartition`:       "a domain has one log, so there is no partition to look one up by",
+	`LogShare`:            "a domain's log carries its whole budget; nothing divides it",
+	`RunPartitioned`:      "the engine runs one estate; there is no partitioned mode",
+	`wrong_partition`:     "a copy is out of service or it serves; it is never another part's",
+	`EvictionKindRelease`: "a node never releases a log: every data node keeps the estate whole",
+	`ReleaseLog`:          "as above",
+	`PartitionHandle`:     "the replicated estate is one file, reached through ReplicatedHandle",
+	`PartitionReader`:     "as above; ReplicatedReader",
+	`OpenPartition`:       "as above; OpenReplicated",
+	`PartitionFile`:       "as above; ReplicatedFile",
+	`EstateLayout`:        "there is no layout; a domain declares its own stream",
+	`EstateStream`:        "as above; a domain's stream is Domain.Stream()",
+	`LayoutZero`:          "as above",
+	`DefaultLayoutOne`:    "as above",
+	`\bestate map\b`:      "every data node holds the estate, so nothing records who holds what",
+	`map_epoch`:           "as above",
+	`CREWLET_L[0-9]`:      "a state log's stream is its domain's own name, never a layout's",
+	`crewlet\.l[0-9]`:     "as above, for its subjects",
+
+	// THE CONTENT-ADDRESSED FILE STORE: files cut into 1 MiB chunks named
+	// by their SHA-256, a manifest listing them on the file's row, a table
+	// of chunk rows beside it, and a coordination lock per chunk around a
+	// deletion and a re-put. Every upload is ONE object under a key minted
+	// for it and never reused now, so nothing is shared, nothing is locked
+	// and a row names one object. What survives is the chunk table's
+	// migration history, allowed by name below.
+	`tracker_file_chunks`: "a file row names one object; migration 0038 dropped the chunk table",
+	`chunk_locks`:         "no build opens or deletes the lock bucket",
+	`LockChunk`:           "a deletion takes no lock (ADR-0027)",
+	`UnlockChunk`:         "as above",
+	`ChunkLockTTL`:        "as above; there is no lock to age",
+	`missing_chunks`:      "the audit names missing and damaged FILES (missing_files)",
+	`GetChunk`:            "a read streams one object through Store.Open",
+	`MaxFileChunks`:       "a file is one object; MaxFileBytes is its only bound",
+	`FileChunkReferences`: "the declaration is FileObjectReferences",
+	`objstore\.Split\b`:   "the backend streams the whole upload; nothing cuts it",
+	`objstore\.ChunkSize`: "as above; an object has no chunk size",
+	`objstore\.Manifest`:  "a row names one objstore.Object, not a list of chunks",
+	`\bchunk lock`:        "a deletion takes no lock (ADR-0027)",
+
+	// THE PLACED OBJECT STORE: object bytes on chosen data nodes, a lease
+	// per member saying which nodes kept them, and a repair duty that read
+	// that membership. The store is one the fleet shares now (natsobj or
+	// s3obj) and keeps its own copies, so no node claims a membership of
+	// it and the seat lease bucket holds seats and presence alone, in
+	// either of the two ways the prose spelled it.
+	`\bobject-store membership`:   "no node is a member of the object store; it is one shared store",
+	`\bobject store's membership`: "as above",
 }
 
 // listFile is this file, which cannot be its own violation.
@@ -257,30 +393,22 @@ const listFile = "internal/statelog/vocabulary_test.go"
 // this runs on every line of the repository, and twenty-six separate scans of
 // each was measured at half a minute where one pass is under a second.
 func matchWithdrawn(line string) []string {
+	scan := withdrawnScan()
 	// THE FAST PATH IS A SUBSTRING SCAN, not a regular expression. This
-	// runs on every line of the repository — measured at 475 000 of them —
-	// and a twenty-six-way case-insensitive alternation with word
-	// boundaries costs about 36 µs per line, or seventeen seconds for the
-	// tree. Every pattern below contains a literal core, so a lowercased
-	// line that holds none of those cores cannot match any pattern, and
-	// strings.Contains settles that in nanoseconds.
-	lower := strings.ToLower(line)
-	possible := false
-	for _, core := range cores() {
-		if strings.Contains(lower, core) {
-			possible = true
-			break
-		}
-	}
-	if !possible {
+	// runs on every line of a file that could match, and a case-insensitive
+	// alternation with word boundaries costs about 36 µs per line — over
+	// the tree's 475 000, seventeen seconds. A line that fails the
+	// prefilter cannot match any pattern, and a substring search settles
+	// that in nanoseconds.
+	if !scan.needs.AdmitsString(line) {
 		return nil
 	}
-	loc := combined().FindStringSubmatchIndex(line)
+	loc := scan.re.FindStringSubmatchIndex(line)
 	if loc == nil {
 		return nil
 	}
 	var hits []string
-	for i, pattern := range patternOrder() {
+	for i, pattern := range scan.order {
 		if loc[2*(i+1)] >= 0 {
 			hits = append(hits, pattern)
 		}
@@ -289,11 +417,11 @@ func matchWithdrawn(line string) []string {
 	// only the leftmost alternation that matched. The rest are found by
 	// re-running from just past it, which is bounded by the line.
 	for at := loc[1]; at < len(line); {
-		next := combined().FindStringSubmatchIndex(line[at:])
+		next := scan.re.FindStringSubmatchIndex(line[at:])
 		if next == nil {
 			break
 		}
-		for i, pattern := range patternOrder() {
+		for i, pattern := range scan.order {
 			if next[2*(i+1)] >= 0 && !slices.Contains(hits, pattern) {
 				hits = append(hits, pattern)
 			}
@@ -307,69 +435,51 @@ func matchWithdrawn(line string) []string {
 	return hits
 }
 
-var (
-	combinedRE    *regexp.Regexp
-	combinedOrder []string
-	combinedCores []string
-)
-
-// patternOrder is the withdrawn patterns in one stable order, which is what
-// makes a submatch index mean a pattern.
-func patternOrder() []string {
-	build()
-	return combinedOrder
+// vocabularyScan is the withdrawn list compiled for the walk.
+type vocabularyScan struct {
+	// order is the patterns in one stable order, which is what makes a
+	// submatch index of re mean a pattern.
+	order []string
+	// re is every pattern, folded, as one alternation.
+	re *regexp.Regexp
+	// needs is what re cannot match without.
+	//
+	// DERIVED from the expression rather than typed out beside it, so a
+	// pattern added to the list is covered by adding nothing else — a
+	// hand-maintained second list is exactly how a prefilter starts
+	// rejecting lines its regex would have matched, which is a guard that
+	// has silently stopped guarding. This gate's own hand-rolled core did:
+	// it lowered a line with strings.ToLower, which leaves U+017F as it is,
+	// while the folded expression reads it as `s` — so a withdrawn name
+	// spelled with a long s passed. sourcetree.Required admits any text
+	// holding such a rune, by a rule derived from the Unicode tables.
+	needs sourcetree.Prefilter
 }
 
-func combined() *regexp.Regexp {
-	build()
-	return combinedRE
-}
-
-// cores are the literal substrings the patterns cannot match without.
-//
-// DERIVED from the patterns rather than typed out beside them, so a pattern
-// added to the list is covered by adding nothing else — a hand-maintained
-// second list is exactly how a prefilter starts rejecting lines its regex
-// would have matched, which is a guard that has silently stopped guarding.
-func cores() []string {
-	build()
-	return combinedCores
-}
-
-// literalCore is a pattern's longest run of characters that must appear
-// literally, lowercased.
-func literalCore(pattern string) string {
-	plain := strings.NewReplacer(
-		`\b`, "\x00", `\s+`, "\x00", `\.`, ".", `.?`, "\x00",
-		"(", "\x00", ")", "\x00", "|", "\x00",
-	).Replace(pattern)
-	best := ""
-	for _, run := range strings.Split(plain, "\x00") {
-		if len(run) > len(best) {
-			best = run
-		}
-	}
-	return strings.ToLower(best)
-}
-
-func build() {
-	if combinedRE != nil {
-		return
-	}
-	combinedOrder = make([]string, 0, len(withdrawn))
+// withdrawnScan compiles the list once per binary.
+var withdrawnScan = sync.OnceValue(func() vocabularyScan {
+	order := make([]string, 0, len(withdrawn))
 	for pattern := range withdrawn {
-		combinedOrder = append(combinedOrder, pattern)
+		order = append(order, pattern)
 	}
-	sort.Strings(combinedOrder)
-	parts := make([]string, 0, len(combinedOrder))
-	for _, pattern := range combinedOrder {
+	sort.Strings(order)
+	parts := make([]string, 0, len(order))
+	for _, pattern := range order {
 		parts = append(parts, "("+pattern+")")
 	}
-	combinedRE = regexp.MustCompile("(?i)" + strings.Join(parts, "|"))
-	combinedCores = make([]string, 0, len(combinedOrder))
-	for _, pattern := range combinedOrder {
-		combinedCores = append(combinedCores, literalCore(pattern))
+	re := regexp.MustCompile("(?i)" + strings.Join(parts, "|"))
+	return vocabularyScan{order: order, re: re, needs: sourcetree.Required(re)}
+})
+
+// shortestLiteral is the length of the shortest string in a prefilter clause.
+func shortestLiteral(clause []string) int {
+	n := -1
+	for _, s := range clause {
+		if n < 0 || len(s) < n {
+			n = len(s)
+		}
 	}
+	return n
 }
 
 type withdrawalKey struct{ file, hit string }
@@ -401,6 +511,14 @@ var allowedWithdrawal = map[withdrawalKey]string{
 	{"internal/store/schema/node/0021_pages_normalised_titles.sql", `projection_cursor`}: "a migration that reshaped it",
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_keys`}:     "the migration that dropped it",
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_cursor`}:   "the migration that dropped it",
+
+	// THE CHUNK TABLE'S MIGRATIONS, for the same reason: the three that
+	// created and reshaped it and the one that dropped it, plus the test
+	// that carries a database holding chunk rows through that drop.
+	{"internal/store/schema/replicated/0031_a_project_keeps_files.sql", `tracker_file_chunks`}:            "the migration that created it",
+	{"internal/store/schema/replicated/0032_a_chunk_row_names_its_slot.sql", `tracker_file_chunks`}:       "a migration that reshaped it",
+	{"internal/store/schema/replicated/0036_a_chunk_row_names_only_its_chunk.sql", `tracker_file_chunks`}: "a migration that reshaped it",
+	{"internal/store/schema/replicated/0038_a_file_row_names_one_object.sql", `tracker_file_chunks`}:      "the migration that dropped it",
 }
 
 func sprintOffence(file string, line int, hit, text string) string {

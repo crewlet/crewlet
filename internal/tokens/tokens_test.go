@@ -13,14 +13,14 @@ func rec(role, phase, model, turn, at string, in, out int) tokens.Record {
 		EventID: at + role + phase, Timestamp: at,
 		AgentRole: role, AgentID: "id-" + role,
 		Phase: phase, Model: model, TurnID: turn,
-		InputTokens: in, OutputTokens: out, TotalTokens: in + out,
+		InputTokens: in, OutputTokens: out, TotalTokens: in + out, Calls: 1,
 	}
 }
 
 func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	t.Parallel()
 	got := tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
 		rec("CEO", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10),
 	}, tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "CEO"}}, Since: since, Until: until})
@@ -37,8 +37,8 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "ceo" {
 		t.Errorf("by_agent = %+v", got.ByAgent)
 	}
-	if n := got.ByAgent[0].ByPhase["plan"].TotalTokens; n != 80 {
-		t.Errorf("the agent's plan bucket = %d, want 80", n)
+	if n := got.ByAgent[0].ByPhase["onboarding"].TotalTokens; n != 80 {
+		t.Errorf("the agent's onboarding bucket = %d, want 80", n)
 	}
 	if len(got.ByTurn) != 1 {
 		t.Fatalf("by_turn = %+v", got.ByTurn)
@@ -55,21 +55,51 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 
 func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	t.Parallel()
-	// The live window is append-ordered by arrival and the store's is by
-	// (time, id) DESCENDING, so the same records reach this in opposite
-	// orders — and a rollup that depended on order would make the live
-	// number and the queried one disagree for no visible reason.
-	forward := []tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
-		rec("CTO", "plan", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5),
-	}
-	backward := []tokens.Record{forward[2], forward[1], forward[0]}
+	// Every figure is a sum, a min or a max, and a turn's work key and role are
+	// one value on every record of the run that names them, so the same
+	// records handed over in any order fold to the same rollup — and a figure
+	// or a name that depended on the order would move when nothing it counts
+	// had. Each turn here has a record naming neither its work key nor (t2) its
+	// role, handed over first one way and last the other, which is what tells
+	// a field filled from whichever record carries it from one taken off the
+	// first. The chart here holds each seat's handle and no name, so a turn's
+	// role is the name its records carry rather than the chart's.
+	//
+	// Mutation: take a turn's work key, or its role, from its first record
+	// only, and the forward order lists t1 with no key and t2 as "unknown".
+	keyless := rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20)
+	keyed := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30)
+	keyed.WorkKey = "wk-1"
+	roleless := rec("", "review", "haiku", "t2", "2026-06-14T12:00:06Z", 4, 1)
+	roleless.AgentID = "id-CTO"
+	cto := rec("CTO", "onboarding", "haiku", "t2", "2026-06-14T12:00:07Z", 10, 5)
+	cto.WorkKey = "wk-2"
+	forward := []tokens.Record{keyless, keyed, roleless, cto}
+	backward := []tokens.Record{cto, roleless, keyed, keyless}
+	opts := tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo"}, "id-CTO": {Handle: "cto"}}}
 
-	a, _ := json.Marshal(tokens.Aggregate(forward, tokens.Options{}))
-	b, _ := json.Marshal(tokens.Aggregate(backward, tokens.Options{}))
-	if string(a) != string(b) {
-		t.Errorf("the rollup depends on arrival order:\n%s\n%s", a, b)
+	want := map[string]tokens.TurnRow{
+		"t1": {WorkKey: "wk-1", Role: "CEO", Handle: "ceo"},
+		"t2": {WorkKey: "wk-2", Role: "CTO", Handle: "cto"},
+	}
+	var answers [2][]byte
+	for i, records := range [][]tokens.Record{forward, backward} {
+		got := tokens.Aggregate(records, opts)
+		if len(got.ByTurn) != len(want) {
+			t.Fatalf("order %d: by_turn = %+v, want one row per run", i, got.ByTurn)
+		}
+		for _, turn := range got.ByTurn {
+			w := want[turn.TurnID]
+			if turn.WorkKey != w.WorkKey || turn.Role != w.Role || turn.Handle != w.Handle {
+				t.Errorf("order %d: turn %s is %s/%s/%s, want %s/%s/%s from whichever "+
+					"of its records names them", i, turn.TurnID, turn.WorkKey, turn.Role,
+					turn.Handle, w.WorkKey, w.Role, w.Handle)
+			}
+		}
+		answers[i], _ = json.Marshal(got)
+	}
+	if string(answers[0]) != string(answers[1]) {
+		t.Errorf("the rollup depends on arrival order:\n%s\n%s", answers[0], answers[1])
 	}
 }
 
@@ -79,7 +109,7 @@ func TestTiesBreakOnANameRatherThanOnMapOrder(t *testing.T) {
 	// differently on every call — which makes a diff of two captures
 	// unreadable and a golden test impossible.
 	records := []tokens.Record{
-		rec("A", "plan", "m", "t1", "2026-06-14T12:00:00Z", 5, 5),
+		rec("A", "onboarding", "m", "t1", "2026-06-14T12:00:00Z", 5, 5),
 		rec("B", "execute", "m", "t2", "2026-06-14T12:00:00Z", 5, 5),
 		rec("C", "review", "m", "t3", "2026-06-14T12:00:00Z", 5, 5),
 	}
@@ -98,8 +128,8 @@ func TestTiesBreakOnANameRatherThanOnMapOrder(t *testing.T) {
 // record does, whatever order the records arrived in.
 func TestASeatIsNamedAsItIsNowNotAsItsRecordsWere(t *testing.T) {
 	t.Parallel()
-	before := rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0)
-	after := rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:05:00Z", 10, 0)
+	before := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0)
+	after := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:05:00Z", 10, 0)
 	after.AgentRole = "Chief Executive"
 	after.EventID = "renamed"
 
@@ -148,7 +178,7 @@ func TestARecordWithNoTurnStillCountsTowardEverythingElse(t *testing.T) {
 	// It is real spend. Dropping it would understate the totals; inventing
 	// a turn key for it would make one row per phase in the turn table.
 	got := tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "", "2026-06-14T12:00:00Z", 60, 20),
 	}, tokens.Options{})
 
 	if got.Totals.TotalTokens != 80 {
@@ -186,7 +216,7 @@ func TestTurnsAreNewestFirstAndCapped(t *testing.T) {
 	for i, at := range []string{
 		"2026-06-14T12:00:01Z", "2026-06-14T12:00:02Z", "2026-06-14T12:00:03Z",
 	} {
-		records = append(records, rec("CEO", "plan", "m", string(rune('a'+i)), at, 100-i*10, 0))
+		records = append(records, rec("CEO", "onboarding", "m", string(rune('a'+i)), at, 100-i*10, 0))
 	}
 	got := tokens.Aggregate(records, tokens.Options{RecentTurns: 2})
 	if len(got.ByTurn) != 2 {
@@ -217,7 +247,7 @@ func TestTurnOrderIsByInstantNotByBytes(t *testing.T) {
 		"2026-06-14T12:00:05.5Z",
 		"2026-06-14T12:00:05Z", // the oldest instant, the highest bytes
 	} {
-		records = append(records, rec("CEO", "plan", "m", string(rune('a'+i)), at, 10, 0))
+		records = append(records, rec("CEO", "onboarding", "m", string(rune('a'+i)), at, 10, 0))
 	}
 
 	got := tokens.Aggregate(records, tokens.Options{RecentTurns: 3})
@@ -291,7 +321,7 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	// These are the exact keys views/spend.js and store.js index by name —
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
+		rec("CEO", "onboarding", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 	}, tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "CEO"}}, Since: since, Until: until}))
 
 	var body map[string]any
@@ -371,6 +401,35 @@ func TestTheWatermarkOrdersByInstantNotByBytes(t *testing.T) {
 	}
 	if turn.EndedAt != fractional {
 		t.Errorf("EndedAt = %q, want the later instant %q", turn.EndedAt, fractional)
+	}
+}
+
+// THE WATERMARK IS A RECORD'S OWN STAMP, past the window's end included.
+//
+// A node whose clock runs fast stamps its spend ahead of the window the live
+// projection cuts, and the projection holds that record a day from its arrival.
+// The watermark reports the stamp the record carries rather than the window's
+// end, because that is what says a node's clock is wrong — and the turn bounds
+// beside it carry the same stamp regardless.
+//
+// Mutation: cut the watermark to Options.Until, and it reads the window's end.
+func TestTheWatermarkIsTheRecordsStampEvenPastTheWindow(t *testing.T) {
+	t.Parallel()
+	const ahead = "2099-01-01T00:00:00Z"
+	got := tokens.Aggregate([]tokens.Record{
+		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0),
+		rec("CEO", "execute", "sonnet", "t2", ahead, 10, 0),
+	}, tokens.Options{Since: since, Until: until})
+
+	if got.Until != until.Format(time.RFC3339) {
+		t.Fatalf("until = %s, want the window the caller cut, %s", got.Until, until)
+	}
+	if got.AggregatedThrough != ahead {
+		t.Errorf("aggregated_through = %s, want the stamp the newest record carries, %s",
+			got.AggregatedThrough, ahead)
+	}
+	if got.ByTurn[0].EndedAt != ahead {
+		t.Errorf("by_turn[0] ended %s, want the same stamp %s", got.ByTurn[0].EndedAt, ahead)
 	}
 }
 

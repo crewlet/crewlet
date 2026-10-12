@@ -381,6 +381,13 @@ func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
 			t.Errorf("message %d came back as %+v, want %+v", i, got.Messages[i], want)
 		}
 	}
+	// EACH CARRIES ITS OWN TS — the id a chat trigger's metadata names it
+	// by — so the dispatch can record which messages a turn was shown.
+	for i, want := range []string{"1.1", "1.2", "1.3", "1.5"} {
+		if got.Messages[i].ID != want {
+			t.Errorf("message %d came back with id %q, want %q", i, got.Messages[i].ID, want)
+		}
+	}
 	// The username a legacy bot message carries is kept, so a sender the
 	// registry cannot resolve still renders as a name.
 	if got.Messages[2].SenderName != "agent-swe" {

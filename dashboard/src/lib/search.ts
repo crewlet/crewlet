@@ -10,7 +10,27 @@
  * the technique.
  */
 
+import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import type { SearchMode, SearchOutcome } from "~/protocol/index.ts";
+import { utf8Bytes } from "./format.ts";
+
+/**
+ * Why a phrase is too long to search, or null when it is not: the engine's own
+ * bound (`SEARCH_QUERY_MAX`), measured as the engine measures it — UTF-8 bytes
+ * of the phrase with the whitespace at its ends trimmed.
+ *
+ * A SCREEN SENDS NOTHING PAST IT AND SAYS THIS, for every one of the engine's
+ * ranked questions (`work_search`, `knowledge`, `answer_knowledge`). Sent, it
+ * is refused as `bad_params`, and a search that quietly lost its results to a
+ * refusal reads as a company with nothing written down. Cut to fit, it is a
+ * search on wherever the cut fell — and a `maxLength` on the box is that same
+ * cut, made by the browser on a paste.
+ */
+export function searchTooLong(phrase: string): string | null {
+  const bytes = utf8Bytes(phrase.trim());
+  if (bytes <= SEARCH_QUERY_MAX) return null;
+  return `This is ${bytes} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`;
+}
 
 /**
  * The modes, in the order a control draws them; the first is the engine's
@@ -93,16 +113,13 @@ export function modeLabel(mode: SearchMode | ""): string {
  */
 export function servedNote(answer: SearchOutcome | null | undefined): string | null {
   if (!answer) return null;
-  // AN OLDER NODE'S ANSWER CARRIES NONE OF THE OUTCOME, and that is not a
-  // degradation: it ranked the one way it knew and says nothing about it.
-  const degraded = answer.degraded ?? "";
-  const asked = modeLabel(answer.mode ?? "hybrid");
-  const served = answer.served_mode ?? "";
+  const { degraded, served_mode: served } = answer;
+  const asked = modeLabel(answer.mode);
   const why = degradedWhy(degraded);
   if (served === "" && degraded) {
     return `${asked} search could not run here — ${why}. Nothing was ranked by it, so nothing is listed rather than a different ranking passed off as this one.`;
   }
-  if (served && served !== (answer.mode ?? "hybrid")) {
+  if (served && served !== answer.mode) {
     return `Asked for ${asked}, served ${modeLabel(served)}${why ? ` — ${why}` : ""}.`;
   }
   if (degraded) return `${asked} search ran in part — ${why}.`;

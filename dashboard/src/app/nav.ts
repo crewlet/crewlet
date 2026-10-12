@@ -12,9 +12,9 @@
  *
  * The approved design keeps the trees and moves them: a workspace's own
  * SECTIONS are paths drawn as tabs in the page header (Settings draws them as
- * a column, because it has eight of its own and cross-links to the reader's
- * Account and to Budgets, in four groups — a tab strip of ten is a row nobody
- * reads to the end of), and its
+ * a column, because its own row in WORKSPACES holds more sections, and
+ * cross-links to the reader's Account and to Budgets, in its groups, than a
+ * tab strip can — a row nobody reads to the end of), and its
  * OBJECTS — a unit, a container, a node — are rows on the section that lists
  * them. What is left for the sidebar is the part every workspace shares: where
  * you can go, and the few objects this reader keeps coming back to.
@@ -22,7 +22,7 @@
  * # The three nouns, stated once and asserted in router.test.ts
  *
  *   - A SIDEBAR ROW is a workspace, or a live shortcut to a project, a pinned
- *     view or a starred page.
+ *     view, a starred page or a running turn.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer —
  *     `tabs` in the page header, `column` for Settings, or `tree` for
  *     Knowledge, whose column also holds its spaces and pages.
@@ -304,10 +304,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "a",
     place: "workspace",
     renderer: "tabs",
-    // THE ONE HUE RULE, said where the colour is: every ring, dot and state
-    // line on these sections is what a seat is DOING, and no seat has a
-    // colour of its own.
-    note: "Colour shows what a seat is doing — never who it is",
+    // THE STATE RULE, said where the state is drawn: every dot, ring and
+    // state line on these sections is what a seat is DOING. The charts also
+    // tone an agent seat, as the org builder does, which says what a seat IS,
+    // so the note names the dot rather than every colour on the page.
+    note: "A seat's dot shows what it is doing",
     sections: [
       {
         key: "chart",
@@ -450,6 +451,12 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "t",
     place: "workspace",
     renderer: "tabs",
+    // THE WINDOW IS THE WORKSPACE'S QUESTION: Overview and Expensive tasks
+    // both read it, and a tab that dropped it opened the next section on the
+    // default while the overview's own "All" link carried it — one section
+    // reached two ways on two windows. Budgets reads its own calendar windows
+    // and ignores it, but carries it, so the way back keeps the reader's.
+    keep: ["window"],
     sections: [
       {
         key: "overview",
@@ -575,7 +582,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Nodes",
         icon: "server",
         path: ["settings", "nodes"],
-        hint: "Nodes, seat leases, duties and config rollout",
+        hint: "Nodes, seat leases, duties, config rollout, the broker and where the company's files are kept",
         group: "Engine",
         grants: ["fleet:operate"],
       },

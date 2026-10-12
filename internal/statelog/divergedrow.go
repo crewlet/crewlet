@@ -33,7 +33,8 @@ import (
 // SAME record ([Runner.recallDiverged]): a reanchor moves the checkpoint into a
 // new generation and an adoption installs another checkpoint, and each of those
 // is a file the verdict was never about — so the row is removed then, and
-// never on any reading of the log.
+// never on any reading of the log. A verdict is only ever reached against a
+// checkpoint that names its record, so its consumed instant is never zero.
 //
 // # Why the node estate
 //
@@ -48,9 +49,18 @@ import (
 //
 // DECLARED HERE because the applier is the caller. The node estate is never
 // replaced under a running process, so a handle to it may be held.
+//
+// ESTATE IS IN THE SHAPE so that the replicated estate cannot be handed here.
+// Its [store.ReplicatedHandle] reads and writes exactly as this does, over a
+// file with none of this table in it, and the two are handed to one
+// constructor side by side ([RunnerDeps]); a store handle says which estate it
+// is, and a replicated handle — which is only ever the replicated estate —
+// does not, so the mistake is a build failure rather than a divergence verdict
+// lost on the one day it is written.
 type NodeEstate interface {
 	Read(ctx context.Context, fn func(*sql.Tx) error) error
 	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+	Estate() store.Estate
 }
 
 // writeDiverged records that stream's log diverged from these rows at d.

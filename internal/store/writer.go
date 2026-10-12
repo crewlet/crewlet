@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -109,13 +110,22 @@ var tagKeys = map[string]string{
 	"target":    "target",
 	"recipient": "recipient",
 	"closed_by": "closed_by",
+	// An INBOUND DELIVERY's two identities beside its recipient: the
+	// provider's own id for it (what an operator has in front of them in
+	// the provider's console — a delivery header, a Mattermost post id),
+	// and the ROUTE that authenticated it, which is not always the
+	// integration it belongs to: a Forge-relayed Jira event is source
+	// `jira`, route `forge`. Tags because a deliveries listing never
+	// selects the payload, and the integration counts read the route to
+	// say what arrived through the relay.
+	"delivery_key": "delivery_key",
+	"route":        "route",
 	// Which THIRD-PARTY APP a notification event concerns. A tag rather than a
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations
 	// room aggregating "how many of this third-party app's deliveries were
-	// dropped by the routing gate" has no other way to read it. Rows written
-	// before this tag existed read back without it — a real discontinuity
-	// at that point in the timeline, not a bug to paper over.
+	// dropped by the routing gate" has no other way to read it. A row whose
+	// event names no app carries none.
 	"notification_source": "notification_source",
 	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
 	// queue stamps on the way out and which is therefore the node whose
@@ -149,14 +159,32 @@ var tagKeys = map[string]string{
 	"dir":         "dir",
 }
 
-// spendEventType is the one event that carries an LLM call's cost.
+// The two events that carry an LLM call's cost: a phase's record, and an
+// auxiliary record's coalesced calls.
 //
 // Gated on the type rather than on "does the payload happen to have these
 // fields", because several other events carry a `model` or a `turn_id` and a
 // rollup that counted them would be counting calls that never happened.
-const spendEventType = "agent_phase_completed"
+// TWO, and taken from their payload types for the reason [phaseCompleted] is.
+var (
+	phaseSpendType     = types.AgentPhaseCompleted{}.EventType()
+	auxiliarySpendType = types.AuxiliarySpend{}.EventType()
+)
 
-// SpendFor pulls one LLM call's cost out of a phase completion.
+// spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
+// spend lists the same two.
+func spendTypes() (string, []any) {
+	return "?, ?", []any{phaseSpendType, auxiliarySpendType}
+}
+
+// phaseAuxiliary is the phase an auxiliary record is filed under. Its event
+// carries no phase of its own because it is none, and every reader — the
+// rollup's bands, the worker breakdown, the usage cells — already keys the
+// auxiliary model's spend on this value.
+const phaseAuxiliary = string(types.PhaseAuxiliary)
+
+// SpendFor pulls a spend record's cost out of a phase completion or an
+// auxiliary record.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -177,14 +205,14 @@ const spendEventType = "agent_phase_completed"
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != spendEventType {
+	if eventType != phaseSpendType && eventType != auxiliarySpendType {
 		return nil
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
 		// The call happened, and dropping it because its payload would
 		// not decode understates the spend this exists to report.
-		return &Spend{}
+		return &Spend{Calls: 1}
 	}
 	spend := &Spend{
 		Phase:        jsonString(body["phase"]),
@@ -201,14 +229,38 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		CacheReadTokens:  jsonInt(body["cache_read_tokens"]),
 		CacheWriteTokens: jsonInt(body["cache_write_tokens"]),
 		ProviderKey:      jsonString(body["provider_key"]),
+		Calls:            phaseCalls(body),
+	}
+	if eventType == auxiliarySpendType {
+		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
+		// looks for it: phase `auxiliary`, its purpose as the worker. The
+		// record names no phase, host phase or iteration of its own, and its
+		// calls are the ones it coalesced — at least the one that produced
+		// it.
+		spend.Phase, spend.HostPhase, spend.Iteration = phaseAuxiliary, "", 0
+		spend.Worker = jsonString(body["purpose"])
+		spend.Stage = jsonString(body["stage"])
+		spend.Calls = max(jsonInt(body["calls"]), 1)
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
-		// slot it ran on. The backfill in schema/0015 does the same, so
-		// history and new rows agree on what "model" means.
+		// slot it ran on, so the rollup always has a model to group by.
 		spend.Model = jsonString(body["provider_key"])
 	}
 	return spend
+}
+
+// phaseCalls is a phase record's provider calls, by [tokens.PhaseCalls] — the
+// rule the live projection counts by too.
+//
+// The list is counted, never decoded: a phase can run a hundred rounds and this
+// runs on the publishing goroutine of every LLM call.
+func phaseCalls(body map[string]json.RawMessage) int {
+	var rounds []json.RawMessage
+	if raw, ok := body["rounds"]; ok {
+		_ = json.Unmarshal(raw, &rounds)
+	}
+	return tokens.PhaseCalls(len(rounds), jsonInt(body["rounds_used"]))
 }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized
@@ -273,17 +325,6 @@ func ExtractTags(payload []byte) map[string]string {
 			tags["work_item"] = types.WorkItem{
 				Backend: types.WorkBackend(item.Backend), ID: item.ID,
 			}.Ref()
-		}
-	}
-	// Turns triggered by A2A carry their channel one level down, so the
-	// cross-reference from a turn back to the conversation that caused it
-	// needs this one nested read.
-	if raw, ok := flat["a2a_context"]; ok {
-		var ctxObj struct {
-			ChannelID string `json:"channel_id"`
-		}
-		if json.Unmarshal(raw, &ctxObj) == nil && ctxObj.ChannelID != "" {
-			tags["a2a_channel_id"] = ctxObj.ChannelID
 		}
 	}
 	return tags

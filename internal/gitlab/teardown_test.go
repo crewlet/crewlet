@@ -48,7 +48,7 @@ func TestADisconnectRemovesTheHooksLeftAtEveryAddress(t *testing.T) {
 	f.hooks = []hookRow{
 		namedHook(1, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
 		namedHook(2, "crewlet", "https://old-tunnel.example.com/webhooks/gitlab"),
-		legacyHook(3, "https://older-tunnel.example.com/webhooks/gitlab"),
+		namedHook(3, "crewlet", "https://older-tunnel.example.com/webhooks/gitlab"),
 	}
 	f.projectHooks = map[string][]hookRow{
 		"nimbus/api": {namedHook(4, "crewlet", "https://old-tunnel.example.com/webhooks/gitlab")},
@@ -67,9 +67,11 @@ func TestADisconnectRemovesTheHooksLeftAtEveryAddress(t *testing.T) {
 }
 
 // AND LEAVES EVERYTHING THAT IS NOT THIS DEPLOYMENT'S. An instance carries
-// hooks other integrations registered, and another deployment of this same
-// company carries its own under its own name — a disconnect that swept either
-// would take down something nobody asked it to touch.
+// hooks other integrations registered — a nameless one at a `/webhooks/gitlab`
+// path included, since this engine names every hook it registers — and
+// another deployment of this same company carries its own under its own name.
+// A disconnect that swept any of them would take down something nobody asked
+// it to touch.
 func TestADisconnectLeavesHooksThatAreNotThisDeploymentsAlone(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -77,14 +79,15 @@ func TestADisconnectLeavesHooksThatAreNotThisDeploymentsAlone(t *testing.T) {
 		foreignHook(1, "https://someone-else.example.com/hook"),
 		namedHook(2, "crewlet-staging", "https://staging.example.com/webhooks/gitlab"),
 		namedHook(3, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
+		foreignHook(4, "https://somebody.example.com/webhooks/gitlab"),
 	}
 	if _, err := tearDownAgainst(t, f, nil); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.hooks) != 2 {
-		t.Fatalf("hooks = %+v, want the foreign one and staging's left in place", f.hooks)
+	if len(f.hooks) != 3 {
+		t.Fatalf("hooks = %+v, want the two foreign ones and staging's left in place", f.hooks)
 	}
 	for _, hook := range f.hooks {
 		if hook.id == 3 {
@@ -301,11 +304,10 @@ func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
 	}
 	f.projectHooks = map[string][]hookRow{}
 	f.projectHooks["nimbus/dropped"] = []hookRow{
-		// NAMELESS, as an older build wrote them, at an address that is
-		// gone. `ours` adopts a nameless hook at this path, so the name is
-		// not what made these unreachable — nothing ever visited the
-		// project.
-		foreignHook(701, "https://dead-tunnel.example.com/webhooks/gitlab"),
+		// THIS DEPLOYMENT'S, at an address that is gone. It carries the
+		// name, so the name is not what made it unreachable — nothing ever
+		// visited the project.
+		namedHook(701, "crewlet", "https://dead-tunnel.example.com/webhooks/gitlab"),
 	}
 	f.projectHooks["nimbus/sub/deeper"] = []hookRow{
 		namedHook(702, "crewlet", "https://also-dead.example.com/webhooks/gitlab"),

@@ -24,14 +24,34 @@ import (
 // fakeInbox is the engine's half of the inbox feed: it keeps what the app
 // registered, and a case fires it the way a committed tracker batch would.
 type fakeInbox struct {
-	mu sync.Mutex
-	fn func([]tracker.InboxMovement)
+	mu  sync.Mutex
+	fn  func([]tracker.InboxMovement)
+	gap func()
 }
 
 func (f *fakeInbox) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fn = fn
+}
+
+func (f *fakeInbox) SetOnInboxGap(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gap = fn
+}
+
+// fireGap tells whatever the app registered that the movements have a gap.
+func (f *fakeInbox) fireGap(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	fn := f.gap
+	f.mu.Unlock()
+	if fn == nil {
+		t.Fatal("the app registered nothing for a gap in its inbox feed, so a " +
+			"switch of source would leave every open inbox stale")
+	}
+	fn()
 }
 
 // fire hands one committed batch's movements to whatever the app registered.
@@ -130,6 +150,71 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 	if other := bob.nextInbox(t); other.Seat != "bob-seat" {
 		t.Fatalf("bob's socket received the frame for %q before its own: one "+
 			"person's screen learned about somebody else's inbox", other.Seat)
+	}
+	carol.drainUntilPong(t)
+}
+
+// A GAP IN WHAT THIS NODE HEARS IS EVERY WATCHED INBOX READ AGAIN.
+//
+// The engine says when it switched where this node's movements come from —
+// its own applier, a peer's relayed while its own copy is out of service — and
+// what moved in between is not replayed. So every seat a socket watches gets
+// one frame that counts nothing and names no subject, which is all a screen
+// needs to read its inbox again; and a socket watching nothing gets none, for
+// the reason no movement ever reaches it.
+//
+// Mutation: register nothing for the gap, or push it to no seat, and the
+// watchers' frames never come.
+func TestAGapInTheInboxFeedTellsEveryWatchedInboxToReadAgain(t *testing.T) {
+	t.Parallel()
+	feed := &fakeInbox{}
+	b := config.DefaultBootstrap()
+	reader := []iam.Grant{iam.GrantStateRead}
+	authorize(&b,
+		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: reader},
+		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: reader},
+		config.APIToken{ID: "carol", Token: "carol-token-long-enough-to-pass", Grants: reader},
+	)
+	seats := map[string]string{
+		iam.TokenLogin("alice"): "alice-seat",
+		iam.TokenLogin("bob"):   "bob-seat",
+		iam.TokenLogin("carol"): "carol-seat",
+	}
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Inbox:     feed,
+		SeatBindings: auth.SeatBindings{
+			Directory: inboxBindings(seats), Chart: inboxChart(seats),
+		},
+	})
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+
+	alice := dialInbox(t, srv.URL, "alice-token-long-enough-to-pass")
+	bob := dialInbox(t, srv.URL, "bob-token-long-enough-to-pass")
+	carol := dialInbox(t, srv.URL, "carol-token-long-enough-to-pass")
+	alice.send(t, map[string]any{"kind": "watch", "seat": "alice-seat"})
+	bob.send(t, map[string]any{"kind": "watch", "seat": "bob-seat"})
+	hub := a.Stream().Hub()
+	deadline := time.Now().Add(10 * time.Second)
+	for hub.Watchers("alice-seat") != 1 || hub.Watchers("bob-seat") != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the watches never reached the index (alice %d, bob %d)",
+				hub.Watchers("alice-seat"), hub.Watchers("bob-seat"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	feed.fireGap(t)
+
+	for name, socket := range map[string]*inboxSocket{"alice": alice, "bob": bob} {
+		got := socket.nextInbox(t)
+		want := map[string]any{"handle": name + "-seat", "unread_delta": float64(0),
+			"subject": "", "reason": ""}
+		if got.Seat != name+"-seat" || !maps.Equal(got.Data, want) {
+			t.Errorf("%s's socket was sent %q %v, want a re-read of its own "+
+				"seat that counts nothing: %v", name, got.Seat, got.Data, want)
+		}
 	}
 	carol.drainUntilPong(t)
 }

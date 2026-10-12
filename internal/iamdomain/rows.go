@@ -18,9 +18,11 @@ import (
 // than a node that appends records the fleet drops one at a time. This file is
 // the identity estate's three.
 
-// NewRows builds the framework's row seam over this domain's guards.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{}, iamGuards)
+// NewRows builds the framework's row seam over this domain's guards, on the
+// log spec names — the one the publisher writes, whose checkpoint and anchors
+// the seam reads.
+func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec, iamGuards)
 }
 
 // iamGuards answers the two object-level facts a first write needs: whether a
@@ -96,7 +98,7 @@ func ReadScopeForBucket(b Bucket) statelog.ScopeSet {
 // open one session twice; the same holds for the first record on any subject,
 // the directory's own included.
 type Fence struct {
-	db     *store.DB
+	db     store.ReplicatedReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -116,7 +118,7 @@ type Fence struct {
 }
 
 // NewFence builds it.
-func NewFence(db *store.DB, nodeID string) *Fence {
+func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -126,15 +128,17 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // precondition of an eviction being permitted at all, so the source that is
 // still fresh in exactly that failure is this node's own replicated table.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
-	if f == nil || f.db == nil || f.nodeID == "" {
+	if f == nil || f.db.IsZero() || f.nodeID == "" {
 		return false, nil
 	}
 	var from, readmitted sql.NullInt64
-	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
-	// replicated estate that is not open — a legitimate, documented state
-	// of that peer, since an adoption closes it between its rename and its
-	// reopen — and a statement issued on it panics inside database/sql.
-	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// THROUGH THE HANDLE, NOT A POOL. A replicated estate that is not open —
+	// a legitimate, documented state, since an adoption closes it between
+	// its rename and its reopen — has no pool, and a statement issued on a
+	// closed one panics inside database/sql. [store.ReplicatedReader.Read]
+	// answers [store.ErrNoEstate], which the refusal below already handles
+	// as the honest "unreadable is not not-evicted".
+	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position
 			FROM iam_evictions WHERE node_id = ?`, f.nodeID).
@@ -196,33 +200,34 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // and statelogtest.RunGates certifies for each. The two must agree: a
 // resolution that looked for a gate the applier never installs would read
 // every unapplied record as "somebody else won".
-type Gates struct{ db *store.DB }
+type Gates struct{ db store.ReplicatedReader }
 
 // NewGates builds it.
-func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
+func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere, and the gate that
 // answers for it.
 //
 // ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer, and
-// through the HANDLE rather than its pool — see [Fence.Evicted] for why a nil
-// pool is reachable here. It used to be two reads, eviction first: two
-// instants and possibly two FILES, since every `Replicated()` reloads the peer
-// an adoption swaps and the applier commits between any two reads, so a
+// through the HANDLE rather than a pool — see [Fence.Evicted] for why a closed
+// estate is reachable here. It used to be two reads, eviction first: two
+// instants and possibly two FILES, since every read through the handle
+// resolves afresh the peer an adoption swaps and the applier commits between
+// any two reads, so a
 // removal committing between them made one half of the answer describe the
 // estate before it and the other the estate after it.
 //
-// THE BODY IS READ for the removal gate, as the applier's own gate reads it:
-// see [gatedPerson].
+// THE BODY IS READ for the removal gate, by the one rule the applier's own
+// gate asks: see [markedPerson].
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 
-	if g == nil || g.db == nil {
+	if g == nil || g.db.IsZero() {
 		return "", false, nil
 	}
 	var reason statelog.Reason
 	var gated bool
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE REMOVAL GATE FIRST, by the rule [statelog.Gates] states: a
 		// tombstone holds the person for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`
@@ -230,7 +235,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		// dropped either way, so the order decides only which one is
 		// REPORTED — and it was the eviction, so a caller was told to wait
 		// for a readmission that could never make the write land.
-		if person, ok := gatedPerson(subj, body); ok {
+		if person, ok := markedPerson(subj, body); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx, `
 				SELECT record_id FROM iam_removed WHERE person_id = ?`,
@@ -282,36 +287,4 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		return "", false, err
 	}
 	return reason, gated, nil
-}
-
-// gatedPerson is the person a record's removal gate is keyed on, from the
-// subject or — where the subject does not name one — from the record's own
-// body, which is exactly how [Applier.gatedPerson] reads it.
-//
-// ONLY THE PERSON'S OWN SUBJECT NAMES ONE. A directory record's subject names
-// nobody and a session's names a lineage, and which person each belongs to is
-// in the record's PAYLOAD. The publisher hands the body of the record it
-// appended ([statelog.Gates.GatedAt]), so a removal landing between a write's
-// decide and its apply is named here as the gate that dropped it — without it,
-// the publisher read its own acknowledged append as a ledger contract
-// violation.
-//
-// WITH NO BODY — a record the publisher merely found above its anchor, whose
-// it is being the open question — such a record is answered "not gated", and the
-// re-decide that answer leads to meets the tombstone in its own snapshot
-// ([Writer.request] refuses a write about a removed person before it
-// publishes). A body that does not decode is not gated either, which is the
-// applier's rule too: such a record is deferred rather than applied.
-func gatedPerson(subj statelog.Subject, body []byte) (string, bool) {
-	if ObjectKind(subj.Kind) == KindPerson && subj.ID != "" {
-		return subj.ID, true
-	}
-	if body == nil {
-		return "", false
-	}
-	record, err := Decode(body)
-	if err != nil || record.Person == "" {
-		return "", false
-	}
-	return record.Person, true
 }

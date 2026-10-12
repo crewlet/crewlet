@@ -14,8 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -203,6 +205,13 @@ type buildOpts struct {
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.
 	calls *turnctx.CallLog
+
+	// budget is the turn's meter, for the cases about what a refusal stops.
+	budget toolloop.BudgetMeter
+
+	// compact is the seat's compactor, for the cases about what a rewrite
+	// the prompt's assembly asks for costs.
+	compact compact.Bound
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -291,6 +300,8 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Steer:     opts.steer,
 		Subagent:  opts.subagent,
 		Turn:      runTurn,
+		Budget:    opts.budget,
+		Compact:   opts.compact,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -373,22 +384,59 @@ func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	}
 }
 
+// isFinishingCorrective reports whether a message is the tool loop's re-prompt
+// for a round that ended without the phase's submission.
+func isFinishingCorrective(m llm.Message, tool string) bool {
+	return m.Role == llm.RoleUser && strings.Contains(m.Content, "so this phase has not finished") &&
+		strings.Contains(m.Content, "`"+tool+"`")
+}
+
 // THE RESCUE PATH. An executor that ran out of rounds, or simply stopped, has
 // produced text and no account of itself. Discarding the turn wastes
 // everything it did; calling it delivered puts words in its mouth on the one
 // question that matters.
+//
+// But only after it was ASKED: its loop finishes by `submit_work`, so a round
+// of prose is not a finish, and the loop asks twice more — naming the tool —
+// before the phase ends without its submission and lands here.
 func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("I posted something.")}})
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{text("I posted something.")}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	exec := prov.requestsFor("execute")
+	if len(exec) != 3 {
+		t.Fatalf("the executor was asked %d times, want 3 — the first answer and two "+
+			"finishing correctives", len(exec))
+	}
+	for i, req := range exec[1:] {
+		last := req.Messages[len(req.Messages)-1]
+		if !isFinishingCorrective(last, runner.SubmitWorkTool) {
+			t.Errorf("request %d opened on %q, want the finishing corrective", i+2, last.Content)
+		}
+	}
+	// Every round declined, the last included: that is what tells a reader
+	// the phase ended without its submission rather than finishing.
+	done := completedPhase(t, pub, "execute")
+	if !done.RescueFired || len(done.RoundNarration) != 3 {
+		t.Fatalf("rescue_fired = %v narration = %v", done.RescueFired, done.RoundNarration)
+	}
+	for _, n := range done.RoundNarration {
+		if n["declined"] != true {
+			t.Errorf("round %v is not marked declined: %v", n["round"], n)
+		}
+	}
 	if w.Outcome != turn.OutcomeIncomplete {
 		t.Errorf("outcome = %s, want incomplete", w.Outcome)
 	}
-	if !strings.Contains(w.Text, "posted something") {
-		t.Errorf("the phase's own text was discarded: %q", w.Text)
+	// Its answer to the task, once: the two the correctives drew out
+	// repeat it, and the reviewer would read the report three times.
+	if n := strings.Count(w.Text, "posted something"); n != 1 {
+		t.Errorf("the phase's text carries its answer %d times, want once: %q", n, w.Text)
 	}
 	// AS TEXT, NOT AS INTENT. The executor gave no account of itself, and
 	// Summary is the intent line — rendered whole to every later round and
@@ -403,6 +451,139 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	// telling "the executor decided this" from "nothing decided anything".
 	if !w.Rescued {
 		t.Error("a synthesised outcome was returned as if the executor had made it")
+	}
+}
+
+// writtenSubmission is the measured failure: an executor on a cli-agent text
+// backend ended its turn with submit_work's ARGUMENTS typed out as a fenced
+// JSON block — the report, as prose — instead of the call.
+func writtenSubmission() llm.Completion {
+	return text("Commented on the work item.\n\n```json\n" +
+		`{"summary":"Commented on the work item","outcome":"blocked",` +
+		`"evidence":"no write tool yet"}` + "\n```")
+}
+
+// AN EXECUTOR THAT WROTE ITS SUBMISSION AS TEXT IS RE-ASKED RATHER THAN
+// RESCUED. Before, the phase ended on that round: the outcome was the engine's
+// `incomplete`, and the reviewer read the fenced JSON as "what the agent
+// produced". The loop now asks again with a message naming submit_work — never
+// a forced call, which a request cannot express — and the model's call is the
+// outcome.
+func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
+	}
+	exec := prov.requestsFor("execute")
+	if len(exec) != 2 {
+		t.Fatalf("the executor was asked %d times, want 2", len(exec))
+	}
+	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
+		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
+	}
+	done := completedPhase(t, pub, "execute")
+	if done.RescueFired || done.RoundsUsed != 2 {
+		t.Errorf("rescue_fired = %v rounds_used = %d, want a submitted phase of 2 rounds",
+			done.RescueFired, done.RoundsUsed)
+	}
+	if len(done.RoundNarration) != 1 || done.RoundNarration[0]["round"] != 1 ||
+		done.RoundNarration[0]["declined"] != true {
+		t.Errorf("round_narration = %v, want round 1 marked declined", done.RoundNarration)
+	}
+}
+
+// A RESUMED EXECUTOR IS ASKED AGAIN TOO. It re-enters the same loop, with the
+// same submission, so a coding run's result followed by a written-out report is
+// the same failure and gets the same corrective — on the phase's round scale.
+func TestAResumedExecutorThatWroteItsSubmissionAsTextIsReAsked(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	// A round the pre-suspend half was corrected on stays marked across the
+	// suspend: the parked row carries the mark and the resumed record keeps
+	// it, or round 1 would read as a finish nothing finished.
+	state := suspendedAfterTwoRounds()
+	state.RoundNarration[0]["declined"] = true
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		pub:    pub,
+		resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+	})
+	w, _, err := r.Resume(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
+	}
+	exec := prov.requestsFor("execute")
+	if len(exec) != 2 {
+		t.Fatalf("the resumed executor was asked %d times, want 2", len(exec))
+	}
+	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
+		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
+	}
+	// Round 3 of the phase: the two it ran before it parked come first, and
+	// the pre-suspend round 1 keeps its mark.
+	done := completedPhase(t, pub, "execute")
+	var declined []any
+	for _, n := range done.RoundNarration {
+		if n["declined"] == true {
+			declined = append(declined, n["round"])
+		}
+	}
+	if len(declined) != 2 || declined[0] != 1 || declined[1] != 3 {
+		t.Errorf("declined rounds = %v, want [1 3] on the phase's scale", declined)
+	}
+}
+
+// A DELIVERY AN EARLIER ROUND MADE IS CITABLE. The prior-work ledger tells a
+// round sent back for a re-read not to comment again, so a check reading only
+// the round refused the one citation that was true — eleven times, in the
+// measured turn, until the round cap ended it.
+func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
+	t.Parallel()
+	tracker := func(t *testing.T, reg *tools.Registry) {
+		t.Helper()
+		if err := reg.RegisterWith(stubTool{name: "comment_on_work_item", out: "commented"},
+			tools.OriginBuiltin, tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	cite := submitCall(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"re-read the item","deliveries":["comment_on_work_item"]}`)
+	earlier := []ledger.Iteration{{Iteration: 1,
+		Calls: []ledger.Call{{Name: "comment_on_work_item", Result: "commented"}}}}
+
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+		execute: []llm.Completion{cite},
+	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
+	w, _, err := r.Execute(context.Background(), 2, "read the item first", earlier)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeDelivered {
+		t.Errorf("outcome = %s (rescued %v), want the citation of round one's comment "+
+			"accepted", w.Outcome, w.Rescued)
+	}
+
+	// The counterfactual: with no such round behind it, the same citation
+	// is refused every time it is made, and the phase ends in the rescue.
+	r, _ = buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+		execute: []llm.Completion{cite},
+	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
+	w, _, err = r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !w.Rescued {
+		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
 	}
 }
 
@@ -531,6 +712,35 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	}
 	if !strings.Contains(got.Notes, runner.SubmitReviewTool) {
 		t.Errorf("the correction does not say what to do: %q", got.Notes)
+	}
+}
+
+// THE REVIEWER IS NEVER FORCED, its corrective round included — a request has
+// no way to force a call. Its only tool is its submission, so a forced choice
+// once looked free — but Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
+// answer one with a 400, which the chain does not retry, so on those models
+// every review died before the corrective that actually enforces the call
+// could run. The submission it names is what re-asks a reviewer that answered
+// in prose.
+func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{
+		text("Looks done to me."),
+		submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
+	}})
+	got, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil)
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got.Decision != phase.Done {
+		t.Fatalf("decision = %s, want the submitted done", got.Decision)
+	}
+	reqs := prov.requestsFor("review")
+	if len(reqs) != 2 {
+		t.Fatalf("the reviewer was asked %d times, want 2", len(reqs))
+	}
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitReviewTool) {
+		t.Errorf("the second review round opened on %q, want the finishing corrective", last.Content)
 	}
 }
 

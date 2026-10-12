@@ -129,9 +129,50 @@ var unguardedExact = map[string]struct{}{
 	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthLogout: {},
 }
 
-var unguardedPrefixes = []string{
-	WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/", AuthInvitePrefix,
-	AuthResetPrefix,
+// unguardedPrefixes is DERIVED from [publicPrefixes] rather than listed beside
+// it, so a route can never be public without also being exempt — see
+// [publicPrefixes]. The rest are exempt and NOT public: the dashboard's
+// /static/ is the shell of the admin surface, served where that surface is, and
+// the invitation and reset links are BROWSER routes a person follows to the
+// dashboard, which the public listener never serves.
+var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
+	"/static/", AuthInvitePrefix, AuthResetPrefix,
+})
+
+// publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
+// webhook or returning a browser from its app flow, and a sandbox box exporting
+// telemetry or calling its seat's tools. None of them holds a person's or a
+// deployment's credential, each authenticates by its own (a provider
+// signature, a per-run signed token), and they are the only routes a
+// deployment has to publish beyond the people who run it.
+//
+// ONE LIST DECIDES THREE THINGS, and that is why it is one list: what the
+// dedicated public listener (Tier A api.public) serves and api.port then
+// refuses, what the guard exempts, and what the cross-site check does not judge
+// ([CSRF.Middleware]) — each a server reaching the engine rather than a
+// browser, so no `Origin` is ever sent. The sign-in routes are exempt from the
+// guard and are NOT here: they are browser routes, judged by the cross-site
+// rule and served only on the admin listener.
+//
+// UNEXPORTED, and read outside this package only through [PublicPrefixes]'
+// copy: [unguardedPrefixes] is derived from it once, at init, so a slice
+// anybody could append to would move the partition without moving the
+// exemptions, and the guarantee above would stop holding with nothing failing.
+var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
+
+// PublicPrefixes is a copy of the prefixes of the routes outside parties call.
+// See [publicPrefixes].
+func PublicPrefixes() []string { return slices.Clone(publicPrefixes) }
+
+// Public reports whether a path is one of the routes outside parties call. See
+// [publicPrefixes].
+func Public(path string) bool {
+	for _, prefix := range publicPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // The sign-in routes served without a credential, named HERE rather than in

@@ -60,8 +60,9 @@ type Writer struct {
 
 	// db is the replicated estate. It is never the write path's own
 	// snapshot — that is the framework's, taken per append — and nothing
-	// decided against it is paired with an expectation.
-	db *store.DB
+	// decided against it is paired with an expectation. A READER, because
+	// nothing here writes it: only the log's applier does.
+	db store.ReplicatedReader
 
 	// blinds derives the blind a directory decide compares an address by,
 	// and sealer seals the values that belong to somebody.
@@ -174,7 +175,7 @@ type SeatLookup interface {
 // WriterDeps is what a writer is built from.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
-	DB        *store.DB
+	DB        store.ReplicatedReader
 
 	// Blinds derives address blinds, and Sealer seals the values that
 	// belong to somebody. Both optional: see [Writer.blinds].
@@ -209,7 +210,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	case deps.Publisher == nil:
 		return nil, errors.New("iamdomain: a writer with no publisher has no " +
 			"way to append, so every call would report a change nobody made")
-	case deps.DB == nil:
+	case deps.DB.IsZero():
 		return nil, errors.New("iamdomain: a writer with no store cannot take " +
 			"the snapshot every decide is made inside")
 	case deps.Actor == "":
@@ -476,7 +477,7 @@ func (w *Writer) publishDirectory(ctx context.Context, op OpKind, person, opID,
 
 	for attempt := 1; ; attempt++ {
 		var scope ScopeSet
-		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) (err error) {
+		if err := w.db.Read(ctx, func(tx *sql.Tx) (err error) {
 			scope, err = scopeOf(ctx, tx)
 			return err
 		}); err != nil {
@@ -664,7 +665,7 @@ func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 // ([iamGuards]), and only a person's own subject carries one. Every other
 // record about somebody names them in its PAYLOAD, which the applier's removal
 // gate decodes — and which the publisher-side reader reads too only for the
-// body it is handed ([gatedPerson]): a record this node appended and a removal
+// body it is handed ([markedPerson]): a record this node appended and a removal
 // raced is named `deleted` there, but a person removed BEFORE the snapshot
 // would have had the record appended only to be dropped by every node — a
 // second removal of somebody already removed among them. Refused here, it is

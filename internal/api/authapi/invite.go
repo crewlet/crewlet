@@ -86,7 +86,7 @@ type inviteView struct {
 	// Seat is the human seat redeeming this invitation BINDS the person
 	// to, as the company's chart calls it now. ALWAYS PRESENT, because
 	// every invitation holds one: a person holds a human seat for as long
-	// as they exist (ADR-0026), and it is part of what they are agreeing
+	// as they exist (ADR-0032), and it is part of what they are agreeing
 	// to, so the form shows it before anything is spent. With no handle
 	// where the chart no longer holds it as a human seat ([inviteSeat]).
 	Seat *inviteSeat `json:"seat"`
@@ -188,12 +188,6 @@ func (s *Service) inviterOf(ctx context.Context, author string) string {
 // when it is not — the redemption refuses that link, and the page says so
 // before anybody types a password. A lookup that fails shows the stored handle
 // alone: the page is a courtesy, and the redemption asks again.
-//
-// AN INVITATION NAMING NO SEAT never reaches here — one issued before every
-// invitation held a seat is spent ([iamdomain.InvitationRow.Spent]) and the
-// view answers it the one 410 every dead link gets — and were one rendered, it
-// would read exactly as a seat the chart no longer holds, which is what it is
-// to the redemption: a link that creates nobody.
 func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
 	switch {
 	case handle == "":
@@ -372,8 +366,8 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 //
 // AN ADDRESS SOMEBODY IS ENROLLED UNDER is the 410 every way a link stops
 // working is: the person the link was for already exists. So is a link whose
-// seat the record refuses — one naming no seat, or one the chart no longer
-// holds as a human seat — which [iamdomain.Writer.Redeem] answers
+// seat the record refuses — one the chart no longer holds as a human seat —
+// which [iamdomain.Writer.Redeem] answers
 // [iamdomain.ErrRefused] and never [iamdomain.ErrSeatRequired]: the invitee
 // left nothing out, and the 400 that asks for a seat would send them looking
 // for a field the form does not have.

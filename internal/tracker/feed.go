@@ -11,11 +11,9 @@ import (
 
 // Source is the notification source name this tracker registers under.
 //
-// BARE, and the same word the engine's earlier tracker used: it appears in
-// every log line, every event's source column and every dashboard filter, and
-// a first-party source has nothing to disambiguate itself from. Keeping the
-// spelling is also what lets a company's existing notification rules go on
-// meaning what they meant.
+// BARE: it appears in every log line, every event's source column and every
+// dashboard filter, and a first-party source has nothing to disambiguate
+// itself from.
 const Source = "work"
 
 // FeedGroup is the durable consumer's name, and it is STABLE for the
@@ -126,7 +124,11 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 // indistinguishable from a record that could not carry one.
 func wakesAnybody(kind ObjectKind) bool {
 	switch kind {
-	case KindBarrier, KindGeneration, KindEviction, KindTurn, KindRankOrder:
+	case KindBarrier, KindGeneration, KindEviction, KindTurn, KindRankOrder,
+		// A FILE IS READ FROM ITS PROJECT, never woken into anybody's
+		// inbox — see [ObjectKind.Routable]'s own list of the kinds
+		// announced elsewhere.
+		KindFile:
 		return false
 	}
 	return true

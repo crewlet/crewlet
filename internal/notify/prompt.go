@@ -10,13 +10,15 @@ import (
 
 // Prompt is everything the spine needs to know about ONE third-party app.
 //
-// Seven questions, and each is asked by a different part of the spine — which
-// is why they are one interface rather than seven registries that could drift
+// Eight questions, and each is asked by a different part of the spine — which
+// is why they are one interface rather than eight registries that could drift
 // out of step about what a source is:
 //
 //   - Build renders the trigger a seat is woken with.
 //   - RequiresRecon says whether that trigger is the context or a POINTER at
 //     it, which the turn-start prefetches read.
+//   - SubjectIsLabel says whether the subject is part of what was sent or
+//     the surface's own name for the event, which the turn's ask reads.
 //   - Addressed says whether somebody is waiting on this seat for an answer,
 //     which the turn engine's delivery check reads.
 //   - PartitionKey says which other events this one is handled WITH: the
@@ -58,6 +60,26 @@ type Prompt interface {
 	// is near-guaranteed to be worth nothing and the agent is already
 	// told to re-query after it has looked.
 	RequiresRecon(n Inbound) bool
+
+	// SubjectIsLabel reports that the subject is the SURFACE's name for
+	// the event — the same words on every event it delivers — rather than
+	// part of what was sent.
+	//
+	// The turn's ask (what every relevance judgement and the turn's one
+	// vector are made against) leads with a notification's subject,
+	// because on most sources it is content: an issue's key and title, a
+	// page's title, a monitor's alert — and on a tracker comment the only
+	// place the topic is named at all. A chat backend's subject is not: it
+	// is "Slack message" on every message, and an ask leading with it
+	// handed the memory filter, the knowledge-query writer and the episode
+	// summary the same words on every turn of the surface, and pulled
+	// every chat turn's vector towards every other. Only the source can
+	// say which kind of subject it writes, so it is asked here.
+	//
+	// The conservative answer is FALSE: a subject read as content when it
+	// was a label costs the ask a few repeated words, while one read as a
+	// label when it was content drops what was sent.
+	SubjectIsLabel(n Inbound) bool
 
 	// Addressed reports that somebody is waiting on THIS seat for an
 	// answer: a direct message, a personal mention, an assignment.

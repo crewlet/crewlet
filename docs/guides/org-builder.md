@@ -60,6 +60,14 @@ copy it kept for the last one; if the engine refuses it, editing pauses until
 somebody whose grants reach the company signs in. Signing out empties the
 tab's kept draft too.
 
+When another system [manages the company
+document](../concepts/configuration.md#managed-configuration) — Tier A names
+its writers in `api.auth.company_writers` — the builder opens read-only for
+every other token: the organization is drawn, every editing control is
+disabled, and a callout says who manages it. Change the company at its source
+and let that system write it. The org chart's **Add seat** is disabled with the
+same sentence. A writer's token edits as usual.
+
 ### Arriving from a link
 
 Every way into Edit org from another screen asks to change one thing, and the
@@ -163,22 +171,28 @@ the check saw, so just after a change a node can read "Lead after the
 check" or "Manager after the check" for a moment rather than show an answer
 the engine has not given.
 
-Colour is state, never identity. Every node is drawn on the same neutral
-surface whatever it holds; what tells a person's seat from an agent's is its
-badge, a circle for a person and a squircle for an agent, and the one colour a
-node takes is the accent ring of the selection. The live org chart follows the
-same rule, and there colour says what a seat is doing: a draft is doing
-nothing, so here there is nothing for colour to say.
+The builder draws the organization the way the console's org chart does. An
+agent seat is its own Crewlet character on a card toned in its own colour,
+with the branch arriving at it and its table row in the same hue; a person's
+seat is a person's glyph in a dashed ring; a unit and the company are their
+own glyphs; and every node but an agent seat is drawn on the same neutral
+surface. An agent's character and colour are the ones its author chose (see
+[A seat](#a-seat)), the original Crewlet in purple until somebody does: they
+are never a hash of a name, so a renamed seat keeps them. The
+selected node's card takes the accent on its own edge. The live org chart
+(Agents › Org chart) draws the same nodes, marks and hue, with what each seat
+is doing under its name, and both are drawn on the same dotted field, which
+says it pans before you drag it.
 
 ### The structure chart
 
 The company is the root. The seats declared at the top level and the units
 hang off it, and each unit's seats and child units hang off that unit: every
 seat is a node of its own, joined to the unit it sits in by the same
-orthogonal branch the live org chart draws. The branch is heavier here: a node
-is half the height of the live chart's card, and the design system keeps the
-branch at the same weight against the node it joins. A node shows its badge (or a
-unit's or the company's glyph), its name and, under it, what kind of thing it
+orthogonal branch the live org chart draws, at the weight the design system
+gives a chart of nodes. A node shows its mark (an
+agent's figure, a person's ringed glyph, or a unit's or the company's glyph),
+its name and, under it, what kind of thing it
 is, with the marks that apply as small glyphs on that line. Each mark says its
 sentence as its name and its tooltip:
 
@@ -298,6 +312,13 @@ guarded or read-only posture, or a draft waiting to be updated) the actions
 stay in the menu and are marked unavailable, so what the builder does is still
 legible.
 
+A click on empty space puts the selection down: on the chart's field, in the
+space round the table, or on the page under either. The node's card or row
+lets go of the accent, the URL drops it and the toolbar's actions with it. A
+click on a node, a row or a control is that thing's own, nothing inside a
+menu or an editor counts, and dragging the chart to pan it keeps the
+selection.
+
 ### The check
 
 The check status beside the view controls says what the engine made of the
@@ -349,7 +370,11 @@ draft avoids the rest of the company's addresses too, though it holds only
 their unit. The address
 is fixed once the draft is saved. A human seat's contact identity is optional:
 the form offers it, it can be added later in the seat's editor, and without
-one the person is reached through the dashboard only.
+one the person is reached through the dashboard only. An agent seat is added
+with a profile icon: the form suggests the first Crewlet character no agent in
+the draft wears yet and the next colour round the six, so a company growing
+one agent at a time is told apart before anybody has chosen, and you can pick
+another character and colour before adding it.
 
 **A new human seat is vacant until somebody is put on it**, which the builder
 does not do: who holds a seat is the identity directory's, not the company
@@ -401,12 +426,12 @@ not a field somebody sets.
 |---|---|
 | Name | Prose; two units may share a name. Renaming a unit re-onboards the agent seats in it and in its units, because onboarding pages are looked up under the new name. |
 | Key | The address every `manages` entry and seat placement names the unit by, and the unit's identity: its schedules and work are filed under it. Editable on a unit this draft added; shown and not edited on a saved one, since another key is another unit (remove it and add a new one). |
-| Type | One of the well-known types or a custom one. It is informational; an empty type is `team`. |
+| Type | A row of chips, one per type the engine knows (division, department, group, team, squad, pod, guild, chapter, unit), and **Custom**, which opens a box in the row for any other name. It is informational; a unit that names no type is a `team`, so Team shows as chosen. |
 | Purpose, goals | |
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
 | Knowledge | Free-text references, not a read scope. |
-| Owns: tracker project, knowledge space | Where unrouted work for the unit goes and where it files its own, whichever backend runs the tracker and the knowledge base. Not a permission. Changing either takes `config:write`, because a lead's authority is derived from them. |
+| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes and where it files its own. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). Changing either takes `config:write`, because a lead's authority is derived from them. |
 | Schedules: enabled | Each schedule can be switched on or off. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
@@ -419,6 +444,7 @@ credentials are written in the configuration document.
 |---|---|
 | Name | Prose; two seats may share a name. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
 | Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
+| Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
 | Email | The address inbound Jira and GitHub payloads identify the seat by, written as typed. |
 | Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
@@ -428,7 +454,7 @@ credentials are written in the configuration document.
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
-| Owns: tracker project, knowledge space | Agent seats. Where unrouted work for the seat goes and where it files its own. Not a permission. Changing either takes `config:write`. |
+| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `config:write`. |
 
 Shown with the reason they are not changed here: per-phase models
 (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
@@ -477,6 +503,7 @@ credential is ever shown.
   block enrols the seat in GitHub; create its app from Integrations. A seat's
   app permissions are fixed when the app is created, so after changing the tier
   of a seat whose app exists, raise the app's permissions at GitHub as well.
+- **Slack:** whether the seat speaks as its own Slack app. A seat's app has no channel of its own: it speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
   The engine provisions a bot only where the seat's `bot_token` is a whole
   `${NAME}` reference, so for such a seat the bot username is read-only:
@@ -494,9 +521,10 @@ agent seat), a per-seat Datadog role, GitLab tiers beyond developer and
 maintainer, and flags that grant access to everything (an empty repository
 list already does).
 
-Two more things the builder deliberately does not have. A seat has no colour
-of its own: colour on the dashboard shows state, never identity, so seats are
-told apart by their names and their badges. And the zoom is the chart's own:
+Two more things the builder deliberately does not have. A colour nobody
+chose: an agent seat is drawn in the colour its profile icon names and a
+person's seat and a unit in none, so no hue is ever made from a name. And the
+zoom is the chart's own:
 zoom in, zoom out and fit are buttons on the chart and keys while it has focus
 (plus, minus and zero), the percentage between the buttons opens a field to
 type one into, and Ctrl or Command with the wheel zooms toward the pointer.
@@ -604,16 +632,15 @@ seat goes:
 
 **Change to human seat** and **Change to agent seat** are their own step,
 because the change removes fields: the engine refuses a human seat every
-field an agent runs on (models, token ceilings, workers, learning, schedules,
-chat app blocks, its tracker project and knowledge space, tool credentials,
-behavioral guidelines and its own GitHub App), and refuses an agent seat
-`contact` and
-`availability`. The dialog lists the fields by name before anything is
-recorded, and calls out the ones that hold credentials: the builder never shows
-a credential, so it cannot type one back in and the value is gone for good once
-the change is saved. Removing a field tears nothing down at a vendor, so the
-seat's apps, bots and accounts, and the secret store entries the removed fields
-referenced, are listed as they are for a deleted seat.
+runtime field (models, sandbox, token budget, workers, learning, schedules,
+placement, chat app blocks, the project and space it owns, tool credentials,
+behavioral guidelines, its own GitHub App and its profile icon), and refuses an agent seat
+`contact` and `availability`. The dialog lists the fields by name before
+anything is recorded, and calls out the ones that hold credentials: the builder
+never shows a credential, so it cannot type one back in and the value is gone
+for good once the change is saved. Removing a field tears nothing down at a
+vendor, so the seat's apps, bots and accounts, and the secret store entries the
+removed fields referenced, are listed as they are for a deleted seat.
 
 Becoming a human seat offers a contact identity without requiring one, and
 cannot be done to the

@@ -23,8 +23,11 @@
 //     is the arbiter clock (the role Postgres now() played), and nodes never
 //     compare their own wall clocks.
 //
-//   - crewlet_duties, holding `worker:` leases, the fleet singletons. See
-//     "Two lease buckets" below for why they cannot share the first.
+//   - crewlet_duties, holding every OTHER lease: the `worker:` leases of the
+//     fleet singletons, and every class a caller leases under a name of its
+//     own (the tracker's `move:`, `merge:` and `bulk:` claims). Named for the
+//     duties, which are why it exists. See "Two lease buckets" below for why
+//     none of them can share the first.
 //
 //   - crewlet_epochs, with NO TTL. One persistent record per resource holding
 //     the monotonic counter and the placement hint, for both lease buckets.
@@ -51,23 +54,32 @@
 // deadline carried in the record, judged against the STORE's clock (see
 // Store.storeNow), never the caller's.
 //
-// # Two lease buckets, because seats and duties want opposite TTLs
+// # Two lease buckets, because seats and everything else want opposite TTLs
 //
-// A seat lease is renewed on the heartbeat, so its TTL is a few heartbeats. A
-// duty lease is re-claimed once per tick of the work it guards, and a tick
-// runs from ten seconds to an hour, so a duty TTL runs up to
-// coord.MaxDutyTTL. One bucket cannot serve both. Its age at the seat TTL
-// refused every duty longer than 45 seconds, which is how the retention sweep,
-// the integration reconcile, the learning passes and every integration pass
-// never ran on any fleet. Its age at the longest duty would put a clock read
-// under every seat renew, and a dead node's seats would sit claimable only by
-// deadline arithmetic rather than by the broker reaping them.
+// A seat lease is renewed on the heartbeat, so its TTL is a few heartbeats,
+// and so is a node's presence. Every other lease is sized from the work it
+// guards: a duty is re-claimed once per tick, and a tick runs from ten seconds
+// to an hour; a tracker walk's claim is renewed on the walk's own heartbeat
+// and lasts a minute; a bulk admission lasts twice the rows it projects. So
+// their TTLs run up to coord.MaxDutyTTL. One bucket cannot serve both. Its age
+// at the seat TTL refused every duty longer than 45 seconds, which is how the
+// retention sweep, the integration reconcile, the learning passes and every
+// integration pass never ran on any fleet — and, once the duties had moved
+// and the rest had not, every tracker walk claim, which is how every
+// cross-project move and merge failed on every fleet. Its age at the longest
+// duty would put a clock read under every seat renew, and a dead node's seats
+// would sit claimable only by deadline arithmetic rather than by the broker
+// reaping them.
 //
-// So the duty bucket's age is coord.MaxDutyTTL and EVERY duty record is judged
-// by its own deadline against the duty bucket's clock, while the seat bucket
-// keeps the production shape where a record that can still be read is live. A
-// duty is claimed per tick rather than per heartbeat, so the clock read costs
-// one round trip per tick of each duty, fleet-wide.
+// So WHICH BUCKET is decided by the class, and by the one rule coord states
+// for it (coord.HeldToSeatTTL): seats and presence in the seat lease bucket,
+// every other class — the duties and any caller's — in the duty bucket. The
+// duty bucket's age is coord.MaxDutyTTL and EVERY record in it is judged by
+// its own deadline against that bucket's clock, while the seat bucket keeps
+// the production shape where a record that can still be read is live. What
+// lives in the duty bucket is claimed per tick or renewed on a walk's
+// heartbeat rather than per seat heartbeat, so the clock read costs one round
+// trip per tick of each duty and per beat of each running walk, fleet-wide.
 //
 // THE DUTY BUCKET'S AGE IS ONLY EVER RAISED, and it is the ONE value this
 // store still writes to a bucket that already exists; every other bucket
@@ -77,7 +89,7 @@
 // lower. A reassertion of this node's own ceiling in either direction lets a
 // build with a shorter one shrink the age under a peer that holds a longer
 // duty, and the broker then reaps a live duty early. An age longer than a
-// duty's TTL costs nothing, because no duty record is judged by the age.
+// lease's TTL costs nothing, because no record there is judged by the age.
 //
 // # A claim is three writes, and the order carries the invariant
 //
@@ -90,11 +102,30 @@
 //
 // Both are satisfied by winning ownership in a CLAIMING state first — owner
 // set, epoch 0 — then advancing the counter, then committing the token into the
-// record already held. Epoch 0 is exactly the right marker because it is
+// record already held. (Between the first two the claim reads its own record
+// back by revision, for the store's timestamp on it — the tenure's start, which
+// the commit has to carry. A read, not a write, but a step a claim can fail
+// at all the same.) Epoch 0 is exactly the right marker because it is
 // exactly the wrong token: a conditional write predicated on it matches an
 // unset column, and TryAcquire has not returned, so nothing can be written
 // under it. Exactly one claimant gets past step 1, so exactly one advances the
 // counter. A renew is still one write.
+//
+// A claim that fails AFTER step 1 GIVES THE RECORD BACK ([Store.abandon]). It
+// used to leave it claiming until its TTL, on the reasoning that a claimant
+// that failed is a claimant that died — and it is not: it is alive, it knows
+// it failed, and the record it left holds the resource against everybody, its
+// own owner included. A peer reads a claiming record as held, and the owner's
+// own retries read it as a sibling one round trip from committing, so each
+// spun through every compare-and-swap round and answered UNKNOWN for the whole
+// TTL: an epochs bucket without a leader for a second kept a seat or a duty
+// dark for a lease's length. The give-back is exact because no token was
+// handed out — a counter the failed step did advance is a gap, and gaps are
+// harmless — and because it is taken only of the record carrying this call's
+// own claim (leaseValue.Claim), so it can never tear down a sibling's claim or
+// a tenure that did commit. What still lapses on its TTL is the record of a
+// claimant that could not give it back: one that died, or whose store refused
+// the give-back too.
 //
 // # The protocol gate degrades, deliberately
 //
@@ -104,30 +135,27 @@
 // shape here is check -> claim -> RE-CHECK -> release on violation. The window
 // shrinks to the interval between our check and our claim, and its consequence
 // changes from silent mixed-protocol operation to a claim we immediately give
-// back. Combined with the gate's existing asymmetry — only newer nodes wait,
-// older ones were never gated — that is a faithful degradation and a
-// deliberate difference, not an oversight. The gate reads both lease buckets,
-// because the contract counts every live lease.
+// back. Combined with the gate's existing asymmetry — only higher-protocol
+// nodes wait, lower ones are never gated — that is a faithful degradation and a
+// deliberate difference, not an oversight. The gate judges the seat lease
+// bucket alone, because the contract counts presence and seat leases and
+// nothing else (coord.ProtocolGateCounts) — a duty lease outlives a crashed
+// holder by up to coord.MaxDutyTTL, and counted, it kept a fleet from placing
+// a seat for that long after the last older node died mid-upgrade. It judges
+// it through a view kept by a watch and made exact by a sequence barrier,
+// never a listing per claim: gate.go is where that is argued, with the three
+// cheaper shapes that break it.
 //
-// # Every read is answered by the stream leader
-//
-// Every bucket here is held as a [leaderBucket], whose point reads go to the
-// bucket's stream leader, whose listings are closed on that leader before a
-// row is handed over, and whose handle on the client exposes no point read at
-// all, because the client's own Get, Create and listings are served by
-// whichever replica the server picks, and a replica behind an acknowledged
-// write answered from before it — a lease read that misses this node's own
-// acquire is "definitively not held". bucket.go is the authority on that,
-// including why the buckets' allow_direct flag is not rewritten to fix it.
-//
-// # Every listing is ONE PASS, and never the client's ListKeys
+// # Every listing is ONE CERTIFIED PASS, and never the client's ListKeys
 //
 // Reading a whole bucket goes through [eachEntry], which hands over the KEY
-// AND THE VALUE TOGETHER in a single ordered pass, and narrows to one key
-// class at the BROKER where the caller wants one. walk.go is the authority on
-// that, including why the batched direct read that would drop even the
-// consumer is deliberately not used; what follows is why the obvious shape is
-// worse than either.
+// AND THE VALUE TOGETHER in a single ordered pass, narrows to one key class at
+// the BROKER where the caller wants one, and CERTIFIES the pass against the
+// stream's own key index before handing anything over, because a pass cannot
+// tell a complete answer from one that lost a key being rewritten under it.
+// walk.go is the authority on all of that, including why the batched direct
+// read that would drop even the consumer is deliberately not used; what
+// follows is why the obvious shape is worse than either.
 //
 // A key listing is not a cheap read. The client implements ListKeys as a
 // watcher, so each call CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER —
@@ -146,13 +174,92 @@
 // not be reached" are three different facts, and a short list with no error
 // collapses the third into the second at every caller at once. For the trim's
 // published floor it is not a degraded read but a delete of records a node
-// still needs. Both walks end on one explicit marker and ONLY on it — the nil
-// entry, or the broker's end-of-batch — and anything else is
-// [coord.ErrUnavailable], named as such.
+// still needs. The pass ends on one explicit marker and ONLY on it — the nil
+// entry — and anything else is [coord.ErrUnavailable], named as such. The
+// marker is where the pass ends rather than proof that it saw every key,
+// which is what the certification is for: it is the client's guess, and
+// measured against three renewers it guessed early on 23% of listings.
 //
 // The ordered walk also owns its watcher, so there is no early-return path
 // that leaks one — the abandoned-listing case the client's blocking 256-entry
 // handoff could park a goroutine and a server-side consumer on for ever.
+//
+// # Every single-key read is the leader's
+//
+// A lease's read-back, a renew's and a release's read, Get, the epoch and
+// hint reads, and every record the fleet store reads by key (fleet.go, the
+// mailboxes, the positions, the follows, the secrets) go
+// through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
+// the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
+// handle's own Get, and none may be.
+//
+// That Get is a DIRECT get, and a direct get is answered by whichever replica
+// the broker picks — the one on the caller's own member first — from its own
+// copy, which can be behind a write the quorum has acknowledged: measured on
+// three members with the CPU saturated, 5 to 8 of every 100 reads made
+// straight after an acknowledged write returned the revision before it,
+// whichever member the reader was connected to. The contract
+// is that a backend serves its own writes per resource (coord.Backend), and
+// every lease answer rests on it: TryAcquire reads its own write back to learn
+// the store's deadline, and on the copy it read the claim's record was still
+// the claiming one it had just replaced, so a claim that WON answered a
+// refusal. Measured on a three-member cluster, a hundred leaf nodes
+// claiming at once: 743 of 10,000 claims on fresh resources answered "not
+// held" for a lease the store then held under their owner until its TTL — a
+// singleton duty dark on every node for a TTL, since the one node that won
+// believed a peer had it. The same read made a renew or a release through a
+// member that was behind answer FALSE, "definitively not yours", which a seat
+// host acts on by shedding the seat, and a fleet record read by key through
+// it answered "absent" for a record the quorum held. shared_cluster_test.go
+// holds both: the conformance case with its handles on members holding no
+// copy, and a member cut off from its peers, whose reads must fail rather than
+// answer from the copy it has.
+//
+// A read the leader cannot answer — none elected, or none reachable — FAILS,
+// which is [coord.ErrUnavailable] to every caller: the contract's third answer,
+// never "absent". A write needs that leader anyway, so a node that cannot read
+// its lease could not have renewed it either.
+//
+// THE ONE COPY THAT IS BEHIND AND STILL ANSWERS is a leader cut off from its
+// peers that has not yet noticed. The broker gives a stream leader no lease: a
+// member that led a stream when it was cut goes on answering that stream's
+// leader reads from its own copy until its metadata layer goes leaderless or
+// its group steps down on lost quorum — measured at about ten seconds after the
+// cut, nats-server's lostQuorumInterval — while the majority elects a leader
+// of its own and moves on. So through a member on the minority side of a
+// partition, a stream it led reads up to that far behind, and a record the
+// majority wrote reads as absent. Nothing written through that member lands (a
+// write needs its quorum), a tenure is fenced by its epoch, and a renew's or a
+// release's compare-and-set fails there; what such a read cannot be trusted
+// with is a decision that writes nothing. Closing the window takes a read that
+// proves a quorum — a barrier append per read, as the state log's linearizable
+// read is — which would make every heartbeat's read a write, so this package
+// does not: the window is the bound it gives, stated here so a caller deciding
+// on an absence knows it has one.
+//
+// The cost, measured on an in-process cluster: a leader read takes 40–220 µs
+// at the median where a direct get takes 25–135 µs — the hop to the leader
+// when the caller's member is not it — and 27,000 reads a second through one
+// member's client where direct gets reached 50,000. A fleet's lease reads are
+// its heartbeats, one read per held lease per renew, so ten thousand seats on
+// the fifteen-second seat heartbeat ask for under seven hundred a second: a
+// few percent of that ceiling. What a direct get would buy back is served by
+// nothing here, because every read in this package is one a caller acts on as
+// current — which is why none of them stays direct.
+//
+// # Every conditional write is DECIDED by the leader
+//
+// A compare-and-set here — a renew, a release, a claim's commit, an epoch's
+// advance, every create (createKey's conditional publish at zero or at a
+// marker's revision) and every fleet record's conditional update or removal —
+// can be answered three ways, not two: it lands; it is refused on a
+// comparison; or the leader declines to compare it at all because another
+// write to the subject is still in flight, which decides nothing, since the
+// write ahead may be this caller's own and already acknowledged. The client
+// maps the last two to one revision mismatch. So every bucket handle this
+// package holds is [settled]: its conditional writes are retried through
+// [jsinflight.Decide] until the leader decides them, and one still undecided
+// at its deadline is UNKNOWN rather than a race somebody else won (settle.go).
 package kv
 
 import (
@@ -165,7 +272,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nats-io/nats.go"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -175,9 +282,9 @@ import (
 
 var log = logging.Get("coord.kv")
 
-// Arguments a caller got wrong. They are errors rather than a (nil, nil)
-// refusal on purpose: (nil, nil) means "somebody else holds this", and a blank
-// owner has not lost a race to anybody. An error routes them to the contract's
+// Arguments a caller got wrong. They are errors rather than a refusal on
+// purpose: a refusal means "somebody else holds this" or "a gate stopped you",
+// and a blank owner has done neither. An error routes them to the contract's
 // third answer — "no answer" — which a caller retries loudly instead of acting
 // on a lie about a peer that does not exist.
 var (
@@ -238,8 +345,10 @@ type Config struct {
 	//
 	// It is a property of the BUCKET, not of a call: see the package doc.
 	// A per-call seat or presence TTL longer than the age in force is
-	// refused; a shorter one is honoured against the store's own clock. Duty
-	// TTLs do not depend on it: they are bounded by coord.MaxDutyTTL.
+	// refused; a shorter one is honoured against the store's own clock. No
+	// other lease's TTL depends on it — a duty's, a tracker walk's — since
+	// every other class is kept in the duty bucket and bounded by
+	// coord.MaxDutyTTL.
 	//
 	// A bucket a peer created first is ADOPTED rather than rewritten, so the
 	// age in force may not be this number at all. [Store.TTL] reports the one
@@ -290,7 +399,7 @@ func (c *Config) normalize() error {
 
 // lane is one lease bucket and the rule its records expire by.
 type lane struct {
-	kv *leaderBucket
+	kv jetstream.KeyValue
 
 	// stream is the name of the stream backing the bucket, resolved once at
 	// Open. storeNow needs it because the clock is read through js.Stream,
@@ -302,6 +411,12 @@ type lane struct {
 	// a record's timestamp is stamped by ITS stream's leader, and in a
 	// cluster two streams may be led by two servers.
 	stream string
+
+	// read answers a record as the stream LEADER holds it — every
+	// single-key read of this bucket goes through it (see the package doc's
+	// "Every single-key read is the leader's"). Built once, at Open, since
+	// it is only an address.
+	read *leaderReader
 
 	// maxTTL is the longest TTL a claim on this bucket may ask for.
 	maxTTL time.Duration
@@ -317,13 +432,22 @@ type lane struct {
 type Store struct {
 	js jetstream.JetStream
 
-	// leases holds seat and presence leases.
+	// leases holds seat and presence leases, and nothing else.
 	leases *lane
-	// duties holds every duty lease this build claims.
+	// duties holds every other lease this build claims: every duty, and
+	// every class a caller leases (see [Store.laneFor]).
 	duties *lane
-	epochs *leaderBucket
+	epochs jetstream.KeyValue
+	// epochRead is the epochs bucket's leader read, as [lane.read] is a
+	// lease bucket's.
+	epochRead *leaderReader
 
 	ttl time.Duration
+
+	// gate is the protocol gate's view of the seat lease bucket (gate.go),
+	// which is what every gated claim and FleetProtocolFloor judge instead
+	// of listing the fleet's leases.
+	gate *gateView
 }
 
 var _ coord.Backend = (*Store)(nil)
@@ -368,16 +492,14 @@ var _ coord.Backend = (*Store)(nil)
 // [OpenFleet] (every bucket that one makes plus these three, rather than these
 // three alone), and the engine applies it once where it makes both, in
 // internal/engine's attachCoordination.
-func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
-	if nc == nil {
-		return nil, errors.New("coord/kv: a NATS connection is required")
+func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, error) {
+	if js == nil {
+		return nil, errors.New("coord/kv: a JetStream client is required — built " +
+			"over the stream's own connection, in the API its broker speaks " +
+			"(see internal/jsapi)")
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
-	}
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
 	// THE FACTS COME BACK WITH THE BUCKET, resolved once here where nothing
@@ -435,9 +557,16 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 				"the bucket while the fleet is down so the next boot re-creates it")
 	}
 
+	var readers [3]*leaderReader
+	for i, bucket := range []jetstream.KeyValue{leases, duties, epochs} {
+		if readers[i], err = newLeaderReader(js, bucket); err != nil {
+			return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
+		}
+	}
+
 	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "duties", duties.Bucket(),
 		"epochs", epochs.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
-	return &Store{
+	s := &Store{
 		js: js,
 		// The seat lease bucket's ceiling is the age IN FORCE on it, never
 		// this node's configured TTL: validateTTL refuses a claim against
@@ -445,7 +574,8 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		// bucket, so believing a number the bucket does not carry would
 		// accept deadlines it will not honour.
 		leases: &lane{
-			kv:         newLeaderBucket(js, leases, leaseFacts),
+			kv:         settled(js, leases),
+			read:       readers[0],
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
 			reapsAtMax: true,
@@ -453,14 +583,18 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		// The duty bucket's ceiling is the CONTRACT's, and its age only has
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
-			kv:         newLeaderBucket(js, duties, dutyFacts),
+			kv:         settled(js, duties),
+			read:       readers[1],
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
 		},
-		epochs: newLeaderBucket(js, epochs, epochFacts),
-		ttl:    leaseFacts.age,
-	}, nil
+		epochs:    settled(js, epochs),
+		epochRead: readers[2],
+		ttl:       leaseFacts.age,
+	}
+	s.gate = newGateView(s)
+	return s, nil
 }
 
 // openDuties creates or adopts the duty bucket, raising its age to
@@ -471,7 +605,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 // create-else-observe handling of a peer that won the race, and the same
 // refusal of a bucket replicated below what this node is configured for.
 //
-// # The one value this store still applies to a bucket that exists
+// # The one value this store applies to a bucket that exists
 //
 // Adoption is the rule everywhere else because every other difference is a
 // PREFERENCE, and the node that booted last does not get to redefine one. This
@@ -479,14 +613,15 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 // can honour, so a bucket created by a build with a shorter ceiling reaps a
 // live duty lease early and the fleet then runs that duty on two nodes at
 // once. Raising it is safe in the only direction that matters, and it is ONLY
-// ever raised, because an age longer than a duty's TTL costs nothing: no duty
-// record is judged by the age, every one carries its own deadline.
+// ever raised, because an age longer than a lease's TTL costs nothing: no
+// record here is judged by the age, every one carries its own deadline.
 func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, bucketFacts, error) {
 	name := cfg.BucketPrefix + dutiesSuffix
 	want := jetstream.KeyValueConfig{
 		Bucket: name,
-		Description: "Crewlet duty leases; every record is judged by its own deadline, and the " +
-			"bucket age is only ever raised to cover the longest duty",
+		Description: "Crewlet duty leases and every other lease outside seats and presence; every " +
+			"record is judged by its own deadline, and the bucket age is only ever raised to " +
+			"cover the longest duty",
 		TTL:      coord.MaxDutyTTL,
 		Replicas: cfg.Replicas,
 	}
@@ -500,9 +635,25 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	if err != nil {
 		return nil, bucketFacts{}, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
-	// An age of zero is no age at all, which already outlives every duty:
+	return raiseAge(ctx, js, cfg.Clustered, bucket, facts, want, "duty lease")
+}
+
+// raiseAge raises a bucket's age to want.TTL when it is younger, and never
+// lowers it — the ONE value this store applies to a bucket that already
+// exists, and only to the duty leases, whose records each carry a deadline of
+// their own: the age is not a preference there but the CEILING on the
+// deadlines the bucket can honour (see [openDuties]), and an age longer than
+// any one record's deadline costs nothing, because no record is judged by the
+// age. `facts` are what [openBucket] read back as IN FORCE on the bucket, and
+// the facts answered are the ones in force once this returns. `holds` names
+// what the bucket keeps, for the error and the log.
+func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
+	bucket jetstream.KeyValue, facts bucketFacts, want jetstream.KeyValueConfig,
+	holds string) (jetstream.KeyValue, bucketFacts, error) {
+
+	// An age of zero is no age at all, which already outlives every record:
 	// raising it would SHORTEN it.
-	if facts.age == 0 || facts.age >= coord.MaxDutyTTL {
+	if facts.age == 0 || facts.age >= want.TTL {
 		return bucket, facts, nil
 	}
 	// THE REPLICA COUNT IN FORCE, never this node's. openBucket has already
@@ -517,35 +668,33 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	// neither, so it ran under nats.go's undeclared five-second default
 	// while its siblings had minutes.
 	writeCtx, cancelWrite := context.WithTimeout(ctx,
-		jsprovision.Clustered(cfg.Clustered).Budget())
+		jsprovision.Clustered(clustered).Budget())
 	defer cancelWrite()
 	var updated jetstream.KeyValue
-	err = jsprovision.Place(writeCtx, jsprovision.Clustered(cfg.Clustered).AskTerm(),
+	err := jsprovision.Place(writeCtx, jsprovision.Clustered(clustered).AskTerm(),
 		func(ctx context.Context) error {
 			var e error
 			updated, e = js.UpdateKeyValue(ctx, want)
 			return e
 		}, nil)
 	if err != nil {
-		return nil, bucketFacts{}, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it "+
-			"can hold a duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)
+		return nil, bucketFacts{}, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so "+
+			"it can hold a %s for its full TTL: %w", want.Bucket, facts.age, want.TTL, holds, err)
 	}
-	log.InfoContext(ctx, "coord_kv_duty_bucket_age_raised", "bucket", name,
-		"from", facts.age, "to", coord.MaxDutyTTL)
+	log.InfoContext(ctx, "coord_kv_bucket_age_raised", "bucket", want.Bucket,
+		"holds", holds, "from", facts.age, "to", want.TTL)
 	// THE AGE IN FORCE IS NOW THE ONE JUST WRITTEN; the stream behind the
 	// bucket and its replica count are what they were, and the update
 	// carried both forward deliberately (see want.Replicas above).
-	facts.age = coord.MaxDutyTTL
+	facts.age = want.TTL
 	return updated, facts, nil
 }
 
 // bucketFacts is what one status read tells the boot path about a bucket:
-// the stream behind it and the subject a key sits under, which is what a read
-// from the stream leader is addressed by (see [leaderBucket]), and the two
-// values IN FORCE on it rather than the ones this node asked for.
+// the stream behind it, and the two values IN FORCE on it rather than the ones
+// this node asked for.
 type bucketFacts struct {
 	stream   string
-	prefix   string
 	age      time.Duration
 	replicas int
 }
@@ -572,51 +721,47 @@ func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, er
 	if !ok || info.StreamInfo() == nil {
 		return bucketFacts{}, fmt.Errorf("coord/kv: %s reported no backing stream", bucket.Bucket())
 	}
-	// ONE SUBJECT SPACE, "$KV.<bucket>.>", which is the shape the client
-	// gives every bucket it makes. Anything else — a mirror, a bucket
-	// sourcing another — keeps its keys under subjects a read by key cannot
-	// address, and a read that guessed would answer "not there" for every
-	// key it has.
-	subjects := info.StreamInfo().Config.Subjects
-	if len(subjects) != 1 || !strings.HasSuffix(subjects[0], ".>") {
-		return bucketFacts{}, fmt.Errorf("coord/kv: %s is backed by a stream on subjects %v, "+
-			"not a bucket's one subject space, so its keys cannot be read by subject",
-			bucket.Bucket(), subjects)
-	}
 	return bucketFacts{
 		stream:   info.StreamInfo().Config.Name,
-		prefix:   strings.TrimSuffix(subjects[0], ">"),
 		age:      info.TTL(),
 		replicas: info.StreamInfo().Config.Replicas,
 	}, nil
 }
 
 // TTL reports the seat lease TTL IN FORCE, which is the seat lease bucket's
-// own age: what expires a seat or presence lease, and what [Store.validateTTL]
-// holds every such claim to.
+// own age: what expires a seat or presence lease, and
+// what [Store.validateTTL] holds every such claim to.
 //
 // NOT NECESSARILY THIS NODE'S CONFIGURED VALUE: the bucket is adopted rather
 // than rewritten, so on a fleet it carries whatever the member that created it
 // asked for. See [Open], and [engine.effectiveLeaseTTL] for why the caller
-// must acquire with this rather than with its own. A duty's ceiling is not
-// this number at all: it is coord.MaxDutyTTL, whatever the seat leases run on.
+// must acquire with this rather than with its own. No other lease's ceiling
+// is this number at all — a duty's, a tracker walk's, any caller class's: it
+// is coord.MaxDutyTTL, whatever the seat leases run on.
 func (s *Store) TTL() time.Duration { return s.ttl }
 
 // each walks a whole bucket — see [eachEntry], which is the one implementation
 // and which both backends reach through a method of their own only so that a
 // call site reads as a walk rather than as connection plumbing.
-func (s *Store) each(ctx context.Context, b *leaderBucket,
+func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, b, visit)
+	return eachEntry(ctx, s.js, kv, visit)
+}
+
+// create writes a key that must not hold a live value — see [createKey], the
+// one create this package makes, and markers.go for why it is not the bucket
+// handle's own.
+func (s *Store) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
+	return createKey(ctx, s.js, kv, key, value)
 }
 
 // eachUnder is [Store.each] over one resource class, narrowed at the broker —
 // see [eachEntryUnder]. `what` names the listing a failure could not finish.
-func (s *Store) eachUnder(ctx context.Context, b *leaderBucket, class coord.Class, what string,
+func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, b, coord.DocumentFilter(string(class)), what, visit)
+	return eachEntryUnder(ctx, s.js, kv, coord.DocumentFilter(string(class)), what, visit)
 }
 
 // checkClass refuses a class that cannot address a key.
@@ -636,76 +781,88 @@ func checkClass(class coord.Class) error {
 		"contain no %q", string(class), coord.ResourceSeparator)
 }
 
-// laneFor is the bucket a resource's lease is written into by this build.
+// laneFor is the bucket a resource's lease is written into by this build:
+// the seat lease bucket for the leases the seat lease TTL holds
+// ([coord.HeldToSeatTTL] — seats and presence), and the duty bucket for EVERY
+// other one, whoever's class it is. Routing the duties alone there left a
+// caller's class — the tracker's walk claims — held to the seat bucket's age,
+// which refused the 60-second walk claim beside a 45-second seat TTL.
 func (s *Store) laneFor(resource string) *lane {
-	if coord.ClassWorker.Holds(resource) {
-		return s.duties
+	if coord.HeldToSeatTTL(resource) {
+		return s.leases
 	}
-	return s.leases
+	return s.duties
 }
 
-// lanesFor is the bucket a listing of one class reads: the duty bucket for the
-// duty class and the seat lease bucket for every other, so the membership read
-// on every heartbeat never opens the duty bucket.
-func (s *Store) lanesFor(class coord.Class) []*lane {
-	if class == coord.ClassWorker {
-		return []*lane{s.duties}
+// laneOf is the one bucket a listing of one class reads: the class lives
+// wherever laneFor writes it. Seats and presence live in the seat lease
+// bucket alone, so each membership read on a heartbeat costs what it did
+// before anything had a bucket of its own.
+func (s *Store) laneOf(class coord.Class) *lane {
+	if class.HeldToSeatTTL() {
+		return s.leases
 	}
-	return []*lane{s.leases}
+	return s.duties
 }
 
 // --- the lease surface ----------------------------------------------------
 
 // TryAcquire claims resource for the owner, or reports that someone else holds
 // it.
-func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, opts.Owner, opts.TTL); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		snap, err := s.readForClaim(ctx, l, resource, opts.Ungated)
+		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
-			return nil, err
-		}
-		// The gate, fleet-wide: refuse while ANY live lease is held at an
-		// older protocol. The disagreement is about what HOLDING A LEASE
-		// means, so it is not scoped to the resource being claimed.
-		// Asymmetric by construction — it only ever looks for a LOWER
-		// protocol, so an older node (which has no such check to run) is
-		// never blocked.
-		if !opts.Ungated {
-			blocked, gateErr := s.blockedByOlder(ctx, snap.all, snap.clock, protocol)
-			if gateErr != nil {
-				return nil, gateErr
-			}
-			if blocked {
-				return nil, nil
-			}
+			return nil, "", err
 		}
 
 		mine := snap.mine
 		held := false
 		if mine != nil {
 			if held, err = s.held(ctx, *mine, snap.clock); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
 		if held && mine.value.Owner != opts.Owner {
-			return nil, nil
+			// A PEER HOLDS IT, which is the answer whatever the gate
+			// would say (coord.RefusedHeld), so no gate is judged for a
+			// claim that cannot write — which is what keeps a sweep over
+			// seats its peers hold from starting the gate view at all.
+			return nil, coord.RefusedHeld, nil
+		}
+		// The gate, fleet-wide: refuse while any live presence or seat
+		// lease (coord.ProtocolGateCounts) is held at a lower protocol.
+		// The disagreement is about what HOLDING A SEAT means, so it is
+		// not scoped to the resource being claimed.
+		// Asymmetric by construction — it only ever looks for a LOWER
+		// protocol, so a lower-protocol node is never blocked.
+		if !opts.Ungated {
+			blocked, gateErr := s.gate.blocked(ctx, protocol)
+			if gateErr != nil {
+				return nil, "", gateErr
+			}
+			if blocked {
+				return nil, coord.RefusedProtocol, nil
+			}
 		}
 		if held && mine.value.Epoch == claimingEpoch {
 			// One of THIS owner's own concurrent claims holds the record
 			// and has not committed its token yet. There is no epoch to
 			// keep, and taking it over would fence this owner against
 			// itself for no reason. Go round again; the sibling call is
-			// one round trip from committing. If it never does — it
-			// failed and abandoned the record — the attempts run out and
-			// this answers UNKNOWN, which is honest: the record lapses on
-			// its TTL like any other, and the next call takes it.
+			// one round trip from committing, or — if it failed — from
+			// giving the record back ([Store.abandon]). If it does
+			// neither, it died or its store refused the give-back as
+			// well, the attempts run out and this answers UNKNOWN, which
+			// is honest: the record lapses on its TTL like a dead
+			// owner's lease, and the next call takes it.
 			continue
 		}
 		value := leaseValue{
@@ -746,13 +903,13 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// never behind the lease bucket — that ordering is what
 				// lets PreferredResources read one bucket.
 				if err = s.pinHint(ctx, resource, opts.Preferred); err != nil {
-					return nil, err
+					return nil, "", err
 				}
 			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			data, err := encodeValue(value)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			// Update at the read revision is the fencing CAS: it fails if
 			// anything at all wrote the record since we read it.
@@ -760,7 +917,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
-				return nil, unavailable("renew lease "+resource, err)
+				return nil, "", unavailable("renew lease "+resource, err)
 			}
 			return s.settle(ctx, l, resource, value, opts, protocol, false)
 		}
@@ -785,26 +942,38 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// rather than 1; and worse, ownership would briefly exist at a
 		// token the persistent counter had not committed, which is the
 		// exact state fencing exists to prevent.
+		//
+		// A failure after step 1 GIVES THE RECORD BACK — see the package
+		// doc's "A claim is three writes". Every failure below that is not
+		// a lost compare-and-swap may have left this call's claiming
+		// record in the bucket, including a write whose answer was lost
+		// after it landed, so each one hands [Store.abandon] the claim it
+		// wrote rather than a revision it may never have been told.
 		claiming := value
 		claiming.Epoch = claimingEpoch
+		claiming.Claim = uuid.NewString()
 		claimData, err := encodeValue(claiming)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var rev uint64
 		if mine == nil {
-			if rev, err = l.kv.Create(ctx, key, claimData); err != nil {
-				if lostCreateRace(err) {
+			if rev, err = s.create(ctx, l.kv, key, claimData); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
-				return nil, unavailable("create lease "+resource, err)
+				err = unavailable("create lease "+resource, err)
+				s.abandon(ctx, l, resource, claiming, mine, err)
+				return nil, "", err
 			}
 		} else {
 			if rev, err = l.kv.Update(ctx, key, claimData, mine.revision); err != nil {
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
-				return nil, unavailable("claim lease "+resource, err)
+				err = unavailable("claim lease "+resource, err)
+				s.abandon(ctx, l, resource, claiming, mine, err)
+				return nil, "", err
 			}
 		}
 
@@ -819,7 +988,13 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// a record already taken from us costs no token.
 		acquiredAt, taken, err := s.claimedAt(ctx, l, resource, rev)
 		if err != nil {
-			return nil, err
+			// No token was minted, and the record is this call's own
+			// claiming one: it goes back, as after every other failure
+			// past the first write. A read the caller gave up on — the
+			// usual way this fails — would otherwise leave the resource
+			// held against its own owner for a whole TTL.
+			s.abandon(ctx, l, resource, claiming, mine, err)
+			return nil, "", err
 		}
 		if taken {
 			continue
@@ -831,16 +1006,19 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// through re-pins it on the persistent record if the two ever drift.
 		epoch, hint, err := s.bumpEpoch(ctx, resource, value.Preferred)
 		if err != nil {
-			// The record is left in the claiming state and expires with
-			// its TTL, exactly as a lease whose owner died does. No token
-			// was minted, so nothing is stranded.
-			return nil, err
+			// No token was handed out, and one the counter did take is
+			// a gap, which is harmless. What must not stay is the
+			// record: left claiming, it held the resource against every
+			// claimant — this owner's retries included — for its TTL.
+			s.abandon(ctx, l, resource, claiming, mine, err)
+			return nil, "", err
 		}
 		value.Epoch = epoch
 		value.Preferred = hint
 		data, err := encodeValue(value)
 		if err != nil {
-			return nil, err
+			s.abandon(ctx, l, resource, claiming, mine, err)
+			return nil, "", err
 		}
 		if _, err := l.kv.Update(ctx, key, data, rev); err != nil {
 			// Our claiming record was taken from us, which needs the
@@ -849,11 +1027,18 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
-			return nil, unavailable("commit lease "+resource, err)
+			// UNKNOWN whether the commit landed. If it did, the record
+			// is a committed tenure under this owner, which abandon
+			// leaves alone — it carries no claim — and this owner's
+			// next claim renews it. If it did not, the record is still
+			// this call's claiming one, and it goes back.
+			err = unavailable("commit lease "+resource, err)
+			s.abandon(ctx, l, resource, claiming, mine, err)
+			return nil, "", err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
-	return nil, contended("TryAcquire", resource)
+	return nil, "", contended("TryAcquire", resource)
 }
 
 // claimedAt is the store's timestamp on revision rev of resource's record,
@@ -862,26 +1047,27 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 // to have lapsed and been taken — so the claim goes round again exactly as a
 // lost CAS does.
 func (s *Store) claimedAt(ctx context.Context, l *lane, resource string, rev uint64) (time.Time, bool, error) {
-	kve, err := l.kv.GetRevision(ctx, encodeResource(resource), rev)
+	kve, err := l.read.at(ctx, encodeResource(resource), rev)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return time.Time{}, true, nil
 	}
 	if err != nil {
-		// The record is left in the claiming state and expires with its
-		// TTL, exactly as a lease whose owner died does. No token has been
-		// minted yet, so nothing is stranded.
+		// The caller gives the claiming record back ([Store.abandon]):
+		// no token has been minted, so nothing is stranded either way.
 		return time.Time{}, false, unavailable("read back the claim on "+resource, err)
 	}
 	return kve.Created().UTC(), false, nil
 }
 
-// settle reads the record back and re-runs the gates.
+// settle reads the record back and re-runs the protocol gate.
 //
 // The read-back is not paranoia: coord.Lease.ExpiresAt must be the STORE's
 // deadline, and the write only returns a revision number. Reading the record
 // we just wrote is how the server's own timestamp for it reaches the caller.
-// On the gated path the same read doubles as the protocol gate's re-check, so
-// the degradation described in the package doc costs one read, not two.
+// On the gated path the protocol gate is judged again AFTER the write, through
+// the view's barrier (gate.go), which waits for every write before this
+// re-check to be in the view, so a record a lower-protocol node wrote before
+// our claim cannot be missed by it.
 func (s *Store) settle(
 	ctx context.Context,
 	l *lane,
@@ -890,10 +1076,10 @@ func (s *Store) settle(
 	opts coord.AcquireOptions,
 	protocol int,
 	fresh bool,
-) (*coord.Lease, error) {
-	snap, err := s.readForClaim(ctx, l, resource, opts.Ungated)
+) (*coord.Lease, coord.Refusal, error) {
+	snap, err := s.readForClaim(ctx, l, resource)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	mine := snap.mine
 	if mine == nil || mine.value.Owner != want.Owner || mine.value.Epoch != want.Epoch {
@@ -901,39 +1087,160 @@ func (s *Store) settle(
 		// reachable with a TTL short enough to lapse inside one round
 		// trip — but the honest answer is the definite one: by the time we
 		// looked, it was not ours.
-		return nil, nil
+		return nil, coord.RefusedHeld, nil
 	}
 	if !opts.Ungated {
-		blocked, err := s.blockedByOlder(ctx, snap.all, snap.clock, protocol)
+		blocked, err := s.gate.blocked(ctx, protocol)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if blocked {
-			return nil, s.yield(ctx, resource, want, protocol, fresh, "coord_kv_claim_yielded_to_older_peer")
+			if err := s.yield(ctx, resource, want, protocol, fresh); err != nil {
+				return nil, "", err
+			}
+			return nil, coord.RefusedProtocol, nil
 		}
 	}
-	return mine.lease(), nil
+	return mine.lease(), "", nil
 }
 
-// yield gives back a claim a gate's re-check refused, when the claim is new.
+// yield gives back a claim the protocol gate's re-check refused, when the
+// claim is new.
 //
 // This is the whole difference from Postgres's atomic subquery: the window did
 // not close, it just changed what happens in it.
 //
-// A re-claim of a lease this owner already held is NOT released: the gates
-// exist to stop a newer node TAKING work beside an older one, and dropping a
-// seat mid-turn would not prevent anything. The refusal still propagates,
-// which is what stops the next sweep, and the next tick of a duty.
-func (s *Store) yield(ctx context.Context, resource string, want leaseValue, protocol int, fresh bool, event string) error {
+// A re-claim of a lease this owner already held is NOT released: the protocol
+// gate exists to stop a higher-protocol node TAKING work beside a lower one,
+// and dropping a seat mid-turn would not prevent anything. The refusal still
+// propagates, which is what stops the next sweep.
+func (s *Store) yield(ctx context.Context, resource string, want leaseValue, protocol int, fresh bool) error {
 	if !fresh {
 		return nil
 	}
 	if _, err := s.Release(ctx, resource, want.Owner, want.Epoch); err != nil {
 		return err
 	}
-	log.InfoContext(ctx, event, "resource", resource, "owner", want.Owner, "epoch", want.Epoch,
-		"protocol", protocol)
+	log.InfoContext(ctx, "coord_kv_claim_yielded_to_older_peer", "resource", resource, "owner", want.Owner,
+		"epoch", want.Epoch, "protocol", protocol)
 	return nil
+}
+
+// abandon gives back the claiming record a TryAcquire wrote and could not
+// commit, so the resource is claimable at once rather than dark for its TTL.
+// cause is why the claim failed, for the line that says so.
+//
+// A TEARDOWN, so it runs on the caller's context WITHOUT its cancellation: the
+// failure being undone is often that cancellation itself — a claim abandoned
+// by a caller that gave up mid-epoch — and a give-back that inherited it would
+// do nothing at all. Bounded instead by the client's own API timeout, since
+// removing the cancellation removes the deadline with it.
+//
+// EXACT, in both directions that matter:
+//
+//   - It takes back ONLY the record carrying this call's claim. A sibling
+//     claim by the same owner writes its own, and a commit clears it, so a
+//     record that no longer carries it — a commit whose answer was lost
+//     after it landed, or a claim that lapsed and was taken — is not this
+//     call's to touch, and is left exactly as it is.
+//   - It FENCES OUT this call's own claiming write where that has not landed
+//     yet, which is the case a cancelled caller makes: the client gives up
+//     on a request the server has not processed, and the request lands after
+//     the give-back looked — a record carrying this call's claim that nothing
+//     would ever take back. So where the key is still what the claiming write
+//     was made against — no live record for a create, the same revision for a
+//     takeover — the give-back writes its tombstone against that same
+//     expectation, and the late write is refused by the expectation it
+//     carries. Before the fence a loaded suite caught it: a claim cancelled
+//     part way left a record carrying its claim that landed after the
+//     give-back had looked, and its owner was answered unknown until the
+//     record's TTL.
+//
+// Every write is at the revision it read, so a record that moved in between
+// is read again rather than overwritten: nothing but this call writes its
+// claim, so a move either landed that claim — to be taken back — or took the
+// key from this call.
+//
+// The give-back is the tombstone [Store.Release] writes, so a reader treats
+// the resource as unheld and the next claim is an ordinary takeover. A
+// give-back the store refuses leaves the record to lapse on its TTL, which is
+// where it used to be left every time, and says so.
+func (s *Store) abandon(ctx context.Context, l *lane, resource string, claiming leaseValue,
+	over *entry, cause error) {
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.js.Options().DefaultTimeout)
+	defer cancel()
+	gaveBack, err := s.giveBack(ctx, l, resource, claiming, over)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "coord_kv_claim_abandon_failed", "resource", resource,
+			"owner", claiming.Owner, "cause", cause.Error(), "error", err.Error(),
+			"detail", "the claim failed part way and its record could not be given back either, "+
+				"so the resource reads as held until the record's TTL lapses")
+	case gaveBack:
+		log.InfoContext(ctx, "coord_kv_claim_abandoned", "resource", resource,
+			"owner", claiming.Owner, "cause", cause.Error())
+	}
+}
+
+// giveBack tombstones resource's record if it is the claiming record this call
+// wrote, or fences the key against that write if it has not landed, reporting
+// whether it wrote. over is the record the claiming write was made over, nil
+// for a create.
+func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming leaseValue,
+	over *entry) (bool, error) {
+
+	key := encodeResource(resource)
+	for range casAttempts {
+		e, err := s.readOne(ctx, l, resource)
+		if err != nil {
+			return false, err
+		}
+		var (
+			tomb   leaseValue
+			landed bool
+		)
+		switch {
+		case e != nil && e.value.Epoch == claimingEpoch && e.value.Claim == claiming.Claim:
+			tomb, landed = e.value, true
+		case over == nil && e == nil:
+			tomb = claiming
+		case over != nil && e != nil && e.revision == over.revision:
+			tomb = e.value
+		default:
+			// The key moved on without this call's write: a commit
+			// that landed, a claim that lapsed and was taken, or a
+			// takeover's record gone — which refuses that write by
+			// its own expectation.
+			return false, nil
+		}
+		tomb.Owner, tomb.Claim = "", ""
+		tomb.TTLNanos = int64(l.maxTTL)
+		data, err := encodeValue(tomb)
+		if err != nil {
+			return false, err
+		}
+		if e == nil {
+			_, err = s.create(ctx, l.kv, key, data)
+		} else {
+			_, err = l.kv.Update(ctx, key, data, e.revision)
+		}
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists),
+			errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			// Moved between the read and the write — possibly by this
+			// call's own claiming write landing. Read it again.
+			continue
+		default:
+			if landed {
+				return false, unavailable("give back the claim on "+resource, err)
+			}
+			return false, unavailable("fence the claim on "+resource, err)
+		}
+	}
+	return false, contended("giveBack", resource)
 }
 
 // Renew extends a lease the caller still holds at this epoch.
@@ -1078,18 +1385,18 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 // THE BROKER NARROWS THIS ONE. A class is the leading segment of a resource
 // and therefore a subject token of its key, so each scan asks for that class
 // and nothing else, where it used to read every lease in the bucket (seats and
-// duties alike) to count the nodes. And only the duty class opens the duty
-// bucket at all; see [Store.lanesFor].
+// duties alike) to count the nodes. And a seat or presence listing never opens
+// the duty bucket, nor any other class's the seat bucket; see [Store.laneOf].
 func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
 	scan := func(ctx context.Context, l *lane) ([]entry, error) { return s.scanIn(ctx, l, class) }
 	// Nothing is filtered here: the broker has already answered with this
 	// class and no other, which is the whole point of narrowing it there.
-	return s.listLive(ctx, s.lanesFor(class), scan, func(entry) bool { return true })
+	return s.listLive(ctx, []*lane{s.laneOf(class)}, scan, func(entry) bool { return true })
 }
 
-// listLive reads the live leases kept by keep across lanes. A resource lives
-// in exactly one lane — its class decides which ([Store.laneFor]) — so the
-// lanes never list one resource twice.
+// listLive reads the live leases kept by keep across lanes. The lanes hold
+// disjoint classes — a resource is written only where laneFor puts it — so
+// no resource is listed twice.
 //
 // `scan` is how each lane is read, because the two callers narrow differently:
 // a class listing asks the broker for that class alone, and a listing by owner
@@ -1151,39 +1458,25 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 	return out, nil
 }
 
-// FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: TryAcquire
-// can only answer yes or no, so a node stalled behind an older peer would
-// otherwise look identical to one whose peers simply hold every seat.
+// FleetProtocolFloor returns the lowest protocol among the live leases the
+// gate counts (presence and seats, coord.ProtocolGateCounts), and whether
+// there were any. It is the observability half of the gate: a claim
+// refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
+// and this names that protocol. It is asked after such a refusal and never
+// otherwise — a sweep whose seats were merely held learns that from the
+// refusal ([coord.RefusedHeld]) and judges no gate.
 //
-// It counts what the GATE counts (held records in both lease buckets,
-// including one still in the claiming state) rather than what Get returns.
+// It counts what the GATE counts (held presence and seat records, including
+// one still in the claiming state) rather than what Get or a listing returns.
 // The two questions differ, and this one exists to explain a refusal: a floor
 // that omitted the very record that caused one would send an operator looking
-// for a peer that is not there.
+// for a peer that is not there, and one that counted a duty the gate passes
+// over would name an older build nothing is being refused for.
+//
+// Judged by the gate's view (gate.go), so it costs what a gate costs rather
+// than a listing of the fleet's leases.
 func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
-	all, err := s.scanAll(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	clk := s.newClock()
-	floor, found := 0, false
-	for _, e := range all {
-		p := e.value.Protocol
-		if found && p >= floor {
-			// Cannot lower the floor, so its liveness is not worth a
-			// clock read.
-			continue
-		}
-		held, err := s.held(ctx, e, clk)
-		if err != nil {
-			return 0, false, err
-		}
-		if held {
-			floor, found = p, true
-		}
-	}
-	return floor, found, nil
+	return s.gate.floor(ctx)
 }
 
 // --- the epochs bucket ----------------------------------------------------
@@ -1205,7 +1498,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		kve, err := s.epochs.Get(ctx, key)
+		kve, err := s.epochRead.live(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			next := resourceValue{Resource: resource, Epoch: 1, Preferred: preferred}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -1213,8 +1506,8 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 			if err != nil {
 				return 0, "", err
 			}
-			if _, err := s.epochs.Create(ctx, key, data); err != nil {
-				if lostCreateRace(err) {
+			if _, err := s.create(ctx, s.epochs, key, data); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
 				return 0, "", unavailable("mint epoch "+resource, err)
@@ -1258,7 +1551,7 @@ func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		kve, err := s.epochs.Get(ctx, key)
+		kve, err := s.epochRead.live(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Only reachable if the persistent record vanished under a
 			// live lease, which nothing in this backend does. The lease
@@ -1296,52 +1589,35 @@ func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
 
 // --- reading --------------------------------------------------------------
 
-// snapshot is what one claim decision reads: every lease record it must judge,
-// the one it is about, and the clock those judgements are taken against.
+// snapshot is what one claim decision reads: the record it is about, and the
+// clock that record is judged against.
 type snapshot struct {
-	all   []entry
 	mine  *entry
 	clock *clock
 }
 
-// readForClaim gathers what TryAcquire needs.
+// readForClaim reads the record a claim is about, by itself, from the
+// stream LEADER.
 //
-// An UNGATED claim reads one key instead of the whole of both lease buckets,
-// and that is not a micro-optimisation: node presence is renewed on every
-// heartbeat of every node, and scanning the fleet's leases to renew one's own
-// presence would make the read cost of a heartbeat grow with the fleet.
-func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, ungated bool) (snapshot, error) {
-	snap := snapshot{clock: s.newClock()}
-	if ungated {
-		e, err := s.readOne(ctx, l, resource)
-		if err != nil {
-			return snapshot{}, err
-		}
-		if e != nil {
-			snap.all = []entry{*e}
-			snap.mine = &snap.all[0]
-		}
-		return snap, nil
-	}
-
-	all, err := s.scanAll(ctx)
+// The claim writes at its revision and settle judges the claim's own write by
+// it, so it must be the newest the quorum holds: a copy one write behind
+// hands settle the claiming record this very call replaced, which read as
+// "superseded" and answered a refusal for a lease the store held under this
+// owner until its TTL. What the gate judges is not in the snapshot at all: the
+// gate's view answers it (gate.go).
+func (s *Store) readForClaim(ctx context.Context, l *lane, resource string) (snapshot, error) {
+	mine, err := s.readOne(ctx, l, resource)
 	if err != nil {
 		return snapshot{}, err
 	}
-	snap.all = all
-	for i := range all {
-		if all[i].lane == l && all[i].resource == resource {
-			snap.mine = &snap.all[i]
-			break
-		}
-	}
-	return snap, nil
+	return snapshot{mine: mine, clock: s.newClock()}, nil
 }
 
-// readOne reads a single lease record from a bucket. A missing key is
-// (nil, nil).
+// readOne reads a single lease record from a bucket, as the stream LEADER holds
+// it. A missing key is (nil, nil); a read the leader did not answer is
+// unknown, never missing.
 func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, error) {
-	kve, err := l.kv.Get(ctx, encodeResource(resource))
+	kve, err := l.read.live(ctx, encodeResource(resource))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil
 	}
@@ -1357,19 +1633,6 @@ func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, 
 			coord.ErrUnavailable, resource)
 	}
 	return &e, nil
-}
-
-// scanAll reads every record of both lease buckets.
-func (s *Store) scanAll(ctx context.Context) ([]entry, error) {
-	leases, err := s.scan(ctx, s.leases)
-	if err != nil {
-		return nil, err
-	}
-	duties, err := s.scan(ctx, s.duties)
-	if err != nil {
-		return nil, err
-	}
-	return append(leases, duties...), nil
 }
 
 // scan reads every lease record of one bucket in one pass.
@@ -1397,7 +1660,7 @@ func (s *Store) scanIn(ctx context.Context, l *lane, class coord.Class) ([]entry
 func (s *Store) collect(ctx context.Context, l *lane,
 	walk func(func(jetstream.KeyValueEntry) error) error) ([]entry, error) {
 
-	byResource := map[string]entry{}
+	var out []entry
 	err := walk(func(kve jetstream.KeyValueEntry) error {
 		e, ok := decodeEntry(kve, l)
 		if !ok {
@@ -1407,21 +1670,17 @@ func (s *Store) collect(ctx context.Context, l *lane,
 			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", l.kv.Bucket(), "key", kve.Key())
 			return nil
 		}
-		// ONCE PER RESOURCE: the walk hands over each key once, at its
-		// newest revision, whatever its two halves delivered (walk.go).
-		byResource[e.resource] = e
+		// Once per resource: the walk hands each key over once, at the
+		// newest revision the listing read, and a resource is one key.
+		out = append(out, e)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]entry, 0, len(byResource))
-	for _, e := range byResource {
-		out = append(out, e)
-	}
-	// Sorted because a map iterates in a different order every time, and an
-	// unstable listing turns any downstream ordering bug into one that
-	// reproduces once in ten runs.
+	// Sorted by RESOURCE, where the walk hands keys over in KEY order: a key
+	// is the resource's encoding — another separator, escaped segments — so
+	// the two orders are not the same order.
 	slices.SortFunc(out, func(a, b entry) int { return strings.Compare(a.resource, b.resource) })
 	return out, nil
 }
@@ -1581,26 +1840,6 @@ func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
 	return info.TimeStamp.UTC(), nil
 }
 
-// blockedByOlder is the mixed-version gate's predicate.
-//
-// A record at this protocol or newer cannot block, so only an older one's
-// liveness is judged, and a fleet running one build reads no clock for it.
-func (s *Store) blockedByOlder(ctx context.Context, entries []entry, clk *clock, protocol int) (bool, error) {
-	for _, e := range entries {
-		if e.value.Protocol >= protocol {
-			continue
-		}
-		held, err := s.held(ctx, e, clk)
-		if err != nil {
-			return false, err
-		}
-		if held {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // --- errors ---------------------------------------------------------------
 
 // validate checks the identity every call carries.
@@ -1631,8 +1870,9 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 	}
 	if l == s.duties {
 		// The duty bucket's ceiling IS the contract's, so the contract's
-		// check and its message are the whole answer.
-		return coord.CheckDutyTTL(resource, ttl)
+		// check and its message are the whole answer, for a duty and for
+		// every other class laneFor sends here.
+		return coord.CheckLeaseTTL(resource, ttl)
 	}
 	if ttl > l.maxTTL {
 		// The bucket's MaxAge would reap the record before this deadline,

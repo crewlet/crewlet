@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +52,13 @@ func (probeDomain) Stream() statelog.StreamSpec {
 		Replay:          statelog.ReplayStrict,
 		ArbitratedKinds: []string{"object"},
 	}
+}
+
+// specOf is a fake domain's stream as a node runs it — its own declaration,
+// at its own ceiling, because a fake's runner and publisher are held to that
+// declaration in everything but the ceiling ([statelog.StreamSpec.Instantiates]).
+func specOf(d statelog.Domain) statelog.StreamSpec {
+	return d.Stream()
 }
 
 func (probeDomain) RecordVersion() int { return 1 }
@@ -135,6 +144,63 @@ type applier struct {
 	// truncated is what Truncated answers: nil while no peer's rows hold
 	// records the log lost.
 	truncated error
+
+	// rules, when set, is what answers Voided: a REAL runner whose
+	// checkpoint carries a reanchor's rules ([reanchorRules]), so what a
+	// resolution is told depends on the generation and the sequence it
+	// asks about exactly as the applier's own drop does. A fake answering
+	// one reason for every record certified that the rules were asked and
+	// nothing about what they were asked — a resolution asking about
+	// generation zero at sequence zero, which the rules void nothing at,
+	// passed it. voidedAsked is every question, in order.
+	rules       statelog.Voids
+	voidedAsked []voidedQuestion
+
+	// budgets is what was left of each wait's context when the wait began —
+	// the budget a write handed its applier — in order.
+	budgets []time.Duration
+}
+
+// noteBudget records what is left of ctx's deadline as a wait begins. The
+// caller holds mu.
+func (a *applier) noteBudget(ctx context.Context) {
+	if deadline, ok := ctx.Deadline(); ok {
+		a.budgets = append(a.budgets, time.Until(deadline))
+	}
+}
+
+// waitBudgets is every wait's budget so far.
+func (a *applier) waitBudgets() []time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.budgets)
+}
+
+// voidedQuestion is one question a resolution asked the reanchor rules: a
+// record stamped with generation Gen, at sequence Seq.
+type voidedQuestion struct {
+	Gen uint32
+	Seq uint64
+}
+
+// Voided answers what the staged rules answer, recording the question; with
+// none staged, no record is void.
+func (a *applier) Voided(gen uint32, seq uint64) (statelog.Reason, bool) {
+	a.mu.Lock()
+	rules := a.rules
+	a.voidedAsked = append(a.voidedAsked, voidedQuestion{Gen: gen, Seq: seq})
+	a.mu.Unlock()
+	if rules == nil {
+		return "", false
+	}
+	return rules.Voided(gen, seq)
+}
+
+// voidedQuestions is every question the reanchor rules were asked.
+func (a *applier) voidedQuestions() []voidedQuestion {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]voidedQuestion(nil), a.voidedAsked...)
 }
 
 func (a *applier) StreamIdentity() error {
@@ -220,6 +286,7 @@ func (a *applier) Committed() statelog.Position {
 
 func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	a.mu.Lock()
+	a.noteBudget(ctx)
 	stalled := a.stalled
 	if !a.frozen && a.committed.Packed() < p.Packed() {
 		a.committed = p
@@ -234,6 +301,7 @@ func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error 
 
 func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
 	a.mu.Lock()
+	a.noteBudget(ctx)
 	err, committed := a.applyErr, a.committed
 	a.mu.Unlock()
 	if err != nil {
@@ -256,8 +324,8 @@ func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, er
 	return entry, ok, nil
 }
 
-// LostBefore answers the instant [harness.sweep] or
-// [harness.adoptFromAScrubbingDonor] last lost rows before.
+// LostBefore answers the instant [harness.sweep] last lost rows before, for
+// every subject kind alike: the probe domain declares no kind of its own.
 func (a *applier) LostBefore(context.Context, string) (time.Time, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -465,16 +533,66 @@ type fakeGates struct {
 	mu     sync.Mutex
 	reason statelog.Reason
 	gated  bool
+
+	// writer, when set, is the one writer the gate holds — a writer's gate
+	// is an eviction, which drops a record by who wrote it — and asked is
+	// every writer the publisher asked about, in order.
+	writer string
+	asked  []string
+
 	// bodies is every body the publisher handed over, one per question.
 	bodies [][]byte
 }
 
-func (g *fakeGates) GatedAt(_ context.Context, _ statelog.Subject, _, _ string,
+func (g *fakeGates) GatedAt(_ context.Context, _ statelog.Subject, writer, _ string,
 	_ statelog.Position, body []byte) (statelog.Reason, bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.asked = append(g.asked, writer)
 	g.bodies = append(g.bodies, body)
+	if g.writer != "" && writer != g.writer {
+		return "", false, nil
+	}
 	return g.reason, g.gated, nil
+}
+
+// holdWriter makes the gate hold writer's records, under reason, and no one
+// else's.
+func (g *fakeGates) holdWriter(writer string, reason statelog.Reason) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.writer, g.reason, g.gated = writer, reason, true
+}
+
+// askedAbout is every writer the gate was asked about.
+func (g *fakeGates) askedAbout() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.asked...)
+}
+
+// faultyRecords is the log read by position, as the publisher's resolution
+// reads it, with a failure a case can inject.
+type faultyRecords struct {
+	inner statelog.LogReader
+	mu    sync.Mutex
+	err   error
+}
+
+func (r *faultyRecords) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	r.mu.Lock()
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return "", nil, time.Time{}, false, err
+	}
+	return r.inner.At(ctx, seq)
+}
+
+func (r *faultyRecords) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
 }
 
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
@@ -583,11 +701,16 @@ type harness struct {
 	gates   *fakeGates
 	applier *applier
 	appends *countingAppender
+	records *faultyRecords
 	log     *js.DomainLog
 
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
 	reserve *statelog.Reserve
 	gen     atomic.Uint32
+
+	// deps is what pub was built from, for a case that builds a second
+	// publisher over the same seams with one of them changed.
+	deps statelog.Deps
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
@@ -624,15 +747,32 @@ func reserveOn(t testing.TB, spec statelog.StreamSpec, log *js.DomainLog) *state
 // decides several of the write path's branches.
 func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	t.Helper()
+	return newHarnessLogging(t, domain, nil)
+}
+
+// newHarnessLogging is [newHarnessFor] with the publisher writing its lines to
+// logger, for a case that reads what a write logged; nil is the package's own
+// logger, as the engine's publishers have.
+func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger) *harness {
+	t.Helper()
 	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
 	// streams in memory, and every property this framework rests on is
 	// about a stream that survives.
-	return newHarnessOn(t, domain, js.Config{StoreDir: t.TempDir()})
+	return buildHarness(t, domain, js.Config{StoreDir: t.TempDir()}, logger)
 }
 
 // newHarnessOn is [newHarnessFor] over the broker cfg names: an external
 // server's URL, for a case about a limit the embedded broker does not have.
 func newHarnessOn(t *testing.T, domain statelog.Domain, cfg js.Config) *harness {
+	t.Helper()
+	return buildHarness(t, domain, cfg, nil)
+}
+
+// buildHarness is the one place a harness is built: over the broker cfg names,
+// with the publisher writing its lines to logger (nil is the package's own).
+func buildHarness(t *testing.T, domain statelog.Domain, cfg js.Config,
+	logger *slog.Logger) *harness {
+
 	t.Helper()
 	q, err := js.Open(t.Context(), cfg)
 	if err != nil {
@@ -643,7 +783,7 @@ func newHarnessOn(t *testing.T, domain statelog.Domain, cfg js.Config) *harness 
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := domain.Stream()
+	spec := specOf(domain)
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name:            spec.Name,
 		Subjects:        spec.Subjects,
@@ -664,6 +804,7 @@ func newHarnessOn(t *testing.T, domain statelog.Domain, cfg js.Config) *harness 
 	h.fence = &fakeFence{}
 	h.gates = &fakeGates{}
 	h.appends = &countingAppender{inner: log, applier: h.applier, gen: h.gen.Load}
+	h.records = &faultyRecords{inner: log}
 	// A REAL RECORDER, because what the publisher counts a refusal as is an
 	// operator's only view of which remedy a fleet needs, and a case that
 	// asserts it has no other witness.
@@ -672,26 +813,33 @@ func newHarnessOn(t *testing.T, domain statelog.Domain, cfg js.Config) *harness 
 	}
 
 	deps := statelog.Deps{
-		Domain:        domain,
-		Log:           h.appends,
-		Signer:        testSigner(t, domain),
+		Domain: domain, Spec: specOf(domain),
+		Log:    h.appends,
+		Signer: testSigner(t, domain),
+		// THE LOG READ BY POSITION THROUGH THE SAME KEYRING, as the
+		// engine's publisher reads it: every record on it is a signed
+		// frame, and the resolution decodes a copy's envelope.
+		Records:       statelog.VerifiedLog{Log: h.records, Verifier: testVerifier(t, domain)},
 		Rows:          h.rows,
 		Fence:         h.fence,
 		Gates:         h.gates,
 		Waiter:        h.applier,
+		Voids:         h.applier,
 		Identity:      h.applier,
 		Metrics:       h.metrics,
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
+		Logger:        logger,
 	}
 	// THE REAL LOG'S OWN RESERVE, where the domain keeps one: every write
 	// through the harness is admitted against the broker's usage, as the
 	// engine's are.
-	if statelog.KeepsGateReserve(domain) {
+	if statelog.ReservationOf(domain).Kept {
 		h.reserve = reserveOn(t, spec, log)
 		deps.Admission = h.reserve
 	}
+	h.deps = deps
 	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
@@ -801,4 +949,26 @@ func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
 		t.Fatal(err)
 	}
 	return verifier
+}
+
+// gatedUnder is how many records the runner counted as gated under reason.
+func gatedUnder(h *applyHarness, reason statelog.Reason) uint64 {
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogRecordsGated && snapshot.Attrs["gate"] == string(reason) {
+			total += snapshot.Total
+		}
+	}
+	return total
+}
+
+// appliedAs is how many records the runner counted consumed with result.
+func appliedAs(h *applyHarness, result string) uint64 {
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogApplyRecords && snapshot.Attrs["result"] == result {
+			total += snapshot.Total
+		}
+	}
+	return total
 }

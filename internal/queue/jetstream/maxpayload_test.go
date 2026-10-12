@@ -220,7 +220,7 @@ accounts {
 // and every row does.
 func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testing.T) {
 	t.Parallel()
-	opts, scratch, err := embeddedOptions(Config{})
+	opts, scratch, err := embeddedOptions(Config{}, systemUser{})
 	if err != nil {
 		t.Fatalf("broker options: %v", err)
 	}

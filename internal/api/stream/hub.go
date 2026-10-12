@@ -126,9 +126,11 @@ const (
 	// [watching]).
 	//
 	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The tracker's applier, on
-	// every node, says whose inbox each committed batch moved, and each
-	// node pushes that to its OWN sockets through [Service.InboxChanged] —
-	// every node applies every record, so no node forwards to another. The
+	// every node serving the API — each holds the estate, since ingress
+	// requires the `data` role — says whose inbox each committed batch
+	// moved, and each node pushes that to its OWN sockets through
+	// [Service.InboxChanged]: every such node applies every record, so no
+	// node forwards to another. The
 	// payload is an [InboxChange]: identifiers and a count, never content.
 	KindInboxChanged Kind = "inbox_changed"
 
@@ -756,6 +758,21 @@ func (h *Hub) Watchers(seat string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.bySeat[seat])
+}
+
+// WatchedSeats is every seat at least one client watches, sorted — the
+// audience of a frame that has to reach every watched seat at once
+// ([Service.InboxReread]). The index holds no empty bucket, so a seat listed
+// here has a watcher.
+func (h *Hub) WatchedSeats() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	seats := make([]string, 0, len(h.bySeat))
+	for seat := range h.bySeat {
+		seats = append(seats, seat)
+	}
+	slices.Sort(seats)
+	return seats
 }
 
 // SetPosture moves the hub and every client on it to p.

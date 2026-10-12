@@ -71,9 +71,15 @@ func DutyTTL(tick time.Duration) time.Duration {
 // restarted node tends to get its own duty back.
 //
 // The claim is UNGATED against the protocol floor, deliberately, and for the
-// reason coord's own doc gives ([coord.AcquireOptions.Ungated]): the gate is
-// about what holding a SEAT means, and gating a duty claimed per tick would
-// stop it for the length of a rolling upgrade for nothing.
+// reason coord's own doc gives ([coord.AcquireOptions.Ungated]): the floor
+// guards what holding a SEAT means, so a fleet singleton keeps running through
+// a rolling upgrade rather than stalling until the last lower-protocol lease
+// lapses. Ungated skips the check, never the stamp: the claim carries this
+// build's protocol (an omitted [coord.AcquireOptions.Protocol] is this
+// build's). The stamp is a fact for a reader of the lease and holds no claim
+// back — the gate counts presence and seats, never a duty
+// ([coord.ProtocolGateCounts]) — so a duty an older node crashed holding
+// cannot keep a newer fleet from placing seats for its TTL.
 //
 // TryAcquire doubles as a renew for the current owner and keeps its epoch, so
 // the per-tick claim is one store round trip and the holder stays the holder
@@ -118,7 +124,7 @@ func HoldNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.D
 	}
 	resource := coord.WorkerResource(duty)
 	return func(ctx context.Context) (func(), bool, error) {
-		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner:     owner,
 			TTL:       ttl,
 			Preferred: nodeID,
@@ -167,7 +173,7 @@ func ClaimNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.
 	}
 	resource := coord.WorkerResource(duty)
 	return func(ctx context.Context) (bool, error) {
-		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner:     owner,
 			TTL:       ttl,
 			Preferred: nodeID,

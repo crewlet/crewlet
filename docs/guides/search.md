@@ -16,7 +16,8 @@ A hybrid search runs two rankers and fuses them:
 
 - **Lexical** — BM25 over the engine's own inverted list, in this node's
   database.
-- **Semantic** — a two-stage vector scan over the replicated vectors.
+- **Semantic** — a two-stage vector search over the replicated vectors, whose
+  first stage probes the corpus's semantic index when it has one.
 
 Every indexed document carries a **search shard**: a stable hash of its own
 identity into 64 fixed buckets, written beside the row in both estates by the
@@ -41,6 +42,18 @@ alike — takes one of three modes, with one vocabulary on every surface:
 | `keyword` | the words the query used — BM25 alone | Keyword |
 | `semantic` | what the query means — the vector scan alone | Meaning |
 
+**The two halves do not read the same text.** The keyword half indexes a
+source's title and its whole body. The semantic half ranks one vector per
+source, computed from its **opening** — the title and then the body, whitespace
+collapsed, the first 8 KiB of the two together, or less where the model's own
+per-input bound is smaller (see
+[Where the vectors come from](../concepts/knowledge-system.md#where-the-vectors-come-from)).
+So a passage deep in a long page is found by `hybrid` and `keyword` through the
+words it uses, and never by `semantic`, which cannot see past the window.
+`crewlet search eval` reports, per corpus, how many sources and how much of
+their text lie past it (see
+[What the quality of this can and cannot be promised](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
+
 A semantic ranking needs the **query** in the same embedding space as the
 documents. The asking node computes that vector once through the company's
 embeddings provider — the same model and width the corpus is embedded at — and
@@ -53,6 +66,20 @@ embedded is a cache hit for the same phrase searched as knowledge, and for the
 turn-start prefetch. Computing a query's vector is bounded at **two seconds** —
 twice the one-second budget of the scan itself — so a slow provider costs a
 search its meaning half rather than holding the person who asked.
+
+**A query is at most 400 bytes**, on every surface that takes one: a seat's
+`search_knowledge`, `search_work_items` and `answer_knowledge`, the operator's
+tools, the API's `knowledge` and `work_search` (`bad_params`, naming the size
+and the limit) and the dashboard, which sends nothing past it and says why. A
+longer one is **refused, never cut** — a query is a question, and a search on
+its first part answers another one; past four hundred bytes it is a pasted
+thread, which no ranker turns into a better search. This is the opposite of
+what the corpus does with a long page, and deliberately: a source is embedded
+as its opening because one vector stands for one source, while a query's
+vector is always computed from the **whole** query. Every model this build
+knows takes at least 2 032 bytes an input; on a model stated with a narrower
+window (`max_input_tokens`), a query longer than one input is embedded in
+pieces at the model's bound, in one request, and the pieces' vectors pooled.
 
 **A mode asked for is not always a mode served, and every answer says which.**
 It carries `served_mode` (the ranking the hits actually came from), `modes`
@@ -88,8 +115,43 @@ mode is still `hybrid`.
 
 A keyword search sends no vector at all, so a participant runs no vector scan
 for it; the rankers a query needs travel with it, and the asking node fuses
-only the ones it asked for even from a participant on an older build that ran
-both.
+only the ones it asked for.
+
+## How big a corpus one node scans
+
+The semantic scan has a **one-second budget**, and how much fits inside it
+depends on how many searches the node is running *at the same moment* — seats
+taking turns, the dashboard, a person searching — and on which **first stage**
+answers: the full scan of every sign code, or the corpus's semantic index,
+which reads only the lists nearest the query (see
+[the knowledge system](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)).
+Measured side by side in one run, at 3 072 dimensions on four cores, p95, over
+40 000 sources of the test fixture's topical corpus — where the index's
+training chose to read **half** its lists:
+
+| Searches in flight | Full scan, per document | Inside one second | Index, per document | Inside one second |
+|---|---|---|---|---|
+| 1 (an idle node) | 2.90 µs | ≈ 345 000 | 1.84 µs | ≈ 545 000 |
+| 8 | 7.34 µs | ≈ 136 000 | 5.48 µs | ≈ 183 000 |
+
+The second row is the one for a node that is running a company. The metric
+`crewlet.tracker.search.concurrency` says which row your node is actually on;
+see [Metrics](../reference/metrics.md). The index's column is **per probe
+share**: an index that reads an eighth of its lists — which the same corpus's
+training chooses at 120 000 sources — reads a quarter of the rows this one
+does, and a corpus with no index is on the scan's column. So is a search
+**narrowed** to a small share of the corpus — to the pages in a corpus
+that is mostly tasks, or to one container: it reads lists until it has seen
+as many of its own rows as an unfiltered search reads, and past half the
+lists it runs the scan instead, which reads every row its filter keeps. `crewlet search
+eval` names the first stage and the share. Every figure here is a benchmark on
+one machine — the scan's own benchmark measured 2.58 µs and 6.14 µs on a
+quieter host — so treat them as a projection until the benchmarks have run on
+yours; [Replication](replication.md#three-things-ci-cannot-prove) says the
+same.
+
+Past the row your node is on, a single node's search is slower than its budget
+and `search_slow` fires. A fleet divides the scan, below.
 
 ---
 
@@ -104,9 +166,12 @@ sort the live node ids, give each a contiguous range, hand the remainder to the
 first few. 64 buckets over three nodes is 22, 21, 21.
 
 Below that floor a search is answered by the asking node alone. The floor is
-not a preference — a broker round trip is about a millisecond and 10 000
-documents is about 13 ms of scanning, so under it a fan-out spends more wall
-clock arranging the work than doing it.
+not a preference — a broker round trip is about a millisecond, and a semantic
+scan of 10 000 documents measures 49 ms at p95 on an idle node and 125 ms with
+eight searches in flight. Under it the scan's fixed cost dominates (its
+per-document cost at 10 000 is nearly twice its cost at 40 000), and a fan-out
+divides the documents but makes every node pay that fixed cost again, so it
+spends more wall clock arranging the work than it saves.
 
 **More nodes is not always faster, and the limit is CPU rather than count.**
 Measured on four cores over 4 000 documents, with every participant in one
@@ -213,6 +278,18 @@ broker. A search that returned nothing because the broker hiccupped would be a
 fleet-wide outage of a read every node can serve alone, so only the *peers'*
 ranges can go missing.
 
+### When the estate does not answer
+
+The bucket division above is how the corpus is scanned. On a node without the
+`data` role the search itself is asked of a data node — every data node holds
+the whole estate — and a search none of them could run is answered with **no
+mode served** and none of the corpus covered (`served_mode` empty,
+`coverage.complete` false), rather than as an empty list: a seat is told the
+knowledge base could not be searched, and never "nothing matched". A work-item
+search no data node could run is an error the caller is told, for the same
+reason. The bucket coverage above says something narrower: a search that ran,
+with a range of the corpus unscanned.
+
 ---
 
 ## The index also derives a page's backlinks
@@ -232,9 +309,9 @@ which would read as "nothing links here" about a page that is linked.
 **An upgrade that changes what the index derives needs no rebuild command.**
 Every indexed row records the derivation it was built under (`kb_docs.derivation`,
 compared against the build's `search.IndexDerivation`), and a row built under an
-older one is re-derived on the next lap exactly as a row whose source moved.
-The upgrade that introduced backlinks is one: every row indexed before it is
-re-read once, and until that lap finishes the node reports `building`.
+older one is re-derived on the next lap exactly as a row whose source moved. A
+later build that bumps `search.IndexDerivation` re-reads each row once, and
+until that lap finishes the node reports `building`.
 
 ---
 
@@ -248,8 +325,17 @@ re-read once, and until that lap finishes the node reports `building`.
    configuration and no rebuild.
 3. **Check `recall_below_floor`.** A corpus whose vectors are behind is
    answering semantically from a fraction of itself.
+4. **Check the first stage.** `crewlet search eval` says whether searches are
+   probing the corpus's index or scanning, and why — unfiltered, and for
+   each narrowed shape how many of its searches scanned. A corpus scans
+   below 1 024 sources, while a model change is re-embedding it, when its
+   training measured that no index reading half its lists or fewer meets the
+   recall floor in every shape — which is a property of the corpus, and
+   `ivf_recall_below_floor` says when it is the codes rather than the index
+   that fall short.
 
-There is no index to tune, no shard count to set and no routing table to
-maintain. The bucket count is fixed for the life of a deployment: changing it
-re-buckets every document, which costs a full index rebuild rather than a
-rebalance.
+There is nothing to tune: the index's list count follows the corpus, how many
+lists a search reads is its own training's measurement, and there is no shard
+count to set and no routing table to maintain. The bucket count is fixed for
+the life of a deployment: changing it re-buckets every document, which costs a
+full index rebuild rather than a rebalance.

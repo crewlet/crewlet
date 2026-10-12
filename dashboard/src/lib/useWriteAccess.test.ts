@@ -11,6 +11,7 @@ import {
   configGuardedReason,
   configWriteAccess,
   linkOf,
+  mayChangeConfig,
   orgWriteAccess,
   writeAccess,
 } from "./useWriteAccess.ts";
@@ -18,6 +19,7 @@ import { ACT_ERRORS } from "~/contract/errors.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { leadScope, NO_SCOPE } from "./leadScope.ts";
 import type { ViewerState } from "./viewer.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -33,6 +35,8 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 /** Signed in, and the directory binds them to no seat. */
@@ -181,6 +185,44 @@ describe("changing the company's configuration", () => {
       reason: "these are Rui's",
     });
   });
+
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every credential
+  // but its writers is held, with the sentence naming who manages it — after
+  // the reasons a person can clear here, and before a hold no screen releases.
+  test("a managed document holds every credential but its writers", () => {
+    const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
+    expect(configWriteAccess(managed, "open")).toEqual({
+      can: false,
+      block: "managed",
+      reason: managedSentence(["gitops"]),
+    });
+    expect(managedSentence(["gitops"])).toContain("managed by gitops");
+    expect(configWriteAccess(managed, "open", "these are Rui's")).toMatchObject({
+      block: "managed",
+    });
+    // The grant ranks first: a reader who could not write anyway is told
+    // what they lack, which is the thing they can clear.
+    expect(configWriteAccess({ ...managed, grants: ["config:read"] }, "open")).toMatchObject({
+      block: "no_grant",
+    });
+    expect(
+      configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), "open"),
+    ).toEqual({ can: true });
+    expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), "open")).toEqual({
+      can: true,
+    });
+  });
+
+  // THE STANDING ANSWER agrees with the press-time one about WHO may write,
+  // and ignores what only this moment decides — the socket, a screen's hold.
+  test("whether the reader may change the configuration at all is the grant and the writers", () => {
+    expect(mayChangeConfig(viewer({}))).toBe(true);
+    expect(mayChangeConfig(viewer({ grants: ["config:read"] }))).toBe(false);
+    expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
+      false,
+    );
+    expect(mayChangeConfig(viewer({ configWriter: true, configManagedBy: ["gitops"] }))).toBe(true);
+  });
 });
 
 // THE COMPANY'S GRANT, OR A LEAD INSIDE THEIR SUBTREE: the engine admits a
@@ -228,6 +270,28 @@ describe("changing one part of the org chart", () => {
     const admin = { ...lead, grants: ["config:read", "config:write"] };
     expect(orgWriteAccess(admin, "open", scope, { seat: "pm" })).toEqual({ can: true });
   });
+
+  // A LEAD IS NO WRITER OF A MANAGED DOCUMENT: the engine refuses a subtree
+  // write from every credential the writers list does not name (ADR-0030), so
+  // a control inside what they lead is held with the managed sentence — while
+  // one outside still says it is outside, which is the nearer reason.
+  //
+  // Mutation: drop the managed check on the lead path, and the first goes green
+  // as `{ can: true }` for a write the engine would refuse.
+  test("a lead's subtree write is held on a managed document", () => {
+    const managed = { ...lead, configWriter: false, configManagedBy: ["gitops"] };
+    expect(orgWriteAccess(managed, "open", scope, { seat: "swe" })).toEqual({
+      can: false,
+      block: "managed",
+      reason: managedSentence(["gitops"]),
+    });
+    expect(orgWriteAccess(managed, "open", scope, { seat: "pm" })).toMatchObject({
+      block: "outside_scope",
+    });
+    expect(
+      orgWriteAccess(managed, "open", scope, { seat: "swe" }, "these are Rui's"),
+    ).toMatchObject({ block: "managed" });
+  });
 });
 
 // A REFUSED /config WRITE IS SAID BY ITS CODE. The browser holds no token, so
@@ -251,5 +315,7 @@ describe("a configuration write refused on authority", () => {
     for (const code of ["unauthorized", "", "step_up_required", "csrf_origin", "invalid_token"]) {
       expect(configGuardedReason(code)).not.toMatch(/token/i);
     }
+    // Nor does the managed sentence: it names who manages the document.
+    expect(managedSentence(["gitops"])).not.toMatch(/token/i);
   });
 });

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // The epoch and how a new one replaces it.
@@ -95,6 +97,10 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
+//
+// IT DOES NOT STAMP THE ACTIVATION: the company arrives here stamped, by
+// [stampActivation] where it was built, because the native halves an apply
+// starts and the reconcile it runs read the company before it is installed.
 func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(ctx, c)
@@ -116,6 +122,25 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+}
+
+// stampActivation records on c the instant the fleet activated the revision it
+// was built from — UTC, and zero for one no activation has named.
+//
+// ONCE, AS THE COMPANY IS BUILT, on both paths that build one — [New] and
+// [Engine.Apply] — and never again: a [Company] is published rather than
+// mutated, so a stamp written after construction would be a write to an epoch
+// a reader may already hold, and a stamp written at install would be missing
+// from everything that reads the company between the build and the publish.
+// See [Company.ActivatedAt] for what reads it.
+func stampActivation(c *Company, activatedAt time.Time) {
+	if c == nil {
+		return
+	}
+	if !activatedAt.IsZero() {
+		activatedAt = activatedAt.UTC()
+	}
+	c.ActivatedAt = activatedAt
 }
 
 // indexes reports whether the live party registry was built from exactly this
@@ -211,7 +236,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 				"this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
-	next.ActivatedAt = activatedAt
+	stampActivation(next, activatedAt)
 	applied = append(applied, "company")
 	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
 	// a part of, before anything below mutates this node — because a
@@ -231,8 +256,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// tools, which are registered only where they exist, and before the
 	// inbound edge, whose parsers include their own. The state log and the
 	// identity estate they ride are the CORE's, running since boot on every
-	// node, so this starts only what depends on the company. See
-	// [Engine.startNativeFor], and the bug it fixes.
+	// data node, so this starts only what depends on the company — and on a
+	// node without `data`, only which halves it reaches through a data node.
+	// See [Engine.startNativeFor], and the bug it fixes.
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -366,11 +392,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	e.installEpoch(ctx, next)
 	applied = append(applied, "epoch")
 
-	// THE SWEEP, rebuilt for a node's FIRST company — after the epoch is
-	// current, because it reads the conversation and inbox horizons off
-	// it, and only then: its job list is the one thing built once at boot
-	// that a first company changes. See [Engine.rebuildMaintenance].
-	if previous == nil || startedNative {
+	// THE SWEEP, rebuilt when this apply started the native runtime — its
+	// job list is the one thing built once at boot that the runtime's
+	// arrival changes. NOT for the horizons: every job asks the current
+	// epoch for its horizon at every sweep, so a revision that moves one
+	// needs no rebuild. See [Engine.rebuildMaintenance].
+	if startedNative {
 		e.rebuildMaintenance(ctx)
 		applied = append(applied, "maintenance")
 	}
@@ -397,7 +424,44 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
 		"previous_seats", seatCount(previous))
+	// AND PLACEMENT, AT ONCE, when this revision changed which seats exist
+	// or where they may run: the sweep's next tick is the first thing that
+	// would otherwise notice, up to its interval later with every seat the
+	// revision added — a node's whole first company among them — run by
+	// nobody, and every one it removed still held. HERE, at the end, and
+	// not beside the swap: a seat's acquisition reads what the stages after
+	// the swap install — the refiled seat tools, its mailbox, the released
+	// model holds, the sandbox runtime — which [Engine.followCompany] has
+	// just run, so a pass asked for at the swap would claim seats onto a node
+	// still half applied. See [seat.Host.Resweep] for what bounds the pass.
+	if e.node != nil && seatsMoved(previous, next) {
+		e.node.Host().Resweep()
+	}
 	return configplane.StatusOK, applied, nil
+}
+
+// seatsMoved reports whether two epochs differ in what placement reads of
+// them: which seats exist, or where any of them may run. Either epoch may be
+// absent — a node's first company moves every seat it has.
+//
+// BY HANDLE, never by position: [Company.Seats] walks the org, and the same
+// seats in another order are not a change anybody has to claim.
+func seatsMoved(previous, next *Company) bool {
+	was, now := previous.Seats(), next.Seats()
+	if len(was) != len(now) {
+		return true
+	}
+	where := make(map[string]placement.SeatPlacement, len(was))
+	for _, s := range was {
+		where[s.Handle] = s.Placement
+	}
+	for _, s := range now {
+		old, ok := where[s.Handle]
+		if !ok || old.Node != s.Placement.Node || !maps.Equal(old.Labels, s.Placement.Labels) {
+			return true
+		}
+	}
+	return false
 }
 
 // errStopped refuses an apply that reaches a node after [Engine.Drain] began.

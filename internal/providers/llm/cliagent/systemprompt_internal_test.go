@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE CHILD ACTUALLY RECEIVES THE VARIABLE, POINTING AT A FILE THAT EXISTS.
@@ -18,6 +19,7 @@ import (
 // spawned, would leave the CLI reading its built-in prompt while the engine
 // believed it had been replaced — silently, and on every turn of every seat.
 func TestTheSystemPromptEnvVarReachesTheChildPointingAtTheText(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_READ_SYSTEM_PROMPT": "GEMINI_SYSTEM_MD",
 	}, map[string]any{"system_prompt_env": "GEMINI_SYSTEM_MD"})
@@ -84,6 +86,7 @@ func TestTheSystemPromptFileBehindTheEnvVarIsPrivate(t *testing.T) {
 // USER content. A profile that set the variable and still rendered the system
 // section into the prompt would pay for the file and change nothing.
 func TestTheSystemPromptEnvVarTakesTheTextOutOfThePrompt(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, map[string]any{
 		"system_prompt_env": "QWEN_SYSTEM_MD",
 	})
@@ -111,7 +114,7 @@ func TestTheSystemPromptEnvVarTakesTheTextOutOfThePrompt(t *testing.T) {
 // a CLI honours when handed the same prompt twice is the vendor's business.
 func TestAProfileCannotDeclareBothSystemPromptChannels(t *testing.T) {
 	t.Parallel()
-	_, err := Load("custom", map[string]any{
+	_, err := cliprofile.Load("custom", map[string]any{
 		"binary":             "x",
 		"complete_args":      []any{"run"},
 		"output":             "text",

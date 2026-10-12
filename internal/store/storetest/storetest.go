@@ -12,6 +12,12 @@
 // Run takes a constructor rather than a *store.DB so each subtest gets its own
 // file: the store owns its file exclusively, and sharing one across parallel
 // subtests would test a configuration the engine never runs in.
+//
+// It is also where the rest of the tree's tests open a store: [OpenEstate] and
+// [OpenNode], and [Seed] for a path a test opens or boots an engine on itself.
+// Those copy a migrated estate built once per test binary rather than
+// migrating every file from nothing — image.go says why that is safe, and
+// what stays fresh because migrating is its subject.
 package storetest
 
 import (
@@ -32,12 +38,28 @@ import (
 // Run executes the contract suite against databases produced by newDB.
 func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 	t.Helper()
+	// THE SCHEMA CASES OPEN FRESH FILES OF THEIR OWN, never newDB's. A
+	// constructor may hand back a copy of the binary's migrated image
+	// ([OpenNode]), and on a copy an applied set equal to the binary's is a
+	// fact about the copy rather than about the migrator — which is what
+	// these two exist to certify, on both estates.
+	fresh := []struct {
+		name string
+		fn   func(t *testing.T)
+	}{
+		{"Schema", testSchema},
+		{"SchemaIsIdempotent", testSchemaIdempotent},
+	}
+	for _, tc := range fresh {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.fn(t)
+		})
+	}
 	cases := []struct {
 		name string
 		fn   func(t *testing.T, db *store.DB)
 	}{
-		{"Schema", testSchema},
-		{"SchemaIsIdempotent", testSchemaIdempotent},
 		{"Capabilities", testCapabilities},
 		{"AppendIsIdempotent", testAppendIdempotent},
 		{"AppendRejectsAnIncompleteIdentity", testAppendIncomplete},
@@ -77,7 +99,8 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ARevisionRecordsWhatWroteIt", testARevisionRecordsWhatWroteIt},
 		{"AWriteThatDoesNotSayWhatWroteItIsRefused", testAnUnattributedWriteIsRefused},
 		{"AnAdoptedRevisionKeepsItsOriginsAuthor", testAnAdoptedRevisionKeepsItsOriginsAuthor},
-		{"AnAdoptionLearnsAnAuthorItDidNotKnow", testAnAdoptionLearnsAnUnknownAuthor},
+		{"AnAdoptionRefusesARevisionThatNamesNobody", testAnAdoptionRefusesARevisionThatNamesNobody},
+		{"AReAdoptionKeepsTheKnownAuthor", testAReAdoptionKeepsTheKnownAuthor},
 		// NOT HERE: the token counter. It is fleet state now, certified
 		// by coordtest against both coordination backends — a counter
 		// this node kept privately was the whole defect (migration
@@ -100,41 +123,65 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 // asserting that an empty page equals a full one.
 var base = time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Minute)
 
-func testSchema(t *testing.T, db *store.DB) {
-	applied, err := db.AppliedMigrations(t.Context())
-	if err != nil {
-		t.Fatalf("AppliedMigrations: %v", err)
-	}
-	want := store.SchemaVersions(store.EstateNode)
-	if len(want) == 0 {
-		t.Fatal("no schema files embedded")
-	}
-	if !slices.Equal(applied, want) {
-		t.Fatalf("applied %v, want %v", applied, want)
+// testSchema migrates a fresh node and its replicated estate and finds each
+// file's whole sequence applied, in order.
+func testSchema(t *testing.T) {
+	node, replicated := openFresh(t, filepath.Join(t.TempDir(), "fresh.db"))
+	defer func() { _ = node.Close() }()
+	for _, db := range []*store.DB{node, replicated} {
+		applied, err := db.AppliedMigrations(t.Context())
+		if err != nil {
+			t.Fatalf("the %s estate's AppliedMigrations: %v", db.Estate(), err)
+		}
+		want := store.SchemaVersions(db.Estate())
+		if len(want) == 0 {
+			t.Fatalf("no %s schema files embedded", db.Estate())
+		}
+		if !slices.Equal(applied, want) {
+			t.Fatalf("the %s estate applied %v, want %v", db.Estate(), applied, want)
+		}
 	}
 }
 
-// testSchemaIdempotent reopens the same file. A forward-only migrator that
-// re-ran an applied file would fail on the second CREATE TABLE, so a clean
-// reopen is the whole assertion.
-func testSchemaIdempotent(t *testing.T, db *store.DB) {
-	path := db.Path()
-	if err := db.Close(); err != nil {
+// testSchemaIdempotent reopens both freshly migrated files. A forward-only
+// migrator that re-ran an applied file would fail on the second CREATE TABLE,
+// so a clean reopen is the whole assertion.
+func testSchemaIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	node, _ := openFresh(t, path)
+	if err := node.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	again, err := store.Open(t.Context(), path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	again, replicated := openFresh(t, path)
 	defer func() { _ = again.Close() }()
 
-	applied, err := again.AppliedMigrations(t.Context())
+	for _, db := range []*store.DB{again, replicated} {
+		applied, err := db.AppliedMigrations(t.Context())
+		if err != nil {
+			t.Fatalf("the %s estate's AppliedMigrations: %v", db.Estate(), err)
+		}
+		if !slices.Equal(applied, store.SchemaVersions(db.Estate())) {
+			t.Fatalf("reopening changed the %s estate's applied set: %v",
+				db.Estate(), applied)
+		}
+	}
+}
+
+// openFresh opens a node's store at path and its replicated estate beside it
+// through the production path and NOTHING ELSE — no image is seeded — so a
+// file that is not there yet is migrated from nothing.
+func openFresh(t *testing.T, path string) (*store.DB, *store.DB) {
+	t.Helper()
+	node, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
-		t.Fatalf("AppliedMigrations: %v", err)
+		t.Fatalf("open the node's store at %s: %v", path, err)
 	}
-	if !slices.Equal(applied, store.SchemaVersions(store.EstateNode)) {
-		t.Fatalf("reopen changed the applied set: %v", applied)
+	replicated, err := node.OpenReplicated(t.Context(), 1)
+	if err != nil {
+		_ = node.Close()
+		t.Fatalf("open the replicated estate beside %s: %v", path, err)
 	}
+	return node, replicated
 }
 
 // testCapabilities asserts the probe is self-consistent: a capability reported
@@ -506,7 +553,7 @@ func testTrace(t *testing.T, db *store.DB) {
 			Category: "task", TraceID: "tr-1",
 		})
 	}
-	got, err := log.Trace(t.Context(), "tr-1")
+	got, err := log.Trace(t.Context(), "tr-1", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
@@ -525,17 +572,19 @@ func testTrace(t *testing.T, db *store.DB) {
 func testTraceCap(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTraceEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "s" + fourDigits(i),
 			Type:     "task_assigned",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "task",
 			TraceID:  "tr-long",
-		})
+		}
 	}
-	got, err := log.Trace(t.Context(), "tr-long")
+	WriteEvents(t, log, recs)
+	got, err := log.Trace(t.Context(), "tr-long", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
@@ -555,19 +604,21 @@ func testTraceCap(t *testing.T, db *store.DB) {
 func testTurnClosing(t *testing.T, db *store.DB) {
 	log := db.Events()
 	over := store.MaxTurnEvents + 10
-	for i := range over {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, over)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       "c" + fourDigits(i),
 			Type:     "agent_phase_completed",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "lifecycle",
 			Payload:  []byte(`{"turn_id":"tn-long"}`),
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 
 	// The head read keeps the OPENING, as its own doc says.
-	head, err := log.Turn(t.Context(), "tn-long")
+	head, err := log.Turn(t.Context(), "tn-long", time.Now())
 	if err != nil {
 		t.Fatalf("turn: %v", err)
 	}
@@ -579,7 +630,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"not exercising a cut at all")
 	}
 
-	got, err := log.TurnClosing(t.Context(), "tn-long", 5)
+	got, err := log.TurnClosing(t.Context(), "tn-long", 5, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing: %v", err)
 	}
@@ -604,7 +655,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"came for are empty")
 	}
 	// A limit of zero asks for nothing rather than for everything.
-	none, err := log.TurnClosing(t.Context(), "tn-long", 0)
+	none, err := log.TurnClosing(t.Context(), "tn-long", 0, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing, no limit: %v", err)
 	}
@@ -631,22 +682,22 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 
-	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC()); err != nil {
+	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}); err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	} else if got == nil {
 		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
 	}
-	if got, err := log.Turn(ctx, "tn-nothing-wrote-this"); err != nil {
+	if got, err := log.Turn(ctx, "tn-nothing-wrote-this", time.Now()); err != nil {
 		t.Fatalf("turn: %v", err)
 	} else if got == nil {
 		t.Error("Turn answered nil for a turn with no rows, which serializes as null")
 	}
-	if got, err := log.Trace(ctx, "tr-nothing-shares-this"); err != nil {
+	if got, err := log.Trace(ctx, "tr-nothing-shares-this", time.Now()); err != nil {
 		t.Fatalf("trace: %v", err)
 	} else if got == nil {
 		t.Error("Trace answered nil for a trace with no rows, which serializes as null")
 	}
-	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5); err != nil {
+	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5, time.Now()); err != nil {
 		t.Fatalf("turn closing: %v", err)
 	} else if got == nil {
 		t.Error("TurnClosing answered nil for a turn with no rows, which serializes as null")
@@ -662,7 +713,7 @@ func testByID(t *testing.T, db *store.DB) {
 		Payload: json.RawMessage(`{"id":"one","detail":"kept"}`),
 	})
 
-	rec, err := log.ByID(ctx, "one")
+	rec, err := log.ByID(ctx, "one", time.Now())
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
@@ -687,7 +738,7 @@ func testByID(t *testing.T, db *store.DB) {
 		t.Fatalf("listing carried a payload: %s", page[0].Payload)
 	}
 
-	if _, err := log.ByID(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := log.ByID(ctx, "absent", time.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id gave %v, want ErrNotFound", err)
 	}
 }
@@ -715,20 +766,34 @@ func testReadFloor(t *testing.T, db *store.DB) {
 	if !slices.Equal(ids(page), []string{"recent"}) {
 		t.Fatalf("listing reached past the floor: %v", ids(page))
 	}
-	tr, err := log.Trace(ctx, "tr-1")
+	tr, err := log.Trace(ctx, "tr-1", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
 	if !slices.Equal(ids(tr), []string{"recent"}) {
 		t.Fatalf("trace reached past the floor: %v", ids(tr))
 	}
+	// A LINK TO IT IS DEAD TOO: one event by id is a read of the log like
+	// any other, so the floor stops it — a row the sweep has not reached yet
+	// is not history the log serves.
+	if _, err := log.ByID(ctx, "ancient", time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ByID on a row past the floor gave %v, want ErrNotFound", err)
+	}
 	// The row is still THERE — unreadable, not deleted. That is exactly the
-	// state the retention sweep exists to end.
-	if _, err := log.ByID(ctx, "ancient"); err != nil {
-		t.Fatalf("ByID on a row past the floor: %v", err)
+	// state the retention sweep exists to end. Asked at an instant two hours
+	// back, whose floor lies below the row, the same read finds it.
+	if _, err := log.ByID(ctx, "ancient", time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("ByID asked at an instant whose floor is below the row: %v", err)
 	}
 }
 
+// testRetention: the sweep deletes a row past retention and keeps one inside
+// it — and the row is GONE, which only a read the history floor cannot hide
+// can say. Asked at now, the floor sits thirty days back and a row past
+// retention is unreadable whether or not the sweep removed it, so this asks at
+// an instant a retention back, whose floor lies below the row: it finds the
+// row before the purge, which is what makes its absence after the purge the
+// purge's doing.
 func testRetention(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
@@ -741,6 +806,11 @@ func testRetention(t *testing.T, db *store.DB) {
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
+	beneath := time.Now().UTC().Add(-store.EventRetention)
+	if _, err := log.ByID(ctx, "stale", beneath); err != nil {
+		t.Fatalf("before the purge, a read whose floor is below the stale row "+
+			"does not find it: %v", err)
+	}
 
 	n, err := log.Purge(ctx)
 	if err != nil {
@@ -749,10 +819,10 @@ func testRetention(t *testing.T, db *store.DB) {
 	if n != 1 {
 		t.Fatalf("purged %d rows, want 1", n)
 	}
-	if _, err := log.ByID(ctx, "stale"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := log.ByID(ctx, "stale", beneath); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("swept row still present: %v", err)
 	}
-	if _, err := log.ByID(ctx, "keep"); err != nil {
+	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
 	}
 
@@ -767,22 +837,39 @@ func testRetention(t *testing.T, db *store.DB) {
 // it completely and keeps what is inside retention. The batch bound exists
 // so no single statement holds the writer for a whole overhang — but a loop
 // that stopped after one batch would leave the tail in place and report a
-// sweep that had not finished.
+// sweep that had not finished. Drained is counted on the TABLE rather than
+// read through the log, because every read of the log is floored thirty days
+// back and the backlog is a day below that: unreadable whether or not it went.
 func testRetentionBacklog(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	stale := store.EventPurgeBatch + 3
 	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
-	for i := range stale {
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, stale)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID: fmt.Sprintf("stale-%04d", i), Type: "task_assigned", Source: "pm",
 			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
-		})
+		}
 	}
+	WriteEvents(t, log, recs)
 	write(t, log, store.EventRecord{
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
+	backlog := func() int {
+		t.Helper()
+		var left int
+		if err := db.SQL().QueryRowContext(ctx,
+			`SELECT count(*) FROM crewlet_events WHERE event_id LIKE 'stale-%'`,
+		).Scan(&left); err != nil {
+			t.Fatalf("count the backlog: %v", err)
+		}
+		return left
+	}
+	if left := backlog(); left != stale {
+		t.Fatalf("the table holds %d of the %d stale rows before the purge", left, stale)
+	}
 
 	n, err := log.Purge(ctx)
 	if err != nil {
@@ -791,7 +878,11 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	if n != int64(stale) {
 		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
 	}
-	if _, err := log.ByID(ctx, "keep"); err != nil {
+	if left := backlog(); left != 0 {
+		t.Fatalf("the purge reported %d rows gone and %d of the backlog are still "+
+			"in the table", n, left)
+	}
+	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
 	}
 }
@@ -931,25 +1022,31 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 // so a busy org's monthly spend was short by whatever fell past the cap, and
 // an undercount reads exactly like an underspend. This writes more rows than
 // that old ceiling and insists every one is counted.
+//
+// The window is written in ONE transaction ([WriteEvents]), through the same
+// row builder an Append runs, because what this case certifies is the fold
+// over the rows and not how they arrived: one commit per row was 20,001
+// fsync'd commits and 69 s of the package's wall clock.
 func testSpendUncapped(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	const rows = 20001
 	at := time.Now().UTC().Add(-time.Hour)
-	for i := range rows {
-		payload := []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
-			`"output_tokens":2,"total_tokens":3}`)
-		write(t, log, store.EventRecord{
+	recs := make([]store.EventRecord, rows)
+	for i := range recs {
+		recs[i] = store.EventRecord{
 			ID:       fmt.Sprintf("spend-%05d", i),
 			Type:     "agent_phase_completed",
 			Source:   "agent",
 			Time:     at.Add(time.Duration(i) * time.Millisecond),
 			Category: "agent",
-			Payload:  payload,
-		})
+			Payload: []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
+				`"output_tokens":2,"total_tokens":3}`),
+		}
 	}
+	WriteEvents(t, log, recs)
 
-	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
+	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -991,7 +1088,8 @@ func testSpendLimited(t *testing.T, db *store.DB) {
 
 	spendIDs := func(q store.PhaseTokenQuery) []string {
 		t.Helper()
-		got, err := log.PhaseTokens(t.Context(), q, now)
+		q.At = now
+		got, err := log.PhaseTokens(t.Context(), q)
 		if err != nil {
 			t.Fatalf("phase tokens %+v: %v", q, err)
 		}
@@ -1022,12 +1120,12 @@ func testSpendDerived(t *testing.T, db *store.DB) {
 	write(t, log, store.EventRecord{
 		ID: "byhand", Type: "agent_phase_completed", Source: "agent",
 		Time: time.Now().UTC().Add(-time.Minute), Category: "agent",
-		Payload: []byte(`{"phase":"plan","provider_key":"anthropic",` +
+		Payload: []byte(`{"phase":"execute","provider_key":"anthropic",` +
 			`"turn_id":"t1","iteration":2,"input_tokens":10,` +
 			`"output_tokens":5,"total_tokens":15}`),
 	})
 
-	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -1038,7 +1136,7 @@ func testSpendDerived(t *testing.T, db *store.DB) {
 	if rec.TotalTokens != 15 || rec.InputTokens != 10 || rec.OutputTokens != 5 {
 		t.Errorf("token counts lost: %+v", rec)
 	}
-	if rec.Phase != "plan" || rec.TurnID != "t1" || rec.Iteration != 2 {
+	if rec.Phase != "execute" || rec.TurnID != "t1" || rec.Iteration != 2 {
 		t.Errorf("call identity lost: %+v", rec)
 	}
 	// An entry naming no model is identified by the provider slot it ran
@@ -1080,12 +1178,12 @@ func testBackup(t *testing.T, db *store.DB) {
 	}
 
 	// Opened as a database in its own right — the restore path, exercised.
-	restored, err := store.Open(ctx, dest, store.Options{})
+	restored, err := store.OpenNode(ctx, dest, store.Options{})
 	if err != nil {
 		t.Fatalf("the copy will not open as a database: %v", err)
 	}
 	defer func() { _ = restored.Close() }()
-	if _, err := restored.Events().ByID(ctx, "backed-up"); err != nil {
+	if _, err := restored.Events().ByID(ctx, "backed-up", time.Now()); err != nil {
 		t.Fatalf("the copy lost a row the original held: %v", err)
 	}
 }
@@ -1160,7 +1258,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 		t.Fatalf("backup under concurrent writes: %v", err)
 	}
 
-	restored, err := store.Open(ctx, dest, store.Options{})
+	restored, err := store.OpenNode(ctx, dest, store.Options{})
 	if err != nil {
 		t.Fatalf("a copy taken under writes will not open: %v", err)
 	}
@@ -1189,7 +1287,8 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	}
 	if _, tracked := store.Category("budget_meters"); tracked {
 		t.Fatal("budget_meters must stay out of the store: it is a ROLLUP " +
-			"of live meters on a 15-second tick, so a durable row per tick " +
+			"of live meters on a 15-second tick (and at a window's first " +
+			"refusal), so a durable row per tick " +
 			"is about two million a year to answer what the live projection " +
 			"answers for free — and the audit log already holds the per-turn " +
 			"spend it is a sum of")

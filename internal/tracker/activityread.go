@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -418,7 +417,7 @@ var ErrBadQuery = errors.New("tracker: this read's request cannot be run")
 // as the read did — indistinguishable, to every surface, from a store fault.
 func feedPositions(cursor string, since statelog.Position) error {
 	if raw := strings.TrimSpace(cursor); raw != "" {
-		at, err := ParseLogPosition(raw)
+		at, err := statelog.ParsePosition(raw)
 		if err != nil {
 			return fmt.Errorf("%w: cursor: %w", ErrBadQuery, err)
 		}
@@ -615,11 +614,6 @@ func counterpartyKeys(ctx context.Context, tx *sql.Tx, sides []string,
 			switch {
 			case member == "" || seen[member]:
 				continue
-			case strings.HasPrefix(member, "+"):
-				// THE DROPPED COUNT, not a member. A bounded
-				// list ends in `+12 more`, and no id this
-				// package mints begins with a plus.
-				continue
 			case len(wanted) >= MaxActivityKeys:
 				// PAST THE CAP THE REST RENDER AS IDS, which is
 				// what an unresolved id already does — so the
@@ -636,8 +630,9 @@ func counterpartyKeys(ctx context.Context, tx *sql.Tx, sides []string,
 
 // activityDeltaSides is every counterparty side a feed page carries.
 //
-// The feed's own shape: `fields_json` decoded into [Delta] pairs, so each
-// field contributes exactly two sides.
+// The feed's own shape: `fields_json` decoded into [Delta] values, so each
+// field contributes its two sides and, for a set, every member it added and
+// removed.
 func activityDeltaSides(records []ActivityRecord) []string {
 	out := make([]string, 0, len(records)*2)
 	for _, record := range records {
@@ -647,6 +642,8 @@ func activityDeltaSides(records []ActivityRecord) []string {
 				continue
 			}
 			out = append(out, delta.From, delta.To)
+			out = append(out, delta.Added...)
+			out = append(out, delta.Removed...)
 		}
 	}
 	return out
@@ -690,10 +687,11 @@ func appendDeltaSides(out []string, raw any) []string {
 		}
 		return out
 	case map[string]any:
-		// A FROM/TO PAIR AND NOTHING ELSE. Any other object here is a
-		// shape this field does not take, and walking its values would
-		// be guessing at which of them names a task.
-		for _, side := range [...]string{"from", "to"} {
+		// A [Delta] AND NOTHING ELSE — its two sides and a set's moves.
+		// Any other object here is a shape this field does not take, and
+		// walking its values would be guessing at which of them names a
+		// task.
+		for _, side := range [...]string{"from", "to", "added", "removed"} {
 			if member, carried := v[side]; carried {
 				out = appendDeltaSides(out, member)
 			}
@@ -872,7 +870,7 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		add(`h.excerpt LIKE ? ESCAPE '\'`, "%"+likeEscape(text)+"%")
 	}
 	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
-		at, err := ParseLogPosition(cursor)
+		at, err := statelog.ParsePosition(cursor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -881,41 +879,4 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		add("h.log_seq < ?", at.Packed())
 	}
 	return where, args, nil
-}
-
-// ParseLogPosition reads back the `stream@generation:seq` triple a cursor is.
-//
-// THE TRIPLE RATHER THAN A BARE SEQUENCE, because a sequence names no stream
-// and no generation: handed one from a previous generation, a reader cannot
-// tell a position that is behind from one that is impossibly far ahead — and
-// the whole reason the public cursor carries all three is that it then never
-// needs a migration.
-func ParseLogPosition(raw string) (statelog.Position, error) {
-	refuse := func() (statelog.Position, error) {
-		return statelog.Position{}, fmt.Errorf("tracker: %q is not a log "+
-			"position — one reads `<stream>@<generation>:<sequence>`, and the "+
-			"answer that produced it carries the value to send back", raw)
-	}
-	stream, rest, found := strings.Cut(raw, "@")
-	if !found || stream == "" {
-		return refuse()
-	}
-	generation, sequence, found := strings.Cut(rest, ":")
-	if !found {
-		return refuse()
-	}
-	gen, err := strconv.ParseUint(generation, 10, 32)
-	if err != nil {
-		return refuse()
-	}
-	seq, err := strconv.ParseUint(sequence, 10, 64)
-	if err != nil {
-		return refuse()
-	}
-	at := statelog.Position{Stream: stream, Generation: uint32(gen), Seq: seq}
-	if err := at.Valid(); err != nil {
-		return statelog.Position{}, fmt.Errorf("tracker: %q is not a usable "+
-			"log position: %w", raw, err)
-	}
-	return at, nil
 }

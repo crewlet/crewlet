@@ -213,6 +213,9 @@ var subjectOf = map[string]subject{
 	// A PLACE ARRANGES A TASK ON A BOARD, decided on the task's kind the
 	// way a rank move always was: the order is nobody's object.
 	"place_work_item": {kind: authz.KindTask},
+	// A FILE IS WRITTEN AS AN ITEM IS FILED, into a project: the project's
+	// kind is what picks work:write, and no relation is asked.
+	"write_project_file": {kind: authz.KindProject},
 
 	// THE CONTAINER CLASS asks who leads the project or the container.
 	// `write_work_catalogue` is NOT here: the catalogue is the whole
@@ -272,6 +275,13 @@ var subjectOf = map[string]subject{
 	// holds for `update_work_item`'s re-route.
 	"remove_work_item":  {kind: authz.KindTask, inTool: true},
 	"restore_work_item": {kind: authz.KindTask, inTool: true},
+
+	// AND SO IS A FILE'S REMOVAL, decided by the project it is kept in —
+	// which the tool settles before it asks, since a call that names no
+	// project means the caller's own team's, and the gate cannot know
+	// whose that is. Decided here on the argument, every removal from the
+	// caller's own project was refused as naming none.
+	"remove_project_file": {kind: authz.KindProject, inTool: true},
 
 	// AND SO IS A MOVE, for the same reason and against the same project:
 	// the item's own, read off the row. Moving work to another project is

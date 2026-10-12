@@ -117,13 +117,34 @@ type Config struct {
 	// now. Nil always admits. It gates the CLAIM only — see
 	// [seat.Config.Ready] for why it is neither the seat list nor the
 	// acquire hook.
-	SeatsAdmitted func() bool
+	SeatsAdmitted func(ctx context.Context) bool
 
 	// SeatsServiceable reports whether this node may KEEP the seats it
 	// holds, and names what stopped it when the answer is no. Nil keeps
 	// them. It is the opposite direction from SeatsAdmitted and fires on a
-	// different class of fault — see [seat.Config.Serviceable].
+	// different class of fault — a node that cannot serve its seats' work
+	// at all; see [seat.Config.Serviceable].
 	SeatsServiceable func(ctx context.Context) (bool, string)
+
+	// SeatAdmitted runs when a seat this node holds STARTS ADMITTING TURNS:
+	// once its acquisition is established — the mailbox attached and
+	// [seat.Host.MayStart] saying yes from here — and again whenever a renew
+	// re-proves ownership after a stretch in which it could not (the
+	// admission edge [Node.OnAdmission] resumes the consumer on). Nil does
+	// nothing.
+	//
+	// It is how something this node refused for want of a seat that admits
+	// turns learns the refusal has lifted, at the transition rather than at
+	// a guess about when it might have. The engine's is a recorded answer
+	// whose resume the seat's preparation inherited and could not run while
+	// the seat was still establishing. It never fails anything: the seat is
+	// already serving.
+	//
+	// THE WHOLE SEAT, as every other seat hook here is handed: what waits on
+	// the edge may be filed by the id or by the handle, and a hook handed
+	// one of them would have to resolve the other through a company view
+	// that may already have moved.
+	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
@@ -353,30 +374,6 @@ func (n *Node) stopConverging() {
 // print a hundred lines.
 const drainLogInterval = 10 * time.Second
 
-// seatReleaseBudget bounds the give-back at the end of a drain.
-//
-// ONE HEARTBEAT INTERVAL — the TTL over [seat.HeartbeatRatio], 15 s at the
-// shipped 45 s TTL — which is the largest budget that is still strictly inside
-// the lease it is racing. Giving a lease back is a handful of coordination
-// writes, so this is a guard against a store that has stopped answering rather
-// than a real allowance; past it the seat lapses on its TTL, which is the same
-// outcome as not trying, only later.
-//
-// A budget rather than the caller's context, because the caller's is very
-// often already expired by the time the wait above ends — Drain's own doc
-// invites a deadline — and a release that inherits it does nothing at all,
-// leaving every seat dark for a full TTL instead of being taken over at once.
-//
-// A FUNCTION OF THIS NODE'S OWN TTL rather than a constant, which is what the
-// reason [seat.HeartbeatRatio] gives actually requires and what this budget
-// claimed while being derived from the shipped number: a deployment that
-// shortened its lease to ten seconds spent fifteen giving the seats back — a
-// budget strictly OUTSIDE the lease it is inside, which is the arrangement
-// the whole ratio exists to prevent.
-func (n *Node) seatReleaseBudget() time.Duration {
-	return n.host.TTL() / seat.HeartbeatRatio
-}
-
 // Drain performs this node's graceful departure and returns once its seats
 // are handed back.
 //
@@ -393,18 +390,29 @@ func (n *Node) seatReleaseBudget() time.Duration {
 //     out a TTL.
 //
 // Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
-// parked mid-LLM-round is
-// making progress a timer cannot see, and cutting it off buys a faster deploy
-// by abandoning work that was nearly done. The hard deadline belongs to
-// whatever supervises the process — a container runtime's kill grace, an
-// operator's second interrupt — which already has one and can see things this
-// process cannot. Callers that want a bound pass a ctx with a deadline.
+// parked mid-LLM-round is making progress a timer cannot see, and cutting it
+// off buys a faster deploy by abandoning work that was nearly done. The hard
+// deadline belongs to whatever supervises the process — a container runtime's
+// kill grace, an operator's second interrupt — which already has one and can
+// see things this process cannot. Callers that want a bound pass a ctx with a
+// deadline.
 //
-// THAT DEADLINE BOUNDS THE WAIT ALONE. The release below runs on a budget of
-// its own, because handing an expired context to the step whose entire
-// purpose is giving the leases back is how every seat lapses on a full TTL —
-// the exact cost step 3 exists to avoid, paid precisely when a caller took
-// this doc's advice and passed a deadline.
+// THAT DEADLINE BOUNDS THE WAIT ALONE. Giving up presence and handing the
+// seats back run on the STOP'S ONE ALLOWANCE instead ([seat.StopBudget]),
+// because handing an expired context to the steps whose entire purpose is
+// giving the leases back is how every seat lapses on a full TTL — the exact
+// cost step 3 exists to avoid, paid precisely when a caller took this doc's
+// advice and passed a deadline. The allowance is the one the caller's stop
+// carries — the engine's
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), shared with
+// everything else that stop gives back — or, for a caller carrying none, one
+// this drain begins from this node's own TTL ([seat.WithinStop]): one
+// heartbeat interval, 15 s at the shipped 45 s, the largest still strictly
+// inside the leases it is racing. Past it a seat lapses on its TTL, the same
+// outcome as not trying, only later. Never a bound of the drain's own beside
+// it: that was a second clock over the same give-backs that also ran through
+// the seats' teardowns between them, so it could only agree with the
+// allowance or cut a give-back short for time no store had spent.
 //
 // # Unless the acknowledgements are gone
 //
@@ -430,12 +438,17 @@ func (n *Node) seatReleaseBudget() time.Duration {
 //
 // NOTHING IN THIS TREE REVERSES IT. [Node.ResumeClaiming] has no production
 // caller — the config plane's shed path gates admission rather than draining
-// the node — and the one caller Drain does have, [engine.Engine.Drain], is a
-// shutdown: it latches a flag the HTTP surface refuses new work on and never
-// clears it. So read the reversibility below as a property of the parts, not
-// as a path somebody takes.
+// the node — and the one caller Drain does have, the engine's
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), is a shutdown:
+// it latches a flag the HTTP surface refuses new work on and never clears it.
+// So read the reversibility below as a property of the parts, not as a path
+// somebody takes.
 func (n *Node) Drain(ctx context.Context) {
-	n.host.BeginDrain(ctx)
+	// THE STOP THIS DRAIN IS PART OF, for the give-backs at either end of it
+	// — see the doc above. Free of ctx's cancellation, and carrying the
+	// allowance every one of them is a step of.
+	stop := seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL())
+	n.host.BeginDrain(stop)
 
 	// THE GATE FIRST, before the mailboxes quiesce. Quiescing stops NEW
 	// deliveries, but a turn already delivered and parked behind a slot is
@@ -503,10 +516,7 @@ func (n *Node) Drain(ctx context.Context) {
 		n.log.Info("drain_in_progress", "in_flight", remaining)
 	}
 
-	releaseCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx), n.seatReleaseBudget())
-	defer cancel()
-	n.host.ReleaseAll(releaseCtx, seat.ReasonDrain)
+	n.host.ReleaseAll(stop, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
 }
 
@@ -571,6 +581,14 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 	n.mu.Unlock()
 	n.log.Info("seat_attached", "handle", handle, "epoch", lease.Epoch)
 	return nil
+}
+
+// OnEstablished passes on that an acquired seat now admits turns — see
+// [Config.SeatAdmitted].
+func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Lease) {
+	if n.cfg.SeatAdmitted != nil {
+		n.cfg.SeatAdmitted(ctx, s)
+	}
 }
 
 // runTurn gates every turn on still owning the seat.
@@ -677,6 +695,11 @@ func (n *Node) OnAdmission(ctx context.Context, s placement.Seat, admitted bool)
 		return fmt.Errorf("node: set admission for %q: %w", handle, err)
 	}
 	n.log.Debug("seat_admission", "handle", handle, "admitted", admitted)
+	// THE SAME EDGE AS AN ESTABLISHMENT, for whatever was refused while
+	// ownership could not be proven — see [Config.SeatAdmitted].
+	if admitted && n.cfg.SeatAdmitted != nil {
+		n.cfg.SeatAdmitted(ctx, s)
+	}
 	return nil
 }
 
@@ -688,13 +711,14 @@ func (n *Node) OnAdmission(ctx context.Context, s placement.Seat, admitted bool)
 // NO PRODUCTION CALLER. It was written for the posture path's other half — a
 // node that shed on config divergence and then converged serving again rather
 // than sitting out until it restarts — and that path was built differently:
-// [engine.Reconciler]'s shed gates ADMISSION and never drains the node, so
-// nothing here is ever undone. Whether the shed should drain, or this should
-// go, is a design decision of its own; until it is taken, do not reach for
-// this as though the engine already used it. [engine.Engine.Drain], the one
-// caller of [Node.Drain], is one-way by construction: it latches a flag the
-// HTTP surface refuses new work on and never clears it, so a resume through
-// here would leave the node serving turns while its routes answer 503.
+// [github.com/crewlet/crewlet/internal/engine.Reconciler]'s shed gates
+// ADMISSION and never drains the node, so nothing here is ever undone.
+// Whether the shed should drain, or this should go, is a design decision of
+// its own; until it is taken, do not reach for this as though the engine
+// already used it. The engine's Drain, the one caller of [Node.Drain], is
+// one-way by construction: it latches a flag the HTTP surface refuses new
+// work on and never clears it, so a resume through here would leave the node
+// serving turns while its routes answer 503.
 //
 // It is not the inverse of [Node.Stop]. Stop releases the seats; this is for
 // a node that still holds them.

@@ -143,8 +143,10 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// applied revision and an apply can change it.
 		Endpoint: func() string {
 			// EMPTY WHERE THIS NODE CANNOT SAY, which is what the worker
-			// reads a missing endpoint as.
-			return e.externalBase
+			// reads a missing endpoint as. The VENDORS' address, never the
+			// one a person reaches: behind a public listener the two are
+			// different sockets ([config.API.WebhookBase]).
+			return e.webhookBase
 		},
 		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
 		// where the address cannot find it again. Read fresh on every
@@ -396,8 +398,9 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
 	// inside the lease the worker is holding.
 	findings, err := c.pass.Run(ctx, setup.PassInput{
-		Sink:        sink,
-		WebhookBase: c.engine.externalBase,
+		Sink:           sink,
+		WebhookBase:    c.engine.webhookBase,
+		WebhookBaseKey: c.engine.webhookBaseKey,
 	})
 	if err != nil {
 		return nil, err

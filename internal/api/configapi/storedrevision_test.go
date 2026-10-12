@@ -8,8 +8,8 @@ import (
 )
 
 // A stored revision is not a submitted document. It was valid under the build
-// that wrote it, and a later build, or an older peer still activating during a
-// rolling upgrade, can leave one in the store that this build refuses. Every
+// that wrote it, and a later build — a newer peer during a rolling upgrade —
+// can leave one in the store that this build refuses. Every
 // case here pins one half of the same rule: such a revision stays READABLE and
 // REPLACEABLE through this surface, and nothing that would RUN it accepts it.
 

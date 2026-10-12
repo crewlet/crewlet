@@ -99,13 +99,17 @@ function windowName(w: BudgetWindow, zone: string): string {
     : w.window;
 }
 
-/** "Refusing since 14:02, 12m ago" — the gate's own stamp, where it has one. */
+/**
+ * "Last refused a call 12m ago" — the gate's own stamp, where it has one. LAST,
+ * because the counter moves it to every refusal it records; "since" claimed
+ * the window had been refusing for less time than it had.
+ */
 function RefusedLine({ w, now }: { w: BudgetWindow; now: number }) {
   if (w.state !== "refusing") return null;
   return (
     <span className="budget-refused t-caption">
       {w.refused_at
-        ? `Refusing charges since ${relTime(w.refused_at, now)}`
+        ? `Last refused a call ${relTime(w.refused_at, now)}`
         : "No further charge fits"}
     </span>
   );

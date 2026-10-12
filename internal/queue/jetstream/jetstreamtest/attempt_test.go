@@ -16,7 +16,8 @@ import (
 // hangs consumes every retry before any of them runs.
 //
 // Measured on this repository's own CI, which is why this is a test rather
-// than a tidy: `TestAFleetAgreesAboutOneCompany` failed after 181.05s with
+// than a tidy: `TestAFleetOfThree/AFleetAgreesAboutOneCompany`, then a test
+// standing up a fleet of its own, failed after 181.05s with
 // "no cluster came up within 3m0s (1 of 4 attempts)". Member 0's broker spent
 // the entire ceiling retrying a route to a port where nothing was listening,
 // and the three attempts that exist to absorb exactly that never ran — the

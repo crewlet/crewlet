@@ -85,6 +85,81 @@ func TestCompanyValidatorRejections(t *testing.T) {
 				"      reasoning_budget_tokens: 10000\n      cli:\n        agent: claude-code\n",
 			"providers.llm.sub.reasoning_budget_tokens", ErrConflict,
 		},
+		// An entry's dials are refused wherever the backend they would
+		// reach does not send them, and an anthropic entry's are held to
+		// what its MODEL accepts (claudemodel) — each of these would
+		// otherwise validate clean and be either ignored or a 400 on
+		// every call, which the chain does not retry.
+		{
+			"reasoning on an anthropic provider — thinking is not a switch there",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-sonnet-5-5\n      reasoning: true\n",
+			"providers.llm.default.reasoning", ErrConflict,
+		},
+		{
+			"reasoning_effort on an openai provider with reasoning off",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: openai\n      model: gpt-5\n      reasoning_effort: high\n",
+			"providers.llm.default.reasoning_effort", ErrConflict,
+		},
+		{
+			"reasoning_effort on an openai-compatible provider",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: openai-compatible\n      model: m\n      base_url: https://x/v1/\n      reasoning_effort: high\n",
+			"providers.llm.default.reasoning_effort", ErrConflict,
+		},
+		{
+			"reasoning_budget_tokens on an openai provider",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: openai\n      model: gpt-5\n      reasoning: true\n      reasoning_budget_tokens: 4096\n",
+			"providers.llm.default.reasoning_budget_tokens", ErrConflict,
+		},
+		{
+			"claude_model on an openai provider",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: openai\n      model: gpt-5\n      claude_model: claude-haiku-4-5\n",
+			"providers.llm.default.claude_model", ErrConflict,
+		},
+		{
+			"claude_model that is not a table id",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: gw-fast\n      claude_model: claude-haiku-4\n",
+			"providers.llm.default.claude_model", ErrUnknownValue,
+		},
+		{
+			"claude_model beside a model the table reads",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-opus-5-5\n      claude_model: claude-haiku-4-5\n",
+			"providers.llm.default.claude_model", ErrConflict,
+		},
+		{
+			"reasoning_effort on a model that takes none",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-haiku-4-5\n      reasoning_effort: low\n",
+			"providers.llm.default.reasoning_effort", ErrConflict,
+		},
+		{
+			"xhigh on a model before Opus 4.7",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-sonnet-4-6\n      reasoning_effort: xhigh\n",
+			"providers.llm.default.reasoning_effort", ErrOutOfRange,
+		},
+		{
+			"xhigh on an alias claude_model says is Opus 4.5",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: gw-big\n      claude_model: claude-opus-4-5\n      reasoning_effort: xhigh\n",
+			"providers.llm.default.reasoning_effort", ErrOutOfRange,
+		},
+		{
+			"reasoning_budget_tokens on an adaptive model",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-sonnet-5-5\n      reasoning_budget_tokens: 4096\n",
+			"providers.llm.default.reasoning_budget_tokens", ErrConflict,
+		},
+		{
+			"reasoning_budget_tokens on an id the table does not know",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: gw-fast\n      reasoning_budget_tokens: 4096\n",
+			"providers.llm.default.reasoning_budget_tokens", ErrConflict,
+		},
+		{
+			"reasoning_budget_tokens below the API minimum",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-haiku-4-5\n      reasoning_budget_tokens: 500\n",
+			"providers.llm.default.reasoning_budget_tokens", ErrOutOfRange,
+		},
+		{
+			"reasoning_budget_tokens the output cap cannot hold",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: claude-haiku-4-5-20251001\n      reasoning_budget_tokens: 64000\n",
+			"providers.llm.default.reasoning_budget_tokens", ErrOutOfRange,
+		},
 		{
 			"cli block on an http provider",
 			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: m\n      cli:\n        agent: claude-code\n",
@@ -347,6 +422,29 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"a Mattermost username the server would refuse",
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: Agent CEO\n",
 			"roles[0].integrations.mattermost.username", ErrUnknownValue,
+		},
+		// The transports resolve a bot's username and token only when the
+		// WHOLE value is one ${VAR}: a reference inside other text was let
+		// through here and reached the server as written, braces and all.
+		{
+			"a Mattermost username with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: \"bot-${SUFFIX}\"\n",
+			"roles[0].integrations.mattermost.username", ErrShape,
+		},
+		{
+			"space around a Mattermost username's reference",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: \"${NAME} \"\n",
+			"roles[0].integrations.mattermost.username", ErrUnknownValue,
+		},
+		{
+			"a Mattermost bot token with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"tok-${T}\"\n",
+			"roles[0].integrations.mattermost.bot_token", ErrShape,
+		},
+		{
+			"a Slack bot token with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"xoxb-${T}\"\n        signing_secret: \"${S}\"\n",
+			"roles[0].integrations.slack.bot_token", ErrShape,
 		},
 		{
 			"a sandbox block that is never enabled",

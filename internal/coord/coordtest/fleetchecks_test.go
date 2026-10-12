@@ -15,9 +15,9 @@ import (
 
 // THE CONTROLS. Each hands a check a twin built to get one thing wrong and
 // asserts it is caught, because a check that has only ever been run against
-// correct backends is a claim rather than coverage — and the two invariants
-// here are precisely the ones a passing suite hid before: the claim that
-// lapsed on a horizon nobody could state, and the refusal that came back as
+// correct backends is a claim rather than coverage — and the invariants here
+// are precisely the ones a passing suite hid before: the claim that lapsed on
+// a horizon other than the one it asked for, and the refusal that came back as
 // "somebody else has it".
 //
 // The first arm of each is the CONTROL SET's other half: the twin as it
@@ -29,70 +29,101 @@ import (
 // Fleet method — the same dodge internal/engine's fakes take.
 type wholeFleet = coord.Fleet
 
-// perWriteTTL is the twin as it WAS: a claim that lapses on a horizon of its
-// own rather than on the bucket it was written to.
-//
-// This is not a hypothetical defect. The twin honoured the ttl its caller
-// passed while the KV validated the same argument and let the bucket decide,
-// and the suite certified the pair clean for as long as both existed, because
-// no case ever travelled past a deadline.
-type perWriteTTL struct {
+// oneHorizon is a claims store that keeps every claim for ONE horizon of its
+// own, whatever ttl its caller asked for — the shape of the defect the ttl
+// parameter once hid: the KV validated the argument and let its bucket's age
+// decide, so a claim lived exactly as long as the bucket did.
+type oneHorizon struct {
 	wholeFleet
 
-	ttl time.Duration
+	horizon time.Duration
 
 	mu   sync.Mutex
 	made map[string]time.Time
 }
 
-func (p *perWriteTTL) Claim(_ context.Context, key string, now time.Time) (bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if at, held := p.made[key]; held && now.Sub(at) < p.ttl {
+func (o *oneHorizon) Claim(_ context.Context, key string, _ time.Duration, now time.Time) (bool, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if at, held := o.made[key]; held && now.Sub(at) < o.horizon {
 		return false, nil
 	}
-	p.made[key] = now
+	o.made[key] = now
 	return true, nil
+}
+
+// everyTakeover honours each claim's own deadline but lets every caller past
+// it win: a takeover written as a plain put rather than a compare-and-set.
+type everyTakeover struct {
+	wholeFleet
+
+	mu    sync.Mutex
+	until map[string]time.Time
+}
+
+func (e *everyTakeover) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if until, held := e.until[key]; held && now.Before(until) {
+		return false, nil
+	}
+	if _, held := e.until[key]; !held {
+		e.until[key] = now.Add(ttl)
+	}
+	// The lapsed record is never replaced, so every caller after the
+	// deadline is told it won.
+	return true, nil
+}
+
+func TestTheSuiteCatchesAClaimThatDoesNotLapseAtItsOwnTTL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
+
+	// THE CONTROL: the twin as it is.
+	if errs := coordtest.CheckClaimLapsesAtItsOwnTTL(ctx, memory.NewFleet(), at); len(errs) != 0 {
+		t.Fatalf("the check objected to a correct twin, so it is measuring itself: %v", errs)
+	}
+
+	for _, c := range []struct {
+		name    string
+		horizon time.Duration
+		want    string
+	}{
+		// Every claim held for the claims bucket's age: a webhook replay
+		// swallowed for the chat socket's window.
+		{"held for the bucket's age", coord.MaxClaimTTL, "still claimed a second past its own"},
+		// Every claim held for the shortest horizon anybody asks for: the
+		// socket's claim lapses while a reconnecting seat still replays.
+		{"held for the shortest horizon", time.Minute, "lets the duplicate through"},
+	} {
+		lying := &oneHorizon{wholeFleet: memory.NewFleet(), horizon: c.horizon,
+			made: map[string]time.Time{}}
+		errs := coordtest.CheckClaimLapsesAtItsOwnTTL(ctx, lying, at)
+		if len(errs) == 0 {
+			t.Errorf("%s: the check passed a store that keeps every claim for %v "+
+				"whatever its ttl", c.name, c.horizon)
+			continue
+		}
+		if !containing(errs, c.want) {
+			t.Errorf("%s: the check objected, but to something else: %v", c.name, errs)
+		}
+	}
+
+	errs := coordtest.CheckClaimLapsesAtItsOwnTTL(ctx,
+		&everyTakeover{wholeFleet: memory.NewFleet(), until: map[string]time.Time{}}, at)
+	if !containing(errs, "taken over by two callers") {
+		t.Errorf("a store whose takeover every caller wins came back %v, want the "+
+			"double takeover named", errs)
+	}
 }
 
 // mute answers an empty key the way a bool-returning registry does: as a race
 // somebody else won.
 type mute struct{ wholeFleet }
 
-func (mute) Claim(context.Context, string, time.Time) (bool, error)      { return false, nil }
-func (mute) ClaimSetup(context.Context, string, time.Time) (bool, error) { return false, nil }
-
-func TestTheSuiteCatchesAClaimThatOutlivesItsBucket(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
-	age := coordtest.LapseAge
-
-	// THE CONTROL: the twin built at the age the check was told about,
-	// which is what every backend the suite certifies must do.
-	clean := memory.NewFleetWithAges(memory.FleetAges{Claim: age})
-	if errs := coordtest.CheckClaimExpiresWithItsBucket(ctx, clean, age, at); len(errs) != 0 {
-		t.Fatalf("the check objected to a correct twin, so it is measuring itself: %v", errs)
-	}
-
-	// AND THE DEFECT: a twin whose claim lapses on a TTL of its own. The
-	// bucket it was built for is half a second old and the claim it keeps
-	// is five minutes, which is the shape of the bug exactly — a horizon
-	// longer than the bucket that is supposed to enforce it.
-	lying := &perWriteTTL{
-		wholeFleet: memory.NewFleetWithAges(memory.FleetAges{Claim: age}),
-		ttl:        coord.ClaimTTL,
-		made:       map[string]time.Time{},
-	}
-	errs := coordtest.CheckClaimExpiresWithItsBucket(ctx, lying, age, at)
-	if len(errs) == 0 {
-		t.Fatal("the check passed a backend that keeps a claim for its own TTL rather " +
-			"than for the bucket's age — which is the divergence this suite certified " +
-			"clean for the whole life of both backends")
-	}
-	if !containing(errs, "outlives its bucket") {
-		t.Errorf("the check objected, but to something else: %v", errs)
-	}
+func (mute) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
+	return false, nil
 }
 
 func TestTheSuiteCatchesARegistryThatRefusesInsteadOfErroring(t *testing.T) {
@@ -108,11 +139,10 @@ func TestTheSuiteCatchesARegistryThatRefusesInsteadOfErroring(t *testing.T) {
 	if len(errs) == 0 {
 		t.Fatal("the check passed a registry that answers an unnamed record with false: " +
 			"a caller that named nothing has not lost a race to anybody, and every " +
-			"caller of these verbs reads false as somebody else having the record")
+			"caller of a claim reads false as somebody else having the record")
 	}
-	if !containing(errs, "an empty key reached Claim,") ||
-		!containing(errs, "an empty key reached ClaimSetup,") {
-		t.Errorf("the check objected, but not about both registries: %v", errs)
+	if !containing(errs, "an empty key reached Claim,") {
+		t.Errorf("the check objected, but not about the claim: %v", errs)
 	}
 }
 
@@ -167,12 +197,13 @@ func (m *markerLoser) Release(ctx context.Context, key string) error {
 	return m.wholeFleet.Release(ctx, key)
 }
 
-func (m *markerLoser) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
+func (m *markerLoser) Claim(ctx context.Context, key string, ttl time.Duration,
+	now time.Time) (bool, error) {
 	if m.lost("claim|" + key) {
 		return false, fmt.Errorf("%w: claim the delivery: wrong last sequence",
 			coord.ErrUnavailable)
 	}
-	return m.wholeFleet.Claim(ctx, key, now)
+	return m.wholeFleet.Claim(ctx, key, ttl, now)
 }
 
 // lostFirst reports a charge that reached a counter after its first charger.
@@ -234,6 +265,7 @@ func (c chargesOnly) Release(ctx context.Context, key string) error {
 	return c.wholeFleet.Release(ctx, key)
 }
 
-func (c chargesOnly) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
-	return c.wholeFleet.Claim(ctx, key, now)
+func (c chargesOnly) Claim(ctx context.Context, key string, ttl time.Duration,
+	now time.Time) (bool, error) {
+	return c.wholeFleet.Claim(ctx, key, ttl, now)
 }

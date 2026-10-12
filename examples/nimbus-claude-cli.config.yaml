@@ -91,7 +91,10 @@ logging:
 # document).  A restart would recreate those logs empty and this node
 # would stop serving for good, so the engine refuses to boot without one
 # rather than losing the records — `crewlet validate` refuses it too,
-# naming stream.store_dir.
+# naming stream.store_dir.  That is a rule about a broker MEMBER, which a
+# node holding `data` always is; a node without `data` is a leaf of the
+# members' broker with JetStream off, keeps no stream at all, and is
+# refused a store_dir (docs/guides/satellite-nodes.md).
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
 # `url` (plus `credentials` / `token` / `tls` where the estate demands
@@ -122,9 +125,7 @@ stream:
 # rebuildable copy — the stream is the truth, this is the cache.
 store:
   path: "./nimbus-data/nimbus.db"
-  # There is no `driver:` here and no CREWLET_STORE_DRIVER either — Turso
-  # is the database and the only one.  A file that still carries the key
-  # is answered by name rather than as a typo.
+  # Turso is the database and the only one, so there is no driver to pick.
 
 # ── Seat ownership ────────────────────────────────────────────────────
 #
@@ -148,7 +149,11 @@ coordination:
 # member a distinct, stable one.
 node:
   id: "${CREWLET_NODE_ID}"
-  # roles: [ingress, seats, workers]   # omit for all three
+  # roles: [data, ingress, seats, workers]   # omit for all four; a node
+                                       #   without data keeps nothing durable
+                                       #   and needs store.scratch plus
+                                       #   stream.leaf.urls — see
+                                       #   docs/guides/satellite-nodes.md
   # labels: {zone: eu-west}            # what a role's placement selector matches
   # max_concurrent: 32                 # agent turns THIS PROCESS runs at once.
                                        #   Per node, so a fleet's ceiling is
@@ -193,11 +198,12 @@ api:
   # and the others set port 0 so only one process binds it.
   port: 8000
 
-  # REQUIRED once a port is set.  Where a BROWSER and a third-party app
-  # reach this deployment, which is not where the process binds: its
-  # scheme decides the session cookie's Secure flag, its host is the
-  # origin every write is checked against, and it is the base every
-  # webhook URL is built on.  Behind a proxy this is the public address.
+  # REQUIRED once a port is set.  Where a PERSON reaches this deployment,
+  # which is not where the process binds: its scheme decides the session
+  # cookie's Secure flag, its host is the origin every write is checked
+  # against, and it is the base of every link a person follows.  With no
+  # `api.public` listener of its own it is also the base every webhook URL
+  # is built on.  Behind a proxy this is the public address.
   external_url: "http://localhost:8000"
 
   auth:
@@ -251,12 +257,14 @@ api:
 #
 # The keyring is this deployment's root of trust, and it does two jobs.
 #
-# It SIGNS every record on every state log. The broker has no auth of its
-# own, so a signature is the only thing that says a record came from this
-# fleet rather than from anything else that can reach the cluster port —
-# and a record is whatever the next node applies. A node with no keyring
-# refuses to start for that reason, and `crewlet validate` refuses a file
-# without one.
+# It SIGNS every record on every state log, and every request a node
+# without `data` sends the estate service on a data node. The broker has no
+# auth of its own, so a signature is the only thing that says a record or a
+# request came from this fleet rather than from anything else that can reach
+# the cluster port — and a record is whatever the next node applies, a
+# request whatever a data node runs as the actor it names. A node with no
+# keyring refuses to start for that reason, and `crewlet validate` refuses a
+# file without one.
 #
 # It SEALS the Tier B company config at rest: every write stores the
 # whole company document as one opaque AES-256-GCM blob

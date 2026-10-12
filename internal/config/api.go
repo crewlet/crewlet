@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,18 +43,31 @@ type API struct {
 	// Host is the bind address.
 	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the HTTP surface."`
 
-	// Port is the bind port. 0 serves no HTTP at all — no dashboard, no
-	// REST API, and no webhook endpoint, so every integration goes deaf.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port; 0 disables the HTTP surface entirely."`
+	// Port is the bind port of this node's ONE listener, and node.roles
+	// decides what it carries. With the ingress role it is the whole HTTP
+	// surface: the dashboard, the REST API, the webhooks and the probes,
+	// less the routes [API.Public] moves to a listener of their own.
+	// Without it, the probes alone (/health and /ready) — plus a seats
+	// node's agent-mode tool bridge where api.public is unset — because an
+	// orchestrator runs every node and must be able to probe each, while
+	// the API is placed only where traffic is meant to arrive. ONE PORT
+	// rather than a second setting for the probes: the probes are already
+	// on this listener on an ingress node, so a probe port beside it would
+	// be a second address for the same two routes there, and one Tier A
+	// file keeps working for both shapes. 0 binds nothing at all, on any
+	// node.
+	//
+	// So a port is not what makes a node SERVE the API — a port and the
+	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
+	// asks for the authentication settings below.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."`
 
-	// ExternalURL is where a BROWSER and a third-party app reach this
-	// deployment. REQUIRED once the API is served.
+	// ExternalURL is where a BROWSER reaches this deployment — a person, a
+	// session cookie and every link a person follows — and, while no
+	// public listener is set, where a vendor and a sandbox box reach it
+	// too. REQUIRED once this node serves the API ([Bootstrap.ServesAPI]).
 	//
-	// # One fact, one field
-	//
-	// It replaced `api.external_url` outright rather than
-	// sitting beside it, because three separate things need the same
-	// answer and two fields is two answers:
+	// # What reads it
 	//
 	//   - the session cookie's `Secure` flag and its `__Host-` prefix,
 	//     which follow this scheme. The engine sits behind a
@@ -62,22 +76,37 @@ type API struct {
 	//     is nothing else to derive them from;
 	//   - the origin a non-GET request and a socket handshake are checked
 	//     against;
-	//   - the base every vendor webhook and every pasted manifest is
-	//     built on, which is the job the retired field had.
+	//   - every link a PERSON follows: a dashboard address in a
+	//     notification, a page-change link, a skill's `${crewlet_base_url}`;
+	//   - the base every vendor webhook, app manifest and sandbox endpoint
+	//     is built on — UNLESS [API.Public] opens a listener of its own, in
+	//     which case those routes are served only there and
+	//     [APIPublic.ExternalURL] is their base ([API.WebhookBase]).
 	//
-	// # Why it moved to Tier A
+	// # Two sockets, two addresses, and no fallback between them
 	//
-	// The old field was Tier B, so it was a `${VAR}` a node resolved at
-	// the surface that used it — and a node that could not resolve it
+	// It replaced the Tier B `integrations.public_base_url` and
+	// `integrations.dashboard_base_url`. One address cannot be right for
+	// both sides once the public routes have a socket of their own — the
+	// person reaches the admin listener and the vendor reaches the public
+	// one — so each socket names its own, and neither stands in for the
+	// other where they differ: a vendor handed this address once
+	// api.public is set would be handed a socket that answers 404 for the
+	// route it was given.
+	//
+	// # Why it is Tier A
+	//
+	// The old fields were Tier B, so each was a `${VAR}` a node resolved at
+	// the surface that used it — and a node that could not resolve one
 	// built a manifest from the literal seven characters. The cookie and
 	// the origin check cannot work that way: they are decided before a
 	// company document is loaded, and they are part of what authenticates
 	// the request that would go on to load one. A value the authentication
 	// path depends on belongs in the tier that holds the keyring.
 	//
-	// Written as scheme://host[:port], with no path: it is a BASE, and a
-	// path here would be concatenated into every URL built from it.
-	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where a browser and a vendor reach this deployment, e.g. https://crewlet.example.com. Required once port is set."`
+	// Written as scheme://host[:port], with no query or fragment: it is a
+	// BASE, and every URL built from it is this value with a path appended.
+	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role."`
 
 	// TrustedProxies are the peers whose `X-Forwarded-For` and
 	// `X-Forwarded-Proto` this deployment believes, as CIDR blocks.
@@ -96,16 +125,30 @@ type API struct {
 	// address, which is correct for a node reached directly.
 	TrustedProxies []string `yaml:"trusted_proxies,omitempty" json:"trusted_proxies,omitempty" desc:"CIDR blocks whose X-Forwarded-For is honoured. Empty trusts no forwarded header."`
 
+	// Public is the optional dedicated listener for the routes outside
+	// parties call. See [APIPublic].
+	Public APIPublic `yaml:"public,omitempty" json:"public,omitzero"`
+
 	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
 }
 
-// Serving reports whether this configuration binds an HTTP surface at all.
+// ServesAPI reports whether this node serves the API surface: it binds a port
+// AND holds the ingress role.
 //
-// The one predicate every rule below turns on, in one place: a deployment that
-// serves nothing needs no external URL, no grant ceiling and no credential,
-// and a deployment that serves needs all three. The keyring is not among them:
-// every node needs it, serving or not ([Bootstrap.Validate]).
-func (a API) Serving() bool { return a.Port != 0 }
+// The one predicate the authentication rules turn on, in one place: a node
+// that serves the API needs an external URL, a grant ceiling and a credential,
+// and one that does not needs none of them. A PORT ALONE IS NOT IT — a node
+// without ingress binds api.port for its probes (and a seats node's tool
+// bridge) and serves no route anybody signs in to, so asking it for a ceiling
+// and a token would be ceremony every worker pays for a surface it never
+// opens. The keyring is not among them: every node needs it, serving or not
+// ([Bootstrap.validateTopology]).
+//
+// THE BOOTSTRAP'S RATHER THAN THE API BLOCK'S, because half of the answer is
+// the node block's roles, which the API block cannot see.
+func (b *Bootstrap) ServesAPI() bool {
+	return b.API.Port != 0 && b.Profile("").RunsIngress()
+}
 
 // ExternalBase is [API.ExternalURL] without its trailing slash, which is the
 // form every URL is built on.
@@ -116,6 +159,153 @@ func (a API) Serving() bool { return a.Port != 0 }
 // literal reference and has to decide what to do with it.
 func (a API) ExternalBase() string {
 	return strings.TrimRight(strings.TrimSpace(a.ExternalURL), "/")
+}
+
+// WebhookBase is where a VENDOR and a sandbox box reach this deployment: the
+// base every webhook, app manifest, app redirect and per-run sandbox endpoint
+// URL is built on.
+//
+// THE PUBLIC LISTENER'S OWN ADDRESS WHEN IT HAS ONE ([APIPublic.ExternalURL]),
+// and [API.ExternalBase] otherwise. No fallback between the two: once
+// api.public is set those routes are served ONLY on that socket, so the person's
+// address answers 404 for every one of them, and an empty answer — which a
+// caller reports as "no public address" — is the truthful one where the public
+// address is unset. The ONE accessor, so no caller branches on the listener
+// itself and two callers cannot answer the question differently.
+func (a API) WebhookBase() string {
+	if a.Public.Enabled() {
+		return a.Public.ExternalBase()
+	}
+	return a.ExternalBase()
+}
+
+// WebhookBaseKey is the Tier A key [API.WebhookBase] is read from, for a
+// screen or a refusal that tells an operator which setting to change: the
+// public listener's address once it is set, and the person's otherwise.
+//
+// BESIDE [API.WebhookBase] AND BRANCHING EXACTLY AS IT DOES, for its reason:
+// a caller naming the key for itself would be a second reading of which
+// listener is in force, and the one that drifts sends an operator to edit a
+// setting nothing reads.
+func (a API) WebhookBaseKey() string {
+	if a.Public.Enabled() {
+		return "api.public.external_url"
+	}
+	return "api.external_url"
+}
+
+// Addr is the API listener's bind address, host and port.
+func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Port)) }
+
+// APIPublic is a second listener that serves the routes outside parties call
+// without an operator credential, and nothing else: the vendor webhooks and the
+// vendor app landings under /webhooks/, and the per-run sandbox endpoints
+// /otlp/{token} and /mcp/{token}. Once it is set those routes are served ONLY
+// here, and api.port answers 404 for them, so the address an integration or a
+// remote sandbox must reach is a different socket from the one that serves the
+// admin API, the dashboard and the probes.
+//
+// # Why a listener rather than a path filter in a proxy
+//
+// Without it, a deployment that must accept vendor webhooks from the internet
+// but keep /config, /secrets and the read surface private has one socket to
+// expose and must filter it by path in front. That filter is an allow-list
+// somebody else maintains: one route it forgets, or one prefix it matches too
+// widely, puts the admin API on the internet, and nothing here can see it.
+// Two sockets make the split a fact about the network — the public one is
+// published, the other is not — and the engine itself decides which routes
+// each answers, from one predicate in the API's auth package.
+//
+// # Why the sandbox endpoints are public and the probes are not
+//
+// The sandbox endpoints are reached from INSIDE a box, which on E2B's cloud
+// is somebody else's network: a box can reach only what the deployment
+// publishes. They hold no operator credential by design — the signed per-run
+// token in the path is theirs — so they are exactly the routes this listener
+// is for, and leaving them on api.port would force that port public for any
+// company running remote sandboxes.
+//
+// The probes stay on api.port. /health describes the node — its seats, its
+// version, its posture — for whoever operates it, and an orchestrator or a
+// load balancer can probe a port other than the one it routes traffic to.
+//
+// # Never the sign-in routes
+//
+// /auth is a person's surface and is judged against [API.ExternalURL]'s origin
+// and cookie scope, so it is never among the routes this listener serves.
+//
+// # On a node without the ingress role
+//
+// Such a node serves its probes on api.port and one route beside them, its
+// seats' tool bridge, and that is a public route: with this block set it binds
+// HERE for it rather than on api.port, so one file still works for every role
+// and the bridge address follows one rule across the fleet. The probes stay on
+// api.port, for the reason above.
+type APIPublic struct {
+	// Host is the bind address. Empty binds every interface, which is the
+	// point of a listener meant to be reached from outside.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the public listener. Empty binds every interface."`
+
+	// Port is the bind port. 0 (the default) opens no public listener, and
+	// every route stays on api.port.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."`
+
+	// ExternalURL is where a VENDOR and a sandbox box reach this listener:
+	// the base of every webhook, app manifest, app redirect and per-run
+	// sandbox endpoint once the listener is set ([API.WebhookBase]).
+	// REQUIRED once the listener is set on an ingress node, because that
+	// node is the one building those addresses and handing them to vendors.
+	//
+	// TIER A, beside [API.ExternalURL] and for its reason: an address a
+	// manifest and a webhook registration are built from is a fact about
+	// where THIS deployment's sockets are published, which is the
+	// operator's, and it is an address by the time anything reads it.
+	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node."`
+}
+
+// IsZero lets an unset public block drop out of a JSON round trip.
+func (p APIPublic) IsZero() bool { return p.Host == "" && p.Port == 0 && p.ExternalURL == "" }
+
+// Enabled reports whether the public routes have a listener of their own.
+func (p APIPublic) Enabled() bool { return p.Port != 0 }
+
+// Addr is the listener's bind address, host and port.
+func (p APIPublic) Addr() string { return net.JoinHostPort(p.Host, strconv.Itoa(p.Port)) }
+
+// ExternalBase is [APIPublic.ExternalURL] without its trailing slash.
+func (p APIPublic) ExternalBase() string {
+	return strings.TrimRight(strings.TrimSpace(p.ExternalURL), "/")
+}
+
+func (p *APIPublic) validate(path Path, ingress bool) error {
+	var probs problems
+	if p.Port < 0 || p.Port > 65535 {
+		probs.add(at(path, "port"), ErrOutOfRange,
+			"must be 0 (no public listener) or a port 1..65535, got %d", p.Port)
+	}
+	if p.Port == 0 && (p.Host != "" || strings.TrimSpace(p.ExternalURL) != "") {
+		probs.add(at(path, "port"), ErrMissing,
+			"is required once host or external_url is set: both describe the "+
+				"public LISTENER, and without a port this node opens none")
+	}
+	raw := strings.TrimSpace(p.ExternalURL)
+	if raw == "" {
+		if p.Enabled() && ingress {
+			probs.add(at(path, "external_url"), ErrMissing,
+				"required once the public listener is set on an ingress node: the "+
+					"webhooks, app manifests and sandbox endpoints it serves are "+
+					"served ONLY on it, so every address handed to a vendor or a "+
+					"box is built on this one and api.external_url answers 404 for "+
+					"them. Write it as scheme://host[:port], e.g. "+
+					"https://hooks.example.com")
+		}
+		return probs.err()
+	}
+	probs.wrap(checkExternalURL(at(path, "external_url"), raw,
+		"every webhook, app manifest and sandbox endpoint URL is built on it, "+
+			"and a vendor refuses one without a scheme",
+		"a vendor and a sandbox box reach this listener on"))
+	return probs.err()
 }
 
 // externalLoopback reports whether the external URL names a loopback host.
@@ -138,7 +328,10 @@ func (a API) externalLoopback() bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (a *API) validate(path Path) error {
+// validate checks the API block. serving is [Bootstrap.ServesAPI] and ingress
+// whether the node holds the ingress role: both are the node block's to say,
+// which this block cannot see.
+func (a *API) validate(path Path, serving, ingress bool) error {
 	var p problems
 	// Unbounded, a port of 70000 passes validation and fails at bind,
 	// long after `crewlet validate` said the config was good.
@@ -146,50 +339,59 @@ func (a *API) validate(path Path) error {
 		p.add(at(path, "port"), ErrOutOfRange,
 			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
 	}
-	p.wrap(a.validateExternalURL(path))
+	p.wrap(a.validateExternalURL(path, serving))
 	for i, block := range a.TrustedProxies {
 		p.wrap(checkTrustedProxy(idx(at(path, "trusted_proxies"), i), block))
 	}
-	p.wrap(a.Auth.validate(at(path, "auth"), *a))
+	p.wrap(a.Public.validate(at(path, "public"), ingress))
+	p.wrap(a.Auth.validate(at(path, "auth"), *a, serving))
 	return p.err()
 }
 
 // validateExternalURL is the required-once-served rule and the shape rules
 // under it.
-func (a *API) validateExternalURL(path Path) error {
+func (a *API) validateExternalURL(path Path, serving bool) error {
 	var p problems
 	raw := strings.TrimSpace(a.ExternalURL)
 	if raw == "" {
-		if a.Serving() {
+		if serving {
 			p.add(at(path, "external_url"), ErrMissing,
-				"required once `api.port` is set: it decides the session "+
-					"cookie's Secure flag and __Host- prefix, the origin every "+
-					"write is checked against and the base every webhook URL is "+
-					"built on. The engine sits behind "+
-					"a TLS-terminating proxy and cannot read any of that off the "+
-					"request. Write it as scheme://host[:port], e.g. "+
+				"required once this node serves the API (`api.port` is set and "+
+					"node.roles holds ingress): it decides the session cookie's "+
+					"Secure flag and __Host- prefix, the origin every write is "+
+					"checked against and every link a person is sent. The engine "+
+					"sits behind a TLS-terminating proxy and cannot read any of "+
+					"that off the request. Write it as scheme://host[:port], e.g. "+
 					"https://crewlet.example.com or http://localhost:%d",
 				DefaultAPIPort)
 		}
 		return p.err()
 	}
+	p.wrap(checkExternalURL(at(path, "external_url"), raw,
+		"a browser Origin, a cookie's Secure flag and every link built on it are "+
+			"all decided by the scheme, so a value without one decides them "+
+			"wrongly rather than failing",
+		"a browser reaches this deployment on"))
+	return p.err()
+}
+
+// checkExternalURL is the shape every external address is held to: an http or
+// https scheme, a host, and no query or fragment. why says what the scheme
+// decides for this field and reachedBy who reaches the address, so each
+// refusal speaks about its own field.
+func checkExternalURL(path Path, raw, why, reachedBy string) error {
+	var p problems
 	if !hasHTTPScheme(raw) {
-		p.add(at(path, "external_url"), ErrShape,
-			"%q must start with http:// or https://: a browser Origin, a "+
-				"cookie's Secure flag and every webhook URL are all decided by the "+
-				"scheme, so a value without one decides them wrongly rather "+
-				"than failing", raw)
+		p.add(path, ErrShape, "%q must start with http:// or https://: %s", raw, why)
 		return p.err()
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		p.add(at(path, "external_url"), ErrShape, "%q is not a URL: %v", raw, err)
+		p.add(path, ErrShape, "%q is not a URL: %v", raw, err)
 		return p.err()
 	}
 	if parsed.Hostname() == "" {
-		p.add(at(path, "external_url"), ErrShape,
-			"%q names no host: it is the address a browser and a vendor reach "+
-				"this deployment on", raw)
+		p.add(path, ErrShape, "%q names no host: it is the address %s", raw, reachedBy)
 	}
 	// A PATH, A QUERY OR A FRAGMENT IS REFUSED rather than trimmed. Every
 	// consumer concatenates onto this value, so `https://x/crewlet/`
@@ -200,7 +402,7 @@ func (a *API) validateExternalURL(path Path) error {
 	// two that can never be right are refused, and the trailing slash is
 	// the one thing normalised.
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		p.add(at(path, "external_url"), ErrShape,
+		p.add(path, ErrShape,
 			"%q carries a query or a fragment: every URL this engine builds is "+
 				"this value with a path appended, so neither can survive the "+
 				"concatenation. Write the scheme, host, port and path prefix "+
@@ -323,7 +525,9 @@ func checkTrustedProxy(path Path, block string) error {
 // after them is, and the founder route, its race between two codes and its
 // setting went.
 //
-// All four are refused by name if they appear — see retiredBootstrapFields.
+// All four are refused if they appear, as every key this build does not define
+// is: the loader decodes Tier A with unknown keys refused, so a file still
+// carrying one fails rather than running a posture it no longer describes.
 type APIAuth struct {
 	// MaxGrants is THE CEILING: the most authority this deployment will
 	// let a company's own directory confer. REQUIRED once the API is
@@ -403,6 +607,66 @@ type APIAuth struct {
 	// needs no entry. The previous default was "*", which let any site a
 	// logged-in operator visited read every unauthenticated endpoint.
 	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"Additional browser origins this deployment is reached on. Empty = same-origin only."`
+
+	// CompanyWriters, when set, are the ids of the Tier A tokens that alone
+	// may CHANGE the company document, and no other credential may. Empty
+	// (the default) leaves every write to the authority table — a holder of
+	// `config:write`, or a lead inside their own subtree — which is the
+	// posture of a company edited by people.
+	//
+	// It exists for a document something ELSE is the source of: a GitOps
+	// pipeline, or a Kubernetes operator rendering it from custom
+	// resources. Such a system overwrites the active revision with its own
+	// at every reconcile, so an edit a person made here survives only until
+	// then — and nothing told them. Listing the system's token turns that
+	// silent loss into a refusal at the moment of the edit, naming who
+	// manages the document. Reads are untouched, and so is everything that
+	// is not the document: a secret write, a reload of the revision already
+	// active.
+	//
+	// A TOKEN ID LIST, NOT A ROLE OR A FLAG: a Tier A token acts under the
+	// login `token:<id>`, which every revision it writes records as both its
+	// author and the credential it came through, so "who may write" and
+	// "who wrote" are the same vocabulary. Each entry is held to the token
+	// id grammar ([iam.ValidTokenID]). [APIAuth.MayWriteCompany] is the one
+	// reading of it; see ADR-0030 for what counts as changing the document.
+	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Ids of the Tier A tokens that alone may change the company document. Empty = whoever the authority table admits."`
+}
+
+// CompanyManaged reports whether the company document is managed: some Tier A
+// token ids are named as its only writers.
+func (a *APIAuth) CompanyManaged() bool { return len(a.CompanyWriters) > 0 }
+
+// MayWriteCompany reports whether a write made as by may change the company
+// document.
+//
+// THE ONE READING of [APIAuth.CompanyWriters], for every surface that asks:
+// the config write path that enforces it and the viewer answer that tells the
+// dashboard whether to offer an edit.
+//
+// THE CREDENTIAL, NEVER THE AUTHOR. by's [iam.Actor.OperatorID] is the
+// credential the write came through, and a Tier A bearer's is its own login,
+// `token:<id>`: a listed id is admitted by that and by nothing else. A person's
+// session (`session:<lineage>`), a machine token acting as its owner
+// (`pat:<id>`) and a session exchanged from a Tier A token each name another
+// credential, so every one of them — a lead writing their own subtree
+// included — is refused while the document is managed, which is the managed
+// posture rather than an exception to it: a person's edit is exactly the one
+// the managing system's next reconcile overwrites.
+//
+// THE ENGINE ITSELF IS ADMITTED ([iam.ActorSystem]): its own writes — a chart
+// apply, a republish of the revision already active — are not an edit
+// somebody made here for the managing system to overwrite.
+func (a *APIAuth) MayWriteCompany(by iam.Actor) bool {
+	if !a.CompanyManaged() || by.Kind == iam.ActorSystem {
+		return true
+	}
+	for _, id := range a.CompanyWriters {
+		if by.OperatorID == iam.TokenLogin(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // SecondFactor is whether a second factor is required here, with the default
@@ -630,7 +894,7 @@ const MaxPasswordLength = 256
 
 // validatePasswords is what a person signing in with a password is asked: the
 // second factor and the password floor.
-func (a *APIAuth) validatePasswords(path Path, api API) error {
+func (a *APIAuth) validatePasswords(path Path, api API, serving bool) error {
 	var p problems
 	if a.TOTP != "" && !a.TOTP.Valid() {
 		p.add(at(path, "totp"), ErrUnknownValue,
@@ -642,7 +906,7 @@ func (a *APIAuth) validatePasswords(path Path, api API) error {
 	// deployment, not on the bind address: a hardened node binds loopback
 	// behind its proxy, so a bind check would permit the insecure posture
 	// in exactly the deployment that must refuse it.
-	if a.TOTP == iam.SecondFactorOptional && api.Serving() &&
+	if a.TOTP == iam.SecondFactorOptional && serving &&
 		!api.externalLoopback() && !a.AcceptInsecure {
 		p.add(at(path, "totp"), ErrConflict,
 			"`optional` on a deployment a browser reaches at %s means a "+
@@ -685,7 +949,7 @@ type APIToken struct {
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
-	Token string `yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
+	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
 	// Grants is what this credential may do. REQUIRED and non-empty: a
 	// credential's blast radius is stated at the pin, never inferred.
@@ -698,14 +962,16 @@ type APIToken struct {
 	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do. Required and non-empty."`
 }
 
-func (a *APIAuth) validate(path Path, api API) error {
+// validate checks the auth block; serving is [Bootstrap.ServesAPI].
+func (a *APIAuth) validate(path Path, api API, serving bool) error {
 	var p problems
 
-	p.wrap(a.validateCeiling(path, api))
+	p.wrap(a.validateCeiling(path, serving))
 	p.wrap(a.Session.validate(at(path, "session")))
 	p.wrap(a.Audit.validate(at(path, "audit")))
-	p.wrap(a.validatePasswords(path, api))
-	p.wrap(a.validateTokens(path, api))
+	p.wrap(a.validatePasswords(path, api, serving))
+	p.wrap(a.validateTokens(path, serving))
+	p.wrap(a.validateWriters(path))
 
 	for i, origin := range a.AllowedOrigins {
 		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
@@ -713,13 +979,45 @@ func (a *APIAuth) validate(path Path, api API) error {
 	return p.err()
 }
 
+// validateWriters holds each company_writers entry to the token id grammar.
+//
+// A WRITER IS A TOKEN ID, and held to the rules a token id is: an entry no id
+// could ever equal is not a stricter list, it is a typo that locks out the
+// system it was meant to name. Whether it names a token THIS file configures is
+// a warning instead ([APIAuth.writerWarnings]): a list naming none is a frozen
+// document, which is a posture, and a token may be listed ahead of its issue.
+func (a *APIAuth) validateWriters(path Path) error {
+	var p problems
+	writers := make(map[string]struct{}, len(a.CompanyWriters))
+	for i, id := range a.CompanyWriters {
+		wp := idx(at(path, "company_writers"), i)
+		switch {
+		case strings.TrimSpace(id) == "":
+			p.add(wp, ErrMissing, "an empty writer names no token: remove the "+
+				"entry, or write the id of the token the managing system holds")
+		case !iam.ValidTokenID(id):
+			p.add(wp, ErrUnknownValue,
+				"writer %q is not a token id, so no token can ever be it and the "+
+					"system it was meant to name is locked out: a token id is "+
+					"lowercase letters, digits and hyphens, optionally joined by "+
+					"colons, in at most %d characters", id,
+				iam.MaxLogin-len(iam.TokenLoginPrefix))
+		}
+		if _, dup := writers[id]; dup && id != "" {
+			p.add(wp, ErrConflict, "writer %q is listed twice", id)
+		}
+		writers[id] = struct{}{}
+	}
+	return p.err()
+}
+
 // validateCeiling is the required-once-served rule on max_grants.
-func (a *APIAuth) validateCeiling(path Path, api API) error {
+func (a *APIAuth) validateCeiling(path Path, serving bool) error {
 	var p problems
 	if len(a.MaxGrants) == 0 {
-		if api.Serving() {
+		if serving {
 			p.add(at(path, "max_grants"), ErrMissing,
-				"required once `api.port` is set: it is the bound on what this "+
+				"required once this node serves the API: it is the bound on what this "+
 					"company's own directory may confer on anybody, and the tier "+
 					"that holds the keyring is the tier that states it. There is no "+
 					"default, because one granting everything is a ceiling that "+
@@ -745,7 +1043,7 @@ func (a *APIAuth) validateCeiling(path Path, api API) error {
 
 // validateTokens is the token list: the label, the value, the entropy floor,
 // the grants and the required-once-served rule.
-func (a *APIAuth) validateTokens(path Path, api API) error {
+func (a *APIAuth) validateTokens(path Path, serving bool) error {
 	var p problems
 	seen := make(map[string]struct{}, len(a.Tokens))
 	for i, t := range a.Tokens {
@@ -824,9 +1122,9 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 	//   - on a running one, an administrator who is throttled, who lost
 	//     their second factor, or whose password is refused has nothing
 	//     else to present.
-	if api.Serving() && len(a.Tokens) == 0 {
+	if serving && len(a.Tokens) == 0 {
 		p.add(at(path, "tokens"), ErrMissing,
-			"at least one token is required once `api.port` is set. The "+
+			"at least one token is required once this node serves the API. The "+
 				"identity estate of a fresh deployment is empty, "+
 				"so this is what puts the first person on their human seat "+
 				"(`crewlet iam invite <address> -seat <handle>`); and on a "+
@@ -932,9 +1230,12 @@ func checkOrigin(path Path, origin string) error {
 // they share is that the configuration works exactly as written and the
 // consequence is somewhere else: on the network between a browser and this
 // node, or in a front end the engine cannot tell apart from its callers.
-func (a API) warnings() []Warning {
+//
+// Asked only of a node that serves the API ([Bootstrap.ServesAPI]): each is
+// about what a browser meets, and a node without ingress serves none.
+func (a API) warnings(serving bool) []Warning {
 	var out []Warning
-	if !a.Serving() {
+	if !serving {
 		return out
 	}
 	auth := a.Auth

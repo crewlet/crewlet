@@ -163,6 +163,9 @@ type Exclusion struct {
 // EVERY ENTRY ALSO STATES WHO AUTHORS ITS RATE, because admission is not only
 // "is this worth keeping" but "can somebody outside this company decide how
 // much of it there is". See [RateAuthor] and [AdmissionViolations].
+//
+// So is the one narrowing of the other half: a type in [unfed] is persisted
+// like every other entry here and is kept out of the activity feed.
 var categories = map[string]placement{
 	// Lifecycle: the org coming and going, plus the config changes an
 	// operator is most likely to go looking for after the fact — and the
@@ -236,6 +239,15 @@ var categories = map[string]placement{
 	"notifications_coalesced": {"notification", RateAuthenticated},
 	"turn_trigger_skipped":    {"notification", RateAuthenticated},
 
+	// Webhook: one inbound delivery presented to one seat, from either edge
+	// — a webhook route or a chat socket. Its own category rather than
+	// `notification`, because it records what ARRIVED, before anything was
+	// decided about it, and the integration counts read exactly this set.
+	// The row is filed under the delivery's own label rather than this
+	// type (internal/observe), so this is the one type whose rows never
+	// carry its name.
+	"inbound_delivery": {WebhookCategory, RateAuthenticated},
+
 	// System: the engine talking about itself. A turn's start is stored
 	// beside its completion, because the pair is what bounds a turn in
 	// history: a turn that began and never finished is a start with no
@@ -296,6 +308,9 @@ var categories = map[string]placement{
 	"iam_session_generation_bumped": {"auth", RateAuthenticated},
 	"statelog_record_unverifiable":  {"auth", RateEngine},
 	"statelog_record_tampered":      {"auth", RateEngine},
+	// What the auxiliary model cost, coalesced per key per flush — PERSISTED
+	// and NOT FED: see [unfed].
+	"auxiliary_spend": {"system", RateEngine},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -381,7 +396,8 @@ var excluded = map[string]Exclusion{
 	"a2a_message": {Cause: CauseAlreadyRecorded, Reason: "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request"},
 	"budget_meters": {Cause: CauseSampled, Reason: "a SNAPSHOT of the shared token counters, published by " +
-		"every node on a 15-second tick, so a durable row per report is about " +
+		"every node on a 15-second tick and at once when a budget window first " +
+		"refuses a charge, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
 		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
@@ -399,11 +415,60 @@ var excluded = map[string]Exclusion{
 		"sandbox_run_answered, and that a person gave it is their " +
 		"operator_acted row, so categorising this would write a third row " +
 		"for one answer — the reason a2a_request is kept out above"},
-	"raw_webhook": {Cause: CauseAlreadyRecorded, Reason: "the delivery is ALREADY a row, written by the webhook " +
-		"receiver under its own id with the raw provider bytes as its payload. " +
-		"This event is the wake it publishes onto a seat's inbox, so " +
-		"categorising it would write a second row per delivery saying the same " +
-		"thing under a different id"},
+	"reflection_due": {Cause: CauseAlreadyRecorded, Reason: "the WAKE that puts a finished turn in front of " +
+		"reflection on the seat's holder. The turn is already a row " +
+		"(turn_completed), and what reflecting on it did is its own row " +
+		"(reflection_completed), so categorising this would write the turn a " +
+		"second time — the reason a2a_request is kept out above"},
+	"custody_batch": {Cause: CauseAlreadyRecorded, Reason: "a CARRIER, not an event: a node without `data` keeps " +
+		"no event log, so it publishes its events in batches and one data " +
+		"node writes each event inside as the row it is (ADR-0025). A row " +
+		"for the batch would describe the transport and repeat every event " +
+		"in it — and on the node that published it, it would be handed to " +
+		"custody in a batch of its own"},
+	"raw_webhook": {Cause: CauseAlreadyRecorded, Reason: "the delivery is ALREADY a row: both inbound edges — the " +
+		"webhook receiver and the Mattermost socket — publish inbound_delivery " +
+		"beside it, filed under the provider's own label with the provider's " +
+		"bytes as its payload. This event is the wake an edge publishes for the " +
+		"transports to route, so categorising it would write a second row per " +
+		"delivery saying the same thing under a different id"},
+}
+
+// unfed are the PERSISTED types the activity feed does not carry, each with the
+// reason.
+//
+// A RULE CHANGE, made once and here rather than as a special case in a reader:
+// "persisted" and "fed" were one fact — a categorised type was a row AND a
+// line of the feed — and the feed is a ring of a few hundred rows (livestate.EventFeedLimit)
+// for the WHOLE COMPANY, because every node's projection is fed by a fleet-wide
+// broadcast. A type that is accounting rather than activity takes those rows
+// from the events a person watching the feed is there for, and a projection
+// that skipped it on its own would leave the startup seed, which reads the
+// feed back out of the store, disagreeing with the stream about what the feed
+// holds. So the class is declared beside the admission list, and every read
+// of the feed's rows asks [KeptOutOfFeed]: the live projection's ring, its
+// startup seed, and every view a reader scrolls on from the ring — the event
+// log's older pages and its axis, the Live screen's activity strip and a
+// seat's latest events — which ask for `feed_only` (store.ListQuery.FeedOnly),
+// so a bar never counts and an older page never lists a row the ring would
+// not hold.
+//
+// An unfed type is still a row with a category: it is in the store, in a
+// turn's and a trace's history, and listed by every read that does not ask
+// for the feed's rows — a type filter, a turn, a trace, a work key.
+//
+// MOVING A TYPE INTO THE CLASS moves every one of those reads at once, on
+// every node: the history scatter carries `feed_only` to each node it asks
+// (internal/eventfan), and each node leaves the class out of its own listing
+// and its own axis by this list.
+var unfed = map[string]string{
+	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
+		"the auxiliary model cost for one key, several per turn beside the " +
+		"turn's own phases and a burst of them when a compaction runs. In " +
+		"the feed they would push the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last " +
+		"few hundred events; their spend reaches every spend figure through " +
+		"the rollups, and a turn's page reads them by its turn id",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.
@@ -411,8 +476,8 @@ var excluded = map[string]Exclusion{
 // A subset rather than the same set: agent_turn_progress, the two seat
 // lifecycle events and the budget snapshot move a live row without joining the
 // activity feed, while raw_webhook reaches the projector not at all, because it
-// is published onto a seat's inbox rather than onto crewlet.events.*, and the
-// receiver ingests its own envelope for it.
+// is published onto the inbound notification topic rather than onto
+// crewlet.events.* — the feed hears a delivery through inbound_delivery.
 var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
 	"agent_spawned":       true,
@@ -442,28 +507,50 @@ func RateAuthorOf(eventType string) (RateAuthor, bool) {
 // driving the live projection.
 func LiveOnly(eventType string) bool { return liveOnly[eventType] }
 
+// KeptOutOfFeed reports whether a type is one of the [unfed]: persisted, and
+// deliberately not a line of the activity feed.
+//
+// THE NARROWING, NOT THE ADMISSION. A reader holding a categorised envelope
+// asks this and nothing else, so the category stays the one statement that a
+// type is persisted — a type this build does not know, which a newer peer's
+// stored row can be, is a feed row exactly as it was.
+func KeptOutOfFeed(eventType string) bool {
+	_, kept := unfed[eventType]
+	return kept
+}
+
+// Unfed returns every persisted type the activity feed does not carry, sorted —
+// for a reader of the store that rebuilds the feed and has to name them in a
+// filter.
+func Unfed() []string { return slices.Sorted(maps.Keys(unfed)) }
+
+// UnfedReasons returns every unfed type with its reason.
+func UnfedReasons() map[string]string { return maps.Clone(unfed) }
+
 // Excluded reports why a type is kept out of the event store, or "" if it is
 // not deliberately excluded — which, for a type with no category either, means
 // nobody has placed it.
 func Excluded(eventType string) string { return excluded[eventType].Reason }
 
-// WebhookCategory is the one category no event TYPE carries.
+// WebhookCategory is the category every inbound DELIVERY row is filed under,
+// and the one inbound_delivery alone carries.
 //
-// The webhook receiver writes its row directly, under the provider's exact
-// bytes and its own delivery id, so nothing in the map above ever produces it —
-// but it is a real value of the `category` column, a real option in the
-// dashboard's filter, and a vocabulary that omitted it would read as complete
-// and be wrong. See internal/api/webhooks.
+// Its rows are the one family whose type column is not the event's type: an
+// inbound_delivery is filed under the delivery's own label (`webhook:push`,
+// `forge:avi:jira:created:issue`, `socket:posted`) with the provider's bytes as its
+// payload — see internal/observe — because that is what an operator matches
+// against their provider's console. Named rather than spelled in the map, since
+// the integration counts (internal/api/queries) and the dashboard's delivery
+// panels select on this value.
 const WebhookCategory = "webhook"
 
-// CategoryNames is every value the `category` column can hold, sorted, with
-// [WebhookCategory] included.
+// CategoryNames is every value the `category` column can hold, sorted.
 //
 // Exported so a docs generator and the guard test read the same list the
 // engine files rows under, rather than a copy somebody has to remember to
 // update.
 func CategoryNames() []string {
-	seen := map[string]bool{WebhookCategory: true}
+	seen := map[string]bool{}
 	for _, placed := range categories {
 		seen[placed.category] = true
 	}

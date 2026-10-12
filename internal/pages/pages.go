@@ -111,14 +111,15 @@ const (
 
 	// MaxBody bounds a page.
 	//
-	// Five hundred and twelve kibibytes, eight times a work item's, because
-	// a runbook or a design document genuinely is that long. It is well
-	// inside this log's declared largest record ([PagesMaxRecordBytes])
-	// however its JSON escapes — six bytes a character at worst, three
-	// mebibytes — and so inside what every broker a node runs against
-	// carries: a node refuses to start against a NATS server that holds it
-	// to a max_payload below the transport's 8 MiB contract
-	// (internal/queue/jetstream).
+	// Five hundred and twelve kibibytes, sixteen times a work item's, because
+	// a runbook or a design document genuinely is that long. A record
+	// carries a page's body once, and JSON escapes a byte into at most six,
+	// so a page at this size is at most 3 MiB on the wire — inside this
+	// log's declared largest record ([PagesMaxRecordBytes]), and so inside
+	// the transport's 8 MiB message ceiling. Nothing here checks the broker:
+	// every node, knowledge base or not, refuses at connect an external NATS
+	// server configured below that ceiling (nats-server's own default is
+	// 1 MiB; internal/queue/jetstream).
 	MaxBody = 512 << 10
 
 	// MaxComment bounds one comment on a page.
@@ -286,4 +287,10 @@ func Sentence(err error) string {
 		return "`" + r.field + "`: " + r.why
 	}
 	return err.Error()
+}
+
+// badParent builds the refusal of a page's `parent_id`, which is both a field
+// refusal and the one fact [ErrParent] names.
+func badParent(why string, args ...any) error {
+	return fmt.Errorf("%w (%w)", invalid("parent_id", why, args...), ErrParent)
 }

@@ -6,12 +6,17 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // The learning WRITE side, wired.
@@ -59,10 +64,11 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	}
 
 	// EVERY WORKER RESOLVES ITS MODEL THROUGH THIS, so auxiliary spend is
-	// charged against the same fleet counter a turn is. Wrapping the seam
-	// rather than each call site is what makes a worker added later charge
-	// without anyone remembering to — see learningbudget.go.
-	models := e.meteredModelsFor(c)
+	// charged against the same fleet counter a turn is and recorded in the
+	// spend history beside it. Wrapping the seam rather than each call site
+	// is what makes a worker added later charge and record without anyone
+	// remembering to — see auxiliary.go.
+	models := e.auxiliaryFor(c)
 	if models == nil {
 		// A COMPANY WITH NO MODELS is a valid one (see nomodels.go), and the
 		// workers that call a model are waiting for a provider rather than
@@ -77,7 +83,8 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	var workers []learning.Worker
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
+		decider, err := learning.NewPersistDecider(models,
+			learning.NewDiary(db, learning.WithEmbed(e.embedText)),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,
@@ -94,8 +101,14 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// `episodic.enabled` in the config because the read-side knobs
 	// (retrieval_limit) presuppose rows exist — a company that wants no
 	// episodic memory turns learning off entirely.
+	//
+	// Its embedder is READ AT CALL TIME (see [Engine.embedText]). The
+	// workers happen to be rebuilt after the apply stores its embedder, so
+	// a captured one would be current today only because of the order of
+	// two calls in the apply — the order that put the pull tools a whole
+	// epoch behind. Read per call, it is current by construction.
 	episodist, err := learning.NewEpisodist(learning.NewEpisodes(db),
-		learning.EpisodistOptions{Embed: e.embedder()})
+		learning.EpisodistOptions{Embed: e.embedText})
 	if err != nil {
 		log.Warn("episodist_unavailable", "error", err,
 			"detail", "no episode will be recorded, so recall and skill "+
@@ -197,22 +210,23 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 // The dispatcher itself is built once and outlives every apply (see
 // [learning.Reflector] for why its redelivery ring must not reset). Once is at
 // boot for a node that booted with a company, and HERE for one that did not:
-// its first company attaches the dispatcher, and every later apply swaps what
+// its first company builds the dispatcher, and every later apply swaps what
 // runs behind it. Before that, this returned early with no dispatcher to
 // point, so a company created on a fresh node reflected on no turn at all (no
 // diary row, no episode, no skill) until the process restarted, while looking
 // entirely healthy.
 //
-// An error is a dispatcher that could not be attached, which fails the apply
-// for the reason it fails a boot: a company served without the write side
-// learns nothing while nothing says so, and the retry attaches it again.
+// An error is a dispatcher that could not be built, which fails the apply for
+// the reason it fails a boot: a company served without the write side learns
+// nothing while nothing says so, and the retry builds it again.
 // Swapping the workers of a running dispatcher never fails the apply.
 func (e *Engine) reconfigureReflection(ctx context.Context, c *Company) error {
-	if e.reflector == nil {
+	reflector := e.reflector.Load()
+	if reflector == nil {
 		return e.attachReflection(ctx, c)
 	}
 	workers := e.buildReflectionWorkers(c)
-	if err := e.reflector.Reconfigure(c.Org, workers, e.learningBudget(c)); err != nil {
+	if err := reflector.Reconfigure(c.Org, workers, e.learningBudget(c)); err != nil {
 		// The previous epoch's workers keep serving. Reflecting with a
 		// stale org is a far smaller wrong than not reflecting at all,
 		// and this is a bug in the wiring above rather than in the
@@ -228,38 +242,91 @@ func (e *Engine) reconfigureReflection(ctx context.Context, c *Company) error {
 	return nil
 }
 
-// startReflection builds the dispatcher and attaches it to completed turns,
-// for the company this node booted with.
+// startReflection builds the dispatcher, for the company this node booted
+// with.
 //
-// Called ONCE, from start, before the first apply — so the subscription
-// exists for the life of the process and an apply only ever swaps what runs
-// behind it. A node that booted with no company has no org to resolve seats
-// against and no models to run a pass on, so it attaches nothing here and its
-// first apply does instead (see [Engine.reconfigureReflection]).
+// Called ONCE, from start, before the first apply — so the dispatcher exists
+// for the life of the process and an apply only ever swaps what runs behind
+// it. A node that booted with no company has no org to resolve seats against
+// and no models to run a pass on, so it builds nothing here and its first
+// apply does instead (see [Engine.reconfigureReflection]).
 func (e *Engine) startReflection(ctx context.Context) error {
 	return e.attachReflection(ctx, e.Company())
 }
 
-// attachReflection builds the dispatcher for c and subscribes it.
+// attachReflection builds the dispatcher for c.
 //
-// DETACHED from the caller's context, because the subscription is the
-// process's rather than the call's: the first apply hands in a reconcile
-// tick's context, and a consumer bound to it would stop reading completed
-// turns the moment that tick returned.
-func (e *Engine) attachReflection(ctx context.Context, c *Company) error {
+// IT SUBSCRIBES NOTHING. A turn's reflection reaches the dispatcher on the
+// seat's own reflection subject, which the node holding the seat attaches with
+// the seat ([Engine.attachSeatReflection]) — so it runs where the seat's memory
+// is held and carried. It ran off one fleet-wide group once, and on a fleet
+// of N nodes all but one in N of a seat's reflections ran where nothing of
+// the seat was held, writing memory nobody carried or read.
+func (e *Engine) attachReflection(_ context.Context, c *Company) error {
 	if c == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
+	// THE NODE'S LEDGER, flushed for a turn before its pass's sentinel: the
+	// pass runs here, so what its workers' calls cost is in this ledger.
 	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
-		e.buildReflectionWorkers(c), e.learningBudget(c))
+		e.buildReflectionWorkers(c), e.learningBudget(c), e.auxSpend)
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}
-	if err := reflector.Start(context.WithoutCancel(ctx), e.backends.Queue); err != nil {
-		return fmt.Errorf("engine: attach the reflect dispatcher: %w", err)
-	}
-	e.reflector = reflector
+	e.reflector.Store(reflector)
 	return nil
+}
+
+// attachSeatReflection attaches a seat's reflection subject on the node that
+// has just acquired it — part of the seat's preparation, so a refused attach
+// refuses the seat like every other step there.
+//
+// AFTER THE SEAT'S MEMORY IS HYDRATED: a reflection reads what the seat
+// already knows, and the wakes waiting on the subject — published by the node
+// that ran each turn, retained while nothing was attached — are taken as soon
+// as this returns.
+//
+// BY THE SEAT'S ID, as its inbox and control subjects are: a durable name
+// outlives every record of the seat, and the id is the one key every node
+// derives alike from the immutable handle.
+func (e *Engine) attachSeatReflection(ctx context.Context, seat placement.Seat) error {
+	subject, group := topics.AgentReflect(seat.ID), topics.AgentReflectGroup(seat.ID)
+	if subject == "" || e.backends == nil || e.backends.Queue == nil {
+		return nil
+	}
+	if err := e.backends.Queue.Subscribe(ctx, subject, group, e.reflectSeatTurn); err != nil {
+		return fmt.Errorf("attaching the seat's reflection subject: %w", err)
+	}
+	return nil
+}
+
+// detachSeatReflection lets a released seat's reflection subject go, BEFORE the
+// release's last memory flush. Detach does not wait for a reflection already
+// running ([queue.EventQueue.Detach] — the fenced release must not), so one
+// that finishes after the flush writes rows this node no longer carries: the
+// same bounded loss the flush documents for a crash. A seat this node never
+// attached detaches to nothing.
+func (e *Engine) detachSeatReflection(ctx context.Context, seat placement.Seat) {
+	subject, group := topics.AgentReflect(seat.ID), topics.AgentReflectGroup(seat.ID)
+	if subject == "" || e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	if _, err := e.backends.Queue.Detach(ctx, subject, group); err != nil {
+		log.WarnContext(ctx, "seat_reflection_detach_failed", "seat", seat.Handle,
+			"agent_id", seat.ID.String(), "error", err)
+	}
+}
+
+// reflectSeatTurn hands one wake to the dispatcher. Before the first company has
+// built one there is nothing to reflect with, and no turn has run either, so a
+// wake then is acknowledged and said.
+func (e *Engine) reflectSeatTurn(ctx context.Context, ev *events.Event) queue.Result {
+	reflector := e.reflector.Load()
+	if reflector == nil {
+		log.DebugContext(ctx, "reflection_without_dispatcher", "event", ev.ID.String())
+		return queue.Ack()
+	}
+	return reflector.Handle(ctx, ev)
 }
 
 // ---- the fleet singletons --------------------------------------------- //
@@ -269,7 +336,9 @@ func (e *Engine) attachReflection(ctx context.Context, c *Company) error {
 // One name for every loop, deliberately: BackgroundOptions takes a single
 // ClaimDuty, so the skill ageing, the episode compaction, the skill clustering
 // and the cross-agent promotion all run on the same node — which is also what
-// learningDutyTTL is sized against.
+// learningDutyTTL is sized against. The name is a coordination key two builds
+// share in a rolling upgrade, so renaming it would leave a node on each name
+// believing it held "the" duty.
 const learningDutyName = "learning"
 
 // lifecycleOptions projects the operator's episode-lifecycle config onto the
@@ -408,7 +477,7 @@ func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.Backgr
 	// least wants unsupervised, so no summarizer means no pass at all: the
 	// rows stay raw and readable rather than being dropped unfolded.
 	if summarize := e.auxSummarizer(c); summarize != nil {
-		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
+		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)),
 			lifecycleOptions(&cfg.EpisodeLifecycle))
 	} else {
 		log.WarnContext(ctx, "episode_compaction_unavailable",
@@ -482,7 +551,7 @@ func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
 	}
 	opts := synthesizerOptions(cfg)
 	opts.Episodes = learning.NewEpisodes(db)
-	built, err := learning.NewSynthesizer(e.meteredModelsFor(c), learning.NewSkills(db), opts)
+	built, err := learning.NewSynthesizer(e.auxiliaryFor(c), learning.NewSkills(db), opts)
 	if err != nil {
 		log.Warn("skill_clustering_unavailable", "error", err,
 			"detail", "scheduler_enabled is on but no clustering pass could be "+
@@ -604,7 +673,8 @@ func hours(n int) time.Duration {
 // compaction entirely — see the caller for why a delete-only pass is worse
 // than no pass.
 func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
-	if c.Models == nil {
+	seam := e.auxiliaryFor(c)
+	if seam == nil {
 		return nil
 	}
 	if !anySeatHasAuxiliary(c) {
@@ -622,7 +692,10 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has "+
 				"no seat with that handle", handle)
 		}
-		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
+		// A BACKGROUND PASS, on no turn: the lifecycle worker compacts a
+		// seat's old episodes on its own schedule.
+		member, err := seam.Auxiliary(seat, auxspend.Use{Stage: types.AuxStageBackground,
+			Purpose: types.AuxEpisodeCompaction})
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction for %q: %w", handle, err)
 		}
@@ -634,6 +707,7 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 				{Role: llm.RoleUser, Content: user},
 			},
 			Temperature: llm.Temp(compactionTemperature),
+			Effort:      compactionEffort,
 			MaxTokens:   e.compactionTokens(c),
 		})
 		if err != nil {
@@ -646,13 +720,51 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 	}
 }
 
+// episodeFit is the compaction pass's [learning.FitFunc]: the epoch's
+// compactor, on the seat the cluster belongs to — named by the handle its
+// episodes are keyed on, which is what [org.Organization.Role] resolves — with
+// the rewrite instructions for the field it is asked about.
+//
+// Nil where the company has no models, which the summarizer reads as "carry
+// every field whole" — the call is then larger, never wrong.
+func (e *Engine) episodeFit(c *Company) learning.FitFunc {
+	fitter := e.compactorFor(c)
+	if fitter == nil {
+		return nil
+	}
+	return func(ctx context.Context, handle string, field learning.EpisodeField, text string, budget int) (string, error) {
+		seat := c.Org.Role(handle)
+		if seat == nil {
+			return "", fmt.Errorf("engine: condensing an episode for %q: this "+
+				"revision has no seat with that handle", handle)
+		}
+		kind := compact.KindTask
+		if field == learning.FieldOutcome {
+			kind = compact.KindOutcome
+		}
+		// The background stage, as the summary it feeds is.
+		res, err := fitter.For(seat, auxspend.Use{Stage: types.AuxStageBackground}).
+			Fit(ctx, kind, text, budget)
+		if err != nil {
+			return "", err
+		}
+		return res.Text, nil
+	}
+}
+
 // compactionTemperature keeps a cluster summary reproducible.
 //
 // The same 0.2 the other auxiliary passes use, and for the same reason: a
 // summary is a description of rows that already exist, so there is nothing
 // for sampling to explore — but zero makes some providers degenerate into
-// repeating the input.
+// repeating the input. Honoured only where the model takes a sampling
+// parameter and the call is not thinking.
 const compactionTemperature = 0.2
+
+// compactionEffort is the most thinking a cluster summary is worth: it
+// describes rows that already exist, which is extraction, and on a thinking
+// model the thinking comes out of the same cap as the summary.
+const compactionEffort = llm.EffortLow
 
 // compactionTokens caps one cluster summary.
 func (e *Engine) compactionTokens(c *Company) int {

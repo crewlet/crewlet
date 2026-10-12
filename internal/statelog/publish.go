@@ -60,6 +60,26 @@ type Waiter interface {
 	WaitApplied(ctx context.Context, s ScopeSet, p Position) error
 }
 
+// Voids is this node's applier's reanchor rules, as a resolution asks them —
+// [Runner.Voided] in the engine.
+type Voids interface {
+	// Voided reports whether this node's applier drops a record stamped
+	// with generation gen at sequence seq under a rule a reanchor placed on
+	// its checkpoint — a generation the reanchor ABANDONED, or one a
+	// restored reanchor OVERTOOK — and which ([ReasonAbandoned],
+	// [ReasonOvertaken]).
+	//
+	// THE FRAMEWORK'S OWN GATES, which no domain's [Gates] can see, and a
+	// resolution needs them for the same reason it needs those: a record
+	// they dropped wrote no ledger row. A node whose rows were a restored
+	// copy's age went on writing in the old generation until it learned of
+	// the move, its record landed after the reanchor's own and was
+	// overtaken on every node, and its resolution — asking only the
+	// domain — reported a ledger contract violation for a record that was
+	// only ever gated.
+	Voided(gen uint32, seq uint64) (Reason, bool)
+}
+
 // Identity is whether this node's positions are sequences on the stream the
 // broker serves under the domain's name — [Runner.StreamIdentity], as the
 // publisher needs it.
@@ -224,6 +244,14 @@ type Fence interface {
 //     below the purge is reported `deleted` too. What is reported is the gate
 //     that holds the record NOW, which is the one a caller can act on; which
 //     gate fired first at p is the applier's `statelog_record_gated` line.
+//   - THE MARKER COVERS THE SUBJECTS THE APPLIER'S DOES, which may be more
+//     than its object's own: a tracker turn is a record about its task, on a
+//     subject of its own kind, and every applier drops it under the task's
+//     marker. A reader that asked about the object's own subject alone told
+//     such a write that nothing gated it, and the write resolved as a record
+//     applied without its ledger row. So each domain states the set once,
+//     for both of its sides, and the family asks the applier about every
+//     subject kind a record can carry rather than taking the domain's word.
 //   - THE PURGE'S OWN RECORD IS EXEMPT FROM ITS OWN MARKER, by operation id,
 //     and from that gate alone: it still falls through to the eviction
 //     window, because the exemption says nothing about its writer.
@@ -241,18 +269,26 @@ type Gates interface {
 	// resolves as "applied nowhere" and its caller is told the
 	// destruction it asked for did not happen, when it did.
 	//
-	// body IS THE RECORD'S OWN BODY when the caller appended it — nil when
-	// the record at p was merely FOUND above an anchor and whose it is is the
-	// open question. It is there for the one reader whose gate is keyed on
-	// what the PAYLOAD names rather than on the subject: the identity
-	// estate's directory records and sessions, which name their person in
-	// the payload — the directory's subject names nobody and a session's a
-	// lineage — exactly where the applier's own gate reads it. Without it a
-	// removal landing between a write's decide and its apply dropped the
-	// record on every node and this reader could not say so — the publisher
-	// read its own acknowledged append as a ledger contract violation. With
-	// nil, a reader answers from the subject alone, and the re-decide an
-	// ambiguous append leads to meets the gate in its own snapshot.
+	// writer IS THE RECORD'S WRITER, which is not always this node: a
+	// write the broker collapsed onto another node's copy of its operation
+	// is asked about that copy's writer, read off the log
+	// ([Publisher.resolve]), because a writer's gate drops a record by who
+	// wrote it.
+	//
+	// body IS THE RECORD'S OWN BODY whenever the record at p is this
+	// operation's — the caller's own append, or a copy of it read off the
+	// log — and nil when the record there is ANOTHER operation's, which the
+	// gates are asked about on this node's behalf. It is there for the one
+	// reader whose gate is keyed on what the PAYLOAD names rather than on
+	// the subject: the identity estate's directory records and sessions,
+	// which name their person in the payload — the directory's subject
+	// names nobody and a session's a lineage — exactly where the applier's
+	// own gate reads it. Without it a removal landing between a write's
+	// decide and its apply dropped the record on every node and this
+	// reader could not say so — the publisher read its own acknowledged
+	// append as a ledger contract violation. With nil, a reader answers
+	// from the subject alone, and the re-decide that leads to meets the
+	// gate in its own snapshot.
 	GatedAt(ctx context.Context, subj Subject, writer, opID string, p Position, body []byte) (Reason, bool, error)
 }
 
@@ -475,16 +511,24 @@ type Publisher struct {
 	maxRecord int64
 
 	log      Appender
+	records  VerifiedReader
 	rows     Rows
 	fence    Fence
 	gates    Gates
 	waiter   Waiter
+	voids    Voids
 	identity Identity
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
 
+	// duplicates is the log's duplicate window ([StreamSpec.Duplicates]):
+	// how long the broker collapses an append under an operation id onto the
+	// record the id first landed — which is what a refusal of a record that
+	// landed and applies nowhere has to tell its caller.
+	duplicates time.Duration
+
 	// admission holds this log's ordinary appends out of its gate reserve,
-	// nil on a log that keeps none ([KeepsGateReserve]).
+	// nil on a log that keeps none ([ReservationOf]).
 	admission Admission
 
 	// nodeID is this node's own identity, handed to every decision as
@@ -513,10 +557,54 @@ type Publisher struct {
 // it answers pending. See [Publisher.resolveBudget].
 const DefaultResolveBudget = 5 * time.Second
 
+// resolveBudgetKey carries a per-call resolution budget ([WithResolveBudget]).
+type resolveBudgetKey struct{}
+
+// WithResolveBudget is ctx with every write made on it waiting at most d for
+// this node's applier — its own record's resolution, the caller's session and
+// a position it finds itself behind — in place of the publisher's
+// [Deps.ResolveBudget]. A non-positive d changes nothing.
+//
+// NO PRODUCTION CALLER SETS IT: how long a write waits is the publisher's
+// decision, made once for every caller ([Publisher.resolveBudget]). It exists
+// for a case that makes a write it KNOWS cannot resolve here — on a node whose
+// applier it has halted — and would otherwise spend the whole default learning
+// `pending`, which is all that budget's length buys there. PER CALL rather
+// than a shorter budget for the publisher, because the same case's other
+// writes resolve against appliers that are running or resuming, and a budget
+// short enough to hurry the first would turn those into a different answer on
+// a loaded runner.
+func WithResolveBudget(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, resolveBudgetKey{}, d)
+}
+
+// budget is how long a write made on ctx waits for this node's applier: the
+// call's own budget if it carries one ([WithResolveBudget]), the publisher's
+// otherwise.
+func (p *Publisher) budget(ctx context.Context) time.Duration {
+	if d, ok := ctx.Value(resolveBudgetKey{}).(time.Duration); ok {
+		return d
+	}
+	return p.resolveBudget
+}
+
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
 	Domain Domain
-	Log    Appender
+
+	// Spec is the stream this publisher writes: the domain's own
+	// ([Domain.Stream]) with the byte ceiling this node's Tier A sized,
+	// held to the domain's declaration in everything else
+	// ([StreamSpec.Instantiates]) — its prefix is every subject's, its
+	// arbitration is against that stream's own sequences, and its
+	// [StreamSpec.MaxRecordBytes] is what every record is held to before
+	// anything is sent.
+	Spec StreamSpec
+
+	Log Appender
 
 	// Signer signs every record this authority appends. REQUIRED: the
 	// broker has no auth of its own, so an unsigned record on this log is
@@ -524,10 +612,27 @@ type Deps struct {
 	// [signature.go].
 	Signer *Signer
 
+	// Records is the same log read by position — in the engine the same
+	// [jetstream.DomainLog] the appends go to, opened through this node's
+	// [Verifier]. REQUIRED, because a write whose append the broker
+	// collapsed onto an earlier copy of its operation, or whose outcome it
+	// had to look for, resolves a record this call did not put there — and
+	// whether a gate dropped that record is a question about ITS writer,
+	// which only the record says ([Publisher.resolve]). A [VerifiedReader]
+	// because what is on the log is a signed frame: read raw, every
+	// peer's copy decodes as nothing and every such write answers unknown.
+	Records VerifiedReader
+
 	Rows   Rows
 	Fence  Fence
 	Gates  Gates
 	Waiter Waiter
+
+	// Voids is the reanchor rules this node's applier drops records by — in
+	// the engine the same runner as Waiter. REQUIRED: a resolution that
+	// could not ask would report a record they dropped as a ledger contract
+	// violation ([Voids]).
+	Voids Voids
 
 	// Identity is the stream identity of the positions Waiter holds —
 	// in the engine the same runner, which is the one place both the
@@ -541,7 +646,7 @@ type Deps struct {
 	Logger *slog.Logger
 
 	// Admission is the log's gate reserve: required of a domain that keeps
-	// one ([KeepsGateReserve]) and refused on one that does not.
+	// one ([ReservationOf]) and refused on one that does not.
 	Admission Admission
 
 	NodeID     string
@@ -560,6 +665,10 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no domain")
 	case d.Log == nil:
 		return nil, fmt.Errorf("statelog: publisher has no appender")
+	case d.Records == nil:
+		return nil, fmt.Errorf("statelog: publisher has no reader of its log — a " +
+			"write collapsed onto another node's copy of its operation is judged " +
+			"by that copy's writer, which only the record on the log names")
 	case d.Rows == nil:
 		return nil, fmt.Errorf("statelog: publisher has no rows")
 	case d.Fence == nil:
@@ -570,6 +679,10 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no gates")
 	case d.Waiter == nil:
 		return nil, fmt.Errorf("statelog: publisher has no waiter")
+	case d.Voids == nil:
+		return nil, fmt.Errorf("statelog: publisher has no reanchor rules — a " +
+			"record a reanchor voided wrote no ledger row, and a resolution that " +
+			"cannot ask would report it as a ledger contract violation")
 	case d.Identity == nil:
 		return nil, fmt.Errorf("statelog: publisher has no stream identity — " +
 			"every expectation it forms is a sequence on the stream its rows " +
@@ -581,18 +694,18 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no node id — the " +
 			"eviction gate compares against it, so a record with none is a " +
 			"record no gate can drop")
-	case KeepsGateReserve(d.Domain) && d.Admission == nil:
+	case ReservationOf(d.Domain).Kept && d.Admission == nil:
 		return nil, fmt.Errorf("statelog: %s claims identity and its publisher "+
 			"has no admission — without one its ordinary writes fill the log to "+
 			"the broker's ceiling and the eviction that could unpin it is refused "+
 			"with them", d.Domain.Name())
-	case !KeepsGateReserve(d.Domain) && d.Admission != nil:
+	case !ReservationOf(d.Domain).Kept && d.Admission != nil:
 		return nil, fmt.Errorf("statelog: %s claims no identity, so its log "+
 			"carries no gate record and a reserve would only refuse its ordinary "+
 			"writes early", d.Domain.Name())
 	}
-	spec := d.Domain.Stream()
-	if err := spec.Validate(); err != nil {
+	spec := d.Spec
+	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
 	}
 	// SIGNED AT THE APPENDER rather than at each call site, so the append
@@ -611,11 +724,14 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		stream:        spec.Name,
 		prefix:        spec.SubjectPrefix,
 		maxRecord:     spec.MaxRecordBytes,
+		duplicates:    spec.Duplicates,
 		log:           log,
+		records:       d.Records,
 		rows:          d.Rows,
 		fence:         d.Fence,
 		gates:         d.Gates,
 		waiter:        d.Waiter,
+		voids:         d.Voids,
 		identity:      d.Identity,
 		metrics:       d.Metrics,
 		logger:        logger,
@@ -728,8 +844,8 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
 				"detail", "this operation was minted before this node's "+
-					"operation ledger may have lost rows to its retention "+
-					"sweep, and it holds no row saying "+
+					"operation ledger may have lost rows to the ledger's "+
+					"retention sweep, and it holds no row saying "+
 					"whether the operation already applied, so it is "+
 					"answered unknown rather than decided a second time; "+
 					"a node whose ledger lost nothing that far back can "+
@@ -799,8 +915,9 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 // cross-project move re-run finds its root already in the target and refuses
 // it as somebody else's, a create finds its guarding row and calls the object
 // taken, an update conditioned on a version finds it moved by its own first
-// copy. On a node whose ledger may have lost the operation's row to its
-// sweep, the refusal was returned before the ledger was ever asked, so a retry was told "no" where
+// copy. On a node whose ledger may have lost the operation's row to its sweep,
+// the refusal was returned before the ledger was ever asked, so a retry was
+// told "no" where
 // the only true answer is that this node cannot say. A domain whose decision
 // only PROBES the ledger (it refuses whenever it runs, because running means
 // the ledger held no row) is the whole of this case: without the question,
@@ -866,7 +983,7 @@ func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
 //
 // ONE JUDGEMENT FOR BOTH PLACES THE LEDGER ANSWERS — a retry the snapshot
 // finds already applied ([Snap.Held]) and an append whose answer is resolved
-// from the ledger ([Publisher.Resolve]) — because they are the same question
+// from the ledger ([Publisher.resolve]) — because they are the same question
 // asked before and after the broker.
 //
 // # A row on another subject answers for some other write
@@ -1039,14 +1156,15 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		if err := at.Valid(); err != nil {
 			return Result{Rounds: round}, dispDone, err
 		}
-		// THE BODY THIS CALL APPENDED is the record at `at` — unless the
-		// broker collapsed the append onto an earlier copy, whose body this
-		// call never saw.
-		var body []byte
-		if !duplicate {
-			body = snap.Decision.Payload
+		// WHOSE RECORD IS AT `at` is what the resolution's gates are asked
+		// about: this call's own, whose body is the payload it appended, or
+		// — on a duplicate — the copy of the operation the broker collapsed
+		// it onto, whichever node wrote it, whose body only the log holds.
+		landed, body := landedOwn, snap.Decision.Payload
+		if duplicate {
+			landed, body = landedCopy, nil
 		}
-		res, err := p.Resolve(ctx, req, at, true, body)
+		res, err := p.resolve(ctx, req, at, landed, snap.Checkpoint.Generation, body)
 		res.Rounds = round
 		// A DUPLICATE ACKNOWLEDGEMENT IS THE BROKER COLLAPSING THIS
 		// APPEND onto an earlier copy of the operation still inside its
@@ -1433,11 +1551,32 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "at", seq, "publish_error", detail)
 		at := Position{Stream: p.stream, Generation: p.generation(), Seq: seq}
-		return p.Resolve(ctx, req, at, false, nil)
+		return p.resolve(ctx, req, at, landedFound, snap.Checkpoint.Generation, nil)
 	}
 }
 
-// Resolve answers what a durable record at p actually produced, and it is
+// landing is what a resolution knows, before it reads anything, about the
+// record at the position it resolves.
+type landing int
+
+const (
+	// landedOwn — the broker acknowledged THIS call's append at the position,
+	// so the record there is this node's, under this operation.
+	landedOwn landing = iota
+
+	// landedCopy — the broker COLLAPSED this call's append onto a copy of
+	// the operation it already held inside the log's duplicate window: the
+	// record there is this operation's, and its writer is whichever node
+	// published that copy — this one on an earlier attempt, or another that
+	// was handed the same operation.
+	landedCopy
+
+	// landedFound — the ambiguous path found the position newest on the
+	// subject, which may be anybody's record under any operation.
+	landedFound
+)
+
+// resolve answers what a durable record at p actually produced, and it is
 // called by the ambiguous path AND by every ordinary write the moment its own
 // acknowledgement names a position — INCLUDING the branch where the wait
 // succeeds.
@@ -1464,17 +1603,65 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 // not claimed: a marker can also land ABOVE p, after an eviction dropped the
 // record, and the reader then reports `deleted` by the rule [Gates] states.
 //
-// mine says whether the caller KNOWS the record at at is its own — true when
-// the broker acknowledged it, false when the ambiguous path merely found
-// something above the anchor. The two differ in one arm and it matters: an
-// absent ledger row means "somebody else won" only when the record might have
-// been somebody else's.
+// # Whose record the gates are asked about
 //
-// body is the record at `at` when the caller KNOWS its bytes — its own
-// acknowledged, non-duplicate append — and nil otherwise; it is handed to the
-// gate reader ([Gates.GatedAt]) and nothing else.
-func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine bool, body []byte) (Result, error) {
-	if req.NoWait {
+// A writer's gate — an eviction — drops a record by its WRITER, so the question
+// is about whoever wrote the record at p, and landed says how much of that this
+// call already knows. Its own acknowledged append is its own. Anything else is
+// READ off the log, because a record this call did not put there may be another
+// node's: a write that node published under this operation and that landed
+// above the node's eviction is on the log, applies nowhere, and holds the
+// operation id in the broker's duplicate window — so another node, handed the
+// same operation, has its append collapsed onto it. Asked about ITS OWN
+// standing, that node found no gate, no ledger row and a ledger that vouched,
+// and reported a contract violation for a record that was only ever gated; the
+// answer is the gate of the record's own writer, which is what holds the
+// operation — and the refusal NAMES that writer ([Unavailable.CopyWriter])
+// whenever the gate that answers blames it ([Reason.BlamesWriter]), since the
+// reason is then its standing and not this node's. The deletion marker blames
+// nobody: it holds every writer's record on the object, this node's included,
+// so a copy it dropped is refused `deleted` naming no writer.
+//
+// A record the read shows is ANOTHER operation's — the ambiguous path found it
+// newest on the subject — is not this operation's landing, and the gates are
+// asked about this node, whose own copy may be the one below it that a gate
+// dropped. And a record that cannot be read is one whose writer nobody here
+// can name, which is `unknown` rather than a guess in either direction.
+//
+// # And whether it is this operation's
+//
+// An absent ledger row means "somebody else won" only when the record might
+// have been somebody else's, which the same knowledge answers: this call's
+// acknowledgement, the broker's collapse onto a copy, or the operation id the
+// record itself carries.
+//
+// # And the framework's own gates, before the domain's
+//
+// A record a reanchor's rule voided — written in a generation the reanchor
+// abandoned, or one a restored reanchor overtook — wrote no ledger row either,
+// and no domain's [Gates] knows those rules: they are the applier's, asked
+// before the domain's gate as the applier asks them ([Voids]). gen is the
+// generation this call stamped its own record with, which is what the rule is
+// asked of for the record this call's own append put at `at`; any other
+// record is asked by the generation it carries.
+//
+// body is this call's own record when landed is [landedOwn] — the payload it
+// appended — and nil otherwise, since only the log holds a copy's bytes: the
+// read that names a copy's writer opens its body too, and that body is what
+// the gates are handed for a record that is this operation's ([Gates.GatedAt]).
+// Read through a [VerifiedReader], because what is on the log is a signed
+// frame; a record this node cannot verify is one it cannot read.
+//
+// # And whether anybody asked
+//
+// Every answer past the wait says so ([Result.Waited]), and the one arm before
+// it is [Request.NoWait]'s: the acknowledgement already establishes that the
+// operation is durable at `at` when the broker put THIS operation there — this
+// call's own append, or the copy it collapsed onto — so that is answered
+// pending without asking. A record the ambiguous path FOUND is not known to be
+// this operation's ([Result.Position]), so that one is resolved like any other.
+func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32, body []byte) (Result, error) {
+	if req.NoWait && landed != landedFound {
 		// THE ANSWER THE ACKNOWLEDGEMENT ALREADY ESTABLISHES. Durable at
 		// `at`, unresolved here because nothing asked — which is the
 		// same OUTCOME a wait that timed out produces and a different
@@ -1483,7 +1670,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 			Outcome: OutcomePending, Position: at, OpID: req.OpID,
 		}, nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	waitCtx, cancel := context.WithTimeout(ctx, p.budget(ctx))
 	defer cancel()
 
 	if err := p.waiter.WaitApplied(waitCtx, req.Scope, at); err != nil {
@@ -1532,32 +1719,113 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 				Position:  entry.Position,
 				OpID:      req.OpID,
 				Version:   entry.Position.Packed(),
-				Collapsed: !mine || entry.Position != at,
+				Collapsed: landed != landedOwn || entry.Position != at,
 				Waited:    true,
 			}, nil
 		}
 	}
 
-	// ABSENT, so ask the two questions that make absence mean something
-	// other than "somebody else won" — in the order that makes each
-	// answer conclusive.
-	if reason, gated, err := p.gates.GatedAt(ctx, req.Subject, p.nodeID, req.OpID, at, body); err != nil {
-		return Result{}, fmt.Errorf("statelog: read the apply gates: %w", err)
-	} else if gated {
+	// ABSENT, so establish whose record `at` holds before asking the two
+	// questions that make absence mean something other than "somebody else
+	// won" — in the order that makes each answer conclusive.
+	writer, ours := p.nodeID, true
+	if landed != landedOwn {
+		env, read, found, err := p.recordAt(ctx, at)
+		if err != nil || !found {
+			// NOBODY HERE CAN NAME ITS WRITER, so nothing here can say
+			// whether a gate dropped it — and NO POSITION, for the
+			// reason [Result.Position] gives: the record at `at` is not
+			// known to be this operation's.
+			p.logger.WarnContext(ctx, "statelog_resolve_unread",
+				"domain", p.domain.Name(), "subject", req.Subject.String(),
+				"op_id", req.OpID, "position", at.String(), "found", found,
+				"err", fmt.Sprint(err))
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Waited: true}, nil
+		}
+		ours = env.OpID == req.OpID
+		switch {
+		case ours:
+			// THIS OPERATION'S COPY, so its body is the record the gates
+			// are asked about — what a payload-keyed gate reads.
+			writer, gen, body = env.Writer, env.Gen, read
+		case landed == landedCopy:
+			// THE BROKER'S DUPLICATE WINDOW IS KEYED ON THE OPERATION ID,
+			// so a copy it collapsed this append onto carries it. One
+			// that does not is a log this resolution cannot reason about.
+			return Result{}, fmt.Errorf("statelog: the broker collapsed operation "+
+				"%q onto the %s record at %s, which carries operation %q — the "+
+				"duplicate window is keyed on the operation id, so this log does "+
+				"not hold what its acknowledgement said", req.OpID, p.domain.Name(),
+				at, env.OpID)
+		}
+	}
+	if !ours {
+		// ANOTHER OPERATION'S RECORD, whose body names whatever that
+		// operation was about: the gates are asked about this node, from
+		// the subject alone.
+		body = nil
+	}
+	reason, gated, err := p.voided(ctx, req, at, ours, writer, gen, body)
+	if err != nil {
+		return Result{}, err
+	}
+	if gated {
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
 		// than an outcome, and never a re-decide: republishing produces
 		// another durable record nothing applies.
+		//
+		// NOT COUNTED AS A DROPPED RECORD HERE. This node's applier
+		// counted the drop when it applied `at` — the wait above is what
+		// guarantees it has — so a second count from the write that meets
+		// it reported one record twice on the writer, and once more on
+		// every node a retry of the same operation id reached inside the
+		// duplicate window. The write's refusal is counted where every
+		// refusal is, by reason ([Publisher.observe]), and this line keeps
+		// the writer and the position.
 		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
-			"gate", string(reason), "position", at.String(), "op_id", req.OpID)
-		p.count(metrics.StatelogRecordsGated, metrics.Attrs{
-			"gate": string(reason), "subject_kind": req.Subject.Kind,
-		})
+			"gate", string(reason), "position", at.String(), "op_id", req.OpID,
+			"writer", writer)
+		// AND THAT THE OPERATION ID IS SPENT FOR A WHILE, which decides
+		// how it is retried: the broker collapses the same id onto the
+		// record for its duplicate window, and the answer is this refusal
+		// again until the window has passed. A fresh id, or the same one
+		// after it, is written afresh — and neither can apply twice, since
+		// the record applies nowhere.
+		spent := fmt.Sprintf("the broker holds the operation id for %s from "+
+			"when that record landed, so the id sent again before then is "+
+			"collapsed onto it and refused the same way", p.duplicates)
+		var detail string
+		switch {
+		case !ours:
+			detail = fmt.Sprintf("this node is held by the gate at %s, the newest "+
+				"record on the subject, so whatever it appended under this "+
+				"operation applies nowhere — and if that landed, %s", at, spent)
+		case writer != p.nodeID:
+			detail = fmt.Sprintf("the record at %s is node %s's copy of this "+
+				"operation, which this node's append was collapsed onto, and it "+
+				"was durable and applied nowhere — %s", at, writer, spent)
+		default:
+			detail = fmt.Sprintf("the record at %s was durable and applied "+
+				"nowhere — %s", at, spent)
+		}
+		// AND WHOSE STANDING THE REASON STATES, when it is not this node's: the
+		// gate held the writer of a copy this node's append was collapsed onto,
+		// and a caller reading `evicted` as this node's own would send the
+		// write away from the one node that has just shown it can make it. ONLY
+		// A GATE THAT BLAMES THE WRITER: a deletion marker holds this node's
+		// own record as surely as the copy, and a writer named beside `deleted`
+		// read as a retry here that meets the marker for ever.
+		var copyWriter string
+		if writer != p.nodeID && reason.BlamesWriter() {
+			copyWriter = writer
+		}
 		return Result{}, &Unavailable{
-			Reason:   reason,
-			Detail:   fmt.Sprintf("the record at %s was durable and applied nowhere", at),
-			Position: at,
-			OpID:     req.OpID,
+			Reason:     reason,
+			Detail:     detail,
+			Position:   at,
+			OpID:       req.OpID,
+			CopyWriter: copyWriter,
 		}
 	}
 
@@ -1578,7 +1846,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	}
 
 	// THE LEDGER'S SILENCE MEANS SOMETHING ONLY WHERE IT CAN VOUCH, and
-	// that is asked before either reading of it below — the mine arm's
+	// that is asked before either reading of it below — the ours arm's
 	// included, because a sweep is exactly what loses the row of a record
 	// this node was acknowledged for.
 	vouched, err := p.vouches(ctx, req)
@@ -1586,26 +1854,32 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		return Result{}, err
 	}
 
-	if mine {
+	if ours {
 		if !vouched {
-			// THE ACKNOWLEDGEMENT IS THE PROOF, and the ledger's loss
-			// is why the row is missing. The broker named this
-			// operation's own record at `at`, this node's rows are past
-			// it and no gate dropped it — so it applied, and its row
-			// went with the rows the watermark says this ledger lost.
+			// THE RECORD IS THE PROOF, and the ledger's loss is why the
+			// row is missing. The broker named this operation's own
+			// record at `at` — or the record there carries its id —
+			// this node's rows are past it and no gate dropped it, so
+			// it applied, and its row went with the rows the watermark
+			// says this ledger lost. COLLAPSED unless the broker
+			// acknowledged this call's own append, for the ledger arm's
+			// reason: a record found or collapsed onto is this
+			// operation's, and not provably this call's decision.
 			return Result{
-				Outcome:  OutcomeApplied,
-				Position: at,
-				OpID:     req.OpID,
-				Version:  at.Packed(),
+				Outcome:   OutcomeApplied,
+				Position:  at,
+				OpID:      req.OpID,
+				Version:   at.Packed(),
+				Collapsed: landed != landedOwn,
+				Waited:    true,
 			}, nil
 		}
-		// THE BROKER ACKNOWLEDGED THIS RECORD, this node applied past
-		// it, no gate dropped it, and its ledger has lost nothing since
-		// the operation was minted — so the applier applied it and wrote
-		// no ledger row. That is a contract violation rather than a race,
-		// and re-deciding would republish a record that already landed,
-		// so it is reported instead of guessed at.
+		// THIS OPERATION'S RECORD, this node applied past it, no gate
+		// dropped it, and its ledger has lost nothing since the operation
+		// was minted — so the applier applied it and wrote no ledger row.
+		// That is a contract violation rather than a race, and re-deciding
+		// would republish a record that already landed, so it is reported
+		// instead of guessed at.
 		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
 			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
 			"publish is resolved by, and a record applied without one cannot be "+
@@ -1634,20 +1908,62 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	return Result{}, nil
 }
 
+// voided is whether the record at `at` applied nowhere, and the gate that
+// answers for it: the framework's own first — a reanchor's rules — as the
+// applier asks them, and then the domain's, about writer.
+//
+// THE FRAMEWORK'S ARE ASKED ONLY OF THIS OPERATION'S OWN RECORD. Another
+// operation's record the ambiguous path found newest on the subject is not
+// this write's landing; the domain's gates are asked about this node for it,
+// whose own copy may be the one below it that a gate dropped.
+func (p *Publisher) voided(ctx context.Context, req Request, at Position,
+	ours bool, writer string, gen uint32, body []byte) (Reason, bool, error) {
+
+	if ours {
+		if reason, gated := p.voids.Voided(gen, at.Seq); gated {
+			return reason, true, nil
+		}
+	}
+	reason, gated, err := p.gates.GatedAt(ctx, req.Subject, writer, req.OpID, at, body)
+	if err != nil {
+		return "", false, fmt.Errorf("statelog: read the apply gates: %w", err)
+	}
+	return reason, gated, nil
+}
+
+// recordAt is the envelope and the body of the record at, read off the log,
+// and false for a sequence the log no longer holds.
+//
+// THE BODY, NEVER THE FRAME: [Deps.Records] is a [VerifiedReader], so a record
+// signed under a key this node does not hold, or not signed by this fleet at
+// all, is an error here — a record nothing here may name a writer from.
+func (p *Publisher) recordAt(ctx context.Context, at Position) (Envelope, []byte, bool, error) {
+	_, body, _, found, err := p.records.At(ctx, at.Seq)
+	if err != nil || !found {
+		return Envelope{}, nil, found, err
+	}
+	env, err := p.domain.Envelope(body)
+	if err != nil {
+		return Envelope{}, nil, false, fmt.Errorf("statelog: decode the envelope at %s: %w", at, err)
+	}
+	return env, body, true, nil
+}
+
 // vouches reports whether this node's operation ledger can answer for req's
 // operation — whether "its row is absent" means "it has not applied here".
 //
 // # Why the ledger can lose a row, and what that costs a retry
 //
 // A WATERMARK SAYS HOW FAR BACK IT MAY HAVE ([Rows.LostBefore]), and it
-// travels in the same file as the ledger. Two things move it, each in the
-// transaction or the file that loses the rows, and only ever forward.
+// travels in the same file as the ledger. One thing moves it — a sweep, the
+// table's or a subject kind's own, in the transaction that loses the rows —
+// and only ever forward.
 //
 // The SWEEP deletes every row applied more than [OpsRetention] ago, and
 // records its cutoff with the delete — and a domain that sweeps one subject
-// kind sooner ([OpsHorizon.Kinds]) records that kind's cutoff as the KIND'S
-// watermark, so the bound weighed here is the later of the table's and the
-// write's own subject kind's. Every copy of an operation is applied at
+// kind sooner (internal/maintenance's OpsHorizon.Kinds) records that kind's
+// cutoff as the KIND'S watermark, so the bound weighed here is the later of
+// the table's and the write's own subject kind's. Every copy of an operation is applied at
 // or after the instant it was minted, so one minted at or after that cutoff
 // cannot have lost its row; one minted before it may have, and absence says
 // nothing. Without this, a retry a month on — an operator repeating an
@@ -1659,7 +1975,9 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 // donor applied and inherits the donor's own watermark besides — and a turn
 // woken by a trigger from before the join, which derives its operation ids
 // from that trigger's instant, has its FIRST attempts decided and published
-// like anyone's.
+// like anyone's. Were the ledger scrubbed out of the snapshot, those first
+// attempts would be answered `unknown` and never published: the recovering
+// node refusing its own backlog.
 //
 // That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
 // resolution of an ambiguous one. A retry — a turn re-run after a crash, a
@@ -1862,7 +2180,8 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return nil
 	}
 	started := time.Now()
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	budget := p.budget(ctx)
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	err := p.waiter.WaitCommitted(waitCtx, req.Session)
 	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
@@ -1879,7 +2198,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return &Unavailable{
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("this node has not applied this caller's own "+
-				"write at %s within %s", req.Session, p.resolveBudget),
+				"write at %s within %s", req.Session, budget),
 			Position: req.Session,
 			OpID:     req.OpID,
 		}
@@ -1897,7 +2216,8 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 // conflict a caller would otherwise be told after sixteen rounds — into a
 // number the caller can retry against.
 func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
-	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	budget := p.budget(ctx)
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
@@ -1907,7 +2227,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("%s is at %s on the log and this node has not "+
 				"applied it within %s, so a write against it would be decided "+
-				"from a state below it", req.Subject, at, p.resolveBudget),
+				"from a state below it", req.Subject, at, budget),
 			Position: at,
 			OpID:     req.OpID,
 		}
@@ -1922,7 +2242,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 // helper; both are the same one line, and the ANCHOR's key comes from the
 // table helper on both sides — which is the pairing that has to agree.
 func (p *Publisher) subjectOf(s Subject) string {
-	return p.prefix + "." + s.String()
+	return wireSubject(p.prefix, s)
 }
 
 // observe records the write path's own instruments.

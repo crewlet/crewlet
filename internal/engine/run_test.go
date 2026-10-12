@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -129,6 +130,72 @@ func TestNoBootstrapIsRefusedByNew(t *testing.T) {
 	}
 }
 
+// AN INVALID TIER A IS REFUSED BY THE ENGINE ITSELF, before anything is opened
+// — not only by the loader, which is the one caller that validates and the one
+// path a bootstrap built in code, or edited after loading, never takes.
+//
+// The first shape is the one the e2e fleet harness actually ran on, with
+// nothing to say so: a clustered stream on local coordination, where every
+// member keeps its leases in its own process and claims every seat and every
+// duty for itself. The second is the one it moved to next, and Tier A refuses
+// it too: two embedded members, which have no coordination quorum without each
+// other. Each refusal names the field an operator changes, and leaves no store
+// file behind — a node that opened its store first would have migrated a
+// database for a config it was always going to refuse.
+func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Bootstrap)
+		field  string
+	}{
+		{
+			name: "a clustered stream on local coordination",
+			mutate: func(b *config.Bootstrap) {
+				b.Stream.Cluster.Name = "acme"
+				b.Coordination.Type = config.CoordinationLocal
+			},
+			field: "coordination.type",
+		},
+		{
+			name: "two embedded members on the embedded KV",
+			mutate: func(b *config.Bootstrap) {
+				b.Stream.Cluster.Name = "acme"
+				b.Stream.Cluster.Port = 6222
+				b.Stream.Cluster.Peers = []string{"nats://10.0.0.2:6222"}
+				b.Stream.Replicas = 2
+				b.Coordination.Type = config.CoordinationEmbeddedKV
+			},
+			field: "stream.cluster.peers",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// UNSEEDED: that nothing is at the store's path afterwards
+			// is the assertion.
+			boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
+				b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+				tc.mutate(b)
+			})
+			_, err := engine.New(t.Context(), engine.Options{
+				Bootstrap: boot, Company: parsedCompany(t, companyDoc),
+			})
+			if err == nil {
+				t.Fatal("the engine built a node on a bootstrap Tier A refuses")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("the refusal does not name %s: %v", tc.field, err)
+			}
+			for _, path := range []string{boot.Store.Path, boot.Stream.StoreDir} {
+				if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("%s exists after the refusal (%v): the engine opened "+
+						"something before it checked the config", path, statErr)
+				}
+			}
+		})
+	}
+}
+
 // --- the dispatcher wiring ------------------------------------------------- //
 
 func TestTheDispatcherIsWiredFromTheEngine(t *testing.T) {
@@ -238,13 +305,15 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 	}
 }
 
-func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
+func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 	t.Parallel()
-	// A detached coding run outlasts any broker ack window, so its seat's
-	// mail is requeued rather than held against the ack deadline. Nil
-	// answers no — a build with no sandbox provider has no seat waiting on
-	// one — so this is the half that says the hook is read at all.
+	// A detached coding run holds its seat for as long as it runs, so the
+	// seat starts no turn: the coordinator holds its inbox, and a delivery
+	// that reaches it anyway is deferred under that hold. Nil answers no — a
+	// build with no sandbox provider has no seat waiting on one — so this is
+	// the half that says the hook is read at all.
 	var parked [][]*events.Event
+	var held []string
 	d := &engine.Dispatcher{
 		// Ownership is the guard above this one; pin it so what is under
 		// test is the sandbox branch and not the lease table.
@@ -253,6 +322,7 @@ func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
 			parked = append(parked, evs)
 			return nil
 		},
+		HoldSandbox: func(_ context.Context, handle string) { held = append(held, handle) },
 	}
 	e := newEngine(t, engine.Options{
 		Dispatch:    d,
@@ -268,16 +338,17 @@ func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
 	}
 
 	if got := e.Dispatch(context.Background(), "ceo",
-		[]*events.Event{ev("external_notification")}); got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want an ack after a park", got.Outcome)
+		[]*events.Event{ev("external_notification")}); got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral under the sandbox hold", got.Outcome)
 	}
-	if len(parked) != 1 {
-		t.Fatalf("parked %d partitions, want 1", len(parked))
+	if len(parked) != 0 || len(held) != 1 {
+		t.Fatalf("parked %d partitions and asked for %d holds, want no park and one hold",
+			len(parked), len(held))
 	}
 	if got := e.Dispatch(context.Background(), "cto",
-		[]*events.Event{ev("external_notification")}); got.Outcome == queue.OutcomeAck &&
-		len(parked) != 1 {
-		t.Error("a seat waiting on nothing was parked too")
+		[]*events.Event{ev("external_notification")}); got.Outcome == queue.OutcomeDefer &&
+		len(held) != 1 {
+		t.Error("a seat waiting on nothing was held too")
 	}
 }
 
@@ -351,6 +422,58 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	if e.SchedulerRunning() {
 		t.Error("a stopped engine armed a scheduler after its teardown stopped it")
 	}
+}
+
+// A SECOND STOP DOES NOTHING. It ran the whole teardown again, against what
+// the first one had closed: the admission withdrawal among it, which warned an
+// operator to exclude a node whose admission the first Stop had already
+// removed. A failed start's cleanup is the ordinary way to reach a second Stop.
+// Lent backends keep the coordination store open across both calls, so a
+// second teardown would reach it and be counted here.
+func TestASecondStopTearsNothingDownAgain(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	withdrawals := &countingWithdrawals{fleet: back.Fleet}
+	back.Fleet = withdrawals
+
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	e.Stop(context.Background())
+	if got := withdrawals.n.Load(); got != 1 {
+		t.Fatalf("the first Stop withdrew the admission %d times, want once", got)
+	}
+	e.Stop(context.Background())
+	if got := withdrawals.n.Load(); got != 1 {
+		t.Errorf("a second Stop withdrew the admission again (%d withdrawals): it "+
+			"ran the teardown a second time", got)
+	}
+}
+
+// countingWithdrawals is a fleet that counts the admission withdrawals made
+// through it.
+type countingWithdrawals struct {
+	fleet
+	n atomic.Int32
+}
+
+// fleet names [coord.Fleet] for embedding: embedded under its own name, the
+// field would collide with the interface's Fleet method.
+type fleet = coord.Fleet
+
+func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
+	c.n.Add(1)
+	return c.fleet.ForgetAdmission(ctx, nodeID, incarnation)
 }
 
 // A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the

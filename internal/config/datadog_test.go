@@ -162,7 +162,7 @@ func TestAnExternalURLWithoutASchemeIsRefused(t *testing.T) {
 	for _, base := range []string{"crewlet.example.com", "//crewlet.example.com"} {
 		t.Run(base, func(t *testing.T) {
 			t.Parallel()
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			b.API.Port = 8000
 			b.API.ExternalURL = base
 			err := b.Validate()

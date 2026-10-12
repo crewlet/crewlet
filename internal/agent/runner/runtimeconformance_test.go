@@ -105,12 +105,27 @@ func conformanceCases() []scenario {
 			want: turn.Work{Outcome: turn.OutcomeBlocked, Summary: "no channel to post in"},
 		},
 		{
+			// NO TEXT IN `want`, because the two runtimes legitimately
+			// differ there and the agreement this suite asserts is about
+			// the OUTCOME. The native loop reminds an executor once that
+			// prose is not a submission (a model call the agent runtime,
+			// whose rounds are the CLI's, does not make), so its
+			// transcript carries the answer to that reminder too. That
+			// the prose survives a rescue is asserted per runtime:
+			// phases_test.go and agentrun_test.go.
 			name: "an executor that never submits is rescued",
 			native: []llm.Completion{
 				{Content: "I looked around and ran out of road"},
 			},
 			bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
 			text:    "I looked around and ran out of road",
+			// THE SAME TEXT FROM BOTH. The native loop asks a phase that
+			// ended in prose to finish twice more before the rescue, and
+			// the model answers each corrective with its report again;
+			// those answers are to the corrective, not the task, so the
+			// text keeps the first — which is what an agent run's one
+			// closing reply is. A reviewer reads the same thing whichever
+			// runtime the executor ran on.
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
 				Text:    "I looked around and ran out of road",

@@ -149,6 +149,16 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"work:write alone reads nothing", person("ci.release", iam.GrantWorkWrite),
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonNoGrant},
+		// A PROJECT'S FILES ARE THE BOARD'S, read on the read grant and on
+		// nothing narrower.
+		{"state:read reads a project's file", seat("sre", iam.GrantStateRead),
+			authz.ActionFileRead,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonGrant},
+		{"work:write alone lists no project's files",
+			person("ci.release", iam.GrantWorkWrite), authz.ActionFileList,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			false, authz.ReasonNoGrant},
 
 		// --- the caller's own working state -------------------------- //
 		{"a seat reads its own episodes", seat("sre"),
@@ -188,6 +198,16 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"knowledge:write authors a page", seat("sre", iam.GrantKnowledgeWrite),
 			authz.ActionPageCreate, authz.Object{Kind: authz.KindPage},
 			true, authz.ReasonGrant},
+		// A FILE IS WRITTEN AS AN ITEM IS FILED, on the work grant — the
+		// project is the object — and never on the page grant.
+		{"work:write keeps a file in a project", seat("sre", iam.GrantWorkWrite),
+			authz.ActionFileWrite,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonGrant},
+		{"knowledge:write does not", seat("sre", iam.GrantKnowledgeWrite),
+			authz.ActionFileWrite,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			false, authz.ReasonNoGrant},
 
 		// --- own record ---------------------------------------------- //
 		{"a seat marks its own inbox", seat("sre"),
@@ -388,6 +408,16 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			seat("sre", iam.GrantWorkWrite), authz.ActionWorkRemove,
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
+		// AND A FILE IS REMOVED AS AN ITEM IS: the project's lead takes it
+		// out, and a colleague who may add one may not.
+		{"the project's lead removes a file", seat("cto"),
+			authz.ActionFileRemove,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonLead},
+		{"a colleague who may write a file may not remove one",
+			seat("sre", iam.GrantWorkWrite), authz.ActionFileRemove,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			false, authz.ReasonNotLead},
 
 		// --- purge ----------------------------------------------------- //
 		{"a person with the grant purges",
@@ -552,6 +582,8 @@ func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"removal", "cto", authz.ActionWorkRemove,
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"}},
+		{"a file's removal", "cto", authz.ActionFileRemove,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

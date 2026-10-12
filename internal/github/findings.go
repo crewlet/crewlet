@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -37,20 +38,23 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// An empty hook list used to be silence, on the reasoning that a
 	// read-only pass produces one by construction and that the public base
-	// "is not on the integrations block today". It IS — it is
-	// `api.external_url`, and the reconcile loop feeds exactly
-	// that value into every pass — so the silence meant a company that
-	// never set it saw GitHub reported Ready while nothing at GitHub
-	// pointed anywhere. That is the state this whole subsystem exists to
-	// refuse.
+	// "is not on the integrations block today". It IS — it is Tier A's
+	// webhook address (`api.public.external_url` behind a public
+	// listener, `api.external_url` otherwise), and the reconcile loop
+	// feeds exactly that value into every pass — so the silence meant a
+	// company that never set it saw GitHub reported Ready while nothing at
+	// GitHub pointed anywhere. That is the state this whole subsystem
+	// exists to refuse.
 	//
 	// ONCE rather than per target, because there is nothing per-target
 	// about it: no address means no hook anywhere, and one sentence naming
-	// the field is the whole of what an operator has to do.
+	// the field is the whole of what an operator has to do — the field the
+	// address was READ from, which only the caller holding the Tier A can
+	// say ([Result.NoIngressKey]).
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "api.external_url",
+			Subject: setup.BaseKey(r.NoIngressKey),
 			Detail:  r.NoIngress,
 		})
 	}

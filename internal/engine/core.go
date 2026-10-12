@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CORE RUNTIME: what every node runs from its first second, with a company
-// or without one.
+// THE CORE RUNTIME: what every DATA node runs from its first second, with a
+// company or without one.
 //
 // # The bug the split fixes
 //
@@ -26,7 +28,7 @@ import (
 // through — a Tier A token's session, exchanged on this node, is what the
 // dashboard's own "create the company" path writes the first revision as, and
 // the company's first person is invited under it once that revision declares
-// the human seat they will hold (ADR-0026) — so the one node that most needed a
+// the human seat they will hold (ADR-0032) — so the one node that most needed a
 // way in had none, and that path needed a session nothing could mint.
 //
 // # Split by what depends on a company, never by domain
@@ -35,10 +37,11 @@ import (
 // log for EVERY registered domain, the node gate over every identity log, the
 // identity estate's two sides, and the loop that derives this node's party
 // registry from its directory. It is published once, by [New], on every node
-// and in every mode. The [native] half is what only a company can say anything
-// about — whether the engine keeps its tracker and knowledge base at all,
-// their read and write sides, the lexical index, the change feeds and the
-// embedding duty — and it still waits for the first company.
+// that holds the estate and in every mode. The [native] half is what only a
+// company can say anything about — whether the engine keeps its tracker and
+// knowledge base at all, their read and write sides, the lexical index, the
+// change feeds and the embedding duty — and it still waits for the first
+// company.
 //
 // # Why the core runs EVERY domain, and not only the identity estate
 //
@@ -61,6 +64,22 @@ import (
 // So the tracker's and the knowledge base's logs are applied on a node with no
 // company exactly as on any other: what waits for the company is the WRITERS
 // and READERS over them, because which of them exist is the company's to say.
+//
+// # Only where the node holds the estate
+//
+// A node without the `data` role (ADR-0025) holds no replicated estate, runs
+// no log and starts no core: there is no copy for an applier to write and no
+// file for a join to replace. What such a node still needs of the identity
+// directory — whose record a login names, and who holds each human seat — it
+// asks a data node through the estate's router ([routedIdentity]), and the
+// chart and this node's own Tier A tokens are applied to the answer here, on
+// the asking side, as they are to its own rows on a data node. Its party
+// registry reads the directory on the periodic net alone ([DirectoryRefresh]),
+// since there is no applier here to signal it. And it needs no more: the
+// sign-in surface and the request guard run only where the `ingress` role does,
+// which Tier A requires `data` beside, so every session this deployment
+// validates is validated against rows the validating node holds — 503 and
+// never 401 on a node that is behind, and no cache in front of either.
 
 // core holds this node's always-on runtime.
 //
@@ -88,7 +107,7 @@ type core struct {
 	gate *NodeGate
 
 	// iamReader and iamWriter are the identity estate's two sides. BUILT
-	// ON EVERY NODE, with or without a company: a node with no company is
+	// ON EVERY DATA NODE, with or without a company: a node with no company is
 	// precisely the node that must sign a Tier A token's session in so the
 	// company can be created, and one whose identity domain failed to come
 	// up is a boot failure naming the domain rather than a nil to branch
@@ -111,8 +130,10 @@ type core struct {
 // startCore brings this node's core runtime up and publishes it, once per
 // process.
 //
-// ONE CALLER, [New], on EVERY node and in every mode — a node with no company,
-// a node in a maintenance mode, a node on a vendor's tracker and wiki. What a
+// ONE CALLER, [New], on EVERY DATA NODE and in every mode — a node with no
+// company, a node in a maintenance mode, a node on a vendor's tracker and wiki
+// — and on no node without `data`, which holds no estate to run a log over
+// ([HoldsEstate]). What a
 // maintenance node does not start is the duties that PUBLISH, which
 // [Engine.startCoreDuties] arms behind New's publishing gate; the appliers
 // and the directory trigger run everywhere, because applying records and
@@ -172,7 +193,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	if c.gate, err = newNodeGate(sl, e.backends.Coord); err != nil {
 		return err
 	}
-	// THE IDENTITY ESTATE, which every node runs. There is no backend
+	// THE IDENTITY ESTATE, which every data node runs. There is no backend
 	// setting for it and no second place to keep one, so its absence is a
 	// boot failure naming the domain rather than a reader that answers nil.
 	if err = c.openIAM(e, sl, nodeID); err != nil {
@@ -211,7 +232,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// down and [Engine.stopCore] — the same shutdown — is what ends it.
 	started = true
 	log.InfoContext(ctx, "core_runtime_started", "node", nodeID,
-		"domains", sl.order)
+		"domains", sl.held().order)
 	return nil
 }
 
@@ -221,16 +242,19 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 // ever, the trail is never swept and a duplicate a restore made is never
 // named — and this node's own usage publisher ([Engine.startUsage]).
 //
-// ON EVERY NODE THAT PUBLISHES, company or not: a fleet nobody has configured
-// yet still writes its identity log — the Tier A token's session the company
-// is created through — and without the trim that log only grows.
+// ON EVERY DATA NODE THAT PUBLISHES, company or not: a fleet nobody has
+// configured yet still writes its identity log — the Tier A token's session the
+// company is created through — and without the trim that log only grows.
 //
 // THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
-// is no singleton: every node publishes its own days, from its own event log,
-// whether or not its company keeps a native tracker or wiki. Armed with the
-// native half it used to be, a company on Jira and Confluence never
+// is no singleton: every data node publishes its own days, from its own event
+// log, whether or not its company keeps a native tracker or wiki. Armed with
+// the native half it used to be, a company on Jira and Confluence never
 // replicated a day of its spend, and a node handed its first company by an
-// apply published none until it restarted.
+// apply published none until it restarted. A node without `data` keeps no event
+// log of its own — its events are kept by a data node's custody
+// ([observe.Custody]) — so its spend is in its keeper's day and it publishes
+// none.
 func (e *Engine) startCoreDuties(ctx context.Context) {
 	c := e.core.Load()
 	if c == nil {
@@ -241,9 +265,9 @@ func (e *Engine) startCoreDuties(ctx context.Context) {
 	e.startUsage(ctx, c.log)
 }
 
-// stopViewTriggers ends the core's view triggers — the party registry's
-// directory trigger and the identity vouch watch — and waits for a rebuild in
-// flight.
+// stopViewTriggers ends this node's view triggers — the party registry's
+// directory trigger and, on a data node, the identity vouch watch — and waits
+// for a rebuild in flight.
 //
 // SEPARATE FROM [Engine.stopCore], and called at the very top of the teardown,
 // because a trigger is not a reader of the log so much as a WRITER of what is
@@ -255,6 +279,7 @@ func (e *Engine) stopViewTriggers() {
 	if c := e.core.Load(); c != nil {
 		c.stopTriggers()
 	}
+	e.routedDirectory.end()
 }
 
 // stopCore ends this node's core runtime: its directory trigger, if the
@@ -294,9 +319,9 @@ func (c *core) shutdown() {
 
 // openIAM builds the identity estate's two sides over its running domain.
 //
-// EVERY NODE RUNS IT, whatever its roles and whether or not it has a company,
-// so a node whose identity domain did not come up is a boot failure naming the
-// domain rather than a node that quietly serves no sign-in surface.
+// EVERY DATA NODE RUNS IT, whatever its other roles and whether or not it has
+// a company, so a node whose identity domain did not come up is a boot failure
+// naming the domain rather than a node that quietly serves no sign-in surface.
 //
 // # The writer acts as THE NODE, and every surface narrows it
 //
@@ -313,7 +338,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: e.backends.Store, Log: running.reader,
+		DB: sl.estate().Reader(), Log: running.reader,
 		Committed: running.runner.Committed,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
@@ -330,7 +355,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		return fmt.Errorf("engine: iam reader: %w", err)
 	}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
-		Publisher: running.publisher, DB: e.backends.Store,
+		Publisher: running.publisher, DB: sl.estate().Reader(),
 		// THE BLINDER IS A SOURCE, resolved at the write that needs it,
 		// because the key behind it is minted by whichever node needs
 		// one first; a node with no company secret store cannot derive
@@ -344,7 +369,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// THE ORGANISATION THIS NODE RUNS, which EVERY binding the
 		// directory writes is checked against as a HUMAN seat — a
 		// create's, an invitation's, a redemption's and an identity
-		// edit's (ADR-0026) — read per call through the seat's KIND
+		// edit's (ADR-0032) — read per call through the seat's KIND
 		// this view answers, so a node with no company yet refuses a
 		// bind naming the remedy ([session.ErrNoCompany], which the
 		// writer answers as iamdomain.ErrNoCompany) rather than binding
@@ -387,12 +412,14 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
 
 // errNoCoreRuntime is what a reader of the core refuses with on an engine that
-// has none — one built by hand, since [New] starts it on every node.
+// has none — a node without `data`, or one built by hand, since [New] starts it
+// on every data node.
 var errNoCoreRuntime = errors.New("engine: this engine runs no core runtime, " +
-	"so it has no state log")
+	"so it has no state log — it is not a data node")
 
 // IAM is this node's identity read side, or nil on an engine with no core
-// runtime — one built by hand, since [New] starts it on every node.
+// runtime — a node without `data`, which reaches the directory through a data
+// node ([Engine.identityDirectory]), or one built by hand.
 func (e *Engine) IAM() *iamdomain.Reader {
 	c := e.core.Load()
 	if c == nil {
@@ -407,8 +434,8 @@ func (e *Engine) IAM() *iamdomain.Reader {
 // against the identity log's end, which is read first
 // ([iamdomain.Reader.AnyPerson]).
 //
-// PROVED, because every node applies the identity log from boot, company or
-// none: a node that has just joined a fleet with people in it holds empty rows
+// PROVED, because every data node applies the identity log from boot, company
+// or none: a node that has just joined a fleet with people in it holds empty rows
 // until its applier catches up, and read bare they told /health and the boot
 // log that nobody works there. A log end this node cannot read is the unknown
 // arm too, never a "nobody" — /health answers `unknown`, and the boot says
@@ -503,78 +530,131 @@ func (e *Engine) NodeGate() *NodeGate {
 	return c.gate
 }
 
-// StateLogHydrated reports whether every domain this node's state log runs has
-// caught up.
+// StateLogHydrated reports whether this node may claim a NEW seat: whether the
+// copies a seat attaching here would act on have caught up.
 //
-// THE GATE ON SEAT ACQUISITION. A seat whose mailbox attached first would
-// answer "there is no such item" to its own tools — an answer it acts on by
-// filing a duplicate or abandoning work it was told to do. An engine with no
-// core runtime is trivially hydrated; every engine [New] builds has one, and a
-// node that has met no company holds no seat anyway.
+// THE GATE ON SEAT ACQUISITION, and the ONE gate, on every node. A seat whose
+// mailbox attached first would answer "there is no such item" to its own tools
+// — an answer it acts on by filing a duplicate or abandoning work it was told
+// to do. Two halves, asked in this order:
 //
-// THE CORE'S LOG, not the native half's, because the log is the core's: the
-// tracker's and the knowledge base's domains are applied from boot whether or
-// not a company has asked for their writers yet, and a seat attaching over a
-// tracker log still behind would read exactly the stale answer this gate
-// exists for.
-func (e *Engine) StateLogHydrated() bool {
-	c := e.core.Load()
-	if c == nil {
+//   - THIS NODE'S OWN LOGS, on a data node: every domain whose health gates
+//     admission ([statelog.Domain.ReadinessInput]) established STRICTLY,
+//     because this is admission rather than a read — a node merely inside the
+//     trim floor still serves rows that are behind, and a seat attaching to
+//     one acts on them. The core's logs and not the native half's, because the
+//     log is the core's: the tracker's and the knowledge base's domains are
+//     applied from boot whether or not a company has asked for their writers
+//     yet. A node without `data` runs no log and has none to wait for.
+//   - THE COPY THAT WILL SERVE THE SEAT'S TOOLS, asked once through the
+//     estate's router ([estate.Router.Serves]): this node's own where its copy
+//     serves, and otherwise the first data node that answers, which admits
+//     only once its own copy is established — the same gate, one hop away. A
+//     node whose own copy is WRONG serves nothing ([localEstate.For]), so it
+//     is answered on a sound data node's word, like a node holding no data;
+//     both halves the company runs natively must be served there, since a
+//     seat's tools reach both. And the router's view must have listed the
+//     fleet at least once: a node that must ask a data node is refused by the
+//     router itself when its view cannot name one.
+//
+// A node running no native half — no company yet, or one on Jira and
+// Confluence — has nothing for the second half to ask, and an engine with
+// neither is trivially hydrated.
+//
+// IT TAKES A CONTEXT because where this node's copy does not serve the answer
+// is a request, and a sweep that is shutting down must not wait on it.
+func (e *Engine) StateLogHydrated(ctx context.Context) bool {
+	if c := e.core.Load(); c != nil {
+		if ok, refusal := c.log.Established(ctx, true); !ok {
+			if refusal != "" {
+				log.DebugContext(ctx, "seat_admission_withheld",
+					"reason", string(refusal))
+			}
+			return false
+		}
+	}
+	runTracker, wiki, ok := e.nativeHalves()
+	if !ok || (!runTracker && !wiki) || e.router == nil {
 		return true
 	}
-	// STRICT, because this is seat admission rather than a read: a node
-	// that is merely inside the trim floor still serves rows that are
-	// behind, and a seat attaching to one acts on them.
-	ok, refusal := c.log.Established(c.run, true)
-	if !ok && refusal != "" {
-		log.DebugContext(c.run, "seat_admission_withheld",
-			"reason", string(refusal))
+	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
+		log.DebugContext(ctx, "seat_admission_withheld", "reason", "unroutable",
+			"detail", "this node's view of the fleet has not listed it yet")
+		return false
 	}
-	return ok
+	trackerServed, pagesServed, err := e.router.Serves(ctx)
+	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+		detail := "no copy of the estate admits a seat yet"
+		if err != nil {
+			detail = err.Error()
+		}
+		log.DebugContext(ctx, "seat_admission_withheld", "reason", "no_serving_copy",
+			"detail", detail)
+		return false
+	}
+	return true
 }
 
-// SeatsServiceable reports whether this node may KEEP the seats it holds.
+// SeatsServiceable reports whether this node may KEEP the seats it holds: it
+// may while it can ROUTE its seats' calls to a copy of the estate, and sheds
+// them only once it cannot.
 //
-// THE OPPOSITE DIRECTION FROM [Engine.StateLogHydrated], and they fire on
-// different classes of fault. Hydration is about a copy that is BEHIND: it
-// catches up, so withholding claims is the whole remedy and dropping work in
-// hand would be pure loss. This is about a copy that is WRONG — an applier
-// halted at a record it cannot decode, an eviction whose peers are dropping
-// everything this node writes, rows below the log with a hole nothing will
-// fill (or a trim floor nobody could read), a checkpoint naming a stream that
-// is not this one, an applied prefix frozen past [statelog.StallGrace], or a
-// record held past [statelog.DeferralGrace]. A seat left running on any of
-// those answers its own tools out of a copy the fleet has already abandoned,
-// and D122 is the rule that says it must not.
+// # A wrong copy is not a reason to shed
 //
-// A LAG IS NEVER ONE OF THEM, which is what the log line below means by
-// "wrong rather than behind" — and for as long as the health underneath
-// derived "has this node's copy ever been whole" from "is it level this
-// instant", that line was false on every firing: one unapplied tracker record
-// made a solo node unfit for a heartbeat and moved all seven of its seats.
+// This used to shed on a copy that was WRONG rather than behind — an applier
+// halted at a record it cannot decode, an eviction, rows below the log, a
+// checkpoint on another stream, a frozen checkpoint, a record held past the
+// deferral grace — because a seat left running on one answered its own tools
+// out of a copy the fleet had abandoned. The router makes that the copy's
+// problem and not the seats': a wrong copy goes out of service
+// ([localEstate.For]), so every call this node's seats make is answered by a
+// data node whose copy is sound, exactly as a node holding no data is
+// answered. Moving the seats instead cost each of them its processes and its
+// memory to be served by the very same peers — and on a single node it stopped
+// the company, which is still what happens: an estate no data node serves
+// refuses its calls, saying so.
 //
-// An engine with no core runtime is trivially serviceable, for
-// [Engine.StateLogHydrated]'s reason.
+// A LAG WAS NEVER ONE OF THEM, and it is not now: being behind is the admission
+// gate's business ([Engine.StateLogHydrated]), and when this read "has this
+// node's copy ever been whole" from "is it level this instant", one unapplied
+// tracker record made a solo node unfit for a heartbeat and moved all seven of
+// its seats.
+//
+// # What a node cannot survive is not being able to route
+//
+// A node that answers from its OWN copy needs nothing else to route its seats'
+// calls — the router asks this node first and asks nobody where it answers —
+// so every data node whose copy is sound keeps its seats whatever its view of
+// the fleet says. Any other node routes by the watched presence view, and a
+// view that answers unknown ([coord.LeaseView.Leases]) and last listed longer
+// ago than [statelog.FloorCacheStale] — the age past which nothing may decide
+// from a cached coordination fact, so no node sheds sooner than any other
+// decider stops trusting the same view — is a node that can no longer say
+// where its seats' calls go, which no copy of its own makes up for; its seats
+// go to a peer that can. A company whose halves are both on a vendor routes
+// nothing, and a view that has never listed sheds nothing: admission claims no
+// seat before it does.
+//
+// THE CONTEXT IS THE SEAT HOST'S, and nothing here waits on it: the verdict a
+// sound copy is judged by is the one already held ([localEstate.servesUnasked]),
+// never a broker round trip on the sweep. It is passed on all the same, because
+// a verdict nobody has read yet starts its first read here, and that read —
+// detached from the sweep's cancellation — keeps the sweep's values rather
+// than starting from nothing.
 func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
-	c := e.core.Load()
-	if c == nil {
+	return e.serviceable(ctx, time.Now())
+}
+
+// serviceable is [Engine.SeatsServiceable] at now.
+func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
+	runTracker, wiki, ok := e.nativeHalves()
+	if !ok || (!runTracker && !wiki) {
 		return true, ""
 	}
-	// THE CALLER'S CONTEXT, because this read reaches the broker for every
-	// domain's stream bounds. Bounded by the engine's own run context
-	// instead, a /ready probe waited on a slow broker for as long as the
-	// process had left to live — past its own deadline, past the
-	// orchestrator's, and the one caller that most needs a timely answer is
-	// the one asking whether to send this node traffic.
-	ok, domain := c.log.Healthy(ctx)
-	if !ok {
-		log.WarnContext(ctx, "seats_unserviceable",
-			"domain", domain,
-			"hint", "this node's copy of that domain is wrong rather than "+
-				"behind; its seats move to a peer until it recovers")
-		return false, domain
+	if e.local != nil && e.local.servesUnasked(ctx) {
+		return true, ""
 	}
-	return true, ""
+	return routable(e.dataView, now)
 }
 
 // ReplicationStatus is one of this node's replication loops, as the fleet view
@@ -615,9 +695,10 @@ type ReplicationStatus struct {
 }
 
 // StateLogStatus is what this node reports about its replication loops, for
-// the fleet view: one row per registered domain, on every node — a node that
-// has met no company included, since its state log runs from boot. Empty only
-// on an engine with no core runtime.
+// the fleet view: one row per registered domain, on every data node — a node
+// that has met no company included, since its state log runs from boot. Empty
+// on a node without `data`, which runs no loop, and on an engine with no core
+// runtime.
 //
 // IT TAKES THE CALLER'S CONTEXT, and that is load-bearing rather than
 // idiomatic tidiness: a domain's row is assembled from the broker's own bounds
@@ -647,11 +728,11 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 	if c == nil || c.log == nil || at.Seq == 0 {
 		return nil
 	}
-	// THE POSITION NAMES ITS OWN STREAM, so this resolves the domain from
-	// it rather than taking one. That is what a bucket revision could never
+	// THE POSITION NAMES ITS OWN STREAM, so this resolves the log from it
+	// rather than taking one. That is what a bucket revision could never
 	// do — it was a number on a family, and the caller had to say which —
 	// and it is why every domain settles through one primitive.
-	running := c.log.Domain(c.log.domainOf(at.Stream))
+	running := c.log.logOf(at.Stream)
 	if running == nil {
 		return nil
 	}
@@ -665,4 +746,108 @@ func (e *Engine) stateLogOf() (*stateLog, error) {
 		return nil, errNoCoreRuntime
 	}
 	return c.log, nil
+}
+
+// identityDirectory is the identity directory as THIS node reads a login's
+// binding: its own rows on a data node, a data node's through the estate's
+// router on one without `data` ([routedIdentity]) — false on an engine with
+// neither, which is one built by hand.
+//
+// ONE ANSWER FOR BOTH KINDS OF NODE, because the callers are the same tools:
+// whose record a login names ([Engine.HolderRecord]) is asked by a seat's
+// tools on whichever node runs the seat, and a data-less seats node runs
+// seats. What the caller then applies — the chart, this node's own Tier A
+// tokens, how far the answering rows could vouch — is the caller's, on this
+// node, whichever rows answered.
+func (e *Engine) identityDirectory() (bindingDirectory, bool) {
+	if c := e.core.Load(); c != nil && c.iamReader != nil {
+		return c.iamReader, true
+	}
+	if e.router != nil && e.local == nil {
+		return routedIdentity{identity: e.router.Identity()}, true
+	}
+	return nil, false
+}
+
+// routedIdentity is the identity directory on a node without `data`: the two
+// questions such a node puts to it — the row a login binds, and who holds each
+// seat — asked of a data node through the estate's router, floored on the
+// identity log like any read of rows a log derives (internal/estate).
+//
+// FACTS AND NEVER VERDICTS cross: the serving node answers the row, narrowed
+// to the binding, and how far its own rows could vouch for it; the verdict
+// formed from them — through this node's chart and this node's Tier A tokens —
+// is formed here, by the very functions a data node forms it with over its own
+// rows ([holderRecordOf], [boundRowOf], [notify.Standing]).
+type routedIdentity struct{ identity estate.Identity }
+
+// PersonByLoginVouched is the row a login binds, as the serving data node
+// holds it, and its vouch. A login nobody holds is the zero row and no error,
+// as the directory answers it.
+func (r routedIdentity) PersonByLoginVouched(ctx context.Context, login string) (
+	iamdomain.Sighting, iamdomain.Vouch, error) {
+
+	bound, vouch, err := r.identity.BindingByLogin(ctx, login)
+	if err != nil {
+		return iamdomain.Sighting{}, iamdomain.Vouch{}, err
+	}
+	return iamdomain.Sighting{ID: bound.ID, Kind: bound.Kind, Stage: bound.Stage,
+		Login: bound.Login, Seat: bound.Seat}, vouch, nil
+}
+
+// SeatHolders is every seat binding the directory holds, in notify's
+// vocabulary, read in one snapshot on the data node that answered. An error is
+// UNKNOWN, never an empty directory — see [Engine.readStandingLocked].
+func (r routedIdentity) SeatHolders(ctx context.Context) ([]notify.Holder, error) {
+	holders, err := r.identity.SeatHolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return notifyHolders(holders), nil
+}
+
+// directoryWatch is the party registry's directory trigger on a node without
+// `data` — the periodic net alone, since no applier here could signal it — and
+// what ends it.
+type directoryWatch struct {
+	stop context.CancelFunc
+	done sync.WaitGroup
+}
+
+// end stops the trigger and waits for a rebuild in flight. Nil-safe, and
+// idempotent.
+func (w *directoryWatch) end() {
+	if w == nil {
+		return
+	}
+	w.stop()
+	w.done.Wait()
+}
+
+// startRoutedDirectory hands the party registry the identity directory as a
+// node without `data` reads it, and starts the net that re-reads it.
+//
+// HANDED OVER BEFORE THE FIRST REGISTRY IS BUILT, for the core's reason: a
+// node that has never read its directory withholds every human seat until it
+// does, and a registry built before the hand-over would be the chart-only one,
+// which routes a suspended person's word to their seat.
+//
+// NO POSITION, because there is no applier here whose position could say the
+// rows moved: the net reads the directory on every tick of
+// [DirectoryRefresh], which the alarm table already calls a stall — a data
+// node's registry is no fresher than that when its applier's signal is lost.
+// A data node never calls this; its core starts the trigger over its own rows.
+func (e *Engine) startRoutedDirectory(ctx context.Context) {
+	if e.router == nil || e.local != nil || e.routedDirectory != nil {
+		return
+	}
+	e.useDirectory(routedIdentity{identity: e.router.Identity()}, nil)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	w := &directoryWatch{stop: cancel}
+	w.done.Add(1)
+	go func() {
+		defer w.done.Done()
+		e.watchDirectory(runCtx)
+	}()
+	e.routedDirectory = w
 }

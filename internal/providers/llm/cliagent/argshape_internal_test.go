@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
@@ -21,11 +23,12 @@ import (
 // alone — the CLI stops for want of a credential, which is exactly far enough
 // to prove the flags were understood.
 func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("grok")
 	if err != nil {
 		t.Skip("no grok on PATH")
 	}
-	p, ok := Builtin("grok")
+	p, ok := cliprofile.Builtin("grok")
 	if !ok {
 		t.Fatal("no built-in grok profile")
 	}
@@ -121,7 +124,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // AGENTS.md / CLAUDE.md from its working directory, and this repository has
 // both — so a probe left in the checkout is answering with whatever the tree
 // happens to contain rather than about the shipped profile.
-func vendorCLIEnv(p Profile, home string, extra map[string]string) []string {
+func vendorCLIEnv(p cliprofile.Profile, home string, extra map[string]string) []string {
 	// Cache beside the home rather than in it, as Workspace.Acquire lays it
 	// out; Work is unread by buildEnv and set for the same reason.
 	c := &Checkout{
@@ -202,10 +205,10 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 func TestVendorCLIEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, ok := Builtin(name)
+			p, ok := cliprofile.Builtin(name)
 			if !ok {
 				t.Fatalf("Builtin(%q) missing from a table BuiltinNames just listed", name)
 			}

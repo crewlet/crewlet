@@ -133,6 +133,16 @@ const FRAME: KeyRow[] = [
     does: `Go to ${ws.label}`,
     by: "dashboard",
   })),
+  // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
+  // and reaching it was a workspace, a card, a profile and a tab away. Not a
+  // `go.` row, which is the family derived from `nav.ts`.
+  {
+    id: "running",
+    scope: "frame",
+    presses: [{ after: "g", key: "r" }],
+    does: "Watch the running turn — with several running, see them all",
+    by: "dashboard",
+  },
   {
     id: "drawer",
     scope: "frame",

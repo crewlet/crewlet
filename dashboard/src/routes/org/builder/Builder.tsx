@@ -59,6 +59,7 @@ import {
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { matchesRow } from "~/app/keymap.ts";
+import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -67,7 +68,9 @@ import {
   CONFIG_WRITE_GRANT,
   CONFIG_WRITE_REASONS,
   configGuardedReason,
+  useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
@@ -127,6 +130,7 @@ import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
+import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
 import {
   type GlyphProps,
   NetworkGlyph,
@@ -149,6 +153,7 @@ import {
   SaveGlyph,
   UndoGlyph,
   TriangleAlertGlyph,
+  ShieldGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -215,9 +220,8 @@ export interface BuilderSurfaces {
      */
     chrome?: { controls?: ReactNode; switcher?: ReactNode };
     /**
-     * The node an open surface is about, so the chart can ease onto it and
-     * push the rest of itself back behind the decision. `null` gives the
-     * reader their view back.
+     * The node an open surface is about, so the chart can push itself back
+     * behind the decision. The reader's view of the chart never moves for it.
      */
     about?: string | null;
     /**
@@ -366,6 +370,8 @@ function statusLook(
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
       return { label: guardedLabel(code, signedIn), tone: "danger", icon: KeyGlyph };
+    case "managed":
+      return { label: "Managed by another system", tone: "neutral", icon: ShieldGlyph };
   }
 }
 
@@ -403,6 +409,16 @@ function guardedCodeOf(state: BuilderState): string {
 function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
   const outcome = state.check.outcome;
   return outcome?.status === "conflict" ? outcome : null;
+}
+
+/**
+ * Who manages the document, from the check's own answer, or `null`. Called
+ * only while the status is `managed`; the last answer decides, for the reason
+ * [conflictOf] gives.
+ */
+function managedByOf(state: BuilderState): readonly string[] | null {
+  const outcome = state.check.outcome;
+  return outcome?.status === "managed" ? outcome.managedBy : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -646,7 +662,7 @@ function BuilderScreen({
   );
   const view = viewParam === "table" ? "table" : "visualization";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
-  const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
+  const chart: ChartKind = chartKindOf(chartParam);
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
@@ -919,17 +935,44 @@ function BuilderScreen({
     posture.kind !== "guarded" && status === "guarded" ? guardedCodeOf(state) : "";
   const stepUp = guardedCode === STEP_UP_REQUIRED;
 
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): the engine says
+  // so on the viewer, and the builder stays a reader of it — every control
+  // drawn, every one disabled with who manages it — rather than collecting a
+  // draft the engine refuses at the save, or that the managing system
+  // replaces at its next reconcile if this credential were let through. It
+  // holds whoever reads, the config:write grant and a lead's own unit alike:
+  // where the company is written is not a question of who may write it.
+  //
+  // AND IF THE ENGINE SAYS SO FIRST — a check answered `config_managed`
+  // before the viewer did — the check's own answer decides the same way.
+  const viewerManaged = useManagedConfig();
+  const checkManagedBy = status === "managed" ? managedByOf(state) : null;
+  const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewer.configManagedBy : null);
+  const managed = managedBy === null ? null : managedSentence(managedBy);
+
   // Why editing is paused, as the sentence the live region says after
   // "Editing is paused."
   const readOnlyReason = useMemo((): string | null => {
     if (save.unsettled || keeping.unsettled) {
       return "The outcome of the last save is not known yet.";
     }
+    if (managedBy !== null) {
+      return `This company's configuration is managed by ${managedBy.join(", ") || "another system"}.`;
+    }
     if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
     if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
     if (status === "conflict") return "The configuration changed since this draft was started.";
     return null;
-  }, [save.unsettled, keeping.unsettled, keeping.offer, guarded, guardedCode, status, signedIn]);
+  }, [
+    save.unsettled,
+    keeping.unsettled,
+    managedBy,
+    keeping.offer,
+    guarded,
+    guardedCode,
+    status,
+    signedIn,
+  ]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -1067,6 +1110,11 @@ function BuilderScreen({
     },
     [nav],
   );
+
+  // A CLICK ON NOTHING LETS THE SELECTION GO: on the empty field, the space
+  // round the table or the page under either (`ui/clickOnNothing.ts`). A
+  // selected node used to stay selected wherever the reader clicked next.
+  useClickOnNothing(selection !== null ? () => select(null) : null);
 
   // ---- Dialogs ----------------------------------------------------------------
 
@@ -1435,20 +1483,7 @@ function BuilderScreen({
    */
   const chartChrome = {
     controls: <FullscreenToggle container={container} />,
-    switcher: (
-      <SegmentedControl
-        label="Chart"
-        semantics="tabs"
-        panelId={chartPanel}
-        value={chart}
-        onValueChange={setChart}
-        size="sm"
-        options={[
-          { value: "structure", label: "Structure" },
-          { value: "reporting", label: "Reporting" },
-        ]}
-      />
-    ),
+    switcher: <ChartSwitch value={chart} onValueChange={setChart} panelId={chartPanel} />,
   };
 
   /*
@@ -1674,6 +1709,11 @@ function BuilderScreen({
           </div>
         )}
 
+        {managed !== null && (
+          <Callout variant="info" icon={<ShieldGlyph />}>
+            {managed}
+          </Callout>
+        )}
         {/* A DECLINED STEP-UP IS CHECKED AGAIN, NOT SIGNED OUT OF: the person
             holds the grant and is signed in, and the check sent again is what
             asks them to confirm. */}

@@ -35,7 +35,7 @@ import (
 // giving their seat away. A removal deletes the person's row, so a seat whose
 // holder was removed is free.
 //
-// AN OPEN INVITATION HOLDS ITS SEAT exactly as it holds its address (ADR-0026):
+// AN OPEN INVITATION HOLDS ITS SEAT exactly as it holds its address (ADR-0032):
 // every person holds a human seat for as long as they exist, so every
 // invitation names the one its redemption binds, and nothing else may take
 // it while the link is outstanding. Taken out of the company under it, the

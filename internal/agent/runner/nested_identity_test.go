@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -120,4 +121,42 @@ func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 	if !found {
 		t.Fatal("no subagent phase was published")
 	}
+}
+
+// A WORKER'S RECORD CARRIES ITS PROMPTS' OUTLINES — and never a map that does
+// not tile its text: the wire promise is that every map a reader receives can
+// be sliced by, so one this node already knows is wrong is withheld and the
+// reader falls back to the prompt's own headings.
+func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	base := emitter{
+		pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"},
+		role: "Lead", tally: &Spend{}, mu: &mu,
+	}
+	system := prompts.BuildSubagent(prompts.Seat{}, prompts.SubagentInput{
+		ParentSystemPrompt: "You research.\n\n## Steps\n1. read — all of it",
+		Submits:            true,
+	})
+	broken := prompts.Prompt{Text: "gather it", Sections: []prompts.Section{
+		{Key: "task", Title: "Task", Bytes: 4},
+	}}
+	base.nestedAt(1).subagentCompleted(context.Background(), subagent.Result{
+		ID: "research", Status: subagent.StatusOK, SystemPrompt: system, UserPrompt: broken,
+	})
+	for _, ev := range pub.events {
+		done, ok := ev.Data.(*types.AgentPhaseCompleted)
+		if !ok || done.Phase != types.PhaseSubagent {
+			continue
+		}
+		if done.SystemPrompt != system.Text || len(done.SystemSections) != len(system.Sections) {
+			t.Errorf("system_sections = %+v, want the builder's %+v", done.SystemSections, system.Sections)
+		}
+		if done.UserPrompt != "gather it" || done.UserSections != nil {
+			t.Errorf("a map that does not tile its text was published: %+v", done.UserSections)
+		}
+		return
+	}
+	t.Fatal("no subagent phase was published")
 }

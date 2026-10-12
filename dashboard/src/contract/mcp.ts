@@ -13,14 +13,16 @@
  * every instance launched started. `partial`: some started and some did not —
  * a node or one seat's credentials rather than the server. `failing`: none
  * that was launched started. `not_started`: every reporting node started
- * nothing for it. `unreported`: no live node publishes the report.
+ * nothing for it. `unreported`: no live node's latest heartbeat carried the
+ * report.
  */
 export type McpServerState = "running" | "partial" | "failing" | "not_started" | "unreported";
 
-/** One live node, and whether it reports its MCP starts at all. */
+/** One live node, and whether its latest heartbeat carried its MCP starts. */
 export interface McpStatusNode {
   id: string;
-  /** False is an older build: its cells are unknown, never zero. */
+  /** False: the node's last heartbeat carried no status (its status hook
+   *  overran the beat), so its cells are unknown, never zero. */
   reported: boolean;
 }
 

@@ -126,6 +126,12 @@ type Service struct {
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
 
+	// pushMu orders the `agents` pushes, and pushed is what the last of them
+	// said about each seat's live call, by agent id: which call, and the version of each
+	// heavy field it described. See pushAgents.
+	pushMu sync.Mutex
+	pushed map[string]pushedCall
+
 	mu      sync.Mutex
 	ticking bool
 	stop    chan struct{}
@@ -277,6 +283,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
+		pushed:    map[string]pushedCall{},
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -362,6 +369,20 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 }
 
 // pushAgents sends the rows of the seats a change moved, named by agent id.
+//
+// A LIVE CALL'S HEAVY FIELDS GO ONLY WHEN THEY MOVED. A running phase moves
+// its seat's row five times a second while a round streams, and the prompt,
+// the committed rounds' narration, the tool calls and the rounds' timing move
+// once a round or once a call at most — so each push carries those only when
+// their version moved since the last push for the same call, and names every
+// version always (see livestate's detail.go for why a version and not a
+// delta: the hub drops a slow client's oldest envelope, and a tab must know
+// from the next push that it missed one).
+//
+// ONE PUSH AT A TIME, under pushMu, from reading the rows to queueing the
+// frame: what is left out is decided against what the previous push said,
+// so two pushes built side by side could each leave out a field the other
+// was the one to carry. Broadcast never blocks, so nothing waits long here.
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -370,8 +391,44 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	// map iteration is randomised, and a frame whose row order changes for
 	// no reason makes a diff of two captures unreadable.
 	seats := slices.Sorted(maps.Keys(change.Agents))
-	if rows := s.state.OverlayRows(seats); len(rows) > 0 {
-		s.hub.Broadcast(Push(KindAgents, rows, now))
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	rows := s.state.OverlayRows(seats)
+	if len(rows) == 0 {
+		return
+	}
+	for _, row := range rows {
+		s.leaveOutWhatIsHeld(row)
+	}
+	s.hub.Broadcast(Push(KindAgents, rows, now))
+}
+
+// pushedCall is what an `agents` push said about one seat's live call.
+type pushedCall struct {
+	key      livestate.CallKey
+	versions livestate.CallVersions
+}
+
+// leaveOutWhatIsHeld replaces a row's live call with the copy a push carries:
+// without the heavy fields the last push for the same call already carried at
+// the same version. A call the last push did not describe — a new phase, a
+// seat's first — goes whole.
+//
+// Called under pushMu.
+func (s *Service) leaveOutWhatIsHeld(row map[string]any) {
+	// KEYED ON THE SEAT'S AGENT ID, which is what names a row: a role is
+	// prose two seats may share, and two seats' calls held under one key
+	// would each leave out what the other's push carried.
+	seat, _ := row["agent_id"].(string)
+	call, _ := row["live_call"].(*livestate.LiveCall)
+	if call == nil {
+		delete(s.pushed, seat)
+		return
+	}
+	last, ok := s.pushed[seat]
+	s.pushed[seat] = pushedCall{key: call.Key(), versions: call.Versions}
+	if ok && last.key == call.Key() {
+		row["live_call"] = call.Without(last.versions)
 	}
 }
 
@@ -574,6 +631,25 @@ func (s *Service) InboxChanged(change InboxChange) {
 	s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change, s.now()))
 }
 
+// InboxReread tells every watched seat's sockets to read their inbox again: one
+// `inbox_changed` frame per watched seat, counting nothing and naming no
+// subject — see [KindInboxChanged].
+//
+// FOR A GAP IN WHAT THIS NODE HEARS, never a movement: the engine switched the
+// source its movements come from (its own applier, a peer's relayed), and what
+// moved in between is not replayed. A frame is exactly what a screen needs to
+// cover that — it re-reads the inbox through the `work_inbox` question on every
+// one, whatever it counts — where closing every socket would have rebuilt every
+// tab's whole snapshot to refresh one list.
+//
+// NEVER BLOCKS, for [Service.InboxChanged]'s reason.
+func (s *Service) InboxReread() {
+	now := s.now()
+	for _, seat := range s.hub.WatchedSeats() {
+		s.hub.Broadcast(PushSeat(KindInboxChanged, seat, InboxChange{Handle: seat}, now))
+	}
+}
+
 func (s *Service) currentHealth() Health { return s.health() }
 
 // StartHealthTicks runs the shared tick until the context is cancelled or
@@ -625,12 +701,21 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 	}()
 }
 
-// flushTokens sends the spend rollup if a phase completed since the last one.
+// flushTokens sends the spend rollup if it moved since the last one: a spend
+// record arrived, or one aged out of the live window.
+//
+// AGED AS WELL AS ARRIVED. A record leaving the window publishes nothing, so a
+// rollup pushed only on arrivals kept every open screen on a figure the window
+// no longer held until the next phase completed — on a quiet company, a day's
+// spend under the heading of a day that had none.
 //
 // The flag is cleared only AFTER the fold, so an aggregation that panicked
 // would not consume the burst it failed on and leave the rollup stale until
 // the next phase completed.
 func (s *Service) flushTokens() {
+	if s.state.ExpireSpend() {
+		s.tokensDirty.Store(true)
+	}
 	if !s.tokensDirty.Load() {
 		return
 	}
@@ -639,21 +724,23 @@ func (s *Service) flushTokens() {
 	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
 }
 
-// TokenRollup folds the live window into the breakdown the dashboard renders.
+// TokenRollup folds the live window into the breakdown the `tokens` push and
+// the snapshot carry, which no screen of the bundled dashboard draws: its spend
+// screens read named windows.
 //
 // Exported because the snapshot needs the same answer: a client that connected
 // mid-window and one that has been receiving pushes must hold the same rollup,
 // and two constructions of it is how they come to differ.
 func (s *Service) TokenRollup() tokens.Rollup {
 	// The window this rollup actually covers, reported rather than assumed:
-	// the client prints it beside the numbers, and a figure labelled with
-	// the wrong window is worse than an unlabelled one. The projection
-	// evicts on a rolling window, so its top edge is this instant.
-	now := time.Now()
-	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
+	// a reader prints it beside the numbers, and a figure labelled with
+	// the wrong window is worse than an unlabelled one. The projection ages
+	// its window on its own clock and names the two instants it cut it at.
+	window := s.state.Spend()
+	return tokens.Aggregate(window.Records, tokens.Options{
 		Seats: s.seats(),
-		Since: now.Add(-livestate.LiveSpendWindow),
-		Until: now,
+		Since: window.Since,
+		Until: window.Until,
 	})
 }
 

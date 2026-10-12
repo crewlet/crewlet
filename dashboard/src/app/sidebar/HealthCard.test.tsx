@@ -8,17 +8,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { HealthCard, healthReading } from "./HealthCard.tsx";
 import type { EngineHealth } from "~/contract/health.ts";
+import { healthFrame } from "~/test/health.ts";
 
 afterEach(cleanup);
 
-const healthy: EngineHealth = {
-  status: "healthy",
-  configured: true,
-  posture: "serve",
-  nodes: 3,
-  applied_epoch: 42,
-  alarms: { count: 0 },
-};
+const healthy: EngineHealth = healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } });
 
 const read = (over: Partial<Parameters<typeof healthReading>[0]> = {}) =>
   healthReading({ connected: true, authRejected: false, health: healthy, ...over });

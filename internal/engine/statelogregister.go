@@ -60,23 +60,21 @@ import (
 // runtime, which is why this is a table rather than a registry each domain
 // writes itself into from an init.
 //
-// # Every node runs every domain
+// # Every data node runs every domain
 //
-// There is no per-domain participation and nothing here reads `node.roles`:
-// whatever roles a node declares, it applies every log in this table. The
-// identity estate once narrowed — a seats-only satellite skipped it, since no
-// turn reads it — and the narrowing cost more than it saved. The satellite
-// still consumed inbound deliveries and ran seats whose contact routing turns
-// on who holds each seat, so it needed a second way to read the directory (a
-// signed scatter to the nodes that held it, with nonces, a head check and a
-// thirty-second poll); an adopted snapshot had to be stripped of the domains
-// a node declined; the trim had to leave a decliner out of that log's counted
-// set; and every reader of the estate carried an arm for "this node has no
-// copy". What it saved was one small log that grows with the company's
-// headcount — on a host that already holds the fleet keyring, which opens
-// every company secret. A domain whose rows a role does not read still costs
-// that role's nodes its disk and its applier, and that is the price this
-// table pays for every node answering every question from its own rows.
+// There is no per-domain participation and nothing here reads `node.roles`
+// beyond the one role that holds the estate: every node with `data` applies
+// every log in this table, and a node without it applies none and reaches the
+// estate through one that does (ADR-0025, internal/estate). The identity
+// estate once narrowed — a seats-only satellite skipped it, since no turn
+// reads it — and the narrowing cost more than it saved: an adopted snapshot
+// had to be stripped of the domains a node declined, the trim had to leave a
+// decliner out of that log's counted set, and every reader of the estate
+// carried an arm for "this node has no copy of this one domain". A data node
+// holds the whole estate or none of it, so a domain whose rows a data node's
+// other roles do not read still costs it its disk and its applier, and that is
+// the price this table pays for every data node answering every question from
+// its own rows.
 //
 // # Why the constructors are functions on the engine rather than methods on
 // the domain
@@ -117,8 +115,10 @@ type registration struct {
 	// THE LOG IS AN ARGUMENT because a strict domain's fence reads its two
 	// ends ([stateLog.logEndsOf]) beside the published floor
 	// ([stateLog.floorOf]) and the runner's committed position — the three
-	// terms [statelog.ZeroFence] clears an expectation of zero against.
-	NewSeams func(s *stateLog, appendTo *jetstream.DomainLog,
+	// terms [statelog.ZeroFence] clears an expectation of zero against. And
+	// so is the log's SPEC, because the ledger the rows read is keyed to the
+	// stream it names ([statelog.Rows]).
+	NewSeams func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 		runner *statelog.Runner) (writeSeams, error)
 
 	// Generation is the domain's own record of a reanchor — what opens a
@@ -140,10 +140,10 @@ type registration struct {
 	// alone being written did to the pages log. A compacted log counts
 	// nobody and has no gate record to write.
 	//
-	// The publisher is handed in rather than read off the running domain,
+	// The publisher is handed in rather than read off the running log,
 	// so a case can put the log behind a recorder and see exactly what the
 	// gate appended.
-	NewGate func(s *stateLog, running *runningDomain,
+	NewGate func(s *stateLog, running *runningLog,
 		publisher *statelog.Publisher) (gateWrite, error)
 
 	// Feed builds the WAKE FEED over this domain's log: the translator that
@@ -234,10 +234,9 @@ type writeSeams struct {
 // the operation id the gate derived for this log ([domainOpID]).
 //
 // THE PRINCIPAL WHOLE, not a name: each log's record carries the author, the
-// kind of party and the credential ([iam.ActorFor]), and the org chart's and
-// the identity estate's writers judge the gesture's authority —
-// `fleet:operate` — on the party's own grants, at the record rather than only
-// at the route, because a gate record can be published by a CLI, a test and a
+// kind of party and the credential ([iam.ActorFor]), and the identity
+// estate's writer judges the gesture's authority — `fleet:operate` — on the
+// party's own grants, at the record rather than only at the route, because a gate record can be published by a CLI, a test and a
 // duty as well as through one.
 type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 	readmit bool) (statelog.Result, error)
@@ -250,32 +249,34 @@ func register() []registration {
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
 				// THE INBOX LISTENER, which is how a person learns they
 				// have work: the apply is the one thing that sees every
-				// notice on every node, and each node tells its own
-				// sockets. See internal/tracker/inboxmove.go.
+				// notice on every data node, and each tells its own
+				// sockets — a node without `data` serves none, since
+				// `ingress` requires `data`. See
+				// internal/tracker/inboxmove.go.
 				return tracker.NewApplier(s.nodeID, s.inboxMoved), nil
 			},
-			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := tracker.NewRows(s.db)
+				rows, err := tracker.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := tracker.NewFence(s.db, s.nodeID)
+				fence := tracker.NewFence(s.estate().Reader(), s.nodeID)
 				name := tracker.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: tracker.NewGates(s.db), Evicted: fence.Evicted}, nil
+					Gates: tracker.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    tracker.EncodeBarrier,
 			Generation: tracker.GenerationRecord{},
-			NewGate: func(s *stateLog, running *runningDomain,
+			NewGate: func(s *stateLog, running *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
 				w, err := tracker.NewWriter(tracker.WriterDeps{
-					Publisher: publisher, DB: s.db, NodeID: s.nodeID,
+					Publisher: publisher, DB: s.estate().Reader(), NodeID: s.nodeID,
 					Drain: running.runner.Drain, Metrics: s.metrics,
 					// THE NODE'S OWN IDENTITY, replaced per gesture with
 					// the operator who ran it — see [tracker.Writer.As].
@@ -317,10 +318,10 @@ func register() []registration {
 			NewApplier: func(*stateLog) (statelog.Applier, error) {
 				return search.NewApplier(), nil
 			},
-			NewSeams: func(s *stateLog, _ *jetstream.DomainLog,
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, _ *jetstream.DomainLog,
 				_ *statelog.Runner) (writeSeams, error) {
 
-				rows, err := search.NewRows(s.db)
+				rows, err := search.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
@@ -345,11 +346,10 @@ func register() []registration {
 			// NO OPERATION LEDGER, like the usage log: the domain declares
 			// no ops table ([search.Domain.OpsTable]).
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
-				bytes, _ := stream.VectorsMaxBytes(free)
+				bytes, derived := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
-					Field:    "stream.tracker_vectors_max_bytes",
-					Explicit: stream.TrackerVectorsMaxBytes > 0,
-					Floor:    config.TrackerVectorsMaxBytesFloor}
+					Field: "stream.tracker_vectors_max_bytes", Explicit: !derived,
+					Floor: config.TrackerVectorsMaxBytesFloor}
 			},
 		},
 		{
@@ -364,27 +364,28 @@ func register() []registration {
 				// to send to.
 				return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 			},
-			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := pages.NewRows(s.db)
+				rows, err := pages.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := pages.NewFence(s.db, s.nodeID)
+				fence := pages.NewFence(s.estate().Reader(), s.nodeID)
 				name := pages.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: pages.NewGates(s.db), Evicted: fence.Evicted}, nil
+					Gates: pages.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    pages.EncodeBarrier,
 			Generation: pages.GenerationRecord{},
-			NewGate: func(s *stateLog, _ *runningDomain,
+			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				kb, err := pages.NewStore(pages.Options{Publisher: publisher, DB: s.db})
+				kb, err := pages.NewStore(pages.Options{Publisher: publisher,
+					DB: s.estate().Reader()})
 				if err != nil {
 					return nil, err
 				}
@@ -430,28 +431,28 @@ func register() []registration {
 				// may have ended (identitymoved.go).
 				return iamdomain.NewApplier(s.nodeID, s.identityMoved), nil
 			},
-			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := iamdomain.NewRows(s.db)
+				rows, err := iamdomain.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := iamdomain.NewFence(s.db, s.nodeID)
+				fence := iamdomain.NewFence(s.estate().Reader(), s.nodeID)
 				name := iamdomain.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: iamdomain.NewGates(s.db), Evicted: fence.Evicted}, nil
+					Gates: iamdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    iamdomain.EncodeBarrier,
 			Generation: iamdomain.GenerationRecord{},
-			NewGate: func(s *stateLog, _ *runningDomain,
+			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
 				w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
-					Publisher: publisher, DB: s.db,
+					Publisher: publisher, DB: s.estate().Reader(),
 					Actor: s.nodeID, ActorKind: iam.KindMachine,
 				})
 				if err != nil {
@@ -477,8 +478,8 @@ func register() []registration {
 			OpsKindRetention: map[string]time.Duration{
 				string(iamdomain.KindSession): iamdomain.SessionOpsRetention,
 			},
-			// NOT DERIVED FROM THE DISK either, like the org chart's and
-			// for a different reason: this log grows with the company's
+			// NOT DERIVED FROM THE DISK, unlike the logs above it, and for
+			// a reason of its own: this log grows with the company's
 			// HEADCOUNT and how often people sign in, and a volume has
 			// nothing to say about either. The parameter stays so the
 			// table is one shape — see [config.Stream.IamMaxBytes].
@@ -497,10 +498,10 @@ func register() []registration {
 			NewApplier: func(*stateLog) (statelog.Applier, error) {
 				return usage.NewApplier(), nil
 			},
-			NewSeams: func(s *stateLog, _ *jetstream.DomainLog,
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, _ *jetstream.DomainLog,
 				_ *statelog.Runner) (writeSeams, error) {
 
-				rows, err := usage.NewRows(s.db)
+				rows, err := usage.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
@@ -522,8 +523,8 @@ func register() []registration {
 			// declares no ops table ([usage.Domain.OpsTable]), and
 			// [checkRegister] refuses a horizon for a ledger nobody keeps.
 			//
-			// NOT DERIVED FROM THE DISK, like the org chart's and the
-			// identity estate's: the log is a census of node-day objects
+			// NOT DERIVED FROM THE DISK, like the identity estate's: the
+			// log is a census of node-day objects
 			// over the domain's horizon, and a larger volume buys none
 			// of them — see [config.Stream.UsageMaxBytes].
 			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
@@ -698,10 +699,10 @@ func checkIdentityEntry(entry registration) error {
 // runs one exactly when its domain declares one, under the group the domain
 // declares ([checkFeed]).
 //
-// AT BOOT, ON EVERY NODE, before anything is provisioned. [Engine.feedFor] asks
-// the same where a feed starts, but only a node that PUBLISHES starts one, so
-// a node in maintenance — or any node before its first company — would boot
-// a build whose feed and trim disagree without a word.
+// AT BOOT, ON EVERY DATA NODE, before anything is provisioned. [Engine.feedFor]
+// asks the same where a feed starts, but only a node that PUBLISHES starts
+// one, so a node in maintenance — or any node before its first company —
+// would boot a build whose feed and trim disagree without a word.
 //
 // A ZERO ENGINE AND AN EMPTY LOG, because what is judged is the group the
 // translator runs under, which is the translator's own constant: nothing is
@@ -736,7 +737,7 @@ func registrationFor(name string) (registration, bool) {
 }
 
 // registeredDomains is every domain this build knows, in the register's order —
-// which is every domain this node runs, since every node runs every one.
+// which is every domain a data node runs, since every data node runs every one.
 //
 // Kept as a derivation rather than folded into every caller, because most of
 // them want exactly this — the list — and reading it off the table is what
@@ -750,13 +751,25 @@ func registeredDomains() []statelog.Domain {
 	return domains
 }
 
+// registeredNames is every registered domain's name, in the register's order —
+// the same derivation, for the readers that key on the name alone.
+func registeredNames() []string {
+	domains := registeredDomains()
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		out = append(out, d.Name())
+	}
+	return out
+}
+
 // Domains is every state-log domain this build registers, in the register's
-// order: what every node runs, and so what a snapshot must name and what two
-// members' replicated estates are compared over.
+// order: what every data node runs, and so what a snapshot must name and what
+// two members' replicated estates are compared over.
 //
 // EXPORTED FOR THE GATES THAT CHECK A WHOLE NODE, which must not keep a list of
-// their own: a literal list of three outlived the org chart and the identity
-// directory joining the register, and certified neither.
+// their own: a literal list of three outlived the identity directory joining
+// the register, and certified neither. A PACKAGE FUNCTION rather than a method,
+// because the answer is this build's and no running engine's.
 func Domains() []statelog.Domain { return registeredDomains() }
 
 // signerFor and verifierFor are one domain's halves of the record signature.

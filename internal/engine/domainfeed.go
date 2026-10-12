@@ -180,7 +180,7 @@ func (r *domainRecords) Stop() error { return r.group.Stop() }
 // builds no feed at all, so the feed is held to it ([checkFeed]) — here, where
 // it starts, and before that at boot ([checkFeedEntry]), so a domain whose feed
 // disagrees with its declaration fails naming itself rather than silently.
-func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changefeed.Opener, error) {
+func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed.Opener, error) {
 	var (
 		translator changefeed.Translator
 		opener     changefeed.Opener
@@ -191,7 +191,7 @@ func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changef
 		// from a committed record rather than the writer's goroutine.
 		translator, opener = entry.Feed(e, domainFeed{
 			log:    running.log,
-			stream: running.domain.Stream().Name,
+			stream: running.spec.Name,
 			envel:  running.domain.Envelope,
 			// THROUGH THE DOMAIN'S OWN VERIFIER: the feed is the log's
 			// second reader, and a domain decoder handed the frame reads

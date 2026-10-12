@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading ONE task, and why it is not a board query with a filter.
@@ -106,7 +107,11 @@ type DetailWants struct {
 	// It is not one of the wants above: resolving costs no query, and a
 	// flag would be one more thing a surface can forget while rendering
 	// an id where a person expects their team's name.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	// Clock is the company's calendar the task's due date is stood
 	// against — see [TaskDetail.DueStanding]. Nil answers no standing,
@@ -116,24 +121,21 @@ type DetailWants struct {
 	// another's.
 	Clock *DayClock
 
-	// Comment names ONE comment to read WHOLE, and REPLACES the page.
-	//
-	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
-	// is the read that opens one. Without it the excerpt is not a pointer
-	// but a loss: a body is accepted at up to [MaxCommentBody] and there
-	// would be no read in the engine that ever returns the rest of it.
-	//
-	// It replaces the page rather than widening it, because a thread of
-	// twenty whole bodies is ten times the ceiling on one tool answer —
-	// which is the reason the page is excerpted in the first place.
+	// Comment names ONE comment to read, and REPLACES the page — the read
+	// that answers "that comment, and nothing else", by id.
 	Comment string
 }
 
 // DayClock is an instant and the company's zone: what "today" is, on the
 // calendar every due band, overdue mark and `due=` token is cut on.
 type DayClock struct {
-	Now  time.Time
-	Zone *time.Location
+	Now time.Time
+
+	// Zone is never encoded — a *time.Location is a table of transitions
+	// a JSON encoder writes as nothing at all — and a read that crosses to
+	// another node carries its NAME beside the clock instead
+	// (internal/estate's taskArgs).
+	Zone *time.Location `json:"-"`
 }
 
 // DueStanding is where a task's due date stands against the company's today.
@@ -443,24 +445,28 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		return TaskDetail{}, fmt.Errorf("tracker: name a task by id or by key")
 	}
 	var out TaskDetail
-	// A POINT READ, and that is what makes a deferred scope a REFUSAL here
-	// where the listing continues: this answer is about one object, and a
-	// record this node cannot decode covering it means the rows it is
-	// about to read may already be wrong.
+	// A READ THAT REPORTS ITS COVERAGE rather than refusing: a record this
+	// node cannot decode covering the task is served beside the rows with
+	// [TaskDetail.Incomplete] saying so, because a detail read has callers
+	// who can act on a caveat — a model is told to say it could not check,
+	// a person sees the task with a banner — and a refusal would hand both
+	// nothing at all during exactly the rolling upgrade that puts such a
+	// record on the wire. A write to the task still refuses; it is the one
+	// that could make the rows wronger.
 	//
-	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the id is
-	// resolved, which happens inside the transaction — so the framework
-	// read is given the object's own term once, from the reference, and
-	// the coverage probe inside the transaction is what catches a
-	// reference that was a key — current or former — rather than the id.
+	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the
+	// reference is resolved — a key names no path, and an id names no
+	// project — so the framework resolves it in the answer's own
+	// transaction ([taskReadScope]) and probes where the task is filed.
 	//
 	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
 	// about this node's lag rather than about a set, so one row's read
 	// is exactly as far behind as a listing's, and a floor the caller
 	// named is the position its own write landed at.
-	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: idOrKey,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return taskReadScope(ctx, tx, idOrKey)
+	}, true), func(tx *sql.Tx) error {
 		id, err := resolveTaskID(ctx, tx, idOrKey)
 		if err != nil {
 			return err
@@ -550,11 +556,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		// says nothing about this task — reporting it here would put a
 		// permanent warning on every task in a company holding one
 		// undecodable record about one other task.
-		incomplete, err := coverageOf(ctx, tx, statelog.ScopeSet{
-			Paths: []string{ScopeTerm{
-				Kind: TermObject, ID: id, Container: out.Task.Project,
-			}.Path()},
-		}.Normalised())
+		//
+		// THE SAME RESOLUTION THE FRAMEWORK PROBED, in the same
+		// transaction, so the count reported here is about exactly the
+		// paths that decided whether the answer is complete — the key's
+		// own address included.
+		scope, err := taskReadScope(ctx, tx, idOrKey)
+		if err != nil {
+			return err
+		}
+		incomplete, err := coverageOf(ctx, tx, scope)
 		if err != nil {
 			return err
 		}
@@ -586,6 +597,63 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		out.Complete = false
 	}
 	return out, nil
+}
+
+// taskReadScope is what a point read of one task is about, resolved from the
+// reference the caller named.
+//
+// THE TASK'S OWN PATH, under the project it is filed in — the only place a
+// record about it is filed. A key adds its own address term as well, because
+// which task a key opens is decided by the records filed under the KEY — an
+// alias claim, and every create, re-key and purge that claims, frees or hands
+// it on ([keyTerm]) — and a deferred one of those is not filed under the task.
+//
+// RESOLVED IN [resolveTaskID]'s ORDER — the id, then the key directory, then a
+// task row's own key — because the scope probed has to be the scope of the
+// task the read then returns: a key two tasks hold opens the one that claimed
+// it, and resolved the other way round the probe asked about one task's
+// project while the answer was the other's.
+//
+// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
+// task" is a claim about rows a deferred create has not written yet: a key
+// names its project, so a create or an alias there could be the answer, and an
+// id names nothing narrower than the domain.
+func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.ScopeSet, error) {
+	ref := strings.TrimSpace(idOrKey)
+	isID := uuid.Validate(ref) == nil
+	var named *ScopeTerm
+	if !isID {
+		term := keyTerm(strings.ToUpper(ref))
+		named = &term
+	}
+	var id, project string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, project_key FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT t.id, t.project_key FROM tracker_task_keys k
+		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
+		UNION ALL
+		SELECT id, project_key FROM tracker_tasks WHERE key = ?
+		LIMIT 1`,
+		ref, strings.ToUpper(ref), strings.ToUpper(ref)).Scan(&id, &project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if named == nil {
+			return statelog.ScopeSet{Paths: []string{
+				ScopeTerm{Kind: TermDomain}.Path(),
+			}}, nil
+		}
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermContainer, ID: named.Container}.Path(),
+		}}.Normalised(), nil
+	case err != nil:
+		return statelog.ScopeSet{}, fmt.Errorf("tracker: resolve %q: %w", idOrKey, err)
+	}
+	paths := []string{ScopeTerm{Kind: TermObject, Container: project, ID: id}.Path()}
+	if named != nil {
+		paths = append(paths, named.Path())
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
 // resolveTaskID turns an id or a key — current or former — into an id.
@@ -624,8 +692,10 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // carries a key and a task's id side by side.
 //
 // THE DIRECTORY AND NOTHING ELSE, because the directory is what the resolver
-// asks first and every apply writes the claim in the same transaction as the
-// task row ([Applier.maintainKeys]), so a held key always has its row. An
+// asks first, a create or a re-key writes its claim in the same transaction
+// as the task row ([Applier.maintainKeys]) and a purge hands a claimant's key
+// on to a task still holding it ([handOnKey]), so a task's current key always
+// has its row. An
 // empty key opens nothing and is never a collision — and neither is a key
 // beside an EMPTY id, which names no task the key could fail to open: asked
 // anyway, every directory row would count as "another" and the row's only
@@ -650,12 +720,14 @@ func keyOpensAnother(key, id string) string {
 // puts a newer node's fields on the wire, and a reader that rebuilt a task
 // from its columns would hand a caller a task with the new field stripped.
 //
-// # `status_entered_at` and `rank` ARE THE TWO EXCEPTIONS, joined here
+// # `status_entered_at` and the spend ARE THE EXCEPTIONS, joined here
 //
-// `rank` because a task's place after its create is written by its project's
-// ORDER, which moves the column and never the task's document (see
-// [Applier.applyRankOrder]); the document's copy is only the key it was filed
-// at. The rest of this section is about the other one.
+// The spend because a turn adds to the task's columns and never its document
+// (see below). `rank` is read from its column too, though the two agree — the
+// project's ORDER writes a task's place into both ([Applier.applyRankOrder]) —
+// because the column is what every board orders by, so a detail read and a
+// board can never name two places for one card. The rest of this section is
+// about `status_entered_at`.
 //
 // Every other column is extracted from what the WRITER wrote, so the document
 // is the authority and the column is the copy. This one is DERIVED by the
@@ -700,16 +772,12 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
-	// AND THE RANK, for the same reason: the order moves the column and
-	// never the document, so the document's copy is the key the task was
-	// filed or last re-homed at — which a detail read answered as the
-	// card's place long after a drag had moved it.
+	// AND THE RANK, from the column every board orders by — see the doc.
 	task.Rank = Rank(rank)
-	// AND THE SPEND, for the rank's reason exactly: a turn adds to the
-	// task's COLUMNS in the transaction that inserts its turn row
-	// ([Applier.applyTurn]) and never touches the document, so the
-	// document's copy is whatever the create wrote — zero. Read from the
-	// document, every task page said no agent had ever worked on it, beside
+	// AND THE SPEND, because a turn adds to the task's COLUMNS in the
+	// transaction that inserts its turn row ([Applier.applyTurn]) and
+	// never touches the document, so the document's copy is whatever the
+	// create wrote — zero. Read from the document, every task page said no agent had ever worked on it, beside
 	// a turn list and a board card counting the turns the columns hold.
 	task.Spend = spend
 	return task, nil
@@ -728,10 +796,9 @@ const DetailComments = 20
 // MaxCommentPage is the most comments one page may hold.
 //
 // FIFTY, the ceiling every other paged read in this tracker holds a caller to
-// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]): each body on a page is
-// excerpted to [CommentBodyShown], so fifty of them stay near a hundred KiB —
-// inside what one answer carries — where a caller walking a long thread wants
-// as few round trips as that allows.
+// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]), where a caller walking a
+// long thread wants as few round trips as that allows. What a page WEIGHS is
+// [CommentPageBytes]'s to bound, not this.
 const MaxCommentPage = 50
 
 // commentPage is the page size a detail read asked for, defaulted and held
@@ -747,20 +814,21 @@ func commentPage(asked int) int {
 	}
 }
 
-// CommentBodyShown is how much of each body a THREAD PAGE carries.
+// CommentPageBytes is how much comment text one THREAD PAGE carries, in
+// WHOLE comments — never a comment cut to fit.
 //
-// 2 KiB, against [MaxCommentBody]'s 32 KiB — which is the whole point: twenty
-// comments at their full length is 640 KiB, ten times the ceiling on ONE tool
-// answer, for a thread nobody asked to read in full. The excerpt is what a
-// reader skims; [DetailWants.Comment] is how they open one.
+// The page used to carry every body cut to two kibibytes, and a comment cut
+// there reads as a comment that ENDED there: a reviewer's "looks good, but —"
+// with the "but" two kilobytes in. Every comment on a page is now whole, and
+// a page holds as many as fit this budget — at least one, which [MaxCommentBody]
+// already bounds — and its cursor continues exactly where it stopped, so a
+// long thread is more pages rather than shorter comments.
 //
-// THAT SECOND HALF IS WHAT MAKES THE CUT LEGITIMATE, and it did not exist:
-// the excerpt was documented as a pointer to a read the engine did not have,
-// so a body written at more than 2 KiB — which every wake excerpt, every
-// `my_work` ask row and every detail read shortened further — could not be
-// recovered by any seat through any tool. A cut with no way back is not a
-// pointer, it is a silent loss of what somebody wrote.
-const CommentBodyShown = 2 << 10
+// 16 KiB is a quarter of the 64 KiB one tool answer may weigh: beside a whole
+// description ([MaxBody]) it leaves the history, links and fields their room,
+// and the answer's own ceiling refuses — naming `include` — rather than cuts
+// on the rare item where all of them are at their largest at once.
+const CommentPageBytes = 16 << 10
 
 // readComments is a page of the thread, NEWEST FIRST.
 //
@@ -775,6 +843,18 @@ const CommentBodyShown = 2 << 10
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
 func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit int) (
+	[]Comment, string, error) {
+	return readCommentPage(ctx, tx, taskID, cursor, limit, CommentPageBytes)
+}
+
+// readCommentPage is [readComments] with the byte budget a parameter, so the
+// bound is exercised directly rather than only at its default.
+//
+// THE BUDGET ENDS A PAGE EARLY, never a comment: the comment that would take
+// the page past it is the first of the next page, and the cursor names the
+// last comment this page RETURNED — the same rule the count follows, for the
+// same reason.
+func readCommentPage(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit, maxBytes int) (
 	[]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
@@ -797,6 +877,8 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 		// what the next page continues strictly below.
 		lastAt int64
 		lastID string
+		// weight is the comment text on the page so far.
+		weight int
 	)
 	for rows.Next() {
 		var body []byte
@@ -820,10 +902,15 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 			return nil, "", fmt.Errorf("tracker: decode a comment on %s: %w",
 				taskID, err)
 		}
-		// THE BODY IS ELIDED HERE and not at the caller, because the
-		// caller that forgot would send the whole thread — and the
-		// elision is what makes twenty of them fit an answer at all.
-		comment.Body = elideCommentBody(comment.Body)
+		// WHOLE, and the page ends before a comment that would take it
+		// past its budget — HERE and not at the caller, because a caller
+		// that forgot would send the whole thread. The first comment is
+		// always taken, so a page is never empty while the thread is not.
+		if len(out) > 0 && weight+len(comment.Body) > maxBytes {
+			next = formatCommentCursor(lastAt, lastID)
+			break
+		}
+		weight += len(comment.Body)
 		out = append(out, comment)
 		lastAt, lastID = at, id
 	}
@@ -834,24 +921,11 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 	return out, next, nil
 }
 
-// elideCommentBody is what a thread carries of one comment.
+// readComment is ONE comment, WHOLE — the read that answers one comment by id.
 //
-// MARKED, and that is the half a plain cut leaves out: a body cut at exactly
-// the cap and handed over unmarked reads as a comment that ENDED there, which
-// is a different message from the one somebody wrote. [textcut.Ellipsis] is
-// the tree's one rune-safe cut, so a multi-byte character on the boundary does
-// not reach a model as a replacement character.
-func elideCommentBody(body string) string {
-	return textcut.Ellipsis(body, CommentBodyShown)
-}
-
-// readComment is ONE comment, WHOLE.
-//
-// The counterpart to the page above, and the reason its excerpt is honest:
-// what a reader skims is cut, what a reader OPENS is exactly what was
-// written. Nothing here elides — a single body is bounded by
-// [MaxCommentBody], which the write already refuses above, so the one value
-// this returns fits inside a tool answer with room to spare.
+// A single body is bounded by [MaxCommentBody], which the write already
+// refuses above, so the one value this returns fits inside a tool answer with
+// room to spare.
 //
 // SCOPED TO THE TASK, so a comment id from another item answers
 // [ErrNoComment] rather than quietly returning a thread the caller was not

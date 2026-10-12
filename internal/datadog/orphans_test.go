@@ -29,11 +29,11 @@ func orphansFinding(t *testing.T, res *datadog.Result) (integration.Finding, boo
 
 // ACCOUNTS THIS ENGINE MADE AND NO LONGER MANAGES ARE REPORTED.
 //
-// A live organization accumulates them: a seat removed, a handle changed, an
-// older naming scheme. Measured on one — 36 disabled accounts under
-// `agent-cs-…@agents.crewlet.invalid`, matching nothing a current pass would
-// ask for. They are absent from the plan by construction, so no seat's result
-// mentioned them and the card read Ready over an organization full of them.
+// A live organization accumulates them: a seat removed or given another handle
+// (a different handle is a different seat, ADR-0013), or an account made by
+// hand at this engine's `.invalid` domain. They are absent from the plan by
+// construction, so no seat's result mentioned them and the card read Ready
+// over an organization full of them.
 //
 // REPORTED, NEVER TOUCHED. An account is a colleague at Datadog with history
 // attached, so removing one because a handle changed is not a decision a timer
@@ -44,9 +44,9 @@ func TestServiceAccountsNoSeatClaimsAreReported(t *testing.T) {
 	reg := newRegion(t)
 	orgOK(reg)
 
-	// The organization holds the seat's own account, one from a naming
-	// scheme this engine no longer derives, a DISABLED one from the same
-	// scheme, and a PERSON.
+	// The organization holds the seat's own account, one made by hand at
+	// the `.invalid` domain under a prefix this engine does not derive, a
+	// DISABLED one like it, and a PERSON.
 	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"data":[
 			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}},

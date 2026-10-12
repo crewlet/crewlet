@@ -17,8 +17,10 @@ import (
 // a keyed table rather than a log, no arbitration, no operation ledger, no
 // identity claim, no seat gating, no generation record ([GenerationRecord]) —
 // and differs from it in the one respect that matters to a reader: there is no
-// singleton duty behind it. EVERY node is a writer, of its own days only, which
-// is what the node in the subject buys.
+// singleton duty behind it. EVERY DATA NODE is a writer, of its own days only,
+// which is what the node in the subject buys — and a node without `data` is no
+// writer at all, since its spend is counted in its custody keeper's day (see
+// the package doc).
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
@@ -26,7 +28,7 @@ func (Domain) Name() string { return "usage" }
 
 const (
 	// History is how far back a node's day is kept: on the stream (its age
-	// bound) and in every node's rows (the apply's own horizon).
+	// bound) and in every data node's rows (the apply's own horizon).
 	//
 	// A HUNDRED AND EIGHTY-ONE DAYS, and the arithmetic is the offered
 	// range rather than a round number: a spend window reaches back ninety
@@ -36,10 +38,10 @@ const (
 	// empty previous half — which is the bug this domain replaced.
 	History = 181 * 24 * time.Hour
 
-	// FlushInterval is how often a node re-derives the days that moved and
-	// publishes what changed.
+	// FlushInterval is how often a data node re-derives the days that moved
+	// and publishes what changed.
 	//
-	// FIFTEEN SECONDS, the staleness of "today" on every node, and it is
+	// FIFTEEN SECONDS, the staleness of "today" in the fleet's rows, and it is
 	// the cadence the live budget meters are pushed on: a spend figure that
 	// trailed the meter above it by more than one of the meter's own
 	// refreshes would read as two different numbers. A tick that finds
@@ -49,12 +51,22 @@ const (
 	// ReadsPerSeatDay is how many (page, via) entries one seat-day record
 	// carries.
 	//
-	// TWO HUNDRED AND FIFTY-SIX. An entry is about 140 bytes encoded, so
-	// the cap bounds the read half of a record near 35 KiB — far under
-	// the largest record this log takes ([LogMaxRecordBytes]) beside a
-	// seat's spend cells — and it is past what any person reads about one
-	// seat on one day. The most-read entries survive, and what was dropped
-	// is counted on the record rather than lost silently.
+	// TWO HUNDRED AND FIFTY-SIX, and what it bounds is ONE RECORD. An
+	// entry is a few hundred bytes encoded plus its query, which is at
+	// most the 400 bytes a search accepts ([knowledge.MaxQueryBytes]), so
+	// a seat-day at the cap is under 200 KiB with a full-length query in
+	// every entry and under 1 MiB even where JSON escapes every byte of
+	// every one — far under the largest record this log takes
+	// ([LogMaxRecordBytes], the transport's own ceiling less what a signed
+	// append carries beside it), as TestAFullSeatDayRecordFitsOneMessage
+	// measures — and it is past what any person reads about one seat on one
+	// day. The most-read entries survive, and what was dropped is counted on
+	// the record rather than lost silently.
+	//
+	// It does NOT bound the stream: [LogMaxBytes] is sized from busy
+	// seat-days, and a fleet whose every seat reached this cap every day
+	// would outgrow that default, which the log's headroom alarm reports
+	// before an append is refused and `stream.usage_log_max_bytes` raises.
 	ReadsPerSeatDay = 256
 
 	// LogMaxBytes is the ceiling this domain declares for its stream, which
@@ -93,7 +105,8 @@ const (
 	LogDuplicates = 2 * time.Minute
 )
 
-// Stream is the usage domain's compacted changelog.
+// Stream is the usage domain's compacted changelog, at the domain's whole
+// budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
 		Name:           topics.UsageLogStream,
@@ -125,9 +138,11 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 		return statelog.Envelope{}, err
 	}
 	return statelog.Envelope{
-		V:       env.V,
-		Kind:    string(env.Subject.Kind),
-		Subject: env.Subject.Wire(),
+		V:    env.V,
+		Kind: string(env.Subject.Kind),
+		// THE WRITER'S IDENTITY for a kind this build does not know — the
+		// key a deferred record supersedes on. See [RecordEnvelope.Wire].
+		Subject: env.Wire(),
 		OpID:    env.OpID,
 		Gen:     env.Gen,
 		Scope:   env.Scope,
@@ -160,6 +175,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		"usage_tokens":        statelog.Divergent,
 		"usage_reads":         statelog.Divergent,
 		"usage_schedule_runs": statelog.Divergent,
+		"usage_person_tokens": statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,
@@ -201,8 +217,10 @@ func (Domain) FeedGroup() string { return "" }
 // The guards answer FALSE for both, and that is this domain's answer rather
 // than an omission: an object is created by its first record and there is no
 // deletion marker, since a day leaves by the horizon rather than by a record.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{},
+//
+// spec is the log the publisher writes, whose checkpoint the seam reads.
+func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil
 		})

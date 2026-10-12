@@ -236,6 +236,49 @@ func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
 	}
 }
 
+// A REFUSAL ON THE TRACKER NAMES THE TRACKER'S OWN TOOLS, and claims a write
+// elsewhere only when there was one.
+//
+// The refusal used to say "a call that reached somewhere else does not answer
+// the person waiting … `list_mcp_server_tools` and `activate_tool` will find
+// it" to every turn waiting on a named surface. A seat woken by a founder's
+// comment, whose only calls were reads, was told both: that it had written
+// somewhere, and to find the tracker's tool through discovery — which lists
+// MCP servers' tools and never the tracker's. It found the one server it held
+// and posted in chat.
+func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue: []string{"get_work_item", "comment_on_work_item", "mattermost_post_message"},
+		Deliveries: map[string]string{
+			"comment_on_work_item":    "work",
+			"mattermost_post_message": "mattermost",
+		},
+		KnownReads:   []string{"get_work_item"},
+		Discoverable: []string{"mattermost_post_message"},
+	}
+	surface := func() turn.Surface { return s }
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+
+	readOnly := decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "get_work_item"}} }, surface)
+	err := mustErr(t, readOnly, claim)
+	if !strings.Contains(err.Error(), "comment_on_work_item") {
+		t.Errorf("the refusal does not name the tool that delivers on the tracker: %v", err)
+	}
+	for _, wrong := range []string{"list_mcp_server_tools", "somewhere else"} {
+		if strings.Contains(err.Error(), wrong) {
+			t.Errorf("the refusal says %q to a turn that only read: %v", wrong, err)
+		}
+	}
+
+	chatted := decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "mattermost_post_message"}} }, surface)
+	if err := mustErr(t, chatted, claim); !strings.Contains(err.Error(), "somewhere else") {
+		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", err)
+	}
+}
+
 // A colleague's ask is answered by the engine on the channel it opened, and an
 // unaddressed turn owes nobody a posted answer — so demanding a citation in
 // either case would loop a turn that did exactly the right thing.

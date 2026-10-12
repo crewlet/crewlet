@@ -36,6 +36,10 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return n.Metadata["page_id"] != ""
 }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject is the
+// page's title, which is what the change is about.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed implements [notify.Prompt]: a mention, and only a mention.
 //
 // The one routing this prompt frames as an ask — somebody named the seat in a

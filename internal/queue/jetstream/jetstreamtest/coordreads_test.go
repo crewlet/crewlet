@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -67,16 +66,17 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	}
 	cfg := coordkv.FleetConfig{
 		BucketPrefix: "behind", Replicas: len(c.Servers), Clustered: true,
-		RateWindow: time.Minute, ClaimTTL: 10 * time.Minute, SetupOnceRetention: 10 * time.Minute,
+		RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
-		BudgetRetention: coord.BudgetRetention, StatusFreshness: 10 * time.Minute,
+		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
+		CooldownMax: time.Hour, BudgetRetention: coord.BudgetRetention,
+		StatusFreshness: 10 * time.Minute, CustodyRetention: 10 * time.Minute,
 	}
-	conns := make([]*nats.Conn, len(c.Servers))
+	clients := make([]*js.Queue, len(c.Servers))
 	stores := make([]*coordkv.FleetStore, len(c.Servers))
 	for i := range c.Servers {
-		conns[i] = c.Client(t, i).Conn()
-		store, err := coordkv.OpenFleet(t.Context(), conns[i], cfg)
+		clients[i] = c.Client(t, i)
+		store, err := coordkv.OpenFleet(t.Context(), clients[i].JetStream(), cfg)
 		if err != nil {
 			t.Fatalf("open the fleet store on member %d: %v", i, err)
 		}
@@ -125,8 +125,8 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	// member while it can still reach a leader: binding reads the stream's
 	// configuration, and the handle keeps the allow_direct it read — which
 	// is what makes its Get the direct get the control below asks.
-	budgets, runs := clientBucket(ctx, t, conns[cut], "behind_token_windows"),
-		clientBucket(ctx, t, conns[cut], "behind_sandbox_runs")
+	budgets, runs := clientBucket(ctx, t, clients[cut], "behind_token_windows"),
+		clientBucket(ctx, t, clients[cut], "behind_sandbox_runs")
 
 	c.Partition(t, cut)
 	awaitRoutes(t, c, cut, 0)
@@ -226,14 +226,12 @@ func refused(t *testing.T, srv *js.Server, member, stream, what string,
 	}
 }
 
-// clientBucket binds the client's own handle on a bucket through nc.
-func clientBucket(ctx context.Context, t *testing.T, nc *nats.Conn, bucket string) jetstream.KeyValue {
+// clientBucket binds the client's own handle on a bucket through q's
+// JetStream — the client the store above reads through, so the two differ only
+// in whose copy a read asks.
+func clientBucket(ctx context.Context, t *testing.T, q *js.Queue, bucket string) jetstream.KeyValue {
 	t.Helper()
-	jsc, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
-	kv, err := jsc.KeyValue(ctx, bucket)
+	kv, err := q.JetStream().KeyValue(ctx, bucket)
 	if err != nil {
 		t.Fatalf("bind %s: %v", bucket, err)
 	}

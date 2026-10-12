@@ -276,20 +276,20 @@ test("every link names a segment a workspace owns, and a whole literal path reso
 });
 
 /**
- * THE HEADS THE REBUILD RENAMED ARE DEAD, AND THE RULE SAYS SO.
+ * A LINK TO A HEAD NO ROUTE OWNS IS DEAD, AND THE RULE SAYS SO.
  *
- * Every workspace moved once: the event log from `#/activity` to
- * `#/live/events`, spend from `#/cost` to `#/spend`, the fleet, the runs, the
- * configuration and the seats under Settings, Live and Agents, and pages from
- * `#/pages` to `#/knowledge/pages`. A link still written against one of those
- * resolves to nothing, and the rule above is only as good as its reading of
- * that — so each retired head is fed through it here, beside the address it
- * became, which has to come back clean. A rule that stopped reporting the old
- * head, or started reporting the new one, fails here rather than letting a
- * whole family of dead links through.
+ * Every workspace lives under one head: the event log under `#/live/events`,
+ * spend under `#/spend`, the fleet, the runs, the configuration and the seats
+ * under Settings, Live and Agents, and pages under `#/knowledge/pages`. A link
+ * written against a plausible head beside one of those — `#/activity`,
+ * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
+ * as its reading of that — so each such head is fed through it here, beside the
+ * live address, which has to come back clean. A rule that stopped reporting
+ * the dead head, or started reporting the live one, fails here rather than
+ * letting a whole family of dead links through.
  */
-test("a link to a head the rebuild renamed is reported, and its new address is not", () => {
-  const moves: [retired: string, current: string][] = [
+test("a link to a head no route owns is reported, and the live address is not", () => {
+  const moves: [dead: string, current: string][] = [
     ['href(["activity"])', 'href(["live", "events"])'],
     ['href(["cost"])', 'href(["spend"])'],
     ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
@@ -300,8 +300,8 @@ test("a link to a head the rebuild renamed is reported, and its new address is n
     ['href(["company"])', 'href(["home"])'],
     ['href(["admin"])', 'href(["settings"])'],
   ];
-  for (const [retired, current] of moves) {
-    expect(deadLinks(retired), retired).toHaveLength(1);
+  for (const [dead, current] of moves) {
+    expect(deadLinks(dead), dead).toHaveLength(1);
     expect(deadLinks(current), current).toEqual([]);
   }
 });
@@ -566,8 +566,8 @@ test("the element scanner reads a multi-line prop", () => {
  * `GridColumn.header` is drawn in the head row, so a column twenty pixels wide
  * carries a mark or nothing at all — a work item's type, a row's actions, a
  * pair of state tags. That is right for the wide table and wrong for the card a
- * grid becomes below 860px, where the head is gone and every value draws its
- * own name beside it: a cell with no name draws none, and the card gets a bare
+ * grid becomes below the phone breakpoint (640px, `breakpoint.phone`), where
+ * the head is gone and every value draws its own name beside it: a cell with no name draws none, and the card gets a bare
  * mark floating on a line of its own between two labelled ones. Measured on the
  * tracker at 390px, it reads as a rendering fault rather than as a value.
  *
@@ -670,7 +670,7 @@ test("a column with no word in its head declares one", () => {
  */
 
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
-const SPELLED = new Set(["useQuery", "query"]);
+const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
 /** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
 const BOUND = new Set(["act", "useAct"]);
 
@@ -681,6 +681,12 @@ const FORWARDS: readonly { path: string; callee: string; argument: string; why: 
     callee: "query",
     argument: "what",
     why: "useQuery's own body sends the socket the kind its caller named, and every caller is held to a literal here",
+  },
+  {
+    path: "lib/useSearchQuery.ts",
+    callee: "useQuery",
+    argument: "what",
+    why: "useSearchQuery's own body asks the ranked search its caller named, after the search bound, and every useSearchQuery( is held to a literal here",
   },
   {
     path: "lib/useAct.ts",
@@ -813,6 +819,29 @@ describe("every read names its question", () => {
     expect(literal("useQuery")).toBeGreaterThan(80);
     expect(literal("query")).toBeGreaterThanOrEqual(2);
     expect(literal("useAct")).toBeGreaterThanOrEqual(4);
+    expect(literal("useSearchQuery")).toBeGreaterThanOrEqual(8);
+  });
+
+  // A RANKED SEARCH IS ASKED THROUGH ITS HOOK, OR NOT AT ALL. The engine
+  // refuses a phrase past its search bound as `bad_params`, and
+  // `useSearchQuery` is where that bound is applied and said: two pickers that
+  // asked `work_search` through `useQuery` sent a pasted description, had it
+  // refused and listed "No task matches". A new picker cannot skip the bound,
+  // because this is where it would have to.
+  test("and every ranked search goes through the search bound", () => {
+    const ranked = new Set(["work_search", "knowledge"]);
+    const bypassing = tree
+      .filter(({ path }) => !/\.test\.tsx?$/.test(path))
+      .flatMap(({ path, calls }) =>
+        calls
+          .filter((c) => c.callee !== "useSearchQuery" && c.name !== null && ranked.has(c.name))
+          .map((c) => `${path}:${c.line} — ${c.written}${c.argument}`),
+      );
+    expect(
+      bypassing,
+      "ask work_search and knowledge with useSearchQuery (lib/useSearchQuery.ts), which sends " +
+        "nothing past the engine's search bound and says why",
+    ).toEqual([]);
   });
 
   // THE WRITE VOCABULARY IS EXACTLY WHAT THE SCREENS PRESS. `ACTIONS` is

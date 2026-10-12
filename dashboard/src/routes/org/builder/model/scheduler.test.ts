@@ -212,6 +212,24 @@ describe("classifyCheck", () => {
     });
   });
 
+  // A MANAGED DOCUMENT IS NOBODY'S MISSING GRANT (ADR-0030): its refusal is a
+  // 403 as well, and read by the whole-company shortcut above it would send a
+  // reader who holds every grant to ask an administrator for one. Whoever
+  // drafts — the company or a lead's unit — it halts as managed. Mutation:
+  // ask the shortcut before the managed reading and the first case is guarded.
+  test("a managed document halts as managed, whoever drafts", () => {
+    const answer: HttpAnswer = {
+      status: 403,
+      body: { error: "config_managed", managed_by: ["gitops"] },
+    };
+    for (const scope of [null, "engineering"]) {
+      expect(classifyCheck(answer, "edit", "r1", scope), String(scope)).toEqual({
+        status: "managed",
+        managedBy: ["gitops"],
+      });
+    }
+  });
+
   test("a refused document carries its problems, and a refusal without any is given one from its detail", () => {
     const problem = {
       path: "roles[0].name",

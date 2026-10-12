@@ -94,7 +94,7 @@ export function backoffDelay(failures: number): number {
 }
 
 export type CheckStatus =
-  "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
+  "checking" | "clean" | "problems" | "conflict" | "guarded" | "managed" | "unreachable";
 
 /**
  * Why the engine holds a revision the draft was not built on: every reason
@@ -127,6 +127,8 @@ export type CheckOutcome =
       readonly currentRevisionId: string | null;
     }
   | { readonly status: "guarded"; readonly code: string }
+  /** Another system manages the document, and this credential is not it (ADR-0030). */
+  | { readonly status: "managed"; readonly managedBy: readonly string[] }
   | { readonly status: "unreachable"; readonly detail: string };
 
 /**
@@ -181,17 +183,25 @@ export function classifyCheck(
   // seat until it has read what a write changes, so it still names each part,
   // starting with an unchanged draft's `document`. That is a grant the reader
   // lacks, which pauses editing, and not a problem with each edit.
-  if (answer.status === 403 && scope === null) {
-    return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
-  }
+  //
   // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
   // (`protocol/configAnswer.ts`). A check has no stored revision to settle,
   // so a drain and an unanswered request are the same thing to it: the
   // engine could not be asked, and the scheduler asks again.
+  //
+  // A MANAGED DOCUMENT IS NEVER THE GRANT MISSING, whoever drafts: it is a
+  // 403 too (ADR-0030), and read as a whole-company draft's missing grant it
+  // sent somebody who holds every grant to an administrator who cannot help
+  // them.
   const refusal = classifyConfigRefusal(answer);
+  if (answer.status === 403 && scope === null && refusal.kind !== "managed") {
+    return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
+  }
   switch (refusal.kind) {
     case "guarded":
       return { status: "guarded", code: refusal.code };
+    case "managed":
+      return { status: "managed", managedBy: refusal.managedBy };
     case "conflict":
       return {
         status: "conflict",
@@ -284,7 +294,7 @@ export const INITIAL_CHECK: CheckState = {
   halted: false,
 };
 
-const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded"]);
+const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "managed"]);
 
 /** The next state of the check, and what to do about it. */
 export function transition(state: CheckState, event: CheckEvent): Transition {
@@ -434,6 +444,14 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         // disabled button's reason, and it used to name "an operator token",
         // which a signed-in reader holding the wrong grants has no use for.
         reason: "The engine refused this browser's credential to check or save the configuration.",
+      };
+    case "managed":
+      return {
+        review: false,
+        save: false,
+        waiting: false,
+        reason:
+          "Another system manages this company's configuration, so it is not saved from here.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };

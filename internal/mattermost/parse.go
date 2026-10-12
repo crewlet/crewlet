@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -189,8 +191,29 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 			Metadata:  metadata(w.Body, seat, post, reach, channelKind),
 		},
 		To: notify.Recipient{Handle: handle},
+		// DERIVED, the second dedupe layer: the fleet's claim fails open,
+		// so a post two nodes both published must still be ONE wake to
+		// the inbox and the completion ledger — and a random id per copy
+		// is two wakes neither can pair. Its instant is the post's own,
+		// which every copy carries alike. See [notify.Routed.WakeID].
+		WakeID: WakeID(handle, postID),
+		WakeAt: stamp(post, "create_at"),
 	}}, nil
 }
+
+// WakeID is the deterministic id of the wake one post produces for one seat.
+//
+// PER SEAT, because one post legitimately wakes every bot in its channel, and
+// one id for all of them would deliver the first and deduplicate the rest.
+// Over the backend, the handle and the post id — the same triple the fleet
+// claims a post under ([ClaimKey]).
+func WakeID(handle, postID string) uuid.UUID {
+	return uuid.NewSHA1(wakeNamespace, []byte(Backend+"\x00"+handle+"\x00"+postID))
+}
+
+// wakeNamespace scopes derived wake ids. Fixed for the life of the deployment:
+// a new one would make every copy of a post already in flight a fresh wake.
+var wakeNamespace = uuid.MustParse("6d1f0a52-93c4-5e0b-8a27-4f3b1c9e7d26")
 
 // metadata is what every downstream consumer reads off a chat notification.
 //

@@ -66,15 +66,16 @@ import (
 // set that was never asked. [admittedColumns] names the filters that decide
 // it, and why an open axis and the second axis are left as they are.
 //
-// # Two axes group on something other than their column
+// # The unit axes resolve the caller's value, not the rows'
 //
-// Every axis above is its column's own value. The two UNIT axes are not: a
-// unit answers to two spellings — its key and its name — and which one a row
-// holds is whatever was true when it was filed, so grouping on the string drew
-// one team as two columns.
-// They group on the unit's KEY instead, folded in SQL, and a caller's
-// `group=` is folded the same way so any spelling narrows to the one column.
-// [unitAxis] is the expression and [groupAxis.Canonical] is the caller's half.
+// The two UNIT axes group on their column like every other axis: every write
+// stores a unit's KEY ([ChartUnit.Key]), and a team keeps one key for its
+// whole life — internal/org holds a unit's key immutable, as it holds a
+// seat's handle — so the column already draws one team as one column.
+// What differs is the CALLER's half: a person or a model may name a unit by
+// its key or its name, in any case, so a `group=` / `subgroup=` value is
+// resolved through the chart to the key before it is compared. [unitAxis] is
+// the axis and [groupAxis.Canonical] is that resolution.
 
 // MaxGroups bounds how many columns one answer draws.
 //
@@ -200,10 +201,10 @@ type groupAxis struct {
 	// Canonical spells a value the way [groupAxis.Expr] spells it.
 	//
 	// Only the unit axes have one, and it is what lets `group=` and
-	// `subgroup=` take any of a team's spellings: that expression folds
-	// every spelling onto the unit's KEY, so a narrowing written with the
-	// name would compare against a value the column never emits — a board with a column and a narrowing to it that answers
-	// nothing.
+	// `subgroup=` take any of a team's spellings: the column holds the
+	// unit's KEY, so a narrowing written with the name would compare
+	// against a value the column never holds — a board with a column and a
+	// narrowing to it that answers nothing.
 	//
 	// It is applied to a key that came from an ANSWER too, where it is a
 	// no-op: the key is already canonical and resolving one answers
@@ -725,8 +726,7 @@ func unitAxis(column string, units Units) groupAxis {
 //
 // THE CHART IS ASKED PER KEY rather than enumerated, because the keys are
 // whatever the rows hold: a column may name a team the chart no longer has,
-// or a spelling it no longer uses, and both are legitimate on a record of
-// what was true.
+// which is legitimate on a record of what was true.
 //
 // AN EMPTY LABEL IS THE ANSWER FOR AN UNRESOLVED KEY, never a stand-in like
 // "(unknown)": a client renders the label or falls back to the key, so a

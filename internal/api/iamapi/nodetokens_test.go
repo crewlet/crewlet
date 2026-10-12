@@ -67,7 +67,7 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 			str("stage"), str("seat")})
 		for key := range m {
 			switch key {
-			case "id", "login", "row", "person", "stage", "seat":
+			case "id", "login", "row", "person", "stage", "seat", "company_writer":
 			default:
 				t.Errorf("token %s carries %q, a field beyond the row it holds — "+
 					"whether its seat dangles is /iam/check's to say", str("id"), key)
@@ -90,6 +90,56 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	if finding == nil || finding["login"] != "token:stale" || finding["seat"] != "gone" {
 		t.Errorf("GET /iam/check named %v, want the stale token's row and its seat",
 			finding)
+	}
+}
+
+// A MANAGED COMPANY DOCUMENT'S WRITERS ARE ANSWERED BESIDE THE LABELS, as this
+// node's Tier A names them, and each of this node's tokens among them is
+// marked — the one place the dashboard learns which credential alone may change
+// the document (ADR-0030), since it is a node's configuration no directory
+// read reaches. An unmanaged document answers an empty list, never a missing
+// field a client must guess the meaning of. Mutation: drop the list and the
+// first case reads none; mark by login instead of id and no token is marked.
+func TestNodeTokensNameTheManagedDocumentsWriters(t *testing.T) {
+	t.Parallel()
+	managed := newRig(t, func(o *iamapi.Options) {
+		o.TokenIDs = func() []string { return []string{"ops", "gitops"} }
+		// UNSORTED, and naming one id this node holds no token for: the
+		// list is the Tier A's, and the mark is this node's.
+		o.CompanyWriters = []string{"gitops", "ci"}
+	})
+	got := managed.as(administrator(), http.MethodGet, "/iam/node-tokens", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("GET /iam/node-tokens = %d %v", got.status, got.body)
+	}
+	if writers, _ := got.body["company_writers"].([]any); !reflect.DeepEqual(writers,
+		[]any{"ci", "gitops"}) {
+		t.Errorf("company_writers = %v, want [ci gitops], sorted", got.body["company_writers"])
+	}
+	// THE MARK IS ABSENT, NEVER FALSE, on a token the list does not name:
+	// the documented answer carries the key on a writer alone, so a client
+	// that tests for the key rather than its value reads the same thing.
+	marked := map[string]any{}
+	tokens, _ := got.body["tokens"].([]any)
+	for _, raw := range tokens {
+		m, _ := raw.(map[string]any)
+		id, _ := m["id"].(string)
+		if mark, present := m["company_writer"]; present {
+			marked[id] = mark
+		}
+	}
+	if !reflect.DeepEqual(marked, map[string]any{"gitops": true}) {
+		t.Errorf("company_writer marks = %v, want gitops alone and the key "+
+			"absent on ops", marked)
+	}
+
+	unmanaged := newRig(t, func(o *iamapi.Options) {
+		o.TokenIDs = func() []string { return []string{"ops"} }
+	})
+	got = unmanaged.as(administrator(), http.MethodGet, "/iam/node-tokens", nil)
+	if writers, ok := got.body["company_writers"].([]any); !ok || len(writers) != 0 {
+		t.Errorf("an unmanaged document answered company_writers %v, want an empty list",
+			got.body["company_writers"])
 	}
 }
 

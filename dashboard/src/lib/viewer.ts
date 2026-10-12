@@ -20,14 +20,12 @@
  *   - BOUND — a principal the directory binds to a seat. This person has an
  *     inbox, a queue, pins and favourites, kept under the seat.
  *   - UNBOUND — a principal with no seat: a Tier A token's session, a service
- *     account acting as itself, a pipeline — an ORDINARY state for those — or
- *     a person recorded before every person held a human seat, which is a
- *     fault the directory reports (`person_without_seat`), since a person
- *     holds one for as long as they exist. Either way they have a record all
- *     the same — their pins, their inbox marks, their priorities — kept under
- *     their LOGIN, which is where their assistant writes it; what they lack
- *     is the work the chart addresses to a seat. A screen shows their record
- *     and says what binding would add, worded by whose login it is
+ *     account acting as itself, a pipeline — an ORDINARY state, and never a
+ *     person's, since a person holds a human seat for as long as they exist.
+ *     It has a record all the same — its pins, its inbox marks, its
+ *     priorities — kept under its LOGIN, which is where its assistant writes
+ *     it; what it lacks is the work the chart addresses to a seat. A screen
+ *     shows its record and says what binding would add
  *     (`components/people.tsx`'s `UnboundRemedy`).
  *   - ANONYMOUS — nobody resolved at all. Every guarded surface is locked, and
  *     the lock says what it needs.
@@ -111,6 +109,14 @@ export interface ViewerState {
    * failed, which `loading` alone cannot tell it apart from.
    */
   asking: boolean;
+  /**
+   * Whether this caller may change the company DOCUMENT — the engine's own
+   * answer, false for every credential a managed document does not list
+   * as a writer (ADR-0030). Read by `lib/useWriteAccess.ts`.
+   */
+  configWriter: boolean;
+  /** Who manages the company document, or empty when nothing does. */
+  configManagedBy: readonly string[];
 }
 
 /**
@@ -148,6 +154,8 @@ function useViewerRead(): ViewerState {
     anonymous: !unknown && login === "",
     loading: unknown,
     asking: loading && data === null && error === null,
+    configWriter: data?.config_writer ?? false,
+    configManagedBy: data?.config_managed_by ?? [],
   };
 }
 

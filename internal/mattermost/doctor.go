@@ -14,7 +14,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The health check for the things that fail SILENTLY.
@@ -435,22 +434,21 @@ func chatSeats(o *org.Organization) []*org.Role {
 	return out
 }
 
-// SeatTokens resolves each seat's bot token through the environment, the
-// way the engine does.
+// SeatTokens resolves each seat's bot token EXACTLY as the engine's transport
+// does ([SeatsFrom], through [seatToken]): a literal is the token, a whole
+// ${VAR} is its variable's value, and a reference inside other text is the
+// literal the transport would send.
+//
+// One function rather than a second reading, because a doctor that resolved
+// more than the engine does would report a seat healthy that the engine
+// authenticates as nobody — this one expanded a reference wherever it sat,
+// while the transport resolves only a whole one. A literal is still a value:
+// an operator managing a seat's credential by hand is a supported choice, and
+// refusing to check it would report a working seat as unconfigured.
 func SeatTokens(env *config.Resolver) func(*org.Role) (string, bool) {
 	return func(seat *org.Role) (string, bool) {
-		raw := seat.Mattermost.BotToken
-		if strings.TrimSpace(raw) == "" {
-			return "", false
-		}
-		// A LITERAL IS A VALUE, not a reference: an operator managing a
-		// seat's credential by hand is a supported choice, and refusing
-		// to check it would report a working seat as unconfigured.
-		if _, ok := provision.SoleVar(raw); !ok && len(provision.ReferencedVars(raw)) == 0 {
-			return raw, true
-		}
-		value := strings.TrimSpace(env.Value(raw))
-		return value, value != ""
+		token := seatToken(seat, env.LookupOK)
+		return token, token != ""
 	}
 }
 

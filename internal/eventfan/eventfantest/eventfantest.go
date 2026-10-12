@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // Factory returns n started queue clients of ONE broker, one per member. The
@@ -76,7 +77,7 @@ func Run(t *testing.T, factory Factory) {
 		write(t, nodes[2], phase("p2", "t-1", at.Add(time.Minute), 60, "model-b"))
 		write(t, nodes[2], completion("c2", "t-1", at.Add(time.Minute+time.Second), false, 500))
 
-		page, coverage, err := asker(nodes).Turns(t.Context(), store.TurnQuery{}, time.Now().UTC())
+		page, coverage, err := asker(nodes).Turns(t.Context(), store.TurnQuery{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -98,6 +99,37 @@ func Run(t *testing.T, factory Factory) {
 		complete(t, coverage)
 		if got := idsOf(detail.Rows); !slices.Equal(got, []string{"p1", "c1", "p2", "c2"}) {
 			t.Fatalf("the turn's rows are %v, want both nodes' in order", got)
+		}
+	})
+
+	t.Run("turns_at_one_microsecond_are_each_on_one_page", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// FOUR TURNS AT ONE INSTANT across three nodes, walked in pages of
+		// one: every page is cut between two of them.
+		for i, turn := range []string{"t-a", "t-b", "t-c", "t-d"} {
+			write(t, nodes[i%3], phase(turn+"-p", turn, at, 10, "m"))
+		}
+		fan := asker(nodes)
+		var order []string
+		q := store.TurnQuery{SinceDays: 1, Limit: 1}
+		for range 10 {
+			page, coverage, err := fan.Turns(t.Context(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			for _, turn := range page.Turns {
+				order = append(order, turn.TurnID)
+			}
+			if page.Next == nil {
+				break
+			}
+			q.Before = page.Next
+		}
+		if want := []string{"t-d", "t-c", "t-b", "t-a"}; !slices.Equal(order, want) {
+			t.Fatalf("the walk listed %v, want %v — each once, by id within the instant", order, want)
 		}
 	})
 
@@ -148,7 +180,7 @@ func Run(t *testing.T, factory Factory) {
 				at.Add(time.Duration(i)*time.Minute), 10*(i+1), "m"))
 		}
 		records, coverage, err := asker(nodes).PhaseTokens(t.Context(),
-			store.PhaseTokenQuery{Since: at.Add(-time.Minute), Limit: 10}, time.Now().UTC())
+			store.PhaseTokenQuery{Since: at.Add(-time.Minute), Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,10 +197,9 @@ func Run(t *testing.T, factory Factory) {
 	})
 
 	// ONE SEAT'S SPEND IS ITS OWN ON EVERY NODE: the narrowing travels to
-	// the peers (v5) rather than being applied to the asker's share alone,
-	// which would merge every other seat's records from the peers in as
-	// though they matched. Two seats sharing a role name, each with records
-	// on two nodes.
+	// the peers rather than being applied to the asker's share alone, which
+	// would merge every other seat's records from the peers in as though they
+	// matched. Two seats, each with records on every node.
 	t.Run("one_seats_spend_window_is_narrowed_on_every_node", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)
@@ -182,7 +213,7 @@ func Run(t *testing.T, factory Factory) {
 			}
 		}
 		records, coverage, err := asker(nodes).PhaseTokens(t.Context(),
-			store.PhaseTokenQuery{Since: at.Add(-time.Minute), AgentID: "seat-b"}, time.Now().UTC())
+			store.PhaseTokenQuery{Since: at.Add(-time.Minute), AgentID: "seat-b"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -194,6 +225,126 @@ func Run(t *testing.T, factory Factory) {
 		if !slices.Equal(got, []string{"seat-b-2", "seat-b-1", "seat-b-0"}) {
 			t.Fatalf("seat-b's spend is %v, want its own record from each of the three nodes", got)
 		}
+	})
+
+	t.Run("the_outcome_counts_are_every_nodes_summed", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, n := range nodes {
+			for j := range i + 1 {
+				write(t, n, store.EventRecord{ID: fmt.Sprintf("o%d-%d", i, j),
+					Type: "notification_skipped", Category: "notification", Time: at.Add(-time.Minute),
+					Tags: map[string]string{"notification_source": "gitlab"}})
+			}
+		}
+		write(t, nodes[2], store.EventRecord{ID: "merged", Type: "notifications_coalesced",
+			Category: "notification", Time: at.Add(-time.Minute),
+			Tags: map[string]string{"notification_source": "slack"}})
+		// Past the window's top edge, on a peer: never counted.
+		write(t, nodes[1], store.EventRecord{ID: "late", Type: "notification_skipped",
+			Category: "notification", Time: at,
+			Tags: map[string]string{"notification_source": "gitlab"}})
+
+		got, coverage, err := asker(nodes).NotificationOutcomes(t.Context(),
+			store.OutcomeQuery{Since: at.Add(-time.Hour), At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		if got.Skipped["gitlab"] != 6 || got.Coalesced["slack"] != 1 {
+			t.Fatalf("the fleet counted %+v, want gitlab skipped 1+2+3 = 6 and slack merged once", got)
+		}
+	})
+
+	t.Run("a_custody_row_two_nodes_hold_is_counted_once", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// ONE STATELESS NODE'S DROP, written by two keepers: node 1 settled
+		// first and keeps it; node 2 has not heard yet. The asker holds none
+		// of it, so both the count and the second question cross the broker.
+		batch := store.CustodyBatch{ID: "batch-1", Origin: "seats-1", Records: []store.EventRecord{{
+			ID: "x-skip", Type: "notification_skipped", Category: "notification",
+			Time: at.Add(-time.Minute), Payload: json.RawMessage(`{}`),
+			Tags: map[string]string{"notification_source": "gitlab"},
+		}}}
+		for _, n := range nodes[1:] {
+			if err := n.log.WriteCustody(t.Context(), batch, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := nodes[1].log.SettleCustody(t.Context(), batch.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		got, coverage, err := asker(nodes).NotificationOutcomes(t.Context(),
+			store.OutcomeQuery{Since: at.Add(-time.Hour), At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		if got.Skipped["gitlab"] != 1 {
+			t.Fatalf("the fleet counted %+v, want the one drop two keepers hold counted once", got)
+		}
+	})
+
+	t.Run("every_count_holds_a_custody_row_two_nodes_hold_once", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// ONE STATELESS NODE'S TURN, written by two keepers that the asker is
+		// neither of — so every count, its names and the second question
+		// cross the broker.
+		first, done := phase("x-phase", "t-x", at.Add(-2*time.Minute), 40, "m"),
+			completion("x-done", "t-x", at.Add(-time.Minute), false, 25)
+		first.TraceID, done.TraceID = "tr-x", "tr-x"
+		batch := store.CustodyBatch{ID: "batch-x", Origin: "seats-1",
+			Records: []store.EventRecord{first, done}}
+		for _, n := range nodes[1:] {
+			if err := n.log.WriteCustody(t.Context(), batch, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		check := func(state string) {
+			t.Helper()
+			fan := asker(nodes)
+			fan.Clock = func() time.Time { return at }
+			axis, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{
+				Bucket: store.BucketHour, ListQuery: store.ListQuery{Since: at.Add(-time.Hour)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			trace, coverage, err := fan.Trace(t.Context(), "tr-x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			turn, coverage, err := fan.Turn(t.Context(), "t-x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			if axis.Total != 2 || trace.Total != 2 || turn.Total != 2 {
+				t.Errorf("%s: the axis counts %d, the trace %d and the turn %d, want the batch's two "+
+					"rows once in each", state, axis.Total, trace.Total, turn.Total)
+			}
+			if len(page.Turns) != 1 || page.Turns[0].TotalTokens != 40 || page.Turns[0].Phases != 1 ||
+				page.Turns[0].DurationMS != 25 {
+				t.Errorf("%s: the page is %+v, want the turn's 40 tokens, its phase and its 25 ms once",
+					state, page.Turns)
+			}
+		}
+		check("both copies unsettled")
+		if err := nodes[1].log.SettleCustody(t.Context(), batch.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		check("node 1 kept it, node 2 not yet settled")
 	})
 
 	t.Run("a_node_that_stops_answering_is_named", func(t *testing.T) {
@@ -229,10 +380,7 @@ func fleet(t *testing.T, factory Factory) []*member {
 	queues := factory(t, Members)
 	out := make([]*member, 0, Members)
 	for i, q := range queues {
-		db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
-		if err != nil {
-			t.Fatalf("open a store: %v", err)
-		}
+		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
 		t.Cleanup(func() { _ = db.Close() })
 		m := &member{id: fmt.Sprintf("node-%d", i), q: q, log: db.Events()}
 		stop, err := eventfan.Serve(t.Context(), q, m.id, m.log)

@@ -318,18 +318,13 @@ export function EditPersonDialog({
     const own = live.seat && !vacant.some((s) => s.handle === live.seat);
     return seatOptions(own ? [entry(live.seat!), ...vacant] : vacant, { none: machine });
   }, [seats.data, live.seat, entry, machine]);
-  // A PERSON RECORDED WITH NO SEAT — before every person held one — starts on
-  // no choice at all rather than on "No seat", and the edit sends a seat only
-  // once one is chosen: a person's `seat: ""` is refused, and sending it with
-  // an unrelated change failed the whole edit.
-  const seatless = !machine && !row.seat;
 
   const before = row.grants ?? [];
   const added = grants.filter((g) => !before.includes(g));
   const removed = before.filter((g) => !grants.includes(g));
   const change: Record<string, unknown> = {
     ...(changesLogin ? { login: login.trim() } : {}),
-    ...(seat !== (row.seat ?? NO_SEAT) && (machine || seat !== NO_SEAT) ? { seat } : {}),
+    ...(seat !== (row.seat ?? NO_SEAT) ? { seat } : {}),
     ...(added.length > 0 ? { add_grants: added } : {}),
     ...(removed.length > 0 ? { remove_grants: removed } : {}),
   };
@@ -420,20 +415,13 @@ export function EditPersonDialog({
             id={field.id}
             ariaLabel="Seat"
             searchable
-            value={seat === NO_SEAT && !machine ? undefined : seat}
+            value={seat}
             placeholder="Choose a seat"
             options={options}
             onChange={(next) => setSeat(String(next))}
           />
         )}
       </FormField>
-      {seatless && (
-        <Callout variant="warning">
-          {you ? "You hold" : `${row.name || row.login || "This person"} holds`} no seat — recorded
-          before every person held one. Choose a human seat nothing else holds, and{" "}
-          {you ? "you act" : "they act"} as it once this saves.
-        </Callout>
-      )}
       <GrantPicker
         value={grants}
         onChange={setGrants}

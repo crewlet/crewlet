@@ -11,14 +11,56 @@
 //   - "The process is gone" must not be read off kill(pid, 0), which reports a
 //     zombie as alive, nor off /proc alone, which a darwin run does not have
 //     ([AwaitGone]).
+//
+// A third is not a correctness trap but a cost every such suite paid without
+// seeing it: a stand-in that is MEANT to end must end when it is done, rather
+// than a second later ([StandInRaceOptions]).
 package procgrouptest
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
+
+// GORACE is the variable the race runtime reads its options from when a
+// race-built process starts.
+const GORACE = "GORACE"
+
+// StandInRaceOptions is the value of [GORACE] a re-executed test binary should
+// be launched with: the options this process was started with, followed by
+// atexit_sleep_ms=0.
+//
+// A race-built binary that EXITS 0 — main returning or os.Exit(0) alike — runs
+// the race runtime's finaliser on its way out, and the finaliser sleeps
+// atexit_sleep_ms before the process ends, 1000 by default, so a goroutine
+// still running at exit has a moment to report a race. A stand-in is a test
+// binary, race-built whenever its suite is, so every clean exit cost a second
+// of nothing, and the suites that launch one per case spent most of their wall
+// clock asleep: cliagent's fake CLI took ~1.02 s per call against 0.05 s for
+// the same exec path exiting 1, and the MCP helper ~1.005 s from stdin-EOF to
+// exit against ~320 µs for `cat`.
+//
+// What it gives up is that grace for a race in the STAND-IN's own exit, and no
+// suite here is testing its stand-in. A race anywhere else in one is reported
+// as before, with the race runtime's exit status, since detection never waited
+// on the sleep.
+//
+// APPENDED rather than set, so the options a suite was run with — a
+// halt_on_error, a log_path — reach its stand-ins too. The race runtime reads
+// them in order and the last one wins, so a developer's own atexit_sleep_ms is
+// the only thing this overrides.
+//
+// A caller passes it EXPLICITLY, in the environment it launches the stand-in
+// with, rather than trusting the GORACE the suite inherited to arrive: a
+// launcher that builds its child's environment from an allowlist — cliagent's
+// does — drops it, so a GORACE exported by make or CI never gets there.
+func StandInRaceOptions() string {
+	return strings.TrimSpace(os.Getenv(GORACE) + " atexit_sleep_ms=0")
+}
 
 // Hold blocks the calling goroutine, and with it a helper process that has
 // nothing else to do, for as long as any test could still be watching it.

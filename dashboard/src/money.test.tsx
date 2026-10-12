@@ -38,6 +38,8 @@ import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 // ---------------------------------------------------------------------------
 // 1. The source
@@ -471,8 +473,8 @@ afterEach(() => {
 function mount(hash: string, view: ReactElement, answers: Record<string, unknown> = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
   store.applyTokens(rollup());
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
@@ -599,6 +601,7 @@ describe("the screens", () => {
         turn: {
           turn_id: "t-1",
           truncated: false,
+          nodes: [],
           events: [
             pricedPhase("2026-09-13T10:01:30Z"),
             // THE TURN'S OWN RECORD CARRIES NO PRICE, because the engine

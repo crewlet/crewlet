@@ -354,7 +354,7 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		WebhookBase: p.engine.externalBase,
+		WebhookBase: p.engine.webhookBase,
 	}); err != nil {
 		return provision.Removed{}, err
 	}
@@ -512,8 +512,9 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 		// register the webhook, on the same terms as every other surface,
 		// and the token is what the definition carries so the route it
 		// posts to accepts the delivery.
-		WebhookBase:  in.WebhookBase,
-		WebhookToken: strings.TrimSpace(env.Value(cfg.WebhookToken)),
+		WebhookBase:    in.WebhookBase,
+		WebhookBaseKey: in.WebhookBaseKey,
+		WebhookToken:   strings.TrimSpace(env.Value(cfg.WebhookToken)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
@@ -551,7 +552,7 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 		// webhook is addressed by name, and the teardown refuses to
 		// delete one pointing anywhere but here — the same expression
 		// gitlabPass.Teardown passes for the same reason.
-		WebhookBase: p.engine.externalBase,
+		WebhookBase: p.engine.webhookBase,
 	})
 }
 
@@ -785,7 +786,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	}
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		Sink: in.Sink, WebhookBase: in.WebhookBase,
+		Sink: in.Sink, WebhookBase: in.WebhookBase, WebhookBaseKey: in.WebhookBaseKey,
 		// AND WHEN EACH SEAT'S ATLASSIAN CREDENTIAL WAS SEALED, which is
 		// the only thing that separates "Atlassian has not finished
 		// granting this brand new account" from "this credential is
@@ -833,7 +834,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provis
 	}
 	return provision.Removed{}, jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
-		WebhookBase: p.engine.externalBase,
+		WebhookBase: p.engine.webhookBase,
 	})
 }
 
@@ -868,7 +869,8 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	}
 	res, err := confluence.Reconcile(ctx, confluence.Options{
 		Client: client, Config: cfg, Value: env.Value,
-		Sink: in.Sink, WebhookBase: in.WebhookBase, Recreate: in.Recreate,
+		Sink: in.Sink, WebhookBase: in.WebhookBase, WebhookBaseKey: in.WebhookBaseKey,
+		Recreate: in.Recreate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
@@ -954,6 +956,7 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: in.Sink,
 		WebhookBase:      in.WebhookBase,
+		WebhookBaseKey:   in.WebhookBaseKey,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		// ROTATE ONLY WHEN ASKED, and NEVER DECOMMISSION from here.
@@ -1123,6 +1126,7 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// a sink is permission to mint, and a person asked for both.
 		Sink:             in.Sink,
 		WebhookBase:      in.WebhookBase,
+		WebhookBaseKey:   in.WebhookBaseKey,
 		RecreateWebhooks: in.Recreate,
 	})
 	if err != nil {

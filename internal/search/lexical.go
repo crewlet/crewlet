@@ -88,7 +88,11 @@ const ScanBatch = 1_000
 // read joins the two, which is why every comparison here is a batch from each
 // side rather than a JOIN.
 type Indexer struct {
-	db *store.DB
+	// db is this node's own estate, where the index is kept, and estate the
+	// replicated estate whose documents it indexes — read only, because the
+	// documents are an applier's rows and the index is not.
+	db     *store.DB
+	estate store.ReplicatedReader
 
 	// built is which sources have completed at least one lap since this
 	// process started, which is what [Indexer.Ready] answers.
@@ -134,12 +138,13 @@ type Indexer struct {
 // IndexDerivation is what the indexer derives from a document's text, as a
 // number a row records beside the source version it was built from.
 //
-// BUMPED WHEN THE DERIVATION CHANGES and the text did not — the first bump is
-// the backlinks (node migration 0036): every row indexed before them matched
-// its source's version and would never have been looked at again, so no page
-// written before the upgrade would ever have listed a link. A row below this
-// is stale exactly as a moved source is, and the next ordinary lap re-derives
-// it: that is the whole backfill.
+// BUMPED WHEN THE DERIVATION CHANGES and the text did not. A node's index is
+// its own and survives the upgrade that changes the derivation, and a row it
+// indexed under the one before still matches its source's version — so the
+// version walk alone would never look at it again, and nothing the new
+// derivation adds would ever reach a document that did not move. A row below
+// this is stale exactly as a moved source is, and the next ordinary lap
+// re-derives it: that is the whole backfill. Derivation 1 is the backlinks.
 const IndexDerivation = 1
 
 // WithLinks has this index derive the backlinks from every body it indexes,
@@ -150,19 +155,22 @@ func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 	return x
 }
 
-// NewIndexer builds an indexer over a node's store, covering every corpus in
+// NewIndexer builds an indexer that keeps its index in a node's own store and
+// reads the documents of the replicated estate, covering every corpus in
 // [DefaultLexicalSources].
-func NewIndexer(db *store.DB) *Indexer { return NewIndexerOver(db, DefaultLexicalSources()) }
+func NewIndexer(db *store.DB, estate store.ReplicatedReader) *Indexer {
+	return NewIndexerOver(db, estate, DefaultLexicalSources())
+}
 
 // NewIndexerOver builds one over the sources given, which is what a test that
 // is about ONE corpus uses.
-func NewIndexerOver(db *store.DB, sources []LexicalSource) *Indexer {
+func NewIndexerOver(db *store.DB, estate store.ReplicatedReader, sources []LexicalSource) *Indexer {
 	built := make(map[string]*atomic.Bool, len(sources))
 	for _, source := range sources {
 		built[source.Source()] = &atomic.Bool{}
 	}
 	return &Indexer{
-		db: db, sources: sources,
+		db: db, estate: estate, sources: sources,
 		built:        built,
 		cursor:       map[string]string{},
 		orphanCursor: map[string]string{},
@@ -336,13 +344,19 @@ const excerptLimit = 600
 // excerptOf keeps the opening of a body for snippet rendering.
 //
 // Whitespace is collapsed first, so a markdown body's blank lines do not
-// spend the budget, and the cut goes through [textcut.Bytes] — a plain slice
+// spend the budget, and the cut goes through [textcut.Within] — a plain slice
 // splits a multi-byte rune, and the invalid UTF-8 that produces is
 // substituted by the JSON encoder and read by a model as a replacement
-// character. No marker: this value is snippet INPUT, and an ellipsis inside
-// it would be cut again by the snippet.
+// character.
+//
+// MARKED WHERE IT WAS CUT, inside the budget. It used to carry no marker, on
+// the reasoning that a snippet cut from it adds its own — but a snippet only
+// marks the end IT cut, and a window that reached the end of this excerpt
+// marked nothing, so the snippet of a long document ended as though the
+// document did. The marker is part of the snippet's input now, and a window
+// that reaches it carries it.
 func excerptOf(body string) string {
-	return textcut.Bytes(strings.Join(strings.Fields(body), " "), excerptLimit)
+	return textcut.Within(strings.Join(strings.Fields(body), " "), excerptLimit)
 }
 
 // Remove drops a document from the index.
@@ -426,14 +440,15 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		// the bodies in a second transaction would fetch a version the
 		// scan never saw.
 		//
-		// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL
-		// pool on a replicated estate that is not open — a legitimate,
-		// documented state of that peer — and a statement issued on it
-		// panics inside database/sql. [store.DB.Read] answers
-		// [store.ErrNoEstate] instead, which every caller here already
-		// reads as an empty index pass.
+		// THROUGH THE HANDLE, NOT A POOL. An estate that is not open
+		// — a legitimate, documented state, since an adoption closes it
+		// between its rename and its reopen — has no pool, and a
+		// statement issued on a closed one panics inside database/sql.
+		// [store.ReplicatedReader.Read] answers [store.ErrNoEstate]
+		// instead, which every caller here already reads as an empty
+		// index pass.
 		var out []Doc
-		if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 			scan, err := source.Versions(ctx, tx, x.cursor[name], ScanBatch)
 			if err != nil {
 				return err
@@ -626,10 +641,9 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 	x.orphanCursor[source.Source()] = candidates[len(candidates)-1]
 
 	live := map[string]bool{}
-	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a nil pool from
-	// a closed replicated estate panics where the handle answers
-	// [store.ErrNoEstate].
-	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a closed
+	// estate's pool panics where the handle answers [store.ErrNoEstate].
+	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		held, err := source.Live(ctx, tx, candidates)
 		live = held
 		return err
@@ -663,7 +677,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	// seat whose company has pages indexed and items not is one that would
 	// be told its own tracker holds nothing.
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
-	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {
 			n, err := source.Count(ctx, tx)
 			if err != nil {

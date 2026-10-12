@@ -522,7 +522,7 @@ func TestTheFeedReportsItsPositionAndAppliedPrefix(t *testing.T) {
 // the rows the framework's own loop writes when it retains one.
 func (r *roundTrip) retainAt(position uint64) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO tracker_log_deferred
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)
@@ -537,7 +537,7 @@ func (r *roundTrip) retainAt(position uint64) {
 // clearRetained forgets every record [roundTrip.retainAt] filed.
 func (r *roundTrip) clearRetained() {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(), `DELETE FROM tracker_log_deferred`)
 		return err
 	}); err != nil {

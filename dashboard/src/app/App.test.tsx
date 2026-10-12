@@ -21,6 +21,9 @@ import { buildHash } from "./router.tsx";
 import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
+import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -47,7 +50,7 @@ function mount() {
 /** The frame, over a socket that answers the viewer and refuses the rest. */
 function mountAs(viewer: Promise<unknown>) {
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     return what === "viewer" ? viewer : Promise.reject(new QueryError("unauthorized"));
@@ -143,10 +146,10 @@ describe("routing", () => {
   // remembered to add to it — so a new destination that renders a blank ships
   // green, which is the one failure this test exists to catch.
   // WHO IS WORKING IS HOME'S, as the Main artboard draws it — the sidebar's
-  // Agents badge carries the count everywhere else. Drawn in every bar it sat
+  // Live row carries the count everywhere else. Drawn in every bar it sat
   // between a task's trail and its actions, and pushed a profile's controls
   // past a phone's edge.
-  test("the working chip is in Home's page bar and in no other", () => {
+  test("the working chip is in Home's page bar and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/", true],
       ["#/work", false],
@@ -156,7 +159,10 @@ describe("routing", () => {
     ] as const) {
       location.hash = hash;
       const { store, view } = mount();
-      act(() => {
+      // AWAITED: a screen reads its chunk through `use`, and a synchronous
+      // act stops flushing at the first render that used a promise, settled
+      // or not, so the re-render this push causes would be left unflushed.
+      await act(async () => {
         store.applySeats([
           { agent_id: "a1", id: "a1", role: "Agent SWE", activity: "working" },
         ] as never);
@@ -167,7 +173,7 @@ describe("routing", () => {
     }
   }, 30_000);
 
-  test("every destination renders a screen rather than a blank", () => {
+  test("every destination renders a screen rather than a blank", async () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
@@ -176,6 +182,9 @@ describe("routing", () => {
     for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
+      // AWAITED, for the reason the working chip's case gives: what a screen
+      // renders after its first pass is flushed only by an awaited act.
+      await act(async () => {});
       expect(
         view.container.querySelector(".crewlet-app-shell__content")?.children.length,
         hash,
@@ -520,12 +529,14 @@ describe("live state reaches the screen", () => {
     // synchronously renders the screen the reader was on before.
     location.hash = "#/agents/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applySeats([
-      { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "working" },
+      { id: "ceo", agent_id: "a-ceo", handle: "ceo", role: "CEO", activity: "working" },
     ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -547,10 +558,12 @@ describe("live state reaches the screen", () => {
     resetStarsForTest();
     location.hash = "#/agents/seats/ceo";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -575,10 +588,12 @@ describe("live state reaches the screen", () => {
   test("a seat whose handle is a reserved word opens its own page", () => {
     location.hash = "#/agents/seats/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -607,12 +622,14 @@ describe("live state reaches the screen", () => {
     // match no branch: the header and the strip, and then nothing.
     location.hash = "#/agents/seats/ceo?tab=zzz";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applySeats([
-      { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "working" },
+      { id: "ceo", agent_id: "a-ceo", handle: "ceo", role: "CEO", activity: "working" },
     ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -666,9 +683,10 @@ describe("a turn watched to its end", () => {
       turn_id: "t1",
       phase,
       iteration: phase === "onboarding" ? 0 : 1,
-      // PAIRED BY AGENT ID, never by the role name two seats may share.
-      agent_id: "ceo",
       role: "CEO",
+      // THE SEAT'S OWN ID, which a streamed phase is matched to its seat on —
+      // never the role name two seats may share.
+      agent_id: "a-ceo",
       model: "claude-sonnet-5",
       total_tokens: 100,
     },
@@ -677,7 +695,7 @@ describe("a turn watched to its end", () => {
   function seatView() {
     location.hash = "#/agents/seats/ceo?tab=turns";
     const { store, view } = mount();
-    store.applyOrg(seat);
+    store.applyOrg(withDerived(seat));
     const redraw = () =>
       view.rerender(
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -698,11 +716,12 @@ describe("a turn watched to its end", () => {
     store.applySeats([
       {
         id: "ceo",
-        agent_id: "ceo",
+        agent_id: "a-ceo",
         handle: "ceo",
         role: "CEO",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "review",
           iteration: 1,
@@ -723,7 +742,14 @@ describe("a turn watched to its end", () => {
     // the live call — the order internal/api/stream.Ingest publishes them in.
     store.applyEvent(phaseEnvelope("p3", "review", "2026-01-01T00:00:09Z") as never);
     store.applySeats([
-      { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "idle", live_call: null },
+      {
+        id: "ceo",
+        agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "idle",
+        live_call: null,
+      },
     ] as never);
     redraw();
 
@@ -748,11 +774,12 @@ describe("a turn watched to its end", () => {
     store.applySeats([
       {
         id: "ceo",
-        agent_id: "ceo",
+        agent_id: "a-ceo",
         handle: "ceo",
         role: "CEO",
         activity: "working",
         live_call: {
+          versions: ZERO_VERSIONS,
           turn_id: "t1",
           phase: "execute",
           iteration: 1,
@@ -768,7 +795,14 @@ describe("a turn watched to its end", () => {
     redraw();
     store.applyEvent(phaseEnvelope("p1", "execute", "2026-01-01T00:00:05Z") as never);
     store.applySeats([
-      { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "idle", live_call: null },
+      {
+        id: "ceo",
+        agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "idle",
+        live_call: null,
+      },
     ] as never);
     redraw();
     expect(screen.queryByText(/finished while you were reading/)).toBeNull();
@@ -852,7 +886,7 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   resetStarsForTest();
   location.hash = "#/work/ENG";
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   const project = {
     key: "ENG",

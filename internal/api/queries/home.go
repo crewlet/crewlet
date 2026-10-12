@@ -598,8 +598,9 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		for _, run := range runs {
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
-			// this person.
-			if !slices.Contains(sandbox.Awaiting, run.Status) || !slices.Contains(run.AudienceHandles, handle) {
+			// this person: [putTo] asks both, as the board's audience
+			// filter does.
+			if !putTo(run, handle) {
 				continue
 			}
 			at := waitingSince(run)

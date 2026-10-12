@@ -343,6 +343,9 @@ export default defineConfig({
       // before anybody has signed in (protocol/auth.ts) — the one unguarded
       // answer that says so.
       "/health": { target: "http://localhost:8000" },
+      // Removing a dead member from the broker's metadata group (Settings ›
+      // Nodes, Broker members). The membership is read over the socket.
+      "/fleet": { target: "http://localhost:8000" },
     },
   },
 });

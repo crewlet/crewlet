@@ -7,11 +7,15 @@
 // The dashboard acts with the session cookie of whoever signed in to it, and
 // anything that runs script on its origin acts with that session: the cookie
 // is HttpOnly, so a script cannot read it, but every request it makes carries
-// it. And the engine serves three kinds of HTML there: the dashboard shell, the
+// it. And the engine serves three kinds of HTML: the dashboard shell, the
 // GitHub App landing page and the Slack OAuth landing page. The two landing
 // pages are unauthenticated and render values an arriving browser supplies.
-// A Content-Security-Policy is per response, so a policy on the shell alone
-// would leave exactly those two pages as the way in.
+// While one listener serves everything they share the dashboard's origin; with
+// a public listener (`api.public`) they are served on that socket instead,
+// under an address — and possibly a scheme — of its own, and get the same
+// headers there, [HSTS] decided by that address. A Content-Security-Policy is
+// per response, so a policy on the shell alone would leave exactly those two
+// pages as the way in.
 //
 // # One helper, set before the status
 //
@@ -103,12 +107,14 @@ func Set(h http.Header, policy string) {
 // Apply is middleware that sets the [API] policy on every response before the
 // next handler runs, so a handler that serves a page only has to replace it.
 //
-// `secure` says a browser reaches this deployment over https, which adds
-// [HSTS]. It is the deployment's `api.external_url` that decides it and never
-// the bind address or `r.TLS`: the engine ordinarily sits behind a
-// TLS-terminating proxy, so the request it receives is plain http on a
-// loopback socket, and a check on either would send the header from nowhere
-// and from exactly the deployments that need it.
+// `secure` says a browser reaches THE LISTENER THIS WRAPS over https, which
+// adds [HSTS]. It is the address that listener is published at that decides it
+// — `api.external_url` for api.port, `api.public.external_url` for the public
+// listener, which may be published under another scheme — and never the bind
+// address or `r.TLS`: the engine ordinarily sits behind a TLS-terminating
+// proxy, so the request it receives is plain http on a loopback socket, and a
+// check on either would send the header from nowhere and from exactly the
+// deployments that need it.
 func Apply(next http.Handler, secure bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Set(w.Header(), API)
@@ -165,9 +171,11 @@ var (
 // whose script varies per request needs a nonce rather than this, and the
 // tests of each page check a real response's blocks against its real header.
 //
-// img-src 'self' lets a page show the product's mark from /static. A script
-// with a src attribute is refused: the pages this serves are self-contained so
-// they render when the dashboard bundle is not built.
+// img-src data: lets a page show the product's mark, INLINED, and nothing else:
+// the pages this serves are self-contained, so they render when the dashboard
+// bundle is not built, and they are public routes, served on the public
+// listener when a deployment sets one, where /static is not served at all. A
+// script with a src attribute is refused for the same reason.
 func ForTemplate(page *template.Template, views ...any) (string, error) {
 	if len(views) == 0 {
 		return "", fmt.Errorf("pagepolicy: %s: render it with at least one view", page.Name())
@@ -185,7 +193,7 @@ func ForTemplate(page *template.Template, views ...any) (string, error) {
 			return "", err
 		}
 	}
-	return "default-src 'none'; img-src 'self'; " +
+	return "default-src 'none'; img-src data:; " +
 		"style-src " + sources(styles) + "; script-src " + sources(scripts) + "; " +
 		"base-uri 'none'; form-action 'none'; frame-ancestors 'none'", nil
 }

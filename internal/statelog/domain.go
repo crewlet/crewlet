@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -102,9 +103,9 @@ type Domain interface {
 	// describes, so the adopter holds a row for every operation the donor
 	// applied and answers a retry of one from it, while an operation
 	// neither ledger holds is one that never applied and is decided
-	// afresh. Classed [Local] it was scrubbed out of every artefact, and
-	// the adopter could tell neither apart for anything minted before the
-	// adoption — so it answered a turn's FIRST attempt at a write
+	// afresh. Classed [Local] it would be scrubbed out of every artefact,
+	// and the adopter could tell neither apart for anything minted before
+	// the adoption — so it would answer a turn's FIRST attempt at a write
 	// `unknown` whenever the turn's trigger predated the join, which is
 	// the recovering node's whole backlog. Every node writes the same op
 	// id, subject and position from the same record; only `applied_at`,
@@ -121,8 +122,8 @@ type Domain interface {
 
 	// ReadinessInput reports whether this domain's health gates seat
 	// admission. A strictly ordered domain's stall is a fault; a
-	// compacted domain's gap is a coverage number, and shedding a
-	// company's seats for one would be the outage the number exists to
+	// compacted domain's gap is a coverage number, and taking a copy
+	// out of service for one would be the outage the number exists to
 	// avoid.
 	ReadinessInput() bool
 
@@ -256,6 +257,10 @@ type StreamSpec struct {
 	// MaxBytes is the ceiling. Crossing it REFUSES an append rather than
 	// dropping the oldest record, so zero — unlimited — is a stream that
 	// fills the volume instead.
+	//
+	// A domain declares its WHOLE budget here, and it is the one setting a
+	// node may replace: the stream a node creates carries the ceiling its
+	// own Tier A sized ([StreamSpec.Instantiates]).
 	MaxBytes int64
 
 	// MaxRecordBytes is the largest record this domain publishes — the
@@ -364,6 +369,55 @@ func (s StreamSpec) Validate() error {
 	return nil
 }
 
+// Instantiates refuses a spec that is not domain d's stream: every setting but
+// the byte ceiling must be the domain's own, names included.
+//
+// The NAMES because every per-log record a node keeps is keyed by one of two
+// things — the checkpoint and the anchors by the stream, a position row and a
+// floor by the domain's name — and a spec naming another stream than the
+// domain it runs under would file one log's positions under another's name.
+// The REST because the loop that reads the log, the arbitration the publisher
+// forms and the duplicate window a retry leans on are all chosen from the
+// DOMAIN's declaration, and a stream of another shape is one those choices
+// are wrong for, silently.
+//
+// ONLY THE CEILING MAY DIFFER: the spec a node creates the stream with
+// carries the byte budget its own Tier A sized, which is the node's to
+// choose. The LARGEST RECORD is not the ceiling's companion but the domain's
+// declaration: the gate reserve is sized by it, the publisher refuses a record
+// past it and the stream's `max_msg_size` holds a peer on another build to it,
+// so a node that ran a log at a largest record of its own choosing would size
+// a reserve and admit records its peers do not.
+func (s StreamSpec) Instantiates(d Domain) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if d == nil {
+		return fmt.Errorf("statelog: stream %q names no domain", s.Name)
+	}
+	want := d.Stream()
+	switch {
+	case s.Name != want.Name,
+		s.SubjectPrefix != want.SubjectPrefix,
+		!slices.Equal(s.Subjects, want.Subjects):
+		return fmt.Errorf("statelog: stream (%q, %q, %v) is not the %s domain's, "+
+			"which is (%q, %q, %v)", s.Name, s.SubjectPrefix, s.Subjects, d.Name(),
+			want.Name, want.SubjectPrefix, want.Subjects)
+	case s.Replay != want.Replay,
+		s.MaxPerSubject != want.MaxPerSubject,
+		s.MaxAge != want.MaxAge,
+		s.MaxRecordBytes != want.MaxRecordBytes,
+		s.Duplicates != want.Duplicates,
+		!slices.Equal(s.ArbitratedKinds, want.ArbitratedKinds):
+		return fmt.Errorf("statelog: stream %q is not the %s domain's: "+
+			"its replay, per-subject bound, age bound, largest record, duplicate "+
+			"window or arbitrated kinds differ from the domain's own declaration, "+
+			"and every one of them decides how the framework reads and writes "+
+			"that log", s.Name, d.Name())
+	}
+	return nil
+}
+
 // TableClass says what a snapshot, an identity claim and a local sweep each
 // do with one of a domain's tables.
 //
@@ -393,8 +447,8 @@ const (
 	// rather than "Replicated minus two tables somebody remembered". The
 	// alternative is worse than untidy: classing such a table Local would
 	// scrub it from every snapshot, and an adopting node would hold a
-	// tail where its peers hold a year — which is exactly what the
-	// operation ledger did while it was Local (see [Domain.OpsTable]).
+	// tail where its peers hold a year — which is exactly what classing
+	// the operation ledger Local would do (see [Domain.OpsTable]).
 	Divergent
 
 	// Local is this node's own rows. SCRUBBED from every snapshot,
@@ -526,7 +580,7 @@ type Record struct {
 
 	// Payload is the record's BODY: what the domain published, with the
 	// framework's signature frame already opened and checked. An applier
-	// decodes this and never sees the frame, which is ADR-0025's rule
+	// decodes this and never sees the frame, which is ADR-0031's rule
 	// stated at the one field every applier reads — the alternative is
 	// every domain unwrapping for itself, and the one that forgot would
 	// fail on every record in the company while its neighbour worked.

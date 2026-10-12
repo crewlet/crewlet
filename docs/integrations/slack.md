@@ -97,7 +97,7 @@ units:
 
 The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it. Both live on `role.integrations.slack`, in the file and through the API alike. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
-Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation has no opinion on it: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
+Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation's only opinion on it is that a `bot_token` is one or the other — never a reference inside other text (`xoxb-${REST}`), which the transport, resolving the token only when it is one whole `${VAR}`, would send as written: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
 
 ---
 
@@ -143,7 +143,7 @@ The run exchanges it for a 12-hour access token and **records both in the ledger
 Run the API server **before** provisioning, publicly reachable at `-public-url`:
 
 ```bash
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000   # unconfigured is fine
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000   # unconfigured is fine
 ```
 
 Slack verifies each app's events **Request URL** with a `url_verification` challenge, and the API answers it unconditionally — no engine, company config or credentials needed. That exemption is deliberate and safe: the response is a pure echo of the caller's own challenge, and it has to work because during provisioning the signing secret does not exist yet, so a verified handshake would be impossible and the app could never be installed. If an app's Request URL still shows *unverified* in its settings page, click **Verify** there.
@@ -326,7 +326,7 @@ identity.
 
 Only `message` / `app_mention` events that carry **new user-visible content** are delivered: regular messages, `thread_broadcast` replies, file shares (a share without a comment renders as `(shared file: …)` so the body is never blank), and other bots' messages (legacy `bot_message` events resolve the sender from `username` / `bot_id`).
 
-Slack reuses `type: "message"` for channel **bookkeeping**, and those events are skipped with a recorded skip reason (`NotificationSkipped` event) instead of waking the agent with an empty notification:
+Slack reuses `type: "message"` for channel **bookkeeping**, and those events are skipped instead of waking the agent with an empty notification — logged at debug as `slack_event_skipped` with the reason, not recorded as a `NotificationSkipped` event, because they concern nobody and a skip row for each would bury the drops that do matter (a seat no recipient matches, the routing gate, the rate valve) under a busy channel's ordinary traffic:
 
 - `message_changed` — edits, **including Slack's own link-unfurl edits** of a message an agent just posted
 - `message_deleted` — deletions

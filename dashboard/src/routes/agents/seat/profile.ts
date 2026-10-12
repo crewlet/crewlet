@@ -20,6 +20,7 @@ import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
+  SandboxEntry,
   ConfigRole,
   SeatActivityDay,
   ScheduleRow,
@@ -38,8 +39,8 @@ import type {
  * Turns, Memory and Schedules are properties of a RUNTIME, and a human seat
  * has none — it is addressable and never spawned — so a person's profile is
  * Overview, Work and Settings. A `tab=` naming a tab this kind does not have
- * (or one an earlier build had: `threads`, `cost`, `access`, `model`) lands on
- * Overview through `useTab`'s own fallback rather than on a blank strip.
+ * lands on Overview through `useTab`'s own fallback rather than on a blank
+ * strip.
  *
  * WORK IS ON BOTH: a person has tasks assigned to them and questions put to
  * them, which is the whole of what this product asks a person to do.
@@ -67,8 +68,8 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
  *
  * Three lookups rather than one, because a handle reaches this screen spelled
  * three ways: a link built from the roster carries the handle, a link built
- * from a config field carries the ROLE NAME (`seatPath` addresses a seat the
- * engine reported no handle for by name), and a pasted URL carries whatever
+ * from a config field carries the ROLE NAME (`seatPath` addresses a document
+ * entry that declares no handle by name), and a pasted URL carries whatever
  * somebody typed.
  */
 export function findSeat(index: OrgIndex, handle: string): Seat | null {
@@ -89,8 +90,7 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
  * line, the rule My work reads a report's day by. Asked only on the grant and
  * the owner, a lead opening a report's page was told the record needs
  * `fleet:operate` "or leading them" about somebody they lead, and their day
- * was never drawn. And where this client holds no hierarchy it cannot tell
- * ([leadsInLine]'s null), so it asks and the engine decides.
+ * was never drawn.
  */
 export function mayReadRecord(
   viewer: Pick<ViewerState, "operatesFleet" | "handle">,
@@ -99,7 +99,7 @@ export function mayReadRecord(
 ): boolean {
   if (viewer.operatesFleet) return true;
   if (isOwnSeat(viewer, handle)) return true;
-  return leadsInLine(index, viewer.handle, handle) !== false;
+  return leadsInLine(index, viewer.handle, handle);
 }
 
 /**
@@ -127,6 +127,17 @@ export function liveRow(
 ): AgentRow | undefined {
   const wanted = seat?.handle || handle;
   return agents.find((a) => a.id === wanted);
+}
+
+/**
+ * The detached coding run a seat has in flight, by its handle alone: the run's
+ * `agent_handle` names one seat, and every run carries one — a launch is made
+ * under the seat's own lease. The role name is never read. Matched on the role,
+ * a sibling's run parked on a question was drawn on this seat's profile and
+ * peek as THIS seat's question.
+ */
+export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): SandboxEntry | null {
+  return sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,12 +329,14 @@ export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
   const running = call.running_call;
   const room = Math.max(0, limit - (running ? 1 : 0));
   const done: FeedRow[] = (call.tool_executions ?? []).map((ex, i) => ({
-    key: `done-${ex.round ?? 0}-${i}`,
+    key: `done-${ex.round}-${i}`,
     at: ex.started_at ?? "",
-    name: ex.name ?? ex.tool ?? "tool",
-    words: callWords(ex.arguments ?? ex.args),
+    name: ex.name,
+    words: callWords(ex.arguments),
     ...(typeof ex.duration_ms === "number" ? { tookMs: ex.duration_ms } : {}),
-    failed: ex.failed === true || Boolean(ex.error),
+    // The rule `toolCalls` reads a failure by: a failed call always carries
+    // `success: false`, and `error` only when it said something.
+    failed: ex.success === false || Boolean(ex.error),
     running: false,
   }));
   const shown = room > 0 ? done.slice(-room) : [];

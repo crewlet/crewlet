@@ -24,14 +24,14 @@ func TestOnboardingPromptRendersHintAndCatalogue(t *testing.T) {
 	p := BuildOnboarding(engineer(), OnboardingInput{
 		Hint:          "Read the 'Onboarding' pages on your chain.",
 		ToolCatalogue: "- knowledge_search: Search team pages.",
-	})
+	}).Text
 	contains(t, p, "ONBOARDING phase", "## What to do",
 		"Read the 'Onboarding' pages on your chain.",
 		"## Available tools", "knowledge_search: Search team pages.")
 
 	// A whitespace-only catalogue is no catalogue: it would leave a heading
 	// over nothing.
-	bare := BuildOnboarding(engineer(), OnboardingInput{ToolCatalogue: "  \n"})
+	bare := BuildOnboarding(engineer(), OnboardingInput{ToolCatalogue: "  \n"}).Text
 	excludes(t, bare, "## What to do", "## Available tools")
 }
 
@@ -40,7 +40,7 @@ func TestOnboardingPromptRendersHintAndCatalogue(t *testing.T) {
 func TestSubagentPromptAppendsTheMandatedPreamble(t *testing.T) {
 	t.Parallel()
 	parent := "You are a web research worker. Return a concise summary."
-	p := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: parent})
+	p := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: parent}).Text
 	// Parent task framing first, runtime contract last.
 	order(t, p, parent, SubagentPreamble)
 }
@@ -65,13 +65,13 @@ func TestAWorkerIsToldHowToEndTheWayItActuallyCan(t *testing.T) {
 	t.Parallel()
 	withTool := BuildSubagent(engineer(), SubagentInput{
 		ParentSystemPrompt: "p", Submits: true,
-	})
+	}).Text
 	contains(t, withTool, "submit_result")
 	if strings.Contains(withTool, SubagentProseRule) {
 		t.Error("a worker with a submission tool was told to answer in prose")
 	}
 
-	withoutTool := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: "p"})
+	withoutTool := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: "p"}).Text
 	contains(t, withoutTool, "concise final answer")
 	if strings.Contains(withoutTool, "submit_result") {
 		t.Error("a worker with no submission tool was told to call it")
@@ -88,7 +88,7 @@ func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testin
 		ParentSystemPrompt: "PARENT-PROMPT-MARKER",
 		ToolCatalogue:      "- foo: Does foo.",
 		Skills:             cat,
-	})
+	}).Text
 	order(t, p, "PARENT-PROMPT-MARKER", "GITHUB-SUMMARY",
 		"## Available tools", SubagentPreamble)
 	// No identity section and no policies: a sub-agent is a worker, not a
@@ -106,8 +106,8 @@ func TestPhaseUserMessageWithoutLedgersIsJustTheTask(t *testing.T) {
 		{"do the thing", "## Task\ndo the thing"},
 		{"", "## Task\n(no description)"},
 	} {
-		if got := BuildPhaseUserMessage(UserMessage{TaskDescription: tc.task}); got != tc.want {
-			t.Errorf("BuildPhaseUserMessage(%q) = %q, want %q", tc.task, got, tc.want)
+		if got := BuildPhaseUserMessage(UserMessage{TaskDescription: tc.task}).Text; got != tc.want {
+			t.Errorf("BuildPhaseUserMessage(%q).Text = %q, want %q", tc.task, got, tc.want)
 		}
 	}
 }
@@ -118,7 +118,7 @@ func TestPhaseUserMessageReadsChronologically(t *testing.T) {
 		TaskDescription:     "THE-ASK",
 		PriorWork:           "PRIOR-WORK",
 		ConversationHistory: "CONVERSATION-HISTORY",
-	})
+	}).Text
 	// Earlier turns of this conversation, then the ask, then earlier rounds
 	// of THIS turn — which happened after the ask arrived. The newest thing
 	// said sits nearest the model's answer.
@@ -133,7 +133,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	withPrior := BuildPhaseUserMessage(UserMessage{
 		TaskDescription: "post the summary",
 		PriorWork:       "### Iteration 1\nExecute called:\n- post_message(...) → success",
-	})
+	}).Text
 	if !strings.HasPrefix(withPrior, "## Task\npost the summary") {
 		t.Error("the ask must lead when there is no conversation history")
 	}
@@ -143,7 +143,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	withHistory := BuildPhaseUserMessage(UserMessage{
 		TaskDescription:     "any update?",
 		ConversationHistory: "### 2026-08-20T09:30\nYou replied: shipped it",
-	})
+	}).Text
 	contains(t, withHistory,
 		"You replied: shipped it",
 		// The block is worse than absent if the model reads it as a script

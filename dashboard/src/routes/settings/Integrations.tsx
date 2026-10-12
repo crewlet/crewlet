@@ -1,21 +1,24 @@
 /**
  * The third-party tools agents work on, and whether each one is working.
  *
- * Laid out the way the console's own Integrations page is: grouped by the
- * CAPABILITY a tool provides (messaging, tasks, code, observability), one
- * bordered list per group, one row per TOOL with its mark, its name and one
- * line on what it is for on the left and its state on the right. Every tool
- * this build serves is listed whether or not this company set it up, so the
- * reader sees the whole catalogue rather than only the part they configured.
+ * Laid out as a GRID OF TILES, the shape the rest of the product's catalogues
+ * take: one tile per TOOL with its mark, its name and the engine's word for
+ * its state, one sentence — what is owed when something is, what the tool is
+ * for otherwise — and a foot carrying a quiet count and ONE action
+ * ([IntegrationTile]). Connected tools come first. Every tool this build
+ * serves is listed whether or not this company set it up, so the reader sees
+ * the whole catalogue rather than only the part they configured, and a last
+ * tile points at everything else an agent can reach: an MCP server.
  *
- * A row is the tool, not the engine's plumbing for it. Atlassian is one row
+ * A tile is the tool, not the engine's plumbing for it. Atlassian is one tile
  * although the engine reaches it over three surfaces (Jira, Confluence and
- * the Forge relay), because that is how the company thinks of it; the row's
+ * the Forge relay), because that is how the company thinks of it; the tile's
  * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
- * the answer's `tools`), and its status line names the surface that is not
- * ready. The counts, the inbound paths and the reconcile
- * findings are still here, folded under a per-row disclosure, so an operator
- * who needs to know why can open it without the screen leading with it.
+ * the answer's `tools`), and its sentence names the surface that is not
+ * ready. The counts, the inbound paths, the reconcile findings and every
+ * agent's own step are on the tool's own page (`#/settings/integrations/{kind}`,
+ * [EntryRow]), so an operator who needs to know why can open it without the
+ * catalogue leading with it.
  *
  * Every count is THREE-VALUED (a number, zero, or `null` meaning "this
  * process cannot say"), and so is the reconcile block: `null` is a process
@@ -47,8 +50,10 @@ import {
   PlusGlyph,
   RotateCwGlyph,
   SettingsGlyph,
+  ShieldGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
+import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
@@ -66,10 +71,11 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
-import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import { useManagedConfig } from "~/lib/useWriteAccess.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { indexOrg, seatLookup, useSeatBadgeOf } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -287,7 +293,7 @@ function actorLabel(actor: string | undefined): string {
   }
 }
 
-/** A tool's rolled-up state: the tag on the right and the one line under the name. */
+/** A tool's rolled-up state: the pill under its name, and what is owed when something is. */
 export interface EntryState {
   /**
    * The word in the badge: the engine's roll-up label — a phase's own label,
@@ -297,8 +303,8 @@ export interface EntryState {
    * grid now, and a tile with no pill under its name is a hole in a row of
    * them that a reader has to explain to themself; the engine's "Not in use"
    * is drawn in the neutral outline, which is the one register on this
-   * screen that reports nothing wrong. EMPTY only when the answer carries no
-   * roll-up for an unconfigured tool, which is a node too old to send one.
+   * screen that reports nothing wrong. EMPTY only while no roll-up for an
+   * unconfigured tool is in hand — before the integrations answer arrives.
    */
   tag: string;
   tone: Tone;
@@ -338,9 +344,9 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
  * ingress override, its own reading of the setup listing — and the copy had
  * drifted: a card being disconnected drew neutral while the surface it named
  * drew amber. What is left is presentation: which tone and outline a state
- * takes, and that a tool with no configured surface gets no badge at all (the
- * Connect button beside it is the whole message, and a chip saying "not in
- * use" on every unconfigured row reads as a fault list).
+ * takes, and that a tool with no configured surface takes the roll-up's word
+ * only when it is "Not in use" — in the neutral outline, see [EntryState.tag] —
+ * and never a state a surface the rows no longer carry would draw.
  */
 export function entryState(
   entry: Entry,
@@ -489,16 +495,18 @@ export function integrationFacts(
       value: (
         <NumberCell
           value={counted((r) => r.inbound)}
-          title="deliveries this engine verified and stored"
+          title="deliveries that reached a seat here: verified webhooks, and chat posts read off a socket — each counted once, where it arrived"
         />
       ),
       note: covered,
     },
     {
-      // NO NOTE ON THE OTHER TWO, although the same window covers them: a
-      // fact line whose every value carries the same footnote is one nobody
-      // reads, which is what `Fact.note` says about itself. The three counts
-      // are read together and the first one states what they all cover.
+      // NO NOTE ON THE OTHER TWO, although the same window covers them — the
+      // engine counts the drops and merges over exactly the window
+      // `traffic_since` names, never over a page of its own: a fact line
+      // whose every value carries the same footnote is one nobody reads,
+      // which is what `Fact.note` says about itself. The three counts are
+      // read together and the first one states what they all cover.
       label: "Dropped",
       value: (
         <NumberCell
@@ -534,12 +542,13 @@ export function integrationFacts(
 /**
  * The findings the report did NOT summarise.
  *
- * The engine promotes the reported finding to index 0 (integration.Promote),
- * so dropping element zero would usually be right — and "usually" is the
- * problem: a row written by a peer on an older build carries the vendor's own
- * order, and a rolling upgrade puts exactly those rows here. Matching by
- * identity is correct for both, and it removes the positional assumption
- * rather than depending on it.
+ * BY IDENTITY, NOT BY POSITION. A pass's findings are stored with the reported
+ * one first (integration.Promote), but the report a row carries is not always
+ * the one they were classified from: while a disconnect is pending,
+ * State.Reported substitutes "this integration is being removed", and the
+ * findings beside it are the last pass's, none of them the headline. Dropping
+ * element zero would then hide a real finding; matching the detail the
+ * headline carries drops exactly the one it stands for, or none.
  *
  * The report's detail can carry a count suffix, because Classify appends
  * "(and 2 more)" when several findings share the winning kind, so that is
@@ -608,12 +617,12 @@ export function Reconcile({
   // next and the findings say what is actually wrong, so an operator who
   // fixes the first should not wait a full pass to learn there was a second.
   //
-  // BY IDENTITY, NOT BY POSITION. This dropped element zero, on the
-  // assumption that the reported finding is first — which the engine now
-  // guarantees (integration.Promote) but a row written by a peer on an
-  // older build does not, and a rolling upgrade puts exactly those rows on
-  // this screen. Whenever the worst finding was not already first, a real
-  // finding was hidden and the headline was re-printed as "1 more finding".
+  // BY IDENTITY, NOT BY POSITION. A pass's findings are stored with the
+  // reported one first (integration.Promote), but while a disconnect is
+  // pending the report is State.Reported's "this integration is being
+  // removed" and the findings beside it are the last pass's, none of them the
+  // headline — so dropping element zero would hide a real finding and
+  // re-print the headline as "1 more finding". See withoutHeadline.
   //
   // Matched on the DETAIL, which is what the report carries and what this
   // list renders, so the comparison is between the two strings actually on
@@ -1026,7 +1035,7 @@ function credentialFindings(present: Present[]): ReconcileFinding[] {
 /**
  * A tile's one action, from what the engine says about the tool.
  *
- * ONE, because a tile in a grid of eight is read in one glance, and a card
+ * ONE, because a tile in a grid is read in one glance, and a card
  * that carried a state tag, a Connect, a Disconnect, a settings square and a
  * chevron asked that glance to parse five controls to learn that nothing was
  * owed. Everything else a tool offers — its settings, its agents' own apps,
@@ -1075,12 +1084,12 @@ export function actionFor(
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return MANAGE;
   // `form_complete` is the engine's own count of unanswered requirements,
-  // company block and seats together. `satisfied` folds the seats' OWN acts
-  // in too — a GitHub seat whose app is created at GitHub, from its row on
-  // the tool's page — so it is only the fallback for a node too old to send
-  // the first: a Continue that opens a form with nothing in it to answer is a
-  // smaller fault than a form nobody can reach.
-  if (configured.some((t) => (t.form_complete ?? t.satisfied) === false)) return CONTINUE;
+  // company block and seats together, and it decides — never `satisfied`,
+  // which folds the seats' OWN acts in too (a GitHub seat whose app is
+  // created at GitHub, from its row on the tool's page): a Continue that
+  // opened a form with nothing in it to answer would offer work there is no
+  // box for.
+  if (configured.some((t) => !t.form_complete)) return CONTINUE;
   if (tools.some((t) => !t.configured)) return CONTINUE;
   return MANAGE;
 }
@@ -1203,12 +1212,19 @@ export function SeatStep({
   app,
   toolKey,
   seat,
+  managed = null,
 }: {
   /** The tool in the reader's own words, from the catalogue. */
   app: string;
   /** The engine surface this roster belongs to: what the route is keyed on. */
   toolKey: string;
   seat: SetupSeatState;
+  /**
+   * Why the company document cannot be changed from here — another system
+   * manages it (ADR-0030) — or null. An app is recorded on the seat, so a
+   * managed document holds its creation BEFORE the host makes one.
+   */
+  managed?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState("");
@@ -1258,7 +1274,15 @@ export function SeatStep({
 
   return (
     <>
-      <Button size="small" variant="primary" disabled={busy} onClick={() => void create()}>
+      <Button
+        size="small"
+        variant="primary"
+        disabled={busy}
+        disabledReason={managed ?? undefined}
+        onClick={() => {
+          if (!managed) void create();
+        }}
+      >
         {busy ? `Opening ${app}` : `Create app on ${app}`}
       </Button>
       {refused && (
@@ -1337,12 +1361,21 @@ export function ActionButton({
   entry,
   action,
   blocked,
+  managed = null,
   onOpen,
 }: {
   entry: Entry;
   action: TileAction;
   /** From [formBlocked]: why the form cannot open, for the three that open it. */
   blocked?: string;
+  /**
+   * Why the company document cannot be changed from here (ADR-0030), or
+   * null. It holds Connect and Continue, which write the document, and NOT
+   * Rotate token: a rotation seals a value the document already names and
+   * changes nothing in it, which is the break-glass a managed deployment
+   * keeps for a person.
+   */
+  managed?: string | null;
   onOpen: () => void;
 }) {
   switch (action.kind) {
@@ -1369,23 +1402,25 @@ export function ActionButton({
           Learn more
         </ButtonLink>
       );
-    default:
+    default: {
+      const held = blocked ?? (action.kind === "rotate" ? undefined : (managed ?? undefined));
       return (
         <Button
           size="small"
           variant={action.kind === "rotate" ? "primary" : "secondary"}
-          disabledReason={blocked}
+          disabledReason={held}
           // NAMED FOR THE TOOL, with the visible label at its start (the
-          // label is in the name, WCAG 2.5.3): a grid of eight tiles is eight
-          // "Connect" buttons to a screen reader's list of controls.
+          // label is in the name, WCAG 2.5.3): a grid of tiles is a column of
+          // "Connect" buttons in a screen reader's list of controls.
           aria-label={ACTION_NAMES[action.kind](entry.name)}
           onClick={() => {
-            if (!blocked) onOpen();
+            if (!held) onOpen();
           }}
         >
           {action.label}
         </Button>
       );
+    }
   }
 }
 
@@ -1439,7 +1474,7 @@ export function asSentence(reason: string): string {
  * THE SENTENCE IS WHAT IS OWED WHEN SOMETHING IS, and what the tool does
  * otherwise. The engine's roll-up carries a reason exactly when a person or
  * the engine has something left to do, and that is the sentence a reader
- * scanning eight tiles came for; on a working tool the reason is empty and the
+ * scanning the tiles came for; on a working tool the reason is empty and the
  * tile says what the tool is for, which is what tells a reader the engine
  * serves it at all.
  */
@@ -1450,6 +1485,7 @@ export function IntegrationTile({
   sections,
   trafficKnown,
   guarded,
+  managed = null,
   onOpen,
 }: {
   entry: Entry;
@@ -1458,6 +1494,8 @@ export function IntegrationTile({
   sections: { name: string; tool: SetupToolState; seat?: string }[];
   trafficKnown: boolean;
   guarded: boolean;
+  /** Why the company document cannot be changed from here, or null; see [ActionButton]. */
+  managed?: string | null;
   /** Open the settings form for this tool, for the action the tile carries. */
   onOpen: (action: TileAction, reason: string) => void;
 }) {
@@ -1476,7 +1514,10 @@ export function IntegrationTile({
     >
       <div className="int-tile-head">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          {/* DRAINED, NOT HIDDEN, when nothing is set up: the kit's word for
+              "available but not connected", read at a glance down the grid
+              without dimming the tile's text — see `.int-tile.is-absent`. */}
+          <VendorMark vendor={entry.vendor} size="lg" muted={present.length === 0} />
         </span>
         <span className="int-tile-title">
           <h2 className="int-name" id={nameID}>
@@ -1496,6 +1537,7 @@ export function IntegrationTile({
           entry={entry}
           action={action}
           blocked={formBlocked(sections, guarded)}
+          managed={managed}
           onOpen={() => onOpen(action, reason)}
         />
       </div>
@@ -1523,11 +1565,15 @@ export function EntryRow({
   sections,
   publicBase,
   guarded = false,
+  managed = null,
+  avatarOf,
   onOpen,
   onDisconnect,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
+  /** How an agent on the tool's roster is drawn, by handle, off the chart. */
+  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
   /** The answer's `tools`: the engine's roll-up of every tool. */
   rollups?: IntegrationTool[];
   /**
@@ -1539,6 +1585,13 @@ export function EntryRow({
   sections?: { name: string; tool: SetupToolState; seat?: string }[];
   /** Whether the setup listing was refused, for [formBlocked]. */
   guarded?: boolean;
+  /**
+   * Why the company document cannot be changed from here — another system
+   * manages it (ADR-0030) — or null. It holds what writes the document
+   * (Connect, Continue, Disconnect, an agent's app) and leaves the settings
+   * form and Rotate token, through which a credential is rotated.
+   */
+  managed?: string | null;
   /**
    * Open the settings form — for the action named, or for the settings square
    * when none is. Absent where nothing may open it.
@@ -1583,11 +1636,19 @@ export function EntryRow({
           entry={entry}
           action={owed}
           blocked={blocked}
+          managed={managed}
           onOpen={() => onOpen(owed, asSentence(state.reason ?? ""))}
         />
       )}
       {!absent && onDisconnect && (
-        <Button size="small" variant="ghost" onClick={onDisconnect}>
+        <Button
+          size="small"
+          variant="ghost"
+          disabledReason={managed ?? undefined}
+          onClick={() => {
+            if (!managed) onDisconnect();
+          }}
+        >
           Disconnect
         </Button>
       )}
@@ -1600,7 +1661,7 @@ export function EntryRow({
     return (
       <div className="int-card int-card-absent">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          <VendorMark vendor={entry.vendor} size="lg" muted />
         </span>
         <span className="int-heading">
           <span className="int-name">{entry.name}</span>
@@ -1625,7 +1686,7 @@ export function EntryRow({
           onClick={() => setOpen((was) => !was)}
         >
           <span className="int-brand" aria-hidden>
-            <VendorMark vendor={entry.vendor} />
+            <VendorMark vendor={entry.vendor} size="lg" />
           </span>
           <span className="int-heading">
             <span className="int-name">Agents and surfaces</span>
@@ -1715,7 +1776,13 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <SeatAvatar name={seat.name || seat.handle} kind="agent" size="sm" decorative />
+                <SeatAvatar
+                  name={seat.name || seat.handle}
+                  kind="agent"
+                  avatar={avatarOf?.(seat.handle)}
+                  size="sm"
+                  decorative
+                />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -1785,7 +1852,9 @@ export function EntryRow({
                 </div>
                 {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
                     take the full width of the row the way a finding does. */}
-                {roster && <SeatStep app={entry.name} toolKey={roster.key} seat={seat} />}
+                {roster && (
+                  <SeatStep app={entry.name} toolKey={roster.key} seat={seat} managed={managed} />
+                )}
               </li>
             ))}
           </ul>
@@ -1832,8 +1901,8 @@ function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
  * direction is the bad one — a kind this build had not heard of would be
  * treated as an advisory and could then hide a broken agent.
  *
- * An ABSENT phase is not an advisory. A node older than the field sends none,
- * and "cannot say" must read as a fault so the badge stays honest.
+ * An ABSENT phase is not an advisory: "cannot say" must read as a fault so the
+ * badge stays honest.
  */
 function advisory(f: ReconcileFinding): boolean {
   return f.phase === "ready";
@@ -1970,6 +2039,15 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  * one of them is a click to the event's own page. The `#/model` screen fetched
  * a payload per row and paid sixty-one round trips for one screen.
  */
+/**
+ * A delivery row's event, as the provider named it: the row's type without the
+ * engine's own filing prefix, which says which edge it came in on — a webhook
+ * route, the Forge relay, or a chat socket.
+ */
+export function deliveryEvent(type: string): string {
+  return type.replace(/^(webhook|forge|socket):/, "");
+}
+
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
@@ -2050,12 +2128,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Event",
                 shrink: true,
                 sortValue: (e) => e.type,
-                // `webhook:` and `forge:` are the engine's own filing
-                // prefixes, and the provider's event name is what an
-                // operator is matching against their own console.
-                cell: (e) => (
-                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
-                ),
+                // `webhook:`, `forge:` and `socket:` are the engine's own
+                // filing prefixes — which edge a delivery came in on — and
+                // the provider's event name is what an operator is matching
+                // against their own console.
+                cell: (e) => <code className="inline nowrap">{deliveryEvent(e.type)}</code>,
               },
               {
                 key: "summary",
@@ -2869,7 +2946,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                         <div className="int-row-badges">
                           {row?.reconcile?.phase && (
                             <Tag variant={phaseTone(row.reconcile.phase)} appearance="outline">
-                              {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
+                              {row.reconcile.phase_label}
                             </Tag>
                           )}
                           {row && <SurfaceBadges row={row} />}
@@ -2958,6 +3035,14 @@ type Show = "all" | "connected" | "available";
 
 export function Integrations({ kind }: { kind?: string }) {
   const viewer = useViewer();
+  // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
+  // who manages it; a credential's rotation stays open.
+  const managed = useManagedConfig();
+  // HOW EACH AGENT IS DRAWN on a tool's roster and in its disconnect dialog,
+  // off the chart: both are handed the resolver rather than reaching for the
+  // store, so they draw in a test with no provider above them.
+  const badgeOf = useSeatBadgeOf();
+  const avatarOf = useCallback((handle: string) => badgeOf(handle).avatar, [badgeOf]);
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -3029,7 +3114,7 @@ export function Integrations({ kind }: { kind?: string }) {
     apps: { handle: string; name: string; url: string }[];
     appPath?: string;
   } | null>(null);
-  // WHICH HALF OF THE CATALOGUE IS SHOWN. Per visit: it narrows eight tiles,
+  // WHICH HALF OF THE CATALOGUE IS SHOWN. Per visit: it narrows the tiles,
   // and remembering it would open the screen on a filter the reader has
   // forgotten setting, hiding the tile they came for.
   const [show, setShow] = useState<Show>("all");
@@ -3120,15 +3205,22 @@ export function Integrations({ kind }: { kind?: string }) {
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
-      {/* ALWAYS SET: `api.external_url` is Tier A, required on every node
-          serving this screen and resolved before the file is decoded, so a
-          node that answers at all has an address — and the states that
-          described its absence can no longer occur. */}
+      {/* ALWAYS SET: the address vendors deliver to is Tier A — the public
+          listener's `api.public.external_url` where one is configured, and
+          `api.external_url` otherwise (`config_path` names which) — required
+          on every node serving this screen and resolved before the file is
+          decoded, so a node that answers at all has an address, and the
+          states that described its absence can no longer occur. */}
       {setup.base && (
         <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
           <span>
             Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
           </span>
+        </Callout>
+      )}
+      {managed !== null && (
+        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+          {managed}
         </Callout>
       )}
       {setup.guarded && (
@@ -3191,6 +3283,7 @@ export function Integrations({ kind }: { kind?: string }) {
           stuck={dropping.stuck || undefined}
           apps={dropping.apps}
           appPath={dropping.appPath}
+          avatarOf={avatarOf}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows
@@ -3230,7 +3323,7 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding eight tiles is not empty, and what the sentence adds —
+            holding a tile for every tool is not empty, and what the sentence adds —
             that only a schedule can wake a seat until then — is worth reading
             before the list, not after it. */}
         {data && !kind && configured.length === 0 && (
@@ -3272,6 +3365,7 @@ export function Integrations({ kind }: { kind?: string }) {
                 sections={sectionsFor(entry, setup.byKey)}
                 trafficKnown={data?.traffic_known ?? false}
                 guarded={setup.guarded}
+                managed={managed}
                 onOpen={(action, reason) => openForm(entry, action, reason)}
               />
             ))}
@@ -3310,6 +3404,8 @@ export function Integrations({ kind }: { kind?: string }) {
             sections={sectionsFor(focus, setup.byKey)}
             publicBase={setup.base?.value}
             guarded={setup.guarded}
+            managed={managed}
+            avatarOf={avatarOf}
             onOpen={(action, reason) => openForm(focus, action, reason)}
             onDisconnect={() =>
               setDropping({

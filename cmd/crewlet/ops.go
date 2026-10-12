@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -71,12 +72,28 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err = refuseScratchStore(boot, "crewlet migrate",
+		"There is nothing to migrate: `crewlet run` creates it fresh, at this "+
+			"binary's schema, every time it starts."); err != nil {
+		return err
+	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
+		// WHERE THE ENGINE PUTS IT. Left out, the store derives the
+		// replicated estate's path from store.path alone — so on a node whose
+		// store.replicated_path names another volume, this command
+		// reported and migrated a fresh database it created beside
+		// store.path, and left the one the engine opens exactly as far
+		// behind as it found it.
+		ReplicatedPath: boot.Store.ReplicatedPath,
+		BusyTimeout:    boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
-
+	// BOTH FILES — the node's own and the replicated estate `crewlet run`
+	// opens beside it. Every node that reaches here holds both: the only
+	// node that holds no replicated estate is one without `data`, whose
+	// store Tier A requires to be scratch, and the scratch store is refused
+	// above — so this creates no file for a node that would never open it.
 	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
@@ -91,9 +108,9 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 				"already applied every migration this binary carries, so a node "+
 				"that is up is a node with nothing pending.")
 	}
-	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
-	// independent sequences, and a report that named one of them would be
-	// a deploy gate that passes while the other is behind.
+	// BOTH FILES, ALWAYS BOTH. A node is two databases with two independent
+	// sequences, and a report that named one of them would be a deploy gate
+	// that passes while the other is behind.
 	var waiting int
 	for _, sch := range schemas {
 		waiting += len(sch.Pending)
@@ -124,9 +141,10 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 
 	// OPENING IS WHAT MIGRATES. There is deliberately no second code path
 	// that applies files: a migrator the engine does not use is one that
-	// can disagree with it about what "applied" means. One Open brings up
-	// both estates, so both sequences run here.
-	db, err := store.Open(ctx, boot.Store.Path, opts)
+	// can disagree with it about what "applied" means. The node's own file
+	// and its replicated estate are opened through the store's own opens,
+	// as `crewlet run` opens them, so both sequences run here.
+	db, err := store.OpenNode(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// NO ROUTE AROUND THIS ONE, and that is correct: migrating the
 		// schema under a live engine is what the lock exists to prevent,
@@ -137,10 +155,20 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	// ONE LOG'S POOL, because this command runs no apply loop: the count
+	// sizes the writers the engine's apply loops pin, none of which run
+	// here, and the schema a file migrates to is the same whatever it is.
+	replicated, err := db.OpenReplicated(ctx, 1)
+	if err != nil {
+		return engineHoldsTheStore(err, bootstrapPath,
+			"Stop `crewlet run` on this node and re-run — a schema change "+
+				"under a live engine is exactly what the lock prevents.")
+	}
+
 	for _, sch := range schemas {
 		handle := db
 		if sch.Estate == store.EstateReplicated {
-			handle = db.Replicated()
+			handle = replicated
 		}
 		now, err := handle.AppliedMigrations(ctx)
 		if err != nil {
@@ -178,11 +206,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 // over; room before then is made by raising the ceiling — a seat's through
 // `PUT /config/roles/{handle}`, the company's through `PATCH /config` — which
 // is a write like any other, recorded under its author.
-func runBudgets(args []string, stdout, stderr io.Writer) error {
+func runBudgets(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "show":
-		return budgetsShow(rest, stdout, stderr)
+		return budgetsShow(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
 			"usage: crewlet budgets show [<config.yaml>] [-url URL]")
@@ -205,8 +233,8 @@ type budgetWindow struct {
 }
 
 // budgetsShow prints what each scope has spent, window by window.
-func budgetsShow(args []string, stdout, stderr io.Writer) error {
-	client, err := nodeClientFor(args, "budgets show", stderr, nil)
+func budgetsShow(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	client, err := nodeClientFor(environ, args, "budgets show", stderr, nil)
 	if err != nil {
 		return err
 	}
@@ -235,16 +263,17 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	// another zone would otherwise read "2026-09-23" as their own day.
 	fmt.Fprintf(stdout, "Windows on the company clock: %s\n\n", dashIfEmpty(answer.Timezone))
 	// STATE is the engine's own judgement (ok, near, refusing), and
-	// REFUSING SINCE is the gate's record of saying no: a refused charge
-	// increments nothing, so a seat charged in rounds stalls short of its
-	// ceiling and USED against LIMIT alone would read as headroom.
+	// LAST REFUSED is the gate's record of when it last said no, under a
+	// window that is still refusing — see [lastRefused]. USED carries the round
+	// the gate refused, which the vendor billed, so a refusing window reads
+	// past its LIMIT.
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tREFUSING SINCE")
+	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tLAST REFUSED")
 	rows := func(scope string, windows []budgetWindow) {
 		for _, win := range windows {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 				scope, win.Period, win.Window, win.Used, limitOrUnlimited(win.Limit),
-				win.State, dashIfEmpty(win.ResetsAt), dashIfEmpty(win.RefusedAt))
+				win.State, dashIfEmpty(win.ResetsAt), lastRefused(win))
 		}
 	}
 	rows("org", answer.Org.Windows)
@@ -259,6 +288,30 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 		rows(seat.Handle, seat.Windows)
 	}
 	return w.Flush()
+}
+
+// lastRefused is a window's LAST REFUSED cell: when the gate last said no,
+// while the window is still refusing, and a dash otherwise.
+//
+// LAST, NOT SINCE: the counter moves the stamp to every refusal it records
+// ([coord.WindowUsage.RefusedAt]) — a refused charge, a call a turn held, a
+// parked delivery — so the instant is the latest one, and a column that said
+// "since" claimed the window had been refusing for less time than it had. It
+// keeps the latest on purpose: an admitted charge clears only the stamps it
+// read, so a refusal that lands between its write and its clear survives only
+// because it carries a newer instant.
+//
+// THE STATE DECIDES, NEVER THE STAMP, the rule every dashboard surface takes. A
+// stamp is cleared only by an admitted charge or by the window turning over,
+// so after a ceiling is raised it outlives the refusal: the window reads ok or
+// near and still carries refused_at. Printed regardless, the row said the
+// window was refusing beside a state saying it was not, and an operator who
+// believed the column went to raise a ceiling that had already been raised.
+func lastRefused(win budgetWindow) string {
+	if win.State != string(types.BudgetRefusing) {
+		return "-"
+	}
+	return dashIfEmpty(win.RefusedAt)
 }
 
 // worthPrinting reports whether a seat has spent anything or is capped in any

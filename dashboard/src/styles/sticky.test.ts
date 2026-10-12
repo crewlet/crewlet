@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import { STYLES, sheetRules } from "../test/sheets.ts";
 
 /**
  * WHAT STOPS WHERE, when a screen is scrolled.
@@ -33,35 +33,21 @@ import { expect, test } from "vitest";
  * but the toolbar is the bug itself.
  */
 
-const STYLES = fileURLToPath(new URL(".", import.meta.url));
-const sheets = () =>
-  readdirSync(STYLES)
-    .filter((f) => f.endsWith(".css"))
-    .map((f) => [f, readFileSync(join(STYLES, f), "utf8")] as const);
-
-/** Every rule that sticks, as `selector -> its own `top` declaration`. */
+/** Every rule that sticks, as `file selector -> its own `top` declaration`. */
 function stickyTops(): Map<string, string> {
   const out = new Map<string, string>();
-  for (const [file, css] of sheets()) {
-    // SPLIT ON THE CLOSING BRACE rather than matching whole rules. A single
-    // `/\}\s*([^{}]*)\{([^{}]*)\}/g` has to consume the `}` that precedes a
-    // rule in order to anchor on it, which leaves the next rule without one —
-    // so it silently reports every OTHER rule, and this gate came back empty
-    // the first time it was written that way.
-    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
-    for (const chunk of bare.split("}")) {
-      const at = chunk.lastIndexOf("{");
-      if (at < 0) continue;
-      const selector = chunk.slice(0, at).trim().replace(/\s+/g, " ");
-      const body = chunk.slice(at + 1);
-      if (!selector || selector.startsWith("@")) continue;
-      if (!/position:\s*sticky/.test(body)) continue;
-      const top = /(?:^|;)\s*top:\s*([^;]+);/.exec(body);
-      // A sticky rule with no `top` at all is not in this conversation — it is
-      // pinning a column with `left`, or it is a rule that only turns stickiness
-      // off. Named with its file so a failure says where to look.
-      if (top) out.set(`${file} ${selector}`, top[1]!.trim());
-    }
+  // THE SHARED WALK (`test/sheets.ts`), which reads the first rule inside an
+  // at-rule too. This file's own copy took everything before a rule's brace
+  // as its selector, so the first rule of every `@media` and `@container`
+  // block came out as `@media (…) { .x`, was discarded as an at-rule, and a
+  // band that stuck at 0 there was invisible to this gate.
+  for (const { file, selector, body } of sheetRules()) {
+    if (!/position:\s*sticky/.test(body)) continue;
+    const top = /(?:^|;)\s*top:\s*([^;]+);/.exec(body);
+    // A sticky rule with no `top` at all is not in this conversation — it is
+    // pinning a column with `left`, or it is a rule that only turns stickiness
+    // off. Named with its file so a failure says where to look.
+    if (top) out.set(`${file} ${selector}`, top[1]!.trim());
   }
   return out;
 }

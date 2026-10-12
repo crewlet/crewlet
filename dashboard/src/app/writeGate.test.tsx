@@ -202,6 +202,8 @@ const NOBODY: ViewerState = {
   anonymous: true,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 const READERS: readonly {

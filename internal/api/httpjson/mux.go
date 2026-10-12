@@ -5,6 +5,24 @@ import (
 	"net/http"
 )
 
+// Router is what a surface mounts its routes on: the two registration verbs of
+// [net/http.ServeMux], and nothing else.
+//
+// AN INTERFACE rather than the mux itself so the API can KEEP every pattern a
+// surface mounts. Both of a node's listeners serve one route table behind a
+// partition that is a predicate over paths, and only the table says which
+// paths exist, so the table is what the listener cases walk whole rather than
+// a sample somebody chose. A surface's own tests still hand it a plain
+// *http.ServeMux.
+//
+// Declared here rather than by each consumer because the API's own interface
+// over a mountable surface names it in a method signature, and two interfaces
+// with one method set are still two types there.
+type Router interface {
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 // Mux serves mux with the mux's OWN refusals answered as JSON.
 //
 // # Why it exists
@@ -74,13 +92,17 @@ func (m *muxRefusal) WriteHeader(status int) {
 // NoRoute writes the answer for a route this node does not serve: `404
 // no_route`, naming the method and the path.
 //
-// THE MUX'S OWN ANSWER, and exported so a route that IS registered but serves
-// a half this company does not run — the work surface on a company whose
-// tracker is a vendor's, the operator's MCP surface with no native backend —
-// answers in exactly the bytes the route's absence would have. A handler that
-// wrote its own "not served here" would be the one refusal a client told apart
-// from a missing route, and a route that is absent by configuration and one
-// that is absent by build must read the same.
+// THE MUX'S OWN ANSWER, and exported for the two other answers that must be
+// INDISTINGUISHABLE from it. A route that IS registered but serves a half this
+// company does not run — the work surface on a company whose tracker is a
+// vendor's, the operator's MCP surface with no native backend — answers in
+// exactly the bytes the route's absence would have: a handler that wrote its
+// own "not served here" would be the one refusal a client told apart from a
+// missing route, and a route that is absent by configuration and one that is
+// absent by build must read the same. And the public listener's refusal of a
+// route that exists on api.port is this answer byte for byte, because a
+// different wording there would tell anybody on the internet that a private
+// admin port exists and which paths it serves.
 func NoRoute(w http.ResponseWriter, r *http.Request) {
 	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
 		"detail": fmt.Sprintf("this node serves nothing at %s %s",

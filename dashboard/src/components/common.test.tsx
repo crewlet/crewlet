@@ -106,7 +106,7 @@ test("a seat two rounds in reads as its third round", () => {
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
-test("a seat the engine reported no handle for still links to its page", () => {
+test("a seat card links through seatPath, so an empty handle still reaches a page", () => {
   const { container } = render(
     <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
   );

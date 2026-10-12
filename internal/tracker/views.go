@@ -87,12 +87,12 @@ type ViewPrior struct {
 // changed hands or appeared since. It is also where the save's scope comes
 // from — see [Writer.WriteView] — so one read serves both.
 func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return ViewPrior{}, fmt.Errorf("tracker: this writer has no store, so it "+
 			"cannot read what saving view %s would replace", id)
 	}
 	var prior ViewPrior
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `
 			SELECT owner, container_kind, container_id FROM tracker_views
 			WHERE id = ?`, id)

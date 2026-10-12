@@ -133,8 +133,22 @@ func TestAnUnreadableBudgetLeavesTheSpawnerOff(t *testing.T) {
 	}
 }
 
+// A SPENT BUDGET REFUSES THE SPAWN TOO. A reader answering zero is a capped
+// seat with no room left — a seat nothing caps is handed no reader — and
+// subagent reads a ParentRemaining of zero as uncapped, so passing it on gave
+// an exhausted seat's fan-out no slice at all.
+func TestASpentBudgetLeavesTheSpawnerOff(t *testing.T) {
+	t.Parallel()
+	r := spawnRunner(t, &runner.SubagentConfig{
+		Limits: shipped(), Remaining: headroom{left: 0},
+	})
+	if got := executeOffers(t, r); slices.Contains(got, subagent.ToolName) {
+		t.Error("a seat with no budget left was offered an uncapped spawner")
+	}
+}
+
 // A READABLE ONE DOES NOT. The ordinary case, and the half that proves the
-// test above is not passing for the wrong reason.
+// tests above are not passing for the wrong reason.
 func TestAReadableBudgetKeepsTheSpawner(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{

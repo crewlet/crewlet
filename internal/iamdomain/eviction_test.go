@@ -96,7 +96,7 @@ func TestANodeGateIsTheDeploymentsAndLandsAtItsOwnPosition(t *testing.T) {
 // standingOf is node's one eviction row on this log, as the trim lists it.
 func standingOf(t *testing.T, rig *writeRig, node string) statelog.EvictionRow {
 	t.Helper()
-	rows, err := iamdomain.Domain{}.Evictions(t.Context(), rig.db)
+	rows, err := iamdomain.Domain{}.Evictions(t.Context(), rig.db.Reader())
 	if err != nil {
 		t.Fatalf("list the evictions: %v", err)
 	}
@@ -118,7 +118,7 @@ func standingOf(t *testing.T, rig *writeRig, node string) statelog.EvictionRow {
 func evictedOnLog(t *testing.T, rig *writeRig, node string) (bool, bool) {
 	t.Helper()
 	evicted, found, err := statelog.EvictedOnLog(t.Context(), iamdomain.Domain{},
-		statelog.StandingOf(rig.log, rig.verifier), node)
+		iamdomain.Domain{}.Stream(), statelog.StandingOf(rig.log, rig.verifier), node)
 	if err != nil {
 		t.Fatalf("read %s's standing off the log: %v", node, err)
 	}

@@ -47,8 +47,10 @@ type TaskRow struct {
 	// reference that does reach it.
 	//
 	// THE COLUMN, never re-derived here: the applier derives it from the
-	// directory on every apply ([Applier.maintainKeys]), so it is the same
-	// on every node and follows the claim wherever a purge hands it.
+	// directory on every apply that moves the directory or who holds the
+	// key ([Applier.maintainKeys]), each of which names the key, so it is
+	// the same on every node and follows the claim wherever a purge hands
+	// it.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Title string `json:"title"`
@@ -346,7 +348,7 @@ const (
 // asking for `session` got whatever this node happened to hold, and
 // `max_lag_seconds` bounded nothing at all.
 type Reader struct {
-	db  *store.DB
+	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
@@ -356,8 +358,8 @@ type Reader struct {
 // a build where every level silently degrades to whatever the local rows say,
 // which is the state this type is being moved out of — and a degradation that
 // is invisible in the answer is worse than a refusal.
-func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
-	if db == nil {
+func NewReader(db store.ReplicatedReader, log *statelog.Reader) (*Reader, error) {
+	if db.IsZero() {
 		return nil, fmt.Errorf("tracker: a reader needs a store")
 	}
 	if log == nil {
@@ -793,9 +795,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if q.Text != "" {
 		// THE FIND, and it is a substring of a KEY or a TITLE — what
 		// the tool that carries it promises, and the only thing this
-		// grammar can honestly do: ranked search over the company's
-		// prose is `search_knowledge`'s, and nothing has ever put a task
-		// in the inverted list.
+		// grammar can honestly do: ranked search over what an item says
+		// is the search index's ([Searcher]), which a filter composed
+		// into this query cannot be.
 		//
 		// THE KEY MATCHES FROM THE FRONT and the title anywhere. A key
 		// is `PROJECT-N`, so it is only ever typed from its start —
@@ -1954,9 +1956,9 @@ func anyOf[T ~string](values []T) []any {
 	return out
 }
 
-// trackerStream is the domain's stream name, read from the declaration rather
-// than written again — one spelling, so the framework and every reader compare
-// against the same one.
+// trackerStream is the name of the log this domain's rows are keyed to, read
+// from the domain's own declaration rather than written again — one
+// spelling, so the framework and every reader compare against the same one.
 var trackerStream = Domain{}.Stream().Name
 
 // placeholders is a bound-parameter list of n slots.

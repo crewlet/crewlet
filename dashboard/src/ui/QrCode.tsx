@@ -19,7 +19,8 @@
  * code inverted for the dark theme is one some authenticator apps will not
  * read — and it is NOT inverted. It carries its own white plate, the quiet
  * zone included, which makes it the one place besides a third-party app's
- * mark (`VendorMark`) where the dashboard paints colours no token names (see
+ * mark (the kit's `VendorMark`, from `@crewlethq/icons`) where the dashboard
+ * paints colours no token names (see
  * the design document's "The one rule"): nothing reads state from them and
  * nothing else is painted with them. The plate is kept under forced colours
  * for the same reason, in `components.css`.

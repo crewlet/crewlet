@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -130,13 +131,19 @@ type Options struct {
 	// time.Now.
 	Now func() time.Time
 
-	// WebhookBase is this deployment's public base URL, or empty to skip
-	// webhook registration.
+	// WebhookBase is where the instance reaches this deployment
+	// ([config.API.WebhookBase]: the public listener's address where
+	// `api.public` is set), or empty to skip webhook registration.
 	//
 	// SKIPPED RATHER THAN GUESSED: a hook pointing at the wrong host is
 	// worse than no hook, because the instance then reports a healthy
 	// integration that delivers into the void.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a run with no address names as
+	// the setting to fill in. Empty is [setup.BaseKey]'s.
+	WebhookBaseKey string
 
 	// RecreateWebhook deletes and remakes the hook to mint a fresh
 	// secret, for the case where the existing one's secret was lost.
@@ -240,6 +247,12 @@ type Result struct {
 	// The zero value is "nothing to report", deliberately: a Result built
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
+
+	// NoIngressKey is the Tier A key this deployment's webhook address is
+	// read from, which NoIngress names as the setting an operator fills in
+	// to give the instance an address — as [Options] handed it over. Empty
+	// is [setup.BaseKey]'s.
+	NoIngressKey string
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -355,7 +368,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return res, err
 	}
 	res.Hooked = in.Hooked
-	res.NoIngress = noIngressReason(opts, res.Deployment)
+	res.NoIngress, res.NoIngressKey = noIngressReason(opts, res.Deployment), opts.WebhookBaseKey
 	return res, nil
 }
 
@@ -554,9 +567,9 @@ func noIngressReason(opts Options, deployment Deployment) string {
 	if deployment == Cloud || webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "api.external_url is unset, so this Jira instance has " +
-		"no address to deliver to and no issue or comment reaches this " +
-		"deployment"
+	return setup.BaseKey(opts.WebhookBaseKey) + " is unset, so this Jira " +
+		"instance has no address to deliver to and no issue or comment " +
+		"reaches this deployment"
 }
 
 // ingress is what one pass did about inbound delivery, and why it did not do
@@ -704,9 +717,9 @@ func webhookSecret(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"clear both -public-url and api.external_url and "+
-				"register %s by hand",
-			provision.Shape(opts.Config.WebhookSecret), target)
+				"clear both -public-url and %s and register %s by hand",
+			provision.Shape(opts.Config.WebhookSecret),
+			setup.BaseKey(opts.WebhookBaseKey), target)
 	}
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
 		opts.RecreateWebhook, func() (string, error) { return rand.Text(), nil })

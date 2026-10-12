@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -59,8 +58,10 @@ type Syncer struct {
 	js      jetstream.JetStream
 	agentID AgentIDFor
 
-	// marks is the per-seat, per-table watermark: the highest rowid
-	// already published. In memory only, and deliberately: a restart
+	// marks is the per-seat, per-table watermark: the highest value of
+	// the table's watermark column already published (table.watermark —
+	// a change sequence that is never reused, so a row written after the
+	// mark is always above it). In memory only, and deliberately: a restart
 	// republishes what it has, which the stream collapses onto the same
 	// subjects, so the cost is one extra pass and the benefit is a
 	// subsystem with no state of its own to keep correct.
@@ -73,13 +74,21 @@ type Syncer struct {
 // Nil rather than a syncer that quietly does nothing: a node with no broker
 // has no way to publish or replay, and a caller that got a working-looking
 // object would believe its seats' memory was travelling when it was not.
-func New(db *store.DB, conn *nats.Conn, agentID AgentIDFor) (*Syncer, error) {
-	if db == nil || conn == nil || agentID == nil {
+//
+// IT TAKES A JETSTREAM CLIENT rather than a connection, because the client is
+// where the API a broker is addressed in is decided — the embedded fleet's
+// domain, a leaf's, or an external cluster's account (see internal/jsapi) — and
+// the caller holds the one its queue already speaks.
+//
+// BUILT OVER THE COORDINATION CONNECTION, never the queue's own (ADR-0001): a
+// replay is an ordered consumer over a seat's whole history, and on the queue's
+// connection it would sit on the read loop every mailbox consumes through. On
+// an external broker the two are one connection; on the embedded one the
+// coordination store's is the second, watched one, so losing it stops the node
+// as losing the queue's does.
+func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) (*Syncer, error) {
+	if db == nil || js == nil || agentID == nil {
 		return nil, nil
-	}
-	js, err := jetstream.New(conn)
-	if err != nil {
-		return nil, fmt.Errorf("memsync: reach the JetStream API: %w", err)
 	}
 	return &Syncer{db: db, js: js, agentID: agentID, marks: map[string]int64{}}, nil
 }
@@ -444,7 +453,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 // owner wrote just before placement moved it, which are the seat's newest. The
 // hydration reported that as success, and the seat served with the amnesia
 // this package exists to prevent: the same stale-replica read internal/coord/kv
-// reads through the leader to avoid (its bucket.go has the measurements).
+// reads through the leader to avoid (walk.go's "Every certifying answer is the
+// LEADER's" has the measurements).
 //
 // So the leader is asked first, and the replay is not done until it has
 // delivered a row at or past this sequence.
@@ -454,9 +464,14 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 // The changelog is provisioned with direct gets OFF (internal/queue/jetstream's
 // stream specs), so the client answers a last-message read with
 // `$JS.API.STREAM.MSG.GET`, which only the stream leader answers — the same
-// read coord/kv's leaderBucket makes by hand because its buckets were created
-// with direct gets on. A member that sees no leader answers an error, which
-// fails the hydration rather than reading as a seat with nothing to carry.
+// `MSG.GET` coord/kv's leaderReader asks for on the wire through
+// internal/jsapi's Leader, because its buckets were created with direct gets
+// on and the client would answer them from any replica. It is the client's own
+// call here, and not jsapi's, for a reason of the filter's: it is a WILDCARD
+// over the seat's subjects, and jsapi's Leader.Last refuses an answer on any
+// subject other than the one it asked about. A member that sees no leader
+// answers an error, which fails the hydration rather than reading as a seat
+// with nothing to carry.
 func (s *Syncer) leaderEnd(ctx context.Context, stream jetstream.Stream, filter string) (uint64, error) {
 	if stream.CachedInfo().Config.AllowDirect {
 		// THE PREMISE ABOVE, checked rather than assumed: with direct gets

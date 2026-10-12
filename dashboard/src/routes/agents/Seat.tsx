@@ -18,6 +18,12 @@
  * publishes no events under a seat id for `seat=` to narrow by) and "Edit in
  * org" are the secondary pair, in the bar's "More" menu.
  *
+ * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
+ * watch link, its Transcript with the phase it is on open — and the Turns tab
+ * carries the pulsing mark that says a turn is running behind it, in words as
+ * well as the dot. A reader who came to see what the seat is doing reached it
+ * through the Overview's card alone, two screens down on a phone.
+ *
  * ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, the frame's rule: Message, or
  * Resume on a paused seat — the one thing to do about a seat that is holding
  * its mail — and the rest fold into the frame's one "More" (`usePageMenu`),
@@ -50,8 +56,9 @@
  */
 
 import { useId, useMemo, useState } from "react";
-import { Button, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
 import {
+  ActivityGlyph,
   ChartNoAxesGanttGlyph,
   CircleQuestionMarkGlyph,
   EllipsisGlyph,
@@ -62,7 +69,13 @@ import {
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
-import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
+import {
+  avatarLabel,
+  seatAvatarKey,
+  seatKindKey,
+  seatPlaceKey,
+  seatUnitKey,
+} from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -99,6 +112,7 @@ import {
   SeatHolding,
   useHumanSeats,
 } from "~/components/people.tsx";
+import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { HoldWrites, menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
@@ -114,6 +128,7 @@ import {
   isOwnSeat,
   liveRow,
   pillWord,
+  seatRun,
   sentence,
   type SeatTab,
 } from "./seat/profile.ts";
@@ -135,8 +150,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   const seat = findSeat(index, handle);
   const human = seat?.kind === "human";
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by — keyed on
-  // the RAW SEGMENT, which is what `crumbsFor` looks up (a seat the engine
-  // reported no handle for is addressed by name). And where it sits: its
+  // the RAW SEGMENT, which is what `crumbsFor` looks up (a link built from a
+  // document entry declaring no handle addresses the seat by name). And where it sits: its
   // unit, as a way back to the team, and its kind, which the crumb's badge
   // draws as the outline every other seat badge wears. Nothing for a seat
   // with no name, which would title the tab " · Crewlet".
@@ -145,8 +160,9 @@ export function SeatScreen({ handle }: { handle: string }) {
       ? {
           [handle]: seat.name,
           [seatKindKey(handle)]: human ? "human" : "agent",
+          ...(seat.avatar ? { [seatAvatarKey(handle)]: avatarLabel(seat.avatar) } : {}),
           ...(seat.unit
-            ? { [seatUnitKey(handle)]: seat.unit.name, [seatPlaceKey(handle)]: unitPath(seat.unit) }
+            ? { [seatUnitKey(handle)]: seat.unit.id, [seatPlaceKey(handle)]: unitPath(seat.unit) }
             : {}),
         }
       : {},
@@ -174,7 +190,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: !!seat?.handle, pollMs: 30_000 },
   );
   // THE GUARDED HALF, read once for every tab that draws it.
-  const setup = useSeatSetup(seat ? seat.handle || seat.name : "");
+  const setup = useSeatSetup(seat?.handle ?? "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
 
@@ -184,12 +200,28 @@ export function SeatScreen({ handle }: { handle: string }) {
   const [assigning, setAssigning] = useState(false);
   const [pausing, setPausing] = useState(false);
   const paused = !!agent?.paused;
+  // THE TURN TO WATCH, while the engine says the seat is working on one with
+  // an id: a working seat a frame ahead of its turn id has nothing to watch.
+  const watching = !human && activityOf(agent) === "working" ? turnIdOf(agent) : "";
   const messageAccess = useWriteAccess("create_work_item");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu(
     seat
       ? [
+          ...(watching
+            ? [
+                {
+                  key: "watch",
+                  label: "Watch live",
+                  icon: <ActivityGlyph size="sm" />,
+                  onSelect: () => {
+                    const watch = watchLink(watching);
+                    nav.to(watch.path, watch.query);
+                  },
+                },
+              ]
+            : []),
           ...(paused
             ? [
                 {
@@ -233,7 +265,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             key: "edit",
             label: "Edit in org",
             icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle || seat.name }),
+            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
           },
         ]
       : [],
@@ -259,6 +291,20 @@ export function SeatScreen({ handle }: { handle: string }) {
   return (
     <div className="prof-frame">
       <PageActions>
+        {/* WATCH LIVE ONLY WHILE IT IS WORKING, first, as a task page's is.
+            Folded on a phone like every action but the one kept in view. */}
+        {watching && (
+          <span className="page-action-folds">
+            <ButtonLink
+              size="small"
+              variant="secondary"
+              leadingIcon={<ActivityGlyph size="sm" />}
+              href={watchHref(watching)}
+            >
+              Watch live
+            </ButtonLink>
+          </span>
+        )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
         <span className={paused ? "page-action-folds" : undefined}>
@@ -318,7 +364,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 label: "Edit in org",
                 description: "Change this seat in the org editor",
                 icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle || seat.name }),
+                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
               },
             ]}
           />
@@ -342,6 +388,11 @@ export function SeatScreen({ handle }: { handle: string }) {
             // THE ENGINE'S COUNT of the seat's open work, the same answer the
             // Overview's card and the Work tab read.
             ...(value === "work" && openWork !== undefined ? { count: openWork } : {}),
+            // A TURN RUNNING BEHIND THE TAB, by the engine's word for the
+            // seat: the strip's pulsing mark, said in words as well.
+            ...(value === "turns" && !human && activityOf(agent) === "working"
+              ? { live: "running now" }
+              : {}),
           }))}
         />
       </header>
@@ -395,6 +446,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
       <SeatAvatar
         name={seat.name}
         kind={human ? "human" : "agent"}
+        avatar={seat.avatar}
         size={60}
         {...(ring ? { ring } : {})}
         decorative
@@ -471,7 +523,7 @@ function Notices({
   if (seat.kind === "human" || !agent) return null;
   const state = activityOf(agent);
   const paused = agent.paused ?? null;
-  const sandbox = sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
+  const sandbox = seatRun(sandboxes, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   if (!agent.last_error && state !== "stopped" && !asking) return null;
   return (

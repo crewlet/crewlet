@@ -61,7 +61,26 @@ func (e *Engine) resolver() *config.Resolver {
 	if v := e.env.Load(); v != nil {
 		return v.resolver
 	}
-	return config.EnvOnly()
+	return config.NewResolver(e.environment())
+}
+
+// environment is the source every resolver this node builds ends in
+// ([Options.Environment]): the process's own for an engine that was not
+// handed one.
+func (e *Engine) environment() config.Source {
+	if e.environ == nil {
+		return config.EnvSource{}
+	}
+	return e.environ
+}
+
+// getenv reads one variable from source the way [os.Getenv] reads the
+// process's: the empty string for one that is unset.
+func getenv(source config.Source) func(string) string {
+	return func(name string) string {
+		value, _ := source.Lookup(name)
+		return value
+	}
 }
 
 // secretView is this node's ${VAR} resolver and the store snapshot it answers
@@ -74,11 +93,14 @@ type secretView struct {
 	values map[string]string
 }
 
-// installSecrets publishes one snapshot as this node's resolver. The caller
-// holds [Engine.secretsMu].
+// installSecrets publishes one snapshot as this node's resolver: THE STORE IN
+// FRONT OF THIS NODE'S ENVIRONMENT ([Engine.environment]), which is the chain
+// [config.WithStore] builds over the process's own. The caller holds
+// [Engine.secretsMu].
 func (e *Engine) installSecrets(values map[string]string) {
 	e.env.Store(&secretView{
-		resolver: config.WithStore(config.MapSource(values)), values: values,
+		resolver: config.NewResolver(config.MapSource(values), e.environment()),
+		values:   values,
 	})
 }
 
@@ -156,8 +178,7 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 	}
 	_, err := fleetsecrets.Migrate(ctx,
 		e.backends.Store.SecretValues(e.cipher),
-		fleetsecrets.New(e.backends.Fleet, e.cipher),
-		time.Now().UTC())
+		fleetsecrets.New(e.backends.Fleet, e.cipher))
 	if err != nil {
 		log.ErrorContext(ctx, "secret_migration_incomplete", "error", err,
 			"detail", "this node's own secret rows are still local and no peer "+
@@ -192,10 +213,9 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 
 	// THE LOCAL ROWS FIRST, so the fleet's win. In steady state there are
 	// none — [Engine.migrateSecrets] emptied the table at boot — and this
-	// read costs one query against an empty table. It is here for the two
-	// states where the table is NOT empty: a node booting for the first
-	// time after the upgrade, and one whose migration could not finish.
-	// Either way the fleet's copy is what every node agrees on, so a
+	// read costs one query against an empty table. It is here for the one
+	// state where the table is NOT empty: a node whose migration could not
+	// finish. The fleet's copy is then what every node agrees on, so a
 	// surviving local row must never shadow it.
 	merged := map[string]string{}
 	if local != nil {

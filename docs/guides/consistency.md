@@ -68,7 +68,7 @@ happened to omit the key. There are four:
 
 | Surface | Default | May the caller choose? |
 |---|---|---|
-| A seat's own tools, inside a turn | `linearizable` | No |
+| A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
 | The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
@@ -194,7 +194,7 @@ Three of the five state logs grant it; the vectors and the usage log do not.
 | The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
 | The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
-| The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat or schedule), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
+| The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
 
 The decision is **declared per log**, in the engine's register of domains
 (`internal/engine/statelogregister.go`): each entry states either the barrier
@@ -202,7 +202,7 @@ encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
 neither or both. It used to be a switch, where a log that grants no
 `linearizable` read and a log whose author forgot it looked the same.
 
-## The thirteen refusals
+## The fourteen refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
@@ -221,6 +221,7 @@ rather than downgraded. Each code names a different thing to do.
 | `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply, so the node adopts a peer's snapshot — on its own: the position heartbeat requests the rejoin. Come back after the hint (one heartbeat, 15 s), or ask another node meanwhile; see [the join runbook](retention.md#the-join-runbook). |
 | `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. It clears the next time the floor is read, so come back after the hint (one heartbeat, 15 s); if it persists, check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
+| `maintenance` | This node runs in a [capacity window](retention.md#changing-a-logs-ceiling) (`-mode maintenance` or `-mode seal`), which publishes nothing — and a `linearizable` read proves the log's end by appending a barrier to it. | Ask again once the fleet is back in normal mode. Every other level appends nothing and is still answered. Every node of a fleet in a window is in one, so no other node answers it either. |
 | `wrong_stream` | This node's own log is not the one its rows are keyed to: its checkpoint is past the log's end — what a broker restored from an older copy looks like, since it keeps the stream's creation instant — or the log holds, at that checkpoint, another record than the one it consumed there, which is the same restore written past this node's rows, or the stream was deleted and rebuilt — found at boot against the checkpoint, or under a running node by the position heartbeat and by any write at an expectation of zero, from the broker's own creation instant — or a peer re-anchored the log past this node's generation, so it continues from that peer's rows rather than this node's. A position this node derived for the read on another log — a session mark, a barrier — is the same refusal. A **state of this node**, never of the request: a `min_position` naming another domain's log is the caller's mistake, which every node answers the same, and is refused as a bad request instead (above). Every one of these findings refuses the node's **writes** with the same word. | Ask another node meanwhile. A recreated stream or a restored broker is an operator's re-anchor — see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log); no wait clears it. A peer's reanchor clears on its own, once this node has [adopted](retention.md#a-node-a-peer-re-anchored-past) a snapshot from the new generation. |
 
 Six of them are worth coming back to **this** node for — `behind`,
@@ -236,7 +237,7 @@ reason spelled like one of the codes above agrees with it about waiting — the
 two describe one state of one node. Every surface that writes to a state log —
 `/work`, `/pages`, `/iam` and `/auth` — answers every one of them
 `503`, with a `Retry-After` only for the four that clear on their own; the
-other fourteen carry none, because the same write is refused the same however
+other thirteen carry none, because the same write is refused the same however
 often it is sent here.
 
 | Reason | What happened | What to do |
@@ -333,15 +334,39 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change sees that change. That is guaranteed, and it is
-guaranteed by the *wake* carrying the record's own position — the turn waits
-for its own applier to reach it — rather than by the level the turn's tools
-then read at.
+An agent woken by a change to the engine's own tracker or knowledge base sees
+that change. That is guaranteed by the *wake* carrying the record's own
+position — `trigger_position`, where on its log the change was committed (see
+[the event system](../concepts/event-system.md)) — and not by the level the
+turn's tools then read at:
 
-So a seat's `linearizable` reads are not what makes it see its own trigger; the
-floor was already established before the turn opened. What they buy is the
-other half: that an answer the turn *decides* on is not one from before the
-read arrived.
+1. Before the turn's first read, the node hands that position to its
+   **read-your-writes floors**: one table per node, the same one every write
+   the node makes raises.
+2. Every tracker or knowledge-base read the turn makes carries the floor on its
+   own domain's log to whichever node answers it — a tracker read the tracker
+   log's, a page read the knowledge base's — this node's own copy included.
+3. That holder waits up to two seconds to have applied it, or answers `behind`
+   and the next holder is asked.
+
+The floor travels with the request rather than being waited for before the
+turn opens, because the node running the turn may hold no data at all and have
+no applier of its own to wait on. A floor on one domain's log never holds up a
+read of the other: a tracker read does not depend on the knowledge base's rows.
+
+**What the floor does not reach.** The ranked searches — `search_knowledge`,
+`search_work_items` and the turn-start knowledge block — read an index each
+node builds behind its own rows, so no log position describes them and they
+carry no floor: a seat woken by a page created a moment ago may not find it by
+search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+message, a Jira issue — carries no position at all, because what changed is in
+another company's system.
+
+So a seat's `linearizable` reads are not what makes it see its own trigger.
+What they buy is the other half: that an answer the turn *decides* on is not
+one from before the read arrived. The operator's reads are `linearizable` too
+and are not settable: the person asking is deciding something about their own
+company, and operators are few.
 
 ## The coordination store is not on this scale
 

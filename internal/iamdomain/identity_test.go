@@ -360,20 +360,16 @@ func TestTwoWritersRacingForOneLoginLeaveOneHolder(t *testing.T) {
 	}
 }
 
-// A PERSON'S SEAT IS CHANGED, BUT NEVER CLEARED (ADR-0026).
+// A PERSON'S SEAT IS CHANGED, BUT NEVER CLEARED (ADR-0032).
 //
 // A person holds a human seat for as long as they are here, so an edit that
 // clears one is refused — decided on the KIND THE ROW HOLDS, never on one a
-// caller states, and before the arm that answers an edit changing nothing, so
-// a person recorded with no seat before the rule is told the rule too. Their
-// seat is MOVED, in one record that frees the old one; a SERVICE ACCOUNT may
-// be unbound, since it acts as itself. And a person recorded with no seat is
-// not frozen by the rule: a rename leaving their binding alone lands, and
-// binding them is a move like any other.
+// caller states. Their seat is MOVED, in one record that frees the old one; a
+// SERVICE ACCOUNT may be unbound, since it acts as itself.
 //
 // Mutation: drop the person arm from SetIdentity's decide and Sarah's seat is
-// cleared; move it after the nothing-to-move arm and the legacy person's
-// unbind answers applied instead of the rule.
+// cleared; apply it to every kind the snapshot holds and the service
+// account's unbind is refused.
 func TestAPersonsSeatIsChangedButNeverCleared(t *testing.T) {
 	t.Parallel()
 	rig := newIdentityRig(t)
@@ -434,32 +430,5 @@ func TestAPersonsSeatIsChangedButNeverCleared(t *testing.T) {
 	}
 	if _, got := rig.held(rig.machine); got != "" {
 		t.Errorf("the unbound service account holds %q, want none", got)
-	}
-
-	// A PERSON RECORDED BEFORE THE RULE, holding no seat, as a build before
-	// it left the row: told the rule when asked to clear what they do not
-	// hold, renamed with their binding left alone, and bound by a move.
-	plant(t, rig.writeRig, `UPDATE iam_people SET seat_id = '' WHERE id = ?`,
-		rig.dana)
-	if err := edit(iamdomain.IdentityEdit{PersonID: rig.dana, Seat: seat(""),
-		OpID: "op-clear-legacy", Reason: "a no-op"}); !errors.Is(err,
-		iamdomain.ErrSeatRequired) {
-		t.Errorf("clearing a seatless person's seat answered %v, want %v — the "+
-			"rule, whatever they hold", err, iamdomain.ErrSeatRequired)
-	}
-	if err := edit(iamdomain.IdentityEdit{PersonID: rig.dana,
-		Login: seat("dana.okafor"), OpID: "op-rename-legacy",
-		Reason: "a rename"}); err != nil {
-		t.Errorf("renaming a seatless person was refused: %v", err)
-	}
-	if err := edit(iamdomain.IdentityEdit{PersonID: rig.dana,
-		Seat: seat("dana-desk"), OpID: "op-seat-legacy",
-		Reason: "given a seat"}); err != nil {
-		t.Errorf("binding a seatless person to a seat was refused: %v", err)
-	}
-	if login, got := rig.held(rig.dana); login != "dana.okafor" ||
-		got != "dana-desk" {
-		t.Errorf("the legacy person holds (%q, %q), want (dana.okafor, "+
-			"dana-desk)", login, got)
 	}
 }

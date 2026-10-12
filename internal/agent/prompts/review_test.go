@@ -4,7 +4,7 @@ import "testing"
 
 func TestReviewPromptDescribesTheDecisionEnum(t *testing.T) {
 	t.Parallel()
-	p := BuildReview(engineer(), ReviewInput{})
+	p := BuildReview(engineer(), ReviewInput{}).Text
 	contains(t, p, "done", "self_iterate", "failed")
 	// The colleague handoff is the next round's outreach, not a decision.
 	excludes(t, p, "ask_colleague")
@@ -16,7 +16,7 @@ func TestReviewPromptDescribesTheDecisionEnum(t *testing.T) {
 // Each rule below maps to a turn-ending failure that has actually happened.
 func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 	t.Parallel()
-	p := BuildReview(engineer(), ReviewInput{})
+	p := BuildReview(engineer(), ReviewInput{}).Text
 	contains(t, p,
 		// Evidence beats narration.
 		"is the evidence", "the agent's own account of itself",
@@ -72,7 +72,7 @@ func TestReviewPromptRendersTheEvidenceTimeline(t *testing.T) {
 		Produced:          "PRODUCED:x",
 		ToolLog:           "- update_item(...) → success",
 		EarlierIterations: "### Iteration 1\nCalled:\n- post_message(...) → success",
-	})
+	}).Text
 	contains(t, p, "INTENT:post the summary", "PRODUCED:x", "### Iteration 1",
 		"post_message", "update_item", "`delivered`")
 	// Oldest first, so the reviewer reads the whole turn top-to-bottom as
@@ -93,11 +93,11 @@ func TestReviewPromptRendersTheEvidenceTimeline(t *testing.T) {
 // distinguishable.
 func TestTheOutcomeLineSaysWhoWroteIt(t *testing.T) {
 	t.Parallel()
-	own := BuildReview(engineer(), ReviewInput{Outcome: "delivered"})
+	own := BuildReview(engineer(), ReviewInput{Outcome: "delivered"}).Text
 	contains(t, own, "the agent's own word")
 	excludes(t, own, "written by the engine: the agent's pass ended")
 
-	rescued := BuildReview(engineer(), ReviewInput{Outcome: "incomplete", Rescued: true})
+	rescued := BuildReview(engineer(), ReviewInput{Outcome: "incomplete", Rescued: true}).Text
 	contains(t, rescued, "written by the engine: the agent's pass ended")
 	excludes(t, rescued, "the agent's own word")
 }
@@ -108,7 +108,7 @@ func TestTheOutcomeLineSaysWhoWroteIt(t *testing.T) {
 // unavailable" rather than "no calls were made".
 func TestReviewPromptRendersAnEmptyToolLogAsNone(t *testing.T) {
 	t.Parallel()
-	p := BuildReview(engineer(), ReviewInput{Intent: "I", Produced: "E"})
+	p := BuildReview(engineer(), ReviewInput{Intent: "I", Produced: "E"}).Text
 	contains(t, p, "\n## What the agent did\n(none)")
 	// The timeline order holds uniformly, not only when the log has
 	// entries.
@@ -120,6 +120,6 @@ func TestReviewPromptRendersAnEmptyToolLogAsNone(t *testing.T) {
 // only mean "this is round 1", and the header refers to it conditionally.
 func TestReviewPromptOmitsEarlierRoundsOnTheFirstPass(t *testing.T) {
 	t.Parallel()
-	p := BuildReview(engineer(), ReviewInput{Intent: "I", Produced: "E"})
+	p := BuildReview(engineer(), ReviewInput{Intent: "I", Produced: "E"}).Text
 	excludes(t, p, "\n## Earlier rounds (already delivered)\n")
 }

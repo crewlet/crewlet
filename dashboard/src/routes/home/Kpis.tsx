@@ -22,8 +22,8 @@ import { ArrowRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
-import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
+import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -71,13 +71,10 @@ export function Kpis({
       <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
       <InProgressTile flow={flow} />
       <CompletedTile flow={flow} range={range} />
-      {/* WHO MAY SET A BUDGET is whoever holds `config:write` — the grant a
-          ceiling is written under — never a kind of credential. */}
-      <TokensTile
-        spend={spend}
-        range={range}
-        canBudget={viewer.grants.includes(CONFIG_WRITE_GRANT)}
-      />
+      {/* WHO MAY SET A BUDGET is whoever may write the company's configuration
+          — `config:write`, the grant a ceiling is written under, and on a
+          managed document one of its writers — never a kind of credential. */}
+      <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />
     </section>
   );
 }
@@ -228,9 +225,12 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
  * and a bare "−88%" in front of "No weekly budget" read as a claim about the
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
- * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE — a holder of
- * `config:write` — as "No weekly budget" linking into Spend › Budgets; anybody
- * else gets the fact, since the screen behind the link would only refuse them.
+ * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
+ * change the company's configuration (`mayChangeConfig` — a holder of
+ * `config:write`, and on a managed document one of its writers) gets "No
+ * weekly budget" as the link into Spend › Budgets; anybody else gets the fact,
+ * since the screen behind the link would only refuse them. The weekly budget
+ * is the COMPANY's ceiling, so no lead path reaches it.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -240,12 +240,15 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
 function TokensTile({
   spend,
   range,
-  canBudget,
+  mayConfigure,
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  /** Whether this reader may set a ceiling: they hold `config:write`. */
-  canBudget: boolean;
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * `config:write` and, on a managed document, are one of its writers.
+   */
+  mayConfigure: boolean;
 }) {
   const label = `Tokens · ${range.words}`;
   const budget = useOrgBudget();
@@ -275,7 +278,7 @@ function TokensTile({
           <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
         ) : budget === null ? (
           "Weekly budget not reported yet"
-        ) : canBudget ? (
+        ) : mayConfigure ? (
           <a className="t-link" href={href(["spend", "budgets"])}>
             No weekly budget
           </a>

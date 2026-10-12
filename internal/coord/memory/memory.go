@@ -32,11 +32,11 @@ import (
 
 var log = logging.Get("coord.memory")
 
-// Arguments a caller got wrong. They are errors rather than a (nil, nil)
-// refusal on purpose: (nil, nil) means "somebody else holds this", and a
-// blank owner has not lost a race to anybody. An error routes them to the
-// contract's third answer — "no answer" — which a caller retries loudly
-// instead of acting on a lie about a peer that does not exist.
+// Arguments a caller got wrong. They are errors rather than a refusal on
+// purpose: a refusal means "somebody else holds this" or "a gate stopped you",
+// and a blank owner has done neither. An error routes them to the contract's
+// third answer — "no answer" — which a caller retries loudly instead of acting
+// on a lie about a peer that does not exist.
 var (
 	errNoOwner = errors.New("coord: owner is required")
 	errBadTTL  = errors.New("coord: ttl must be positive")
@@ -75,6 +75,12 @@ type record struct {
 
 func (r *record) live(now time.Time) bool { return r.expiresAt.After(now) }
 
+// gated reports whether the record is one the protocol gate judges: live, and
+// of a class the gate counts (coord.ProtocolGateCounts).
+func (r *record) gated(now time.Time) bool {
+	return r.live(now) && coord.ProtocolGateCounts(r.resource)
+}
+
 func (r *record) lease() coord.Lease {
 	return coord.Lease{
 		Resource:   r.resource,
@@ -111,30 +117,30 @@ func (b *Backend) now() time.Time {
 }
 
 // TryAcquire claims resource, or reports that someone else holds it.
-func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	if err := unavailable(ctx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := validateTTL(resource, opts.Owner, opts.TTL); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Meta crosses a wire on every real backend, so it crosses one here.
 	// See wireCopy: an in-process shortcut past this is a divergence the
 	// twin would certify rather than catch.
 	wire, err := wireCopy(opts.Meta)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	opts.Meta = wire
-	lease := b.acquire(resource, opts)
+	lease, refused := b.acquire(resource, opts)
 	if lease == nil {
-		return nil, nil
+		return nil, refused, nil
 	}
 	log.DebugContext(ctx, "lease_acquired", "resource", resource, "owner", opts.Owner, "epoch", lease.Epoch)
-	return lease, nil
+	return lease, "", nil
 }
 
-func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lease {
+func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal) {
 	protocol := opts.EffectiveProtocol()
 
 	b.mu.Lock()
@@ -144,26 +150,33 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lea
 	}
 	now := b.now()
 
-	// The mixed-version gate. Refuse while ANY live lease is held at an
-	// older protocol — the disagreement is about what holding a lease
-	// MEANS, so it is not scoped to the resource being claimed. Asymmetric
-	// by construction: it only ever looks for a LOWER protocol, so an
-	// older node (which has no such check to run) is never blocked.
+	row := b.rows[resource]
+	if row != nil && row.live(now) && row.owner != opts.Owner {
+		// A PEER HOLDS IT, which is the answer whatever the gate would
+		// say: a claim that cannot write has nothing for a gate to stop.
+		// First, so the twin gives the reason the KV backend gives — see
+		// coord.RefusedHeld.
+		return nil, coord.RefusedHeld
+	}
+
+	// The mixed-version gate. Refuse while any live lease the gate counts
+	// — presence and seats, never a duty (coord.ProtocolGateCounts) — is
+	// held at a lower protocol. The disagreement is about what holding a
+	// seat MEANS, so it is not scoped to the resource being claimed.
+	// Asymmetric by construction: it only ever looks for a LOWER protocol,
+	// so a lower-protocol node is never blocked.
 	if !opts.Ungated {
 		for _, r := range b.rows {
-			if r.live(now) && r.protocol < protocol {
-				return nil
+			if r.gated(now) && r.protocol < protocol {
+				return nil, coord.RefusedProtocol
 			}
 		}
 	}
 
-	row := b.rows[resource]
 	switch {
 	case row == nil:
 		row = &record{resource: resource, epoch: 1, acquiredAt: now}
 		b.rows[resource] = row
-	case row.live(now) && row.owner != opts.Owner:
-		return nil
 	case row.live(now):
 		// An unbroken same-owner hold keeps its epoch: nothing was ever
 		// unowned, so the holder's in-flight work stayed covered. This
@@ -194,7 +207,7 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lea
 	}
 
 	lease := row.lease()
-	return &lease
+	return &lease, ""
 }
 
 // Renew extends a lease the caller still holds at this epoch.
@@ -367,10 +380,12 @@ func (b *Backend) PreferredResources(ctx context.Context, class coord.Class, nod
 	return out, nil
 }
 
-// FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: TryAcquire
-// can only answer yes or no, so a node stalled behind an older peer would
-// otherwise look identical to one whose peers simply hold every seat.
+// FleetProtocolFloor returns the lowest protocol among the live leases the
+// gate counts (coord.ProtocolGateCounts), and whether there were any. It is
+// the observability half of the gate: a claim refused [coord.RefusedProtocol]
+// says a lease at a lower protocol stopped it, and this names that protocol —
+// so it counts what the gate counts and nothing else. It is asked after such
+// a refusal and never otherwise.
 func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	if err := unavailable(ctx); err != nil {
 		return 0, false, err
@@ -380,7 +395,7 @@ func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	now := b.now()
 	floor, found := 0, false
 	for _, r := range b.rows {
-		if !r.live(now) {
+		if !r.gated(now) {
 			continue
 		}
 		if !found || r.protocol < floor {
@@ -423,10 +438,17 @@ func validate(resource, owner string) error {
 // non-positive TTL would mint a lease that is already lapsed, which reads
 // downstream as a seat nobody can hold.
 //
-// The twin could honour a duty TTL of any length, and refuses one above
-// coord.MaxDutyTTL anyway: a twin that accepted what the KV store refuses is
-// exactly how every long duty claim passed every single-node test while no
-// fleet ever ran those duties.
+// The twin could honour a TTL of any length, and refuses one above
+// coord.MaxDutyTTL on every lease outside seats and presence anyway — a duty,
+// a tracker walk's claim, any class of a caller's — through the contract's own
+// check (coord.CheckLeaseTTL). A twin that accepted what the KV store refuses
+// is exactly how every long duty claim passed every single-node test while no
+// fleet ever ran those duties, and how the tracker's walk claims did the same
+// after the twin learned the duties' ceiling and nobody else's.
+//
+// A seat or presence lease is not bounded here: the KV store holds one to the
+// seat lease TTL it was opened with, a property of the deployment the twin is
+// never given, and its callers acquire at the TTL that store reports.
 func validateTTL(resource, owner string, ttl time.Duration) error {
 	if err := validate(resource, owner); err != nil {
 		return err
@@ -434,7 +456,7 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 	if ttl <= 0 {
 		return errBadTTL
 	}
-	return coord.CheckDutyTTL(resource, ttl)
+	return coord.CheckLeaseTTL(resource, ttl)
 }
 
 // wireCopy puts meta through the encoding a real backend puts it through.

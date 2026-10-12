@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // bootstrapWithKeys writes a Tier A naming a store and a keyring.
@@ -51,6 +52,7 @@ func bootstrapWithKeys(t *testing.T, dir string, keys ...string) string {
 // secrets half report success and dropped the retired key had just made their
 // configuration unreadable on every node, at the next apply.
 func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	old := bootstrapWithKeys(t, dir, "k1")
 	company := companyFile(t, dir, "company.yaml", nil)
@@ -90,6 +92,7 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 
 // A SECOND RUN IS A NO-OP, which is what makes this safe in a deploy script.
 func TestConfigRekeyIsIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, cfg, "import",
@@ -114,6 +117,7 @@ func TestConfigRekeyIsIdempotent(t *testing.T) {
 // than decrypting — so previewing a rotation is not a bigger exposure than
 // the pass it previews.
 func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	old := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, old, "import",
@@ -165,10 +169,9 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	if secrets.Sealed(document) {
 		t.Fatal("the planted revision is sealed, so no case using it is about plaintext")
 	}
-	db, err := store.Open(t.Context(), filepath.Join(dir, "index.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
+	// THE NODE'S OWN FILE: revisions are the node estate's, so nothing a
+	// state log applies is opened beside it.
+	db := storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
 	defer func() { _ = db.Close() }()
 	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
 		Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
@@ -190,6 +193,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 // here is byte for byte the planted one, so an import that compared against
 // the plaintext rather than replacing it would write nothing either.
 func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	plantPlaintextRevision(t, dir)
 	keyed := bootstrapWithKeys(t, dir, "k1")
@@ -223,6 +227,7 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 // used to store a plaintext revision on a node with no keyring and is now
 // refused like the rest, because every node holds one.
 func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	plain := bootstrapWithKeys(t, dir)
 	for _, args := range [][]string{

@@ -78,7 +78,7 @@ import { Button, Callout, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
 import { Segmented } from "~/ui/primitives.tsx";
 import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { plainText } from "~/lib/markdown.ts";
@@ -110,7 +110,10 @@ export function WorkSearch() {
   const [modeRaw, setMode] = useParam("mode", "hybrid", "filter");
   const mode = asSearchMode(modeRaw);
   const [typed, setTyped] = useState(q);
-  const hits = useQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
+  // place of the results — see `useSearchQuery`.
+  const hits = useSearchQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  const tooLong = hits.tooLong;
   const served = servedNote(hits.data);
   usePageCoverage(undefined);
 
@@ -119,7 +122,8 @@ export function WorkSearch() {
 
   // THE PEEK IS THE FRAME'S: the shell mounts one rail for every screen, so
   // this one opens peeks and renders none — and the grid marks the row whose
-  // link is the peek's page, so the open hit is drawn from the same `itemId`.
+  // link is the peek's page, so the open hit is drawn from the same address
+  // (`itemAddress`).
   const { open: openPeek } = usePeekControls();
 
   const rows = useMemo(() => hits.data?.hits ?? [], [hits.data]);
@@ -186,6 +190,8 @@ export function WorkSearch() {
           title="Type what you half remember"
           description="Finds the tasks most about a phrase — by its words, by what it means, or both — across titles, descriptions and comments. The board's filters answer which tasks are in a state; this answers which are about something."
         />
+      ) : tooLong ? (
+        <Callout variant="warning">{tooLong}</Callout>
       ) : hits.data && !hits.data.available ? (
         // NOT AN EMPTY RESULT. See the file head: this node has the items and
         // not yet the index, and a reader told "no matches" acts on it.
@@ -201,6 +207,7 @@ export function WorkSearch() {
         <QueryState
           error={hits.error}
           refusal={hits.refusal}
+          detail={hits.detail}
           loading={hits.loading}
           empty={
             rows.length
@@ -327,7 +334,14 @@ export function WorkSearch() {
                 // through the chart before showing it.
                 cell: (r) => {
                   const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
-                  return <SeatCell handle={r.assignee} name={who?.name} kind={who?.kind} />;
+                  return (
+                    <SeatCell
+                      handle={r.assignee}
+                      name={who?.name}
+                      kind={who?.kind}
+                      avatar={who?.avatar}
+                    />
+                  );
                 },
               },
             ]}

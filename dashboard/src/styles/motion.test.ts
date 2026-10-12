@@ -79,7 +79,7 @@ const ANIMATED: { selector: string; kind: Kind; why: string }[] = [
       "reader who asked for less motion.",
   },
   {
-    selector: ".prose.stream::after",
+    selector: ".prose.md.stream > :last-child::after",
     kind: "steady",
     why: "The caret on text being streamed: live for as long as the model is writing.",
   },

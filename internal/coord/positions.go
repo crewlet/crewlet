@@ -50,8 +50,11 @@ type DomainPosition struct {
 	// stream read as one caught up on the live one, and no node of a
 	// fleet could ever re-anchor.
 	//
-	// NEVER ZERO: a runner is always keyed to a stream
-	// ([statelog.Runner.KeyedTo]).
+	// ZERO IS UNKNOWN, never "no stream": this build always publishes it — a
+	// runner is always keyed to a stream ([statelog.Runner.KeyedTo]), and a
+	// node whose broker reports no creation instant does not run the domain
+	// — so a zero is only the type's zero value, a row nothing can place on
+	// a stream, which a reader never counts as on its own.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this
@@ -68,8 +71,8 @@ type DomainPosition struct {
 	// against a reanchoring node's own position
 	// ([statelog.ReanchorInputs.Highest]).
 	//
-	// ZERO IS A CHECKPOINT NAMING NO RECORD, and a reader weighs it as
-	// history the log may not hold.
+	// ZERO IS UNKNOWN — a checkpoint naming no record — and a reader weighs
+	// it as history the log may not hold.
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
@@ -84,6 +87,22 @@ type DomainPosition struct {
 	// applied. Zero on a healthy node, and the number an operator reads
 	// beside AppliedThrough to tell a lagging node from a stalled one.
 	Deferred int `json:"deferred,omitempty"`
+
+	// RecordVersion is the highest record version this node's build reads
+	// on the domain's log — what a writer asks before it publishes a record
+	// no older build can even DEFER.
+	//
+	// Deferral is a rolling upgrade's contract for a record a peer cannot
+	// apply, and it rests on the peer reading the record's ENVELOPE; a kind
+	// a build's envelope refuses stops that build's applier instead. So a
+	// writer about to publish such a kind reads this across every node the
+	// log counts, and waits for the last to advertise a build that reads it.
+	//
+	// ZERO IS "NOT ADVERTISED" — what a reader holds for a node it counts
+	// from its presence before that node's first report — and a reader
+	// weighs it as a build that reads nothing newer, never as one that
+	// reads everything.
+	RecordVersion int `json:"record_version,omitempty"`
 
 	// LogDiverged reports that the log holds, at this node's checkpoint,
 	// another record than the one it consumed there: a broker restored from
@@ -110,13 +129,17 @@ type DomainPosition struct {
 // trim asks "what has every node applied", and it asks it about every domain
 // at once.
 type NodePositions struct {
-	NodeID        string                    `json:"node_id"`
-	At            time.Time                 `json:"at"`
-	EngineVersion string                    `json:"engine_version,omitempty"`
-	Domains       map[string]DomainPosition `json:"domains"`
+	NodeID        string    `json:"node_id"`
+	At            time.Time `json:"at"`
+	EngineVersion string    `json:"engine_version,omitempty"`
+
+	// Domains is this node's position on each log it runs, keyed by the
+	// log's domain name.
+	Domains map[string]DomainPosition `json:"domains"`
 
 	// SnapshotBytes is the size of the artefact those per-domain snapshot
-	// positions came from.
+	// positions came from — the node's one artefact of the replicated
+	// estate.
 	//
 	// ON THE ROW RATHER THAN ON EACH DOMAIN, because a snapshot is ONE
 	// file covering every domain: a byte count per domain would be the

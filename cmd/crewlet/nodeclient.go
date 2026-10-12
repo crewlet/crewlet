@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Talking to a running node.
@@ -69,8 +70,11 @@ func (c *nodeClient) patiently(limit time.Duration) *nodeClient {
 }
 
 // nodeClientFor is the shared "one config argument, then find the node"
-// preamble the node-facing operator commands share.
-func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*flag.FlagSet)) (*nodeClient, error) {
+// preamble the node-facing operator commands share. env is the invocation's
+// environment ([runIn]), which the credential is read from.
+func nodeClientFor(environ config.Source, args []string, name string, stderr io.Writer,
+	extra func(*flag.FlagSet)) (*nodeClient, error) {
+
 	bootstrapPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
@@ -109,7 +113,7 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	// loopback bind of an unreleased binary, and that is a legitimate way
 	// to reach these routes. The 401 from a node that does not is the
 	// honest answer, and it names the variable.
-	base, bearer := *addr, nodeTokenOrEmpty()
+	base, bearer := *addr, nodeTokenOrEmpty(environ)
 	if base == "" {
 		// The config is read for the ADDRESS only, so an operator who
 		// named one can act on a node whose config file this machine does
@@ -239,7 +243,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 	// run it again.
 	if resp.StatusCode/100 != 2 {
 		if engineCode(body) == "" {
-			return notTheNode(path, resp.StatusCode, body)
+			return notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
 		return nodeError(resp.StatusCode, body, c.token != "")
 	}
@@ -262,8 +266,8 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 // none — which no refusal the engine writes does: every one is JSON with an
 // `error` code, the guard's 401 included, and so are its router's own
 // `no_route` and `method_not_allowed` for a route or a method the node does
-// not serve ([httpjson.Mux]) — a route an older node lacks is a refusal, not a
-// gateway.
+// not serve ([httpjson.Mux]) — a route this node does not serve is a refusal,
+// not a gateway.
 func engineCode(body []byte) string {
 	var payload struct {
 		Error string `json:"error"`
@@ -274,6 +278,30 @@ func engineCode(body []byte) string {
 	return payload.Error
 }
 
+// missingSurface is the refusal for a 404 at a REST surface the command needs,
+// given the code the body carried.
+//
+// Only a node with the ingress role mounts the REST surface. A node without
+// it binds api.port for its probes and tool bridge alone ([api.Probes]), and its
+// router answers every other path with the engine's own `no_route`
+// ([httpjson.CodeNoRoute]) — so that code is a Crewlet node missing a role,
+// and a 404 carrying no code of the engine's is not a node's API at all: a
+// proxy or gateway in front of it, or another service at the address. Each
+// is told where to point instead, because "no such route" alone sends an
+// operator looking for a build that lacks one.
+func missingSurface(base, surface, code string) error {
+	if code == string(httpjson.CodeNoRoute) {
+		return fmt.Errorf("%s serves no %s surface: it is a node without the "+
+			"%s role, which serves only its probes and tool bridge — point -api at a node "+
+			"whose node.roles include %s", base, surface,
+			placement.RoleIngress, placement.RoleIngress)
+	}
+	return fmt.Errorf("%s has no %s surface: whatever answered is not a "+
+		"Crewlet node's API — point -api (or api.host and api.port) at a node "+
+		"with the %s role rather than at a proxy or another service",
+		base, surface, placement.RoleIngress)
+}
+
 // notTheNode is a non-200 that is not the node's own answer: no engine error
 // code, so something between this command and the node wrote it — most often
 // a reverse proxy's read timeout, a 504 with an HTML page, while the node went
@@ -282,15 +310,13 @@ func engineCode(body []byte) string {
 // # Why it is a noAnswer and not a refusal
 //
 // Because a refusal the node wrote means nothing was done, and this does not:
-// the gate route takes up to a minute past its judgement, a proxy's default
-// read timeout is a minute, and the node finishes a gesture whatever happens to
-// the connection. Read as a refusal, the eviction printed no -op-id, so the
-// only way on was a second gesture over every log the first one reached.
-func notTheNode(path string, status int, body []byte) error {
-	said := textcut.Ellipsis(strings.TrimSpace(string(body)), maxRefusalTextBytes)
-	if said == "" {
-		said = "(an empty body)"
-	}
+// the gate route answers within fifty seconds (engine.GateAnswerBudget), a
+// proxy configured below that cuts it off, and the node finishes a gesture
+// whatever happens to the connection. Read as a refusal, the eviction printed
+// no -op-id, so the only way on was a second gesture over every log the first
+// one reached.
+func notTheNode(path string, status int, contentType string, body []byte) error {
+	said := foreignAnswer(contentType, body)
 	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+
 		"the engine writes, so it is not the node's own: something in front of it "+
 		"answered — a proxy or gateway, most often its read timeout — and the node "+
@@ -316,8 +342,9 @@ func (e noAnswer) Unwrap() error { return e.error }
 // the message does not carry: a gate refusal names what to do as `actions` — a
 // closed set each surface renders in its own words — and `crewlet retention
 // evict` renders them as the flags it has (-force, -op-id), which it can only
-// do if it can read them; and a write names the operation it was sent under,
-// which `crewlet work purge` prints as the -op-id a retry must carry.
+// do if it can read them, and which ones it renders depends on the refusal's
+// code; and a write names the operation it was sent under, which `crewlet work
+// purge` prints as the -op-id a retry must carry.
 type nodeRefusal struct {
 	Status  int
 	Code    string
@@ -341,10 +368,39 @@ type nodeRefusal struct {
 	// through another node (-url), under the same id.
 	Unvouched bool
 
+	// detail and hint are the refusal's own sentences, which the message
+	// carries beneath its first line.
+	detail, hint string
+
 	msg string
 }
 
 func (e *nodeRefusal) Error() string { return e.msg }
+
+// answered is the refusal as the node's own answer, whatever its status: the
+// status and the code, then the detail and the hint.
+func (e *nodeRefusal) answered() string {
+	return fmt.Sprintf("the node answered %d: %s", e.Status,
+		withRefusalDetail(e.Code, e.detail, e.hint))
+}
+
+// asJudgement is the refusal framed as the node's JUDGEMENT of a request — a
+// gate refusal — rather than as a node that cannot serve it.
+//
+// A 503 IS NOT ALWAYS "GO ELSEWHERE". [nodeError] frames one as "this node
+// cannot serve that", which is what a draining node and one built without a
+// route's backend mean. A gesture that could not be judged answers 503 too
+// (`readmission_unjudged`, `eviction_unjudged`), and is about something else
+// entirely — a lease listing or a positions register nobody could read, which
+// the refusal's own hint and actions say how to get past. Introduced as this
+// node's inability, the refusal contradicted its own hint; framed as the answer
+// it is, as every 409 gate refusal is, its code, hint and actions say what it
+// is.
+func (e *nodeRefusal) asJudgement() *nodeRefusal {
+	out := *e
+	out.msg = e.answered()
+	return &out
+}
 
 // nodeError turns a non-2xx the NODE wrote into something an operator can act
 // on. Only an answer carrying an engine error code reaches it: one that
@@ -365,7 +421,8 @@ func nodeError(status int, body []byte, sentToken bool) error {
 	}
 	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions,
 		OpID: payload.OpID, Unvouched: payload.Unvouched,
-		Unsettled: payload.Outcome == string(statelog.OutcomeUnknown)}
+		Unsettled: payload.Outcome == string(statelog.OutcomeUnknown),
+		detail:    payload.Detail, hint: payload.Hint}
 	switch {
 	case refusal.Unsettled:
 		// NOT A REFUSAL: a write the node could not account for, which
@@ -379,12 +436,12 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// backend a route needs, and a node DRAINING for a shutdown. The
 		// code says which, and the detail and hint beside it are what say
 		// where to go instead — "draining" on its own names what happened
-		// and not what to do about it.
+		// and not what to do about it. (A gate's 503 is neither, and its
+		// command reads it as the judgement it is: [nodeRefusal.asJudgement].)
 		refusal.msg = "this node cannot serve that: " + withRefusalDetail(
 			payload.Error, payload.Detail, payload.Hint)
 	default:
-		refusal.msg = fmt.Sprintf("the node answered %d: %s", status,
-			withRefusalDetail(payload.Error, payload.Detail, payload.Hint))
+		refusal.msg = refusal.answered()
 	}
 	return refusal
 }

@@ -14,14 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -258,6 +259,37 @@ func (p Params) Int(key string, def int) int {
 	return def
 }
 
+// WholeInt reads a parameter that must be a WHOLE NUMBER, and reports whether
+// it is one: a socket frame's number with no fraction and inside int64, or a
+// query string's integer as [strconv.ParseInt] reads it.
+//
+// FOR A VALUE THE ANSWER DEPENDS ON EXACTLY, which [Params.Int] is not: Int
+// truncates a socket frame's `12.5` to 12, because a dashboard's limit or page
+// size is a filter a typo should not blank a screen over. An offset into a
+// text is not a filter — `after: 12.5` names no byte — and read as 12 it is a
+// different request, answered as though it were the one asked. A caller
+// refuses a false here by name. An absent key is false too; ask [Params.Has]
+// first where absence means something of its own.
+func (p Params) WholeInt(key string) (int64, bool) {
+	switch v := p.values[key].(type) {
+	case float64:
+		// 2^63 is the first float64 past int64's range: MaxInt64 itself is
+		// not a float64, and converting what rounds to it is undefined.
+		if v != math.Trunc(v) || v < -(1<<63) || v >= 1<<63 {
+			return 0, false
+		}
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		return n, err == nil
+	}
+	return 0, false
+}
+
 // Bool reads a boolean parameter, falling back to def.
 func (p Params) Bool(key string, def bool) bool {
 	switch v := p.values[key].(type) {
@@ -490,24 +522,9 @@ func unresolved(ctx context.Context, what string) error {
 // give up on a screen that would work in a few seconds. The reference had
 // promised a 503 for both.
 //
-// Two sources, and each is its own subsystem's classification rather than a
-// second list here:
-//
-//   - EVERY state-log refusal ([statelog.ErrUnavailable]), a read's or a
-//     write's, whether or not waiting clears it. A node that is behind will
-//     catch up; a node holding a record it cannot decode, one whose log is
-//     full or whose broker refused the barrier will not — but none of those
-//     is a FAULT, and reported as one (a 500 `query_failed`, with the
-//     refusal's words sent only to the log) it told a caller the server had
-//     broken while hiding the remedy the refusal names. Whether to come back
-//     is carried separately, by [statelog.RetryAfter], which is ZERO for a
-//     refusal waiting cannot clear — so a surface answers it with no
-//     Retry-After and a client does not go round a loop. The retryable ones
-//     alone used to qualify, and when a barrier the broker refused stopped
-//     reading as a missed quorum, a linearizable read on a full log went
-//     from a 503 to a 500.
-//   - [coord.ErrUnavailable], the coordination contract's own third answer:
-//     the store could not be reached, which is neither "held" nor "absent".
+// What this node could not serve is [unavailableHere] — the tools' own rule,
+// each arm of it a sentinel its own subsystem marks, rather than a second list
+// here.
 //
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
@@ -534,7 +551,7 @@ func classifyFailure(err error) error {
 	case errors.Is(err, statelog.ErrForeignPosition):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
-	if errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, coord.ErrUnavailable) {
+	if unavailableHere(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
 		// derived hint survive for [statelog.RetryAfter], for the
 		// transport that renders them, and for the log.
@@ -546,6 +563,45 @@ func classifyFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err
+}
+
+// unavailableHere reports a read THIS NODE could not serve — which is never a
+// fault of the request, and never a fault of the server either.
+//
+// IT IS THE TOOLS' OWN RULE ([builtin.Condition]) and not a list of this
+// registry's, because the two answer the same reads: the tracker and the
+// knowledge base are read through the estate's router whichever surface asks,
+// and a second list here had already drifted from the first — it knew the
+// router's unserved answer while the tools did not, and the tools knew a queue
+// that is not live, a broker that did not answer, a store held closed while it
+// adopts a snapshot and a wait that ran out, which this one did not, so a read
+// the router could not even send answered `bad_params` or a 500 here. What it
+// covers:
+//
+//   - EVERY state-log refusal ([statelog.ErrUnavailable]), a read's or a
+//     write's, whether or not waiting clears it. A node that is behind will
+//     catch up; a node holding a record it cannot decode, one whose log is
+//     full or whose broker refused the barrier will not — but none of those
+//     is a FAULT, and reported as one (a 500 `query_failed`, with the
+//     refusal's words sent only to the log) it told a caller the server had
+//     broken while hiding the remedy the refusal names. Whether to come back
+//     is carried separately, by [statelog.RetryAfter], which is ZERO for a
+//     refusal waiting cannot clear — so a surface answers it with no
+//     Retry-After and a client does not go round a loop.
+//   - coord.ErrUnavailable, the coordination contract's own third answer:
+//     the store could not be reached, which is neither "held" nor "absent".
+//   - the estate router finding no copy to answer from (estate.ErrUnserved):
+//     no live node holds data, or none that does answers — a copy out of
+//     service or a peer restarting reaches this surface as this.
+//   - this node's own queue or store not ready for the read, and a read that
+//     ran out of time — see [builtin.Condition] for each.
+//
+// ASKED BY THE ANSWERS as well as the registry, for the answers that read what
+// is left of a failure as a refusal of the request: handed one of these, they
+// told a caller to change a question nothing was wrong with.
+func unavailableHere(err error) bool {
+	_, ok := builtin.Condition(err)
+	return ok
 }
 
 // Needs reports the grant a question is registered as needing.

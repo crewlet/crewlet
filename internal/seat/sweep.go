@@ -15,17 +15,60 @@ import (
 
 // sweepLoop re-evaluates placement on its own cadence, separate from the
 // heartbeat because the two answer different questions: the heartbeat keeps
-// what this node has, the sweep looks for what it should take.
-func (h *Host) sweepLoop(ctx context.Context) {
+// what this node has, the sweep looks for what it should take — and at once
+// when [Host.Resweep] asks, at most once per interval.
+//
+// THE INTERVAL STARTS AGAIN after an asked-for pass, so that pass stands in
+// for the tick rather than adding one beside it: a node's passes stay one per
+// interval apart but for the one an ask brings forward, which is what keeps
+// the per-sweep claim limit a bound on the rate — two passes' claims in any
+// interval at most, however many applies ask. An ask inside the interval of
+// the last one it honoured waits for the tick, which is the latency it would
+// have had without asking. Wall-clock, like the ticker, never the injected
+// clock the leases are judged by.
+func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
+	var asked time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-asks:
+			if !asked.IsZero() && time.Since(asked) < h.sweepEvery {
+				continue
+			}
+			asked = time.Now()
+			ticker.Reset(h.sweepEvery)
 		}
 		h.safely("seat_sweep_tick_failed", func() { h.Sweep(ctx) })
+	}
+}
+
+// Resweep asks for a placement pass now rather than at the sweep's next tick,
+// without waiting for it. For a change to the seats [Config.Seats] answers —
+// a role added or removed, a placement moved, a node's first company — which
+// the next tick would otherwise be the first to see, up to [SweepInterval]
+// later with every new seat unclaimed and every removed one still held.
+//
+// DROPPED BY A HOST THAT IS NOT RUNNING, whose [Host.Start] begins with a pass
+// of its own over the seats as they are by then. Kept, an ask made before the
+// start — an apply while the engine around the host is still being built — was
+// taken straight after that first pass: a second pass with nothing new to see,
+// which spent the one ask an interval honours, so the first apply after the
+// boot waited for the tick. Coalesced while running: an ask that finds one
+// pending adds nothing, and one inside the interval of the last honoured waits
+// for the tick ([Host.sweepLoop]).
+func (h *Host) Resweep() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.resweep == nil {
+		return
+	}
+	select {
+	case h.resweep <- struct{}{}:
+	default:
 	}
 }
 
@@ -52,12 +95,41 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		last, _ := h.LastSweep()
 		return last
 	}
-	plan, liveNodes := h.plan(ctx, seats)
+
+	draining := h.Draining()
+
+	// WHETHER THIS NODE CAN SERVE ITS SEATS AT ALL, asked BEFORE the plan,
+	// because the answer changes the plan: a node that cannot serve its
+	// seats' work gives every one of them back and claims none, so it is not
+	// placing seats, and it says so to its peers ([placement.NodeProfile.Withdrawn])
+	// rather than leaving them to keep its share free for it.
+	//
+	// It is a separate question from the readiness gate lower down because
+	// the two have opposite directions: readiness withholds CLAIMS and
+	// deliberately keeps what is held, and this gives back what is held
+	// whether or not anything is claimable. See [Config.Serviceable]. Not
+	// asked while draining, which gives everything back anyway.
+	var unfit bool
+	var unfitReason string
+	if !draining {
+		unfit, unfitReason = h.unserviceable(ctx)
+	}
+	h.setWithdrawn(ctx, unfit)
+
+	plan, liveNodes, peers := h.plan(ctx, seats, unfit)
 
 	byHandle := make(map[string]placement.Seat, len(seats))
+	placeable := make(map[string]struct{}, len(seats))
 	for _, s := range seats {
 		byHandle[s.Handle] = s
+		placeable[s.Handle] = struct{}{}
 	}
+	for _, handle := range plan.Unplaceable {
+		delete(placeable, handle)
+	}
+	h.mu.Lock()
+	h.placeable = placeable
+	h.mu.Unlock()
 	eligible := make(map[string]struct{}, len(plan.Eligible))
 	for _, handle := range plan.Eligible {
 		eligible[handle] = struct{}{}
@@ -80,6 +152,12 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			}
 			continue
 		}
+		if unfit {
+			// Eligible for nothing while withdrawn, which is not a
+			// placement change: the unserviceable shed below gives it back
+			// under its own reason.
+			continue
+		}
 		if _, may := eligible[handle]; !may {
 			// Still a seat, no longer OURS to run: the placement selector
 			// changed under a live apply, or this node's labels or roles
@@ -95,66 +173,74 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		}
 	}
 
-	draining := h.Draining()
-
-	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node whose rows
-	// are wrong gives back EVERY seat, so there is no share left to
-	// converge on and the capacity pass below has nothing to divide.
-	//
-	// It is a separate question from the readiness gate lower down because
-	// the two have opposite directions: readiness withholds CLAIMS and
-	// deliberately keeps what is held, and this gives back what is held
-	// whether or not anything is claimable. See [Config.Serviceable].
-	// THE TWO ARE SCOPED DIFFERENTLY ON PURPOSE. `unfit` outlives this
-	// block — the readiness gate below reads it — so it needs a zero value
-	// on the draining path, where nothing evaluates it. The REASON is only
-	// ever the text of the line logged here, so declaring it out there gave
-	// it an empty initialiser nothing could read.
-	var unfit bool
-	if !draining {
-		var unfitReason string
-		if unfit, unfitReason = h.unserviceable(ctx); unfit {
-			for _, handle := range h.Held() {
-				if h.Release(ctx, handle, ReasonUnserviceable) {
-					released = append(released, handle)
-				}
+	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node that cannot
+	// serve its seats' work gives back EVERY seat, so there is no share
+	// left to converge on and the capacity pass below has nothing to
+	// divide.
+	if unfit {
+		for _, handle := range h.Held() {
+			if h.Release(ctx, handle, ReasonUnserviceable) {
+				released = append(released, handle)
 			}
-			// EVERY PASS while it holds, at WARN: this is a node running
-			// no work at all, and an operator looking at an idle node
-			// needs the reason on the node rather than in a fleet-wide
-			// alarm they have to go and correlate.
-			log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
-				"reason", unfitReason, "released", len(released),
-				"hint", "this node's copy of the company's records is wrong "+
-					"rather than merely behind, so its seats move to a peer "+
-					"that can serve them; it reclaims them when this clears")
 		}
+		// EVERY PASS while it holds, at WARN: this is a node running no
+		// work at all, and an operator looking at an idle node needs the
+		// reason on the node rather than in a fleet-wide alarm they have to
+		// go and correlate.
+		log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
+			"reason", unfitReason, "released", len(released),
+			"hint", "this node cannot serve its seats' work at all, so its "+
+				"seats move to a peer that can; it reclaims them when this "+
+				"clears")
 	}
 
 	if !draining {
-		released = append(released, h.shedToCapacity(ctx, plan.Capacity)...)
+		released = append(released, h.shedToCapacity(ctx, plan)...)
 	}
 
 	var claimed []string
 	var blocked int
+	var fleetFull bool
 	// AFTER the shed above, deliberately: a node that is not ready must
 	// still give back seats it holds beyond its share, or a fleet whose
 	// newest member is mid-hydration cannot rebalance onto it and its
 	// oldest member stays over-subscribed for as long as that takes.
-	withheld := !draining && (unfit || !h.admits())
+	withheld := !draining && (unfit || !h.admits(ctx))
 	if !draining && !withheld {
+		// ONE BOUND PER GROUP, and nothing else: room in one group is never
+		// room in another, or a node matching a pinned seat's group and the
+		// unpinned one fills up on unpinned seats and strands the pinned one.
+		// The undead seats are already in it — [placement.Plan.Room]
+		// charges them first and squeezes the least constrained groups —
+		// so there is no total beside it to disagree with (see the
+		// placement package doc).
 		h.mu.Lock()
-		// Undead seats count against capacity: this process may still be
-		// serving them, so taking on more work would over-subscribe a node
-		// that is already in trouble.
-		room := plan.Capacity - len(h.held) - len(h.undead)
+		groupRoom := h.roomLocked(plan)
 		h.mu.Unlock()
-		if room > h.claimLimit {
-			room = h.claimLimit
+		room := 0
+		for _, r := range groupRoom {
+			room += max(r, 0)
 		}
-		if room > 0 {
-			claimed, blocked = h.claimUpTo(ctx, byHandle, plan.Eligible, room)
+		room = min(room, h.claimLimit)
+		switch {
+		case room <= 0:
+		case h.fleetHoldsEverySeat(seats, plan, peers):
+			// NOTHING IS FREE, and the fleet's own counts say so: see
+			// [Host.fleetHoldsEverySeat]. Trying every seat to learn it
+			// is the standing cost this skips.
+			fleetFull = true
+		default:
+			claimed, blocked = h.claimUpTo(ctx, byHandle, plan.Groups, groupRoom, room)
 		}
+	}
+
+	// WHAT THIS PASS TOOK, ADVERTISED NOW rather than at the next
+	// heartbeat, so a peer deciding whether anything is free counts it:
+	// otherwise that peer goes on trying every seat for up to a heartbeat.
+	// What a pass GIVES BACK is advertised by the release itself (see
+	// [Host.finishRelease]), whichever path releases it.
+	if len(claimed) > 0 {
+		h.renewNodePresence(ctx)
 	}
 
 	if withheld {
@@ -179,8 +265,9 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 
 	if len(plan.Unplaceable) > 0 {
 		log.WarnContext(ctx, "seats_unplaceable", "node", h.nodeID, "seats", plan.Unplaceable,
-			"hint", "no live node that runs seats matches these seats' placement, so nothing "+
-				"is serving them. Start a node that matches, or widen the selector.")
+			"hint", "no live node placing seats matches these seats' placement, so nothing "+
+				"is serving them. Start a node that matches (or bring back the one that "+
+				"matches and has withdrawn), or widen the selector.")
 	}
 
 	h.pruneSeatLocks(byHandle)
@@ -195,6 +282,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		Unplaceable:       plan.Unplaceable,
 		BlockedByProtocol: blocked,
 		Withheld:          withheld,
+		FleetFull:         fleetFull,
 	}
 	// A copy, never &result: a heartbeat appends to the stored record, and
 	// the value returned here would otherwise be the same object.
@@ -208,6 +296,26 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			"blocked_by_protocol", blocked)
 	}
 	return result
+}
+
+// setWithdrawn records whether this node is placing seats, and tells its peers
+// the moment that changes rather than at the next heartbeat.
+//
+// THE PEERS ARE WHO NEED IT. A node that cannot serve its seats gives them all
+// back and claims none, but its presence lease stays live — it is still a
+// member of the fleet — and a peer that went on counting it would leave its
+// share of every group free for it: those seats would sit unclaimed with no
+// node reporting anything, and a seat only it matches would never be called
+// unplaceable. Advertised, its peers divide by the nodes actually placing
+// seats and take the seats up, and a group only it matches is reported.
+func (h *Host) setWithdrawn(ctx context.Context, withdrawn bool) {
+	h.mu.Lock()
+	changed := h.withdrawn != withdrawn
+	h.withdrawn = withdrawn
+	h.mu.Unlock()
+	if changed {
+		h.renewNodePresence(ctx)
+	}
 }
 
 // currentSeats reads the org, converting a panicking provider into a pass
@@ -259,38 +367,46 @@ func (h *Host) pruneSeatLocks(seats map[string]placement.Seat) {
 // new node computes a share it cannot reach, and the incumbent keeps serving
 // seats it has already been told are not its own.
 //
+// PER GROUP, like claiming. A node over its share of one group gives back
+// seats of THAT group, whatever room it has in another: room is not
+// fungible across groups (see the placement package doc), and a node that
+// let an over-full group ride on another's spare share would hold seats an
+// eligible peer is waiting for — the same strand a fungible claim makes, from
+// the other side. A node that held its total on unpinned seats under a
+// build that pooled the shares sheds the surplus here and claims its pinned
+// seat with the room that frees.
+//
+// AND THE UNDEAD, through the same number. A seat whose teardown could not be
+// proven still counts against capacity — this process may still be serving
+// it — wherever it sits, a role this node may no longer run included, and
+// [placement.Plan.Room] charges it before handing the rest out most
+// constrained group first. So what an undead seat costs comes out of the
+// least constrained groups, and a pinned seat with no other home keeps its
+// room: a total kept beside the groups would read "full" there and shed
+// nothing, while the pinned seat waited.
+//
 // VOLUNTARY, so the seat is quiesced and its in-flight turn finishes before
 // the consumer detaches. A rebalance costs at most one turn boundary of
 // latency on each seat that moves; nothing is abandoned and nothing goes
 // dark, because the seat is served continuously — first here, then there.
 //
-// CONVERGENT, NOT OSCILLATING, and the ceiling is what guarantees it: shares
-// are ceil(seats/nodes), so they sum to at least the seat count, and a node
-// that has shed down to its share has no room to immediately re-claim what
-// it just gave up. The excess moves once and stops.
-func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
+// CONVERGENT, NOT OSCILLATING, and the ceiling is what guarantees it: a
+// group's shares are ceil(group size / eligible nodes), so they sum to at
+// least its size, and a node that has shed a group down to its share has no
+// room in it to immediately re-claim what it just gave up. The excess moves
+// once and stops.
+func (h *Host) shedToCapacity(ctx context.Context, plan placement.Plan) []string {
 	h.mu.Lock()
-	over := len(h.held) + len(h.undead) - capacity
+	candidates := h.overCapacityLocked(plan)
 	h.mu.Unlock()
-	if over <= 0 {
-		return nil
-	}
 
-	// Sorted, and NOT ordered by the preferred hint the way claiming is.
-	// The hint records the last node to claim a seat, which for every seat
-	// this node holds is this node — so it cannot discriminate among them,
-	// and ordering by it would only look like it was doing something. A
-	// stable order is what matters: it makes a shed reproducible, and two
-	// nodes rebalancing at once hold disjoint sets, so they cannot collide.
-	candidates := h.Held()
-	limit := min(over, h.releaseLimit, len(candidates))
-
+	limit := min(h.releaseLimit, len(candidates))
 	var shed []string
 	for _, handle := range candidates[:limit] {
 		h.mu.Lock()
 		held := len(h.held)
 		h.mu.Unlock()
-		log.InfoContext(ctx, "seat_released_over_capacity", "seat", handle, "held", held, "capacity", capacity)
+		log.InfoContext(ctx, "seat_released_over_capacity", "seat", handle, "held", held, "capacity", plan.Capacity)
 		h.Release(ctx, handle, ReasonDrain)
 
 		// A release whose teardown could not be proven keeps the lease —
@@ -309,36 +425,109 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 	return shed
 }
 
-// claimUpTo takes at most room seats, and reports the fleet's protocol floor
-// when it took none because an older-protocol peer is live.
+// overCapacityLocked is every running seat this node holds beyond what
+// [placement.Plan.Room] lets it keep, in the order they are given back:
+// least constrained groups first, so when the release limit cuts a pass
+// short a pinned seat — the one with the fewest other homes — is the last
+// to go. The caller holds h.mu.
+//
+// Sorted within a group, and NOT ordered by the preferred hint the way
+// claiming is. The hint records the last node to claim a seat, which for
+// every seat this node holds is this node — so it cannot discriminate among
+// them, and ordering by it would only look like it was doing something. A
+// stable order is what matters: it makes a shed reproducible, and two nodes
+// rebalancing at once hold disjoint sets, so they cannot collide.
+func (h *Host) overCapacityLocked(plan placement.Plan) []string {
+	running := make([][]string, len(plan.Groups))
+	for i, g := range plan.Groups {
+		for _, handle := range g.Handles {
+			if _, ok := h.held[handle]; ok {
+				running[i] = append(running[i], handle)
+			}
+		}
+		slices.Sort(running[i])
+	}
+
+	room := h.roomLocked(plan)
+	var out []string
+	for i := len(room) - 1; i >= 0; i-- {
+		// Room only ever reads negative by running seats of the group —
+		// the undead ones are what it charged first, not what it counts
+		// down — so the surplus is always theirs to give.
+		out = append(out, running[i][:max(-room[i], 0)]...)
+	}
+	return out
+}
+
+// roomLocked is [placement.Plan.Room] over what this node holds: the seats it
+// runs, and the undead ones it cannot give back. The caller holds h.mu.
+func (h *Host) roomLocked(plan placement.Plan) []int {
+	return plan.Room(func(handle string) bool {
+		_, ok := h.held[handle]
+		return ok
+	}, slices.Collect(maps.Keys(h.undead)))
+}
+
+// claimUpTo takes at most room seats in all and at most groupRoom[i] of
+// groups[i], and reports the fleet's protocol floor when the mixed-version
+// gate stopped it.
+//
+// A SEAT IS TAKEN ONLY AGAINST ITS OWN GROUP'S ROOM. A seat whose group is
+// full is skipped, never paid for out of another group's spare share: that
+// is what keeps a node matching a pinned seat's group and the unpinned one
+// from filling up on unpinned seats and stranding the pinned one.
+//
+// THE FLOOR IS ASKED ONLY WHEN THE GATE REFUSED A CLAIM, never because a pass
+// took nothing. A pass that took nothing because its peers hold every seat
+// it may run is the steady state of any node whose share did not come out
+// even — room for one more, and nothing free — and it used to ask the floor
+// on every sweep to rule the gate out. The floor is a question about every
+// live lease, which the KV backend answers from a view that takes in every
+// lease write the fleet makes while anybody asks it; asked every five seconds
+// the view never went idle, and the node took in the fleet's heartbeats (at
+// ten thousand seats, about 670 messages a second) to learn what each refusal
+// had already said: held. The refusal says which rule refused (see
+// coord.Refusal), so a pass that met only held seats judges no gate at all.
+//
+// A GATE REFUSAL ENDS THE PASS: the gate is fleet-wide, so every other claim
+// this pass could make would be refused the same way, and each of them would
+// judge the gate again to learn it.
+//
+// byHandle is the pass's seats by handle: a group names its seats by handle,
+// and a claim needs the whole seat, because its lease is named by the id.
 func (h *Host) claimUpTo(ctx context.Context, byHandle map[string]placement.Seat,
-	eligible []string, room int) ([]string, int) {
+	groups []placement.Group, groupRoom []int, room int) ([]string, int) {
 
 	var claimed []string
-	for _, handle := range h.claimOrder(ctx, byHandle, eligible) {
+	for _, c := range h.claimOrder(ctx, byHandle, groups, groupRoom) {
 		if len(claimed) >= room {
 			break
 		}
-		took, stop := h.tryClaim(ctx, byHandle[handle])
+		if groupRoom[c.group] <= 0 {
+			continue
+		}
+		took, refused, stop := h.tryClaim(ctx, c.seat)
 		if took {
-			claimed = append(claimed, handle)
+			claimed = append(claimed, c.seat.Handle)
+			groupRoom[c.group]--
+		}
+		if refused == coord.RefusedProtocol {
+			// "An older-protocol node is live and this build refuses to
+			// claim beside it" — an upgrade that has stalled, and
+			// invisible without this — rather than "peers hold
+			// everything", which is normal.
+			return claimed, h.protocolBlock(ctx)
 		}
 		if stop {
 			break
 		}
 	}
-	if len(claimed) > 0 {
-		return claimed, 0
-	}
-	// Nothing claimed. Distinguish "peers hold everything" (normal) from
-	// "an older-protocol node is live and this build refuses to claim
-	// beside it" (an upgrade that has stalled, and invisible without this).
-	return claimed, h.protocolBlock(ctx)
+	return claimed, 0
 }
 
-// tryClaim takes one seat, reporting whether it was established and whether
-// the pass must stop claiming altogether.
-func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bool) {
+// tryClaim takes one seat, reporting whether it was established, why it was
+// refused if it was, and whether the pass must stop claiming altogether.
+func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, refused coord.Refusal, stop bool) {
 	handle := seat.Handle
 	// A SEAT WITH NO ID CANNOT BE CLAIMED, and refusing here is what keeps
 	// that loud: its lease resource, its mailbox subject and its consumer
@@ -350,7 +539,7 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bo
 			"hint", "this seat has no derivable id, so it has no lease and no "+
 				"mailbox; a human seat is never claimed, and an agent seat "+
 				"without one is a company whose name or handle derives nothing")
-		return false, false
+		return false, "", false
 	}
 	unlock := h.lockSeat(handle)
 	defer unlock()
@@ -358,12 +547,23 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bo
 	h.mu.Lock()
 	_, alreadyHeld := h.held[handle]
 	_, alreadyDead := h.undead[handle]
+	draining := h.draining
 	h.mu.Unlock()
+	// A DRAIN THAT BEGAN AFTER THIS PASS READ THE HOST ends the pass. The
+	// pass decided to claim from a host that was not draining, and a drain
+	// begun since has handed its seats back — under this same seat lock, so
+	// a claim waiting on it would take straight back the seat the drain had
+	// just let go, onto a node that is leaving: attached after the drain's
+	// quiesce, held through the teardown, and, when the stop cancelled the
+	// pass mid-acquire, left to lapse on its TTL.
+	if draining {
+		return false, "", true
+	}
 	if alreadyHeld || alreadyDead {
-		return false, false // re-claimed under us while we waited
+		return false, "", false // re-claimed under us while we waited
 	}
 
-	lease, err := h.backend.TryAcquire(ctx, coord.SeatResource(seat.ID), coord.AcquireOptions{
+	lease, refused, err := h.backend.TryAcquire(ctx, coord.SeatResource(seat.ID), coord.AcquireOptions{
 		Owner: h.owner,
 		TTL:   h.ttl,
 		// The STABLE node id, not the incarnation: the hint has to survive
@@ -380,18 +580,30 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bo
 		// what this pass actually got. Distinct from a nil lease, which is
 		// a real refusal by a peer and only skips THIS seat.
 		log.WarnContext(ctx, "seat_claim_unavailable", "seat", handle, "error", err)
-		return false, true
+		return false, "", true
 	}
 	if lease == nil {
-		return false, false
+		return false, refused, false
 	}
-	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
 	// Held from here so the heartbeat renews it while the hook runs, but
 	// ESTABLISHING so nothing may start a turn on it yet. See heldSeat.
+	//
+	// UNLESS A DRAIN BEGAN WHILE THE LEASE WAS BEING TAKEN, decided under
+	// the lock [Host.BeginDrain] sets its flag under: a seat entered here
+	// before the flag is one the drain's release reads in the held set and
+	// gives back, and once the flag is set nothing is entered — so no claim
+	// can slip between the drain's decision and its release. The lease
+	// just taken goes straight back, with nothing attached to it.
 	h.mu.Lock()
+	if h.draining {
+		h.mu.Unlock()
+		h.giveBackUnattached(ctx, handle, *lease)
+		return false, "", true
+	}
 	h.held[handle] = &heldSeat{seat: seat, lease: *lease, renewedAt: h.now(), establishing: true}
 	h.mu.Unlock()
+	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
 	if err := h.notifyAcquire(ctx, seat, *lease); err != nil {
 		// A seat whose takeover pipeline failed must not stay claimed: it
@@ -406,32 +618,73 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bo
 		// Fenced, and already inside this seat's lock. The reason tells the
 		// hook the seat was never fully established, so it must tolerate
 		// half-spawned children and a consumer that was never attached.
-		h.releaseLocked(ctx, handle, ReasonAcquireFailed)
-		return false, false
+		//
+		// NOT ON THE PASS'S CONTEXT, for the reason [Host.Stop] gives: the
+		// commonest way a hook fails mid-pass is the host stopping, which
+		// cancels the pass, and a give-back that inherits that releases
+		// nothing — the seat then lapses on its TTL, outside the held set
+		// the stop gives back.
+		h.releaseLocked(WithinStop(context.WithoutCancel(ctx), h.ttl),
+			handle, ReasonAcquireFailed)
+		return false, "", false
 	}
 
 	h.mu.Lock()
-	if entry := h.held[handle]; entry != nil {
+	entry := h.held[handle]
+	if entry != nil {
 		entry.establishing = false
 	}
 	h.mu.Unlock()
+	// THE EDGE INTO ADMISSION, said out loud: nothing else reports it, and
+	// whatever the acquire hook was refused while the seat established is
+	// waiting on exactly this. See [Hooks.OnEstablished].
+	if entry != nil {
+		h.notifyEstablished(ctx, seat, *lease)
+	}
 
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
 	// a failed takeover straight back — a bad MCP command, a credential
 	// resolving to nothing — so counting it earlier meant a seat nothing
-	// runs still burned a claim slot, still logged as claimed, and still
-	// made the pass non-empty, which suppresses the protocol-block probe: a
-	// stalled mixed-version upgrade then reported no block beside a claim
-	// that never happened.
-	return true, false
+	// runs still burned a claim slot and still logged as claimed.
+	return true, "", false
 }
 
-// claimOrder is the unheld seats this node may run, its preferred ones
-// first.
+// giveBackUnattached hands back a seat lease this node took and never
+// entered in its held set, so nothing — no hook, no consumer — was attached to
+// it. The caller holds the seat's lock.
 //
-// The caller passes the ELIGIBLE handles, already filtered by placement —
+// On a context free of the pass's cancellation, bounded as every give-back of
+// a stop is ([WithinStop]), because the pass that took it is one a stopping
+// host cancels; past the bound the lease lapses on its TTL, the outcome of not
+// trying.
+func (h *Host) giveBackUnattached(ctx context.Context, handle string, lease coord.Lease) {
+	stepCtx, done := StopStep(WithinStop(context.WithoutCancel(ctx), h.ttl))
+	defer done()
+	if _, err := h.backend.Release(stepCtx, lease.Resource, h.owner, lease.Epoch); err != nil {
+		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
+	}
+}
+
+// candidate is a seat a pass may try, and the index of its group in the
+// plan — the room it is claimed against.
+type candidate struct {
+	seat  placement.Seat
+	group int
+}
+
+// claimOrder is the unheld seats this node may run, in the groups it has room
+// in, most constrained group first and its preferred ones first within each.
+//
+// The caller passes the plan's groups, already filtered by placement —
 // eligibility is not a preference to be sorted, it is the difference between
-// a seat this node may hold and one it may not.
+// a seat this node may hold and one it may not. A group with no room left
+// contributes nothing: trying a seat this node may not take costs a lease
+// read for a claim it would have to give straight back.
+//
+// GROUPS BEFORE HINTS. The groups come in the plan's order, fewest eligible
+// nodes first, so when the claim limit cuts a pass short it is the seats
+// with the fewest other homes that were taken. The hint then orders seats
+// WITHIN a group.
 //
 // Stickiness, and only stickiness: a seat whose hint names this node is
 // TRIED first so a restart or a rolling deploy tends to land it back where
@@ -448,7 +701,7 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bo
 // expires — negative stickiness, the mirror of the positive kind. Peers are
 // unaffected.
 func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Seat,
-	seats []string) []string {
+	groups []placement.Group, groupRoom []int) []candidate {
 
 	now := h.now()
 	h.mu.Lock()
@@ -457,24 +710,34 @@ func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Sea
 			delete(h.acquireBackoffs, handle)
 		}
 	}
-	candidates := make([]string, 0, len(seats))
-	for _, handle := range seats {
-		if _, skip := h.held[handle]; skip {
+	perGroup := make([][]string, len(groups))
+	total := 0
+	orderable := false
+	for i, g := range groups {
+		if groupRoom[i] <= 0 {
 			continue
 		}
-		if _, skip := h.undead[handle]; skip {
-			continue
+		for _, handle := range g.Handles {
+			if _, skip := h.held[handle]; skip {
+				continue
+			}
+			if _, skip := h.undead[handle]; skip {
+				continue
+			}
+			if _, skip := h.acquireBackoffs[handle]; skip {
+				continue
+			}
+			perGroup[i] = append(perGroup[i], handle)
 		}
-		if _, skip := h.acquireBackoffs[handle]; skip {
-			continue
-		}
-		candidates = append(candidates, handle)
+		slices.Sort(perGroup[i])
+		total += len(perGroup[i])
+		orderable = orderable || len(perGroup[i]) >= 2
 	}
 	h.mu.Unlock()
-	slices.Sort(candidates)
 
-	// NOTHING TO ORDER, so nothing to read. Fewer than two candidates has
-	// exactly one ordering, and the hint read below is a walk of the epochs
+	// NOTHING TO ORDER, so nothing to read. The hint orders seats within a
+	// group, so a pass where no group has two candidates has exactly one
+	// ordering, and the hint read below is a walk of the epochs
 	// bucket — which has no TTL and is never pruned, so it holds a record
 	// for every resource the deployment has ever leased. Paying that on the
 	// five-second sweep to sort a list that cannot be sorted is waste in the
@@ -482,43 +745,57 @@ func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Sea
 	// capacity, or one whose every remaining candidate is in acquire
 	// backoff. The second is the case the backoff exists to calm, so
 	// spending a full-bucket read there works directly against it.
-	if len(candidates) < 2 {
-		return candidates
+	var hinted map[string]struct{}
+	if orderable {
+		got, err := h.backend.PreferredResources(ctx, coord.ClassSeat, h.nodeID)
+		if err == nil {
+			hinted = got
+		}
 	}
 
-	hinted, err := h.backend.PreferredResources(ctx, coord.ClassSeat, h.nodeID)
-	if err != nil || len(hinted) == 0 {
-		return candidates
-	}
-	mine := make([]string, 0, len(candidates))
-	rest := make([]string, 0, len(candidates))
-	for _, handle := range candidates {
-		if _, ok := hinted[coord.SeatResource(byHandle[handle].ID)]; ok {
-			mine = append(mine, handle)
-			continue
+	out := make([]candidate, 0, total)
+	for i, handles := range perGroup {
+		var rest []candidate
+		for _, handle := range handles {
+			c := candidate{seat: byHandle[handle], group: i}
+			// The hint is on the LEASE, which is named by the seat's id.
+			if _, ok := hinted[coord.SeatResource(c.seat.ID)]; ok {
+				out = append(out, c)
+				continue
+			}
+			rest = append(rest, c)
 		}
-		rest = append(rest, handle)
+		out = append(out, rest...)
 	}
-	return append(mine, rest...)
+	return out
 }
 
-// protocolBlock reports the fleet's protocol floor when it is what stopped
-// this node claiming, and zero otherwise. The decision is [coord.Lagging]'s;
-// what is left here is what to SAY about the answer.
+// protocolBlock reports the fleet's protocol floor once the mixed-version gate
+// has refused one of this pass's claims, and zero when the floor it names is no
+// longer below this node's.
 //
-// AN UNREADABLE STORE IS NOT A BLOCK HERE: this runs every five seconds and
-// reports a hint, so a transient read failure that stopped every claim would
-// turn a store blip into a fleet-wide stall.
+// Asked only then, which is what makes it cheap: the claim the gate refused
+// has just judged the same view, so the floor is read from a view that is
+// already running rather than one started to answer it.
 func (h *Host) protocolBlock(ctx context.Context) int {
-	floor, lagging, err := coord.Lagging(ctx, h.backend, h.protocol)
-	if err != nil || !lagging {
+	const hint = "an older-protocol node is still live or still holds seats; this node will claim nothing " +
+		"until it drains. Finish the rolling upgrade — do NOT roll back across a protocol " +
+		"bump without stopping the fleet first."
+	floor, found, err := h.backend.FleetProtocolFloor(ctx)
+	switch {
+	case err != nil:
+		// The gate DID refuse — that much the claim said — so the stall
+		// is reported even when the floor to name could not be read.
+		log.WarnContext(ctx, "seat_claims_blocked_by_older_protocol", "node", h.nodeID,
+			"fleet_floor", "unknown", "this_node", h.protocol, "error", err, "hint", hint)
+		return 0
+	case !found || floor >= h.protocol:
+		// The older lease went between the refusal and this read: the
+		// next pass claims.
 		return 0
 	}
 	log.WarnContext(ctx, "seat_claims_blocked_by_older_protocol", "node", h.nodeID,
-		"fleet_floor", floor, "this_node", h.protocol,
-		"hint", "an older-protocol node still holds leases; this node will claim nothing until "+
-			"it drains. Finish the rolling upgrade — do NOT roll back across a protocol bump "+
-			"without stopping the fleet first.")
+		"fleet_floor", floor, "this_node", h.protocol, "hint", hint)
 	return floor
 }
 
@@ -536,8 +813,14 @@ func (h *Host) protocolBlock(ctx context.Context) int {
 // undoing the balance for no reason. Before the first successful read there
 // is nothing to reuse, and a fleet of one — this node — is the honest
 // assumption.
-func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int) {
-	var live []placement.NodeProfile
+//
+// The third result is the PEERS AS READ BY THIS PASS, and nil when the read
+// failed: a stale roster is good enough to size a share by, and not good
+// enough to conclude from that nothing is free ([Host.fleetHoldsEverySeat]).
+func (h *Host) plan(ctx context.Context, seats []placement.Seat,
+	withdrawn bool) (placement.Plan, int, []placement.NodeProfile) {
+
+	var live, peers []placement.NodeProfile
 
 	leases, err := h.backend.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -556,11 +839,91 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 		h.mu.Lock()
 		h.liveProfiles = live
 		h.mu.Unlock()
+		peers = live
 	}
 
-	plan := placement.Compute(seats, h.profile, live)
-	h.checkFleetRoles(append(slices.Clone(live), h.profile))
-	return plan, plan.SeatNodes
+	me := h.profile
+	me.Withdrawn = withdrawn
+	plan := placement.Compute(seats, me, live)
+	h.checkFleetRoles(append(slices.Clone(live), me))
+	return plan, plan.SeatNodes, peers
+}
+
+// fleetHoldsEverySeat reports whether the live seat-running nodes, by their
+// own counts, hold every seat any of them may run — in which case a pass with
+// room has nothing to claim and tries nothing.
+//
+// # Why it asks the counts rather than the seats
+//
+// A node whose share did not come out even — room for one more, and nothing
+// free — is the steady state of most of a fleet, and it learned that nothing
+// was free by trying every seat it may run: a leader read each, plus a walk of
+// the epochs bucket to order them, every five seconds, for an answer that was
+// the same each time. At two thousand seats that was about four thousand
+// messages to that node per pass. Every node already advertises on its
+// presence row, and this pass has already listed those rows to size its share,
+// so the sum of the counts is free.
+//
+// # Why it is safe to be wrong in either direction
+//
+// Nothing is claimed on this answer — a claim is still the lease's
+// compare-and-set — so a wrong answer costs time or reads and never a seat
+// held twice. It errs toward TRYING. Each seat is held by one node at most, so
+// the counts sum to at most the seats held, and a sum that reaches every
+// placeable seat says every one of them is held. A count a row does not carry
+// readably reads as zero and adds nothing to the sum, which can only make it
+// read "something may be free" — the answer that tries; a node whose
+// presence lapsed is not listed, so its seats read as free the moment it goes;
+// and a roster this pass could not read concludes nothing. It can read FULL
+// while a seat is free only for as long as some node's advertised count
+// outlives what it holds — a seat it lost and has not yet noticed — which
+// that node's next renewal corrects, and which a release corrects at once
+// ([Host.finishRelease]), or while two nodes' membership reads disagree about
+// which seats are placeable, which the next sweep's read settles.
+//
+// # Only leases on placeable seats count
+//
+// The sum is compared with the placeable seats, so it must count only leases
+// on them. A lease on any other seat — an undead one whose role is gone, or
+// whose placement now matches no live node — is held, and is not one of the
+// seats being counted to: added in, it stands in for a free seat. While its
+// teardown kept failing, every node read the fleet as full and the free seat
+// waited with nothing reported. So every node counts, and advertises, only
+// its leases on the seats its own plan calls placeable ([Host.placedCount]).
+//
+// OWN COUNT FROM MEMORY, never from this node's own row, which is a renewal
+// old.
+func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
+	peers []placement.NodeProfile) bool {
+
+	if peers == nil {
+		return false
+	}
+	held := h.placedCount()
+	for _, p := range peers {
+		if p.ID == h.nodeID || !p.RunsSeats() {
+			continue
+		}
+		held += p.Held
+	}
+	return held >= len(seats)-len(plan.Unplaceable)
+}
+
+// placedCount is how many seat leases this node holds on seats some live node
+// may run ([Host.placeable]): the seats it runs and the undead ones it is
+// still renewing, less any lease on a seat outside that set.
+func (h *Host) placedCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for handle := range h.placeable {
+		if _, ok := h.held[handle]; ok {
+			n++
+		} else if _, ok := h.undead[handle]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // checkFleetRoles says something when the fleet has nobody doing one of the
@@ -576,7 +939,7 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 // and again when it comes back — not 720 times.
 func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 	unmanned := map[placement.NodeRole]struct{}{}
-	for _, role := range []placement.NodeRole{placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
+	for _, role := range placement.Vocabulary() {
 		manned := false
 		for _, node := range live {
 			if node.Roles.Has(role) {
@@ -631,6 +994,19 @@ func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 // the reading side already renders as "did not say".
 func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
+	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
+	// anything is free ([Host.fleetHoldsEverySeat]). Placement's own key,
+	// written unconditionally: it is the host's own fact, with no hook to
+	// overrun.
+	meta[placement.HeldKey] = h.placedCount()
+	// WITHDRAWN, only while it is: see [Host.setWithdrawn]. Absent is the
+	// reading every peer gives a node that is placing seats.
+	h.mu.Lock()
+	withdrawn := h.withdrawn
+	h.mu.Unlock()
+	if withdrawn {
+		meta[placement.WithdrawnKey] = true
+	}
 	if h.status == nil {
 		return meta
 	}
@@ -675,7 +1051,12 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	if h.Draining() {
 		return
 	}
-	lease, err := h.backend.TryAcquire(ctx, coord.NodeResource(h.nodeID), coord.AcquireOptions{
+	// BEFORE THE CALL, as a seat's renew takes it: what a successful claim
+	// proves is the row's TTL from the moment it was asked for, and a stamp
+	// taken after a slow store answered would credit this node with time it
+	// never held.
+	asked := h.now()
+	lease, _, err := h.backend.TryAcquire(ctx, coord.NodeResource(h.nodeID), coord.AcquireOptions{
 		Owner:     h.owner,
 		TTL:       h.ttl,
 		Preferred: h.nodeID,
@@ -702,6 +1083,7 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	draining := h.draining
 	if !draining {
 		h.nodeLease = lease
+		h.presenceRenewedAt = asked
 	}
 	h.mu.Unlock()
 	if draining {
@@ -726,6 +1108,9 @@ func (h *Host) releaseNodePresence(ctx context.Context) {
 }
 
 func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
+	// ONE STEP OF A STOP, when a stop is what asks ([StopStep]).
+	ctx, done := StopStep(ctx)
+	defer done()
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		log.WarnContext(ctx, "node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}
@@ -738,7 +1123,7 @@ func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
 // because a status function paniced once would be a worse failure than the
 // one the gate was added to prevent. The panic is logged where it can be
 // found.
-func (h *Host) admits() (ok bool) {
+func (h *Host) admits(ctx context.Context) (ok bool) {
 	if h.ready == nil {
 		return true
 	}
@@ -752,7 +1137,7 @@ func (h *Host) admits() (ok bool) {
 			ok = true
 		}
 	}()
-	return h.ready()
+	return h.ready(ctx)
 }
 
 // unserviceable asks [Config.Serviceable] whether held seats may stay.

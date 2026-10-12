@@ -4,9 +4,8 @@
  * key nothing reads any more is removed rather than left behind.
  *
  * Browser storage outlives every build, so a key is a promise about a
- * reader's profile that deleting the module does not retract: the app rail's
- * `crewlet.rail.collapsed` outlived the rail. Both halves are about the SOURCE
- * rather than a browser, so they are read off it.
+ * reader's profile that deleting the module does not retract. Both halves are
+ * about the SOURCE rather than a browser, so they are read off it.
  */
 
 import { describe, expect, test, vi } from "vitest";
@@ -72,13 +71,20 @@ describe("the registry", () => {
   test("a retired key is not also a live one, and the two lists share no value", () => {
     const live = new Set<string>(Object.values(STORAGE_KEYS));
     expect(RETIRED_STORAGE_KEYS.filter((k) => live.has(k))).toEqual([]);
-    expect(RETIRED_STORAGE_KEYS).toContain("crewlet.rail.collapsed");
     expect(new Set(Object.values(STORAGE_KEYS)).size).toBe(Object.values(STORAGE_KEYS).length);
   });
 });
 
 describe("a retired key", () => {
   test("is removed at boot, and nothing live is touched", () => {
+    // A profile holding one value a build stopped reading beside every live one.
+    const profile = new Map<string, string>(Object.values(STORAGE_KEYS).map((k) => [k, "kept"]));
+    profile.set("crewlet.gone.key", "stale");
+    const storage = () => ({ removeItem: (k: string) => void profile.delete(k) });
+    forgetRetiredKeys(storage, ["crewlet.gone.key"]);
+    expect(profile.has("crewlet.gone.key")).toBe(false);
+    expect([...profile.keys()].sort()).toEqual(Object.values(STORAGE_KEYS).sort());
+    // And at boot it removes exactly the declared list.
     const removed: string[] = [];
     forgetRetiredKeys(() => ({ removeItem: (k: string) => removed.push(k) }));
     expect(removed).toEqual([...RETIRED_STORAGE_KEYS]);

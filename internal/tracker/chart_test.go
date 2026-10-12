@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/configplane"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -120,7 +120,7 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 // An operation id derived from the activation is one the ledger already holds
 // from that activation's first write, so it answered the reapply as done and
 // the stale names stood until the configuration moved again.
-func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
+func TestAReapplySetsRightWhatAnEqualEpochWalkedBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 	const at = int64(100)
@@ -132,12 +132,12 @@ func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(at), stale); err != nil {
-		t.Fatalf("the equal-position stale apply: %v", err)
+		t.Fatalf("the equal-stamp stale apply: %v", err)
 	}
 	r.drain()
 	if name := r.projectName("ENG"); name != "Engineering" {
 		t.Fatalf("the stale apply left %q — the premise of this case is an equal "+
-			"position the guard lets through", name)
+			"stamp the guard lets through", name)
 	}
 
 	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(at), current)
@@ -159,20 +159,18 @@ func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
 // ledger keeps its rows.
 //
 // The operation is the APPLY, minted when it runs through the state log's own
-// grammar. The id it replaced, `chart:<position>:<key>`, was outside that
+// grammar. The id it replaced, `chart:<epoch>:<key>`, was outside that
 // grammar, so the ledger read it as minted at the zero instant and could vouch
 // for it on no node whose ledger had ever lost a row: every boot of every such
 // node had every project answered `unknown` without being decided.
 func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
-	// THE LEDGER HAS LOST ROWS UP TO A MINUTE AGO — a sweep, say. A minute
-	// rather than now, so the apply's own mint, which an id resolves to the
-	// millisecond, is unambiguously after it.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
-		tracker.Domain{}, time.Now().Add(-time.Minute)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	// THE LEDGER HAS LOST ROWS UP TO A MINUTE AGO — a sweep, say — and the
+	// activation is older than that. A minute rather than now, so the
+	// apply's own mint, which an id resolves to the millisecond, is
+	// unambiguously after it.
+	r.markLedgerLost(time.Now().Add(-time.Minute))
 	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})
@@ -198,13 +196,9 @@ func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
 func TestTwoNodesApplyingOneChartWriteOnce(t *testing.T) {
 	t.Parallel()
 	a := newRoundTripWithoutProject(t)
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node-b.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open node b's store: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	b := newRoundTripOn(t, a.broker, a.log, db, "node-b")
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node-b.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = dbNode.Close() })
+	b := newRoundTripOn(t, a.broker, a.log, dbNode, db, "node-b")
 	b.applyWhileWriting()
 	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
@@ -242,10 +236,7 @@ func TestAnUnknownChartWriteIsAnError(t *testing.T) {
 	r := newRoundTripWithoutProject(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this apply mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
-		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now().Add(time.Hour))
 	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})
@@ -259,7 +250,7 @@ func TestAnUnknownChartWriteIsAnError(t *testing.T) {
 func (r *roundTrip) projectName(key string) string {
 	r.t.Helper()
 	var name string
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT name FROM tracker_projects WHERE key = ?`, key).Scan(&name)
 	}); err != nil {
@@ -375,7 +366,7 @@ func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {
 func (r *roundTrip) projectChartEpoch(key string) int64 {
 	r.t.Helper()
 	var at int64
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT chart_epoch FROM tracker_projects WHERE key = ?`, key).Scan(&at)
 	}); err != nil {

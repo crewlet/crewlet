@@ -20,8 +20,9 @@ import (
 // only symptom a refusal naming a grant the caller already held.
 //
 // NOTHING ELSE CATCHES IT. The completeness walks in internal/authz hold the
-// rules table against itself, and [TestEveryToolHasAnAuthorityRule] holds it
-// against the tool NAMES. A field name inside a row is below all of them.
+// rules table against itself, and [TestEveryRegisteredToolHasAnAuthorityRule]
+// holds it against the tool NAMES. A field name inside a row is below all of
+// them.
 func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 	t.Parallel()
 	declared := declaredArguments(t)
@@ -169,6 +170,6 @@ func toolsWithArguments() []tools.Callable {
 		&markInbox{}, &setPins{}, &saveWorkView{},
 		&removeWorkItem{}, &restoreWorkItem{}, &moveWorkItem{},
 		&placeWorkItem{}, &pauseSeat{}, &resumeSeat{}, &steerTurn{},
-		&answerRun{},
+		&answerRun{}, &writeProjectFile{}, &removeProjectFile{},
 	}
 }

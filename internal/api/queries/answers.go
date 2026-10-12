@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -150,12 +152,46 @@ type Sources struct {
 	// alone, which offers a suspended person as somebody to hand work to.
 	WithheldContacts func() func(handle string) bool
 
+	// Env resolves a `${VAR}` a seat's CONTACT IDS carry — a Slack user id,
+	// a GitHub login — through the serving node's own chain: its secret
+	// store, then the environment it was handed (the engine's
+	// LookupSecret). `colleague` reports those ids, and a seat's own lookup
+	// resolves them through the same chain ([builtin.Corpus]). Nil reads
+	// the process environment.
+	//
+	// THE NODE'S CHAIN because the routing that mentions a person resolves
+	// the same fields through it: an id sealed in the store, read here from
+	// the process environment, was a person the screen showed no id for
+	// while every delivery to them was routed by it. It resolves contact
+	// ids and nothing else — who a caller IS is the identity directory's
+	// answer, never a field of the chart.
+	Env org.EnvLookup
+
+	// CompanyWriters is Tier A's `api.auth.company_writers`: the ids of
+	// the Tier A tokens that alone may change the company document while
+	// it is managed (ADR-0030), or empty while it is not. `viewer` answers
+	// from it whether this principal may change the document and who
+	// manages it, through [config.APIAuth.MayWriteCompany] — the one
+	// reading the config surface enforces it by — so a screen offers
+	// exactly the edits that surface admits.
+	CompanyWriters []string
+
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
 
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
+
+	// Objects is the fleet's record of the object store, for the fleet
+	// view's file-storage card. Nil leaves the card out of the answer rather
+	// than reporting a fleet whose collector never ran.
+	Objects ObjectsReader
+
+	// FleetBroker is the fleet broker's membership — what every live node
+	// advertises against what the metadata group counts. Nil leaves the
+	// question unregistered.
+	FleetBroker BrokerLister
 
 	// Runs is the schedule dispatch ledger. Nil still answers the
 	// schedules question — the configured schedules are a projection of
@@ -290,6 +326,12 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// Files is a project's files — the rows, never the bytes, which the
+	// download route streams. SEPARATE from [Sources.Work] for the reason
+	// [Sources.WorkSearch] is: a node can answer one and not the other,
+	// and a screen needs to know which. Nil leaves `work_files`
+	// unregistered.
+	Files FileReader
 	// Backlinks is which pages and tasks link to a page — this node's
 	// lexical index, which derives the links from the bodies it reads
 	// ([search.Backlinks]). Nil leaves the `page` answer without
@@ -305,9 +347,20 @@ type Sources struct {
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
 
-	// PublicBase is where a browser and a third-party app reach this
-	// deployment — `api.external_url` — or nil when this process cannot
-	// say.
+	// WebhookBase is where a THIRD-PARTY APP reaches this deployment —
+	// `config.API.WebhookBase`: the public listener's
+	// `api.public.external_url` where `api.public` is set, and
+	// `api.external_url` otherwise — or nil when this process cannot say.
+	//
+	// THE VENDOR'S ADDRESS, NEVER THE PERSON'S. What this is compared
+	// against is the endpoint a surface was REGISTERED at, which the
+	// reconcile loop and the dashboard's setup pass both stamp from that
+	// same accessor ([integration.StampEndpoint]). Behind a public listener
+	// the person's `api.external_url` is a different socket, one that
+	// answers 404 for every webhook route — so compared against it, every
+	// registration on a healthy deployment read as moved, for ever, and its
+	// card as Action needed. Named as setupapi's Options name it, so the
+	// wiring says which of the two addresses it hands in.
 	//
 	// A SEAM RATHER THAN A READ OF [Sources.Company], which is where the
 	// address used to live. As a Tier B field it could be a whole `${VAR}`
@@ -321,7 +374,7 @@ type Sources struct {
 	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
 	// above: a node that cannot read the value must not be the reason a
 	// screen calls a healthy registration stale.
-	PublicBase func() string
+	WebhookBase func() string
 	// Retention is this node's answer about the state log's own history:
 	// how far each domain's log may be trimmed, what is stopping it, and
 	// what this node costs to replace.
@@ -469,6 +522,13 @@ var ErrNotFound = errors.New("queries: no such record")
 func Register(r *Registry, s Sources) {
 	if s.State != nil {
 		r.Register("agent", iam.GrantStateRead, s.agent)
+		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`
+		// push names a version of a heavy field newer than the copy it
+		// holds — the push that carried it was dropped. From the projection
+		// alone, so it costs what a push does; `agent` reads the seat's
+		// history from every node as well. On the read the `agents` push
+		// itself is decided by, since it answers exactly what a push does.
+		r.Register("live_call", iam.GrantStateRead, s.liveCall)
 		r.Register("tokens", iam.GrantStateRead, s.tokens)
 	}
 	if s.Events != nil {
@@ -485,7 +545,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("trace", iam.GrantAuditRead, s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
-		// answer, and migration 0014 which made it askable at all.
+		// answer, and migration 0015 which made it askable at all.
 		r.Register("turn", iam.GrantAuditRead, s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
@@ -548,6 +608,13 @@ func Register(r *Registry, s Sources) {
 		// document's own reader is already trusted with. See
 		// [Sources.credentialPool].
 		r.Register("credential_pool", iam.GrantConfigRead, s.credentialPool)
+	}
+	if s.FleetBroker != nil {
+		// ON THE DEPLOYMENT'S GRANT, for the fleet question's reason: node
+		// ids, their roles and which member the broker counts are the
+		// deployment's shape, not the company's work — and the removal it
+		// is read beside is a `fleet:operate` gesture too.
+		r.Register("fleet_broker", iam.GrantFleetOperate, s.fleetBroker)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to
@@ -702,6 +769,11 @@ func Register(r *Registry, s Sources) {
 		// so the halves of what a seat has said and remembered cannot
 		// answer one reader differently.
 		r.Register("agent_memory", iam.GrantAuditRead, s.agentMemory)
+		// ONE EPISODE WHOLE, which the listing carries the openings of —
+		// a page of fifty whole asks could be more than the transport
+		// takes. Half of the same trail, so on the same grant and decided
+		// per seat by the same verb.
+		r.Register("agent_episode", iam.GrantAuditRead, s.agentEpisode)
 		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
 		// holder in one scatter — what the diaries list draws, where a
 		// read per seat would be a lease read and a scatter per row.
@@ -712,6 +784,13 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", iam.GrantAuditRead, s.a2aChannels)
+	}
+	if s.Files != nil {
+		// A PROJECT'S FILES, a page at a time in path order. The bytes are
+		// not an answer on this channel — a download streams from its own
+		// route — so this is everything a file list draws and nothing a
+		// reader opens. On the board's read, as every other work question.
+		r.Register("work_files", iam.GrantStateRead, s.workFiles)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
@@ -823,6 +902,52 @@ func (s Sources) agentSeat(handle string) (*org.Role, string) {
 		return nil, ""
 	}
 	return seat, id.String()
+}
+
+// liveCall answers `live_call{agent_id}`: the seat's in-flight call with every
+// field, and the version of each, or null while it has none.
+//
+// The REPAIR for an `agents` push the socket dropped. A push leaves out a heavy
+// field its seat's tabs already hold at the version it names (internal/api/
+// stream's pushAgents), so a tab that missed the push which moved one is
+// holding an older copy than every later push describes, and asks for the call
+// whole here. A seat the projection has not seen is answered null like one
+// between calls: either way there is nothing in flight.
+//
+// BY AGENT ID, the key the projection and every `agents` push name the seat
+// by, so the tab pairs the answer with the row it asked for. It used to be the
+// ROLE NAME, which two seats may share — two "Engineer"s answered each other's
+// call. The handle rides along as a label, from the company this node runs, and
+// is empty for an id that company does not hold: a call already in flight on a
+// seat the latest revision removed is still a call, and nothing in the answer
+// is keyed by the label.
+func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
+	agentID := strings.TrimSpace(p.String("agent_id"))
+	if agentID == "" {
+		return nil, fmt.Errorf("%w: live_call needs the seat's agent_id", ErrBadParams)
+	}
+	handle := ""
+	if id, err := uuid.Parse(agentID); err == nil {
+		if organization := s.organization(); organization != nil {
+			if seat := organization.AgentSeatByID(id); seat != nil {
+				handle = seat.Handle()
+			}
+		}
+	}
+	// live_call_seq orders this answer against the `agents` pushes for the
+	// same seat: the answer runs on its own goroutine and can be delivered
+	// after a push generated later (a clear, a new call), so the tab drops
+	// an answer whose sequence is behind what it has applied. Always carried,
+	// a null call included — see [livestate.Overlay.LiveCallSeq].
+	answer := map[string]any{"agent_id": agentID, "handle": handle,
+		"live_call": nil, "live_call_seq": 0}
+	if overlay := s.State.AgentOverlay(agentID); overlay != nil {
+		answer["live_call_seq"] = overlay.LiveCallSeq
+		if overlay.LiveCall != nil {
+			answer["live_call"] = overlay.LiveCall
+		}
+	}
+	return answer, nil
 }
 
 // phaseHistory is the seat's finished calls, newest first, as the rows the
@@ -1014,7 +1139,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 		ChannelID:    strings.TrimSpace(p.String("channel_id")),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
-		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0015, AND
 		// DEAD: the column exists, the reader filters on it, and no
 		// surface ever passed one — so "every event of this turn" was
 		// answerable by the store and unaskable from anywhere.
@@ -1056,6 +1181,20 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 			q.Failed = &flag
 		default:
 			return store.ListQuery{}, badParams("failed", raw, []string{"true", "false"})
+		}
+	}
+	// THE ROWS THE ACTIVITY FEED CARRIES, which every view merged with the
+	// live ring asks for: the ring holds no accounting row
+	// ([events.KeptOutOfFeed]), so an older page that did — or an axis
+	// counting them — would show a reader scrolling past the ring a log the
+	// ring never was. Absent is every stored row: the event log's own reads
+	// of a turn, a trace or a type want the accounting rows too.
+	if raw := strings.TrimSpace(p.String("feed_only")); raw != "" {
+		switch raw {
+		case "true", "false":
+			q.FeedOnly = raw == "true"
+		default:
+			return store.ListQuery{}, badParams("feed_only", raw, []string{"true", "false"})
 		}
 	}
 	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
@@ -1152,9 +1291,10 @@ func (s Sources) seatAgentID(handle string) (string, error) {
 		id, ok := organization.AgentIDFor(role)
 		if !ok {
 			return "", fmt.Errorf("%w: seat=%q is %s, a human seat — the engine "+
-				"runs no turns for a person, so nothing is filed under it; a "+
-				"person's events are the ones they acted in, under `actor`",
-				ErrBadParams, handle, role.Name)
+				"runs no turns for a person, so no seat's history is filed under "+
+				"it; a person's events are the ones they acted in, under `actor`, "+
+				"and what was spent for them is a row of its own in the "+
+				"company's spend", ErrBadParams, handle, role.Name)
 		}
 		return id.String(), nil
 	}
@@ -1238,7 +1378,6 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	// SAYS WHEN IT CUT. A trace stops at store.MaxTraceEvents — and one
 	// shown short with no note reads as a complete causal chain that simply
 	// ends, which is the one thing a reader must not conclude from it.
-	// Additive, so a client that predates the field is unaffected.
 	//
 	// ASKED, NOT INFERRED: each node counts what it holds when its read
 	// filled (see internal/eventfan), because a trace of exactly the cap

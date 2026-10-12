@@ -2,6 +2,9 @@ package runner_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -186,6 +189,19 @@ func extendableRunner(
 	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
+	return cappedRunner(t, prov, pub, judge, runner.Caps{
+		ExecutorRounds: 2, ExecutorCeiling: 8,
+		ExtensionOn: true, ExtensionStep: 4,
+	}, meter...)
+}
+
+// cappedRunner is extendableRunner under caps a case states itself — the
+// extension switch off, or a ceiling equal to the budget.
+func cappedRunner(
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps runner.Caps, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -199,10 +215,7 @@ func extendableRunner(
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps: runner.Caps{
-			ExecutorRounds: 2, ExecutorCeiling: 8,
-			ExtensionOn: true, ExtensionStep: 4,
-		},
+		Caps:      caps,
 		Task:      "read the files",
 		Publisher: pub,
 		Judge:     judge,
@@ -325,6 +338,91 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 		t.Errorf("total_tokens = %d, want 700 (500 before the suspend, 200 after)",
 			done.TotalTokens)
 	}
+}
+
+// WHY A PARKED ROUND STOPPED SURVIVES THE RESUME — AND THE NEXT SUSPEND.
+//
+// The parked row carries each round's stop reason, and the resume rebuilds the
+// loop's rounds from it field by field. A field left out of that rebuild is
+// blank on the resumed record (which reads as "the backend reported none"),
+// and because a second suspend re-encodes the rounds from the rebuilt ones,
+// it is gone from every later record too. Both ends are asserted: the record
+// the resume publishes, and the row a second suspension would persist.
+func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
+	t.Parallel()
+	parked := func() execstate.State {
+		state := suspendedAfterTwoRounds()
+		state.Rounds = []types.PhaseRound{
+			{Round: 1, Model: "earlier", StopReason: string(llm.StopToolUse)},
+			{Round: 2, Model: "earlier", StopReason: string(llm.StopToolUse)},
+		}
+		// Through JSON, as the pending-run row hands it back.
+		blob, err := execstate.Encode(state)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		out, _, err := execstate.Decode(blob)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		return out
+	}
+	wantParked := func(t *testing.T, rounds []types.PhaseRound) {
+		t.Helper()
+		if len(rounds) < 2 {
+			t.Fatalf("rounds = %+v, want the two parked rounds first", rounds)
+		}
+		for _, r := range rounds[:2] {
+			if r.StopReason != string(llm.StopToolUse) {
+				t.Errorf("parked round %d stop_reason = %q, want %q",
+					r.Round, r.StopReason, llm.StopToolUse)
+			}
+		}
+	}
+
+	t.Run("the resumed record", func(t *testing.T) {
+		t.Parallel()
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, runner.SubmitWorkTool,
+				`{"outcome":"delivered","summary":"shipped it","evidence":"the box did the work"}`),
+		}}
+		pub := newCapture()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			pub:    pub,
+			resume: &runner.Resume{State: parked(), Answer: "the run succeeded"},
+		})
+		if _, _, err := r.Resume(context.Background(), nil); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		wantParked(t, completedPhase(t, pub, "execute").Rounds)
+	})
+
+	t.Run("a second suspension", func(t *testing.T) {
+		t.Parallel()
+		state := parked()
+		state.ActiveTools = append(state.ActiveTools, "run_sandbox")
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, "run_sandbox", `{"task":"and the follow-up"}`),
+		}}
+		r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+		})
+		if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		w, _, err := r.Resume(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if !w.Suspended {
+			t.Fatal("the resumed phase did not suspend again, so there is no second row to read")
+		}
+		again, ok := r.Suspended()
+		if !ok {
+			t.Fatal("no second suspension was recorded")
+		}
+		wantParked(t, again.State.Rounds)
+	})
 }
 
 // suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
@@ -452,6 +550,153 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 	}, nil
 }
 
+// A JUDGEMENT THE BUDGET REFUSES ENDS THE EXTENSION, AND IS CHARGED ALL THE
+// SAME.
+//
+// The judge runs once a phase is out of rounds and has answered by the time it
+// is charged. A refusal there declines the extension — the outcome of the judge
+// saying no, because a seat at its cap should stop extending rather than die —
+// and the meter has still been handed the judgement, which the fleet's counter
+// records like any round it refuses.
+func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		thinkAndCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"read both"}`, "enough"),
+		text("done"),
+	}}
+	pub := newCapture()
+	// Two 100-token rounds fit; the 30-token judgement after them does not.
+	meter := &ceilingMeter{ceiling: 220}
+	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
+
+	// NOT A FAILED TURN: an over-budget judgement is a declined extension.
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	judged := phasesOfKind(t, pub, "judge")
+	if len(judged) != 1 {
+		t.Fatalf("%d judge phases published, want the one call that ran", len(judged))
+	}
+	if judged[0].Decision != "rescue" {
+		t.Errorf("decision = %q, want rescue: the budget refused the judgement, so "+
+			"the phase was not extended", judged[0].Decision)
+	}
+	if got := prov.n["execute"]; got != 2 {
+		t.Errorf("the executor made %d model calls, want its 2 rounds and no extension", got)
+	}
+	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
+		t.Errorf("charges = %v, want both rounds and the refused judgement's 30", got)
+	}
+}
+
+// THE PHASE AFTER A REFUSED JUDGEMENT MAKES NO CALL.
+//
+// The judgement's refusal declines the extension and the phase ends rescued,
+// but the refused judgement is counted, so the window reads past its ceiling
+// and every later charge of the turn is refused. The reviewer that follows
+// used to send its whole first round — the evidence log, the prompt, its
+// tools — which the vendor billed and the meter then refused. The meter holds
+// the refusal now, and the reviewer is refused before it calls.
+func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{
+		execute: []llm.Completion{
+			thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+			thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		},
+		review: []llm.Completion{
+			thinkAndCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"ok"}`, "judged"),
+		},
+	}
+	pub := newCapture()
+	meter := &ceilingMeter{ceiling: 220} // two 100-token rounds fit; the 30-token judgement does not
+	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
+
+	work, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	calls := len(prov.seen)
+	_, err = r.Review(context.Background(), 1, work, nil)
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Review = %v, want the refusal the judgement left standing", err)
+	}
+	if got := len(prov.seen) - calls; got != 0 {
+		t.Errorf("the reviewer made %d model calls after the turn was refused, want none", got)
+	}
+	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
+		t.Errorf("charges = %v, want both rounds and the refused judgement, and nothing after", got)
+	}
+}
+
+// A JUDGE IS NOT CALLED ON A REFUSAL ALREADY CERTAIN. The judge is a model
+// call like any other — billed, then charged — and once nothing more fits a
+// window every charge after is refused. Here the phase's two rounds fill the
+// ceiling exactly: both are admitted, nothing refused them, and the meter
+// knows no later charge can fit. Asking the judge would have paid for a call
+// whose only possible verdict was the refusal.
+func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+	}}
+	pub := newCapture()
+	meter := &ceilingMeter{ceiling: 200}
+	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
+		t.Errorf("%d judge phases published on a refusal the meter already held", len(got))
+	}
+	if got := meter.charges(); !slices.Equal(got, []int{100, 100}) {
+		t.Errorf("charges = %v, want the two rounds and no judgement", got)
+	}
+}
+
+// ceilingMeter records every charge it is handed and refuses one that does
+// not fit its ceiling — recording it all the same, as the fleet's counter
+// does, because the call it charges has already been made.
+type ceilingMeter struct {
+	countingMeter
+	ceiling int
+}
+
+func (m *ceilingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
+	m.mu.Lock()
+	before := 0
+	for _, c := range m.seen {
+		before += c
+	}
+	m.mu.Unlock()
+	if _, err := m.countingMeter.Spend(ctx, tokens); err != nil {
+		return toolloop.SpendOutcome{}, err
+	}
+	if before+tokens > m.ceiling {
+		return toolloop.SpendOutcome{Scope: "agent", Used: before + tokens, Limit: m.ceiling}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+// Refused holds what the meter has seen, as the engine's meter does: once
+// nothing more fits under the ceiling, every later charge is refused, and the
+// meter says so before the next call is made.
+func (m *ceilingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	used := 0
+	for _, c := range m.charges() {
+		used += c
+	}
+	if used < m.ceiling {
+		return toolloop.SpendOutcome{}, false
+	}
+	return toolloop.SpendOutcome{Scope: "agent", Used: used, Limit: m.ceiling}, true
+}
+
 // countingMeter records every charge the shared budget saw.
 type countingMeter struct {
 	mu   sync.Mutex
@@ -463,6 +708,11 @@ func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutc
 	defer m.mu.Unlock()
 	m.seen = append(m.seen, tokens)
 	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+// Refused never holds a refusal: nothing caps this meter.
+func (m *countingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	return toolloop.SpendOutcome{}, false
 }
 
 func (m *countingMeter) charges() []int {
@@ -496,18 +746,19 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 
 // A REVIEWER THAT THINKS AND STOPS IS ASKED AGAIN, not rescued.
 //
-// The tool loop's corrective re-prompt is gated on the caller requiring a tool
-// call, and no caller did — so `maxForcedToolRetries` and
-// `forcedToolCorrective` were unreachable and the package doc's claim that a
-// forced tool call is ENFORCED held for no phase the engine runs. A reviewer
-// that answered with prose fell straight through to the rescue, which sends
-// the whole turn back for another executor round: a whole extra turn spent on
-// the one failure a model reliably fixes when it is simply asked again.
+// The tool loop's corrective re-prompt was once gated on the caller requiring
+// a tool call, and no caller did — so it was unreachable and the package doc's
+// claim that a forced tool call is ENFORCED held for no phase the engine ran. A
+// reviewer that answered with prose fell straight through to the rescue, which
+// sends the whole turn back for another executor round: a whole extra turn
+// spent on the one failure a model reliably fixes when it is simply asked
+// again. The reviewer's loop finishes by `submit_review`, so the corrective it
+// gets now is the FINISHING one, naming that tool.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llm.Completion{
-		// Round 1: thinks, calls nothing. Some endpoints ignore tool_choice
-		// and some models think-then-stop; this is that round.
+		// Round 1: thinks, calls nothing. Nothing forces a call and
+		// some models think-then-stop; this is that round.
 		text("The work looks fine to me."),
 		submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","notes":"the delivery matches the ask"}`),
@@ -709,4 +960,78 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 				"bridged call's 1", got)
 		}
 	})
+}
+
+// A RESUMED RUN MAY CITE A DELIVERY A CLOSED ROUND MADE, on both runtimes.
+//
+// The citation check reads the TURN's record ([turn.Record]): the rounds
+// that closed before the suspend, then the phase's own calls. A resume that
+// read only the phase refused the one citation that was true, because the
+// prior-work ledger had told the round not to make that delivery again.
+func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
+	t.Parallel()
+	tracker := func(t *testing.T, reg *tools.Registry) {
+		t.Helper()
+		if err := reg.RegisterWith(stubTool{name: "comment_on_work_item", out: "commented"},
+			tools.OriginBuiltin, tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	const citation = `{"outcome":"delivered","summary":"collected the run",` +
+		`"deliveries":["comment_on_work_item"]}`
+	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
+		{Name: "comment_on_work_item", Result: "commented"},
+	}}}
+
+	native := func(t *testing.T, history []ledger.Iteration) turn.Work {
+		t.Helper()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+			execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool, citation)},
+		}}}, buildOpts{
+			reply: turn.ToolReply("work"), register: tracker,
+			resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+		})
+		w, _, err := r.Resume(context.Background(), history)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return w
+	}
+	agent := func(t *testing.T, history []ledger.Iteration) turn.Work {
+		t.Helper()
+		var args map[string]any
+		if err := json.Unmarshal([]byte(citation), &args); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{reply: turn.ToolReply("work"), register: tracker,
+				agentRun: &recordingLauncher{}, resume: &runner.Resume{
+					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 2},
+					Answer:  "done",
+					Bridged: []ledger.Call{{Name: runner.SubmitWorkTool, Args: args}},
+				}})
+		w, _, err := r.Resume(context.Background(), history)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return w
+	}
+
+	for name, resume := range map[string]func(*testing.T, []ledger.Iteration) turn.Work{
+		"a native run": native, "an agent-mode run": agent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if w := resume(t, closed); w.Rescued || w.Outcome != turn.OutcomeDelivered {
+				t.Errorf("outcome = %s (rescued %v), want the citation of the closed "+
+					"round's comment accepted", w.Outcome, w.Rescued)
+			}
+			// The counterfactual: with no closed round behind it the same
+			// citation names a comment nobody made, and is refused.
+			if w := resume(t, nil); !w.Rescued {
+				t.Errorf("outcome = %s, want a citation of a comment nobody made refused",
+					w.Outcome)
+			}
+		})
+	}
 }

@@ -15,8 +15,8 @@ import (
 //
 // The state log refuses to decide again an operation its node's ledger cannot
 // vouch for, which is one minted before the ledger's watermark — the point
-// before which it may have lost rows, to its sweep or to a snapshot adopted
-// from a donor that scrubbed it — whose row it does not hold. A re-run comes
+// before which it may have lost rows to its sweep — whose row it does not
+// hold. A re-run comes
 // after the loss it is judged against by construction, so an id carrying the
 // RUN's clock is one a re-run after a loss publishes a second time — which is
 // exactly how the operation ledger was defeated while every writer stamped its
@@ -127,6 +127,63 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 				"op id carrying %s when the work began — a write re-made after "+
 				"an adoption is otherwise decided twice", i, key, at, ok, began)
 		}
+	}
+}
+
+// A TURN REBASED PAST THE LEDGER MINTS EVERY WRITE AT ITS REBASE — the
+// tracker's and the knowledge base's, whichever identity the ids are seeded
+// from.
+//
+// The engine rebases a turn whose identity started longer ago than the
+// operation ledger can vouch for (turnctx.Turn.RebasedTo) — a trigger
+// dispatched a month late, a turn resumed a month after it parked: an
+// operation minted at that start, with its row swept, is answered `unknown`
+// and never published on any node. So the rebase has to reach every id a tool
+// derives, and it outranks BOTH starts — the work's, and the run's own where
+// there is no work key — because either is as old as the other.
+func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
+	t.Parallel()
+	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	rebasedTo := began.Add(40 * 24 * time.Hour)
+	for name, keyed := range map[string]bool{"a keyed turn": true, "a keyless turn": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rebased := func() *turnctx.Turn {
+				tn := workTurn(t)
+				tn.RunID = statelog.NewOpID(began, "")
+				tn.WorkKey, tn.WorkSince = "", time.Time{}
+				if keyed {
+					tn.WorkKey, tn.WorkSince = "wk-1", began
+				}
+				tn.RebasedTo = rebasedTo
+				return tn
+			}
+
+			trk := newFakeTracker()
+			call(t, workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as}),
+				rebased(), builtin.UpdateWorkItemTool, map[string]any{
+					"item": "ENG-1", "priority": "urgent",
+				})
+			if len(trk.opIDs) != 1 {
+				t.Fatalf("the update wrote %v", trk.opIDs)
+			}
+			if minted, _ := statelog.OpMintedAt(trk.opIDs[0]); !minted.Equal(rebasedTo) {
+				t.Fatalf("the rebased update was minted at %s, want the rebase's %s — "+
+					"minted at the start, no node could vouch for it", minted, rebasedTo)
+			}
+
+			kb := newFakeKB()
+			call(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}), rebased(),
+				builtin.CommentOnPageTool, map[string]any{"page": "p1", "body": "noted"})
+			if len(kb.comments) != 1 || len(kb.keys) != 1 {
+				t.Fatalf("the comment reached the knowledge base %d time(s) under %v",
+					len(kb.comments), kb.keys)
+			}
+			if minted, _ := statelog.OpMintedAt(kb.keys[0]); !minted.Equal(rebasedTo) {
+				t.Fatalf("the rebased comment was minted at %s, want the rebase's %s",
+					minted, rebasedTo)
+			}
+		})
 	}
 }
 

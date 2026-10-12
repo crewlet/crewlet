@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -159,7 +160,7 @@ func reflectorGated(t *testing.T, budget learning.BudgetGate, o *org.Organizatio
 	pub queue.Publisher, workers ...learning.Worker,
 ) *learning.Reflector {
 	t.Helper()
-	r, err := learning.NewReflector(o, pub, workers, budget)
+	r, err := learning.NewReflector(o, pub, workers, budget, nil)
 	if err != nil {
 		t.Fatalf("NewReflector: %v", err)
 	}
@@ -172,7 +173,12 @@ func reflectOnce(r *learning.Reflector, tc types.TurnCompleted) learning.Reflect
 
 // --- delivery -------------------------------------------------------------
 
-func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
+// A TURN'S WAKE ON THE SEAT'S OWN SUBJECT REACHES THE WORKERS through the
+// queue, with the turn's own trace — and a turn_completed does not: the
+// dispatcher is attached to the seat's reflection subject, which only the
+// seat's holder attaches, never to the fleet-wide event subject every node
+// could take it from.
+func TestADueReflectionReachesTheWorkersThroughTheSeatsOwnSubject(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	q := memory.New()
@@ -180,16 +186,23 @@ func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	w := &stubWorker{name: "w"}
-	if err := reflector(t, devOrg(), q, w).Start(ctx, q); err != nil {
-		t.Fatalf("Start: %v", err)
+	o := devOrg()
+	r := reflector(t, o, q, w)
+	// THE SEAT'S SUBJECT IS NAMED BY ITS ID, as its holder attaches it.
+	seat, ok := o.AgentIDFor(o.Roles[0])
+	if !ok {
+		t.Fatal("the fixture's seat derives no id")
+	}
+	if err := q.Subscribe(ctx, topics.AgentReflect(seat), topics.AgentReflectGroup(seat), r.Handle); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 
-	ev := events.New(settledTurn(), events.NewTrace())
-	if err := q.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	ev := due(settledTurn(), events.NewTrace())
+	if err := q.Publish(ctx, topics.AgentReflect(seat), ev); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if w.ran() != 1 {
-		t.Fatalf("worker ran %d times; the dispatcher is attached to the wrong subject", w.ran())
+		t.Fatalf("worker ran %d times; the dispatcher did not take the seat's wake", w.ran())
 	}
 	got := w.turns()[0]
 	if got.Event.TurnID != "t1" || got.Role == nil || got.Role.Name != "Dev" {
@@ -199,15 +212,20 @@ func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
 		t.Errorf("trace = %q, want the turn's own %q", got.Trace.TraceID, ev.TraceID)
 	}
 
-	// Counterfactual: a different event type on the same subject space is
-	// not a completed turn and must reach nobody.
-	other := events.New(types.EpisodeWritten{TurnID: "t2"}, events.NewTrace())
+	// Counterfactual: the completed turn itself, on the fleet-wide event
+	// subject, reaches nobody.
+	other := events.New(settledTurn(), events.NewTrace())
 	if err := q.Publish(ctx, topics.Event(other.Type), other); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if w.ran() != 1 {
-		t.Errorf("worker ran %d times; it is consuming somebody else's subject", w.ran())
+		t.Errorf("worker ran %d times; it is consuming the fleet-wide event subject", w.ran())
 	}
+}
+
+// due is a turn's reflection wake, as the node that ran it publishes it.
+func due(turn types.TurnCompleted, tr events.TraceContext) *events.Event {
+	return events.New(types.ReflectionDue{Turn: turn}, tr)
 }
 
 func TestAnUnreadableDeliveryIsAckedRatherThanRedelivered(t *testing.T) {
@@ -219,7 +237,8 @@ func TestAnUnreadableDeliveryIsAckedRatherThanRedelivered(t *testing.T) {
 		ev   *events.Event
 	}{
 		{"nothing at all", nil},
-		{"an envelope with no body", &events.Event{Type: "turn_completed"}},
+		{"an envelope with no body", &events.Event{Type: "reflection_due"}},
+		{"the completed turn rather than its wake", events.New(settledTurn(), events.TraceContext{})},
 		{"another type entirely", events.New(types.EpisodeWritten{}, events.TraceContext{})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,7 +261,7 @@ func TestAFailingPassStillAcks(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "w", err: errors.New("the vendor is down")}
 	r := reflector(t, devOrg(), &recordingPub{err: errors.New("broker refused")}, w)
-	ev := events.New(settledTurn(), events.TraceContext{})
+	ev := due(settledTurn(), events.TraceContext{})
 	if res := r.Handle(context.Background(), ev); res.Outcome != queue.OutcomeAck {
 		t.Errorf("outcome = %v, want an ack", res.Outcome)
 	}
@@ -300,7 +319,7 @@ func TestAPanickingWorkerCostsThePassNeitherItsPeersNorItsSentinel(t *testing.T)
 func TestAPanickingPublisherDoesNotEscapeTheHandler(t *testing.T) {
 	t.Parallel()
 	r := reflector(t, devOrg(), &recordingPub{panics: true}, &stubWorker{name: "w"})
-	res := r.Handle(context.Background(), events.New(settledTurn(), events.TraceContext{}))
+	res := r.Handle(context.Background(), due(settledTurn(), events.TraceContext{}))
 	if res.Outcome != queue.OutcomeAck {
 		t.Errorf("outcome = %v, want an ack; the panic must not reach the consumer goroutine", res.Outcome)
 	}
@@ -436,7 +455,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 	}{
 		// The turn recognised the trigger was for somebody else.
 		{"the turn opted out", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 		}, false},
 		// It MEANT to opt out and never said so, so the turn finished
 		// `done` having touched nothing outside the engine.
@@ -444,7 +463,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 		}, false},
 		{"it opted out having called tools anyway", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 			x.ToolSequence = []string{"slack_post"}
 		}, false},
 		// A failed turn that called nothing failed AT something, and that
@@ -453,9 +472,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 			x.ReviewOutcome = "failed"
 		}, true},
-		{"no plan artifact at all, but it acted", func(x *types.TurnCompleted) {
-			x.PlanDecision = ""
-		}, true},
+		{"it acted and finished done", func(*types.TurnCompleted) {}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -545,7 +562,7 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 	pub := &recordingPub{}
 	r := reflector(t, devOrg(), pub, w)
 
-	ev := events.New(settledTurn(), events.NewTrace())
+	ev := due(settledTurn(), events.NewTrace())
 	ev.ParentSpanID = "aaaaaaaaaaaaaaaa"
 	r.Handle(context.Background(), ev)
 
@@ -585,23 +602,23 @@ func TestAWorkerWithNothingToAnnounceStillCounts(t *testing.T) {
 
 func TestADispatcherRefusesWiringItCannotWorkWithout(t *testing.T) {
 	t.Parallel()
-	if _, err := learning.NewReflector(nil, &recordingPub{}, nil, nil); err == nil {
+	if _, err := learning.NewReflector(nil, &recordingPub{}, nil, nil, nil); err == nil {
 		t.Error("a dispatcher with no org was accepted; every turn would skip on an unresolvable seat")
 	}
-	if _, err := learning.NewReflector(devOrg(), nil, nil, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), nil, nil, nil, nil); err == nil {
 		t.Error("a dispatcher with no publisher was accepted")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}, nil, nil); err == nil {
 		t.Error("a nil worker was accepted; it panics on the first completed turn")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil, nil); err != nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil, nil, nil); err != nil {
 		t.Errorf("a dispatcher with no workers yet was refused: %v", err)
 	}
 	// A pass reports its skips and failures BY WORKER NAME, so two workers
 	// sharing one would each erase the other's entry and an operator would
 	// read one worker's failure as the other's.
 	twins := []learning.Worker{&stubWorker{name: "same"}, &stubWorker{name: "same"}}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins, nil, nil); err == nil {
 		t.Error("two workers under one name were accepted")
 	}
 }
@@ -621,7 +638,7 @@ func TestConcurrentDeliveriesAreSafe(t *testing.T) {
 			if i%2 == 0 {
 				turn.TurnID = fmt.Sprintf("t%d", i)
 			}
-			r.Handle(context.Background(), events.New(turn, events.TraceContext{}))
+			r.Handle(context.Background(), due(turn, events.TraceContext{}))
 		})
 	}
 	wg.Wait()
@@ -1042,5 +1059,76 @@ func TestAReflectionResolvesItsSeatByHandle(t *testing.T) {
 	gone.AgentHandle, gone.RoleName = "not-a-handle", "Senior Developer"
 	if out := reflectOnce(reflector(t, company, &recordingPub{}, w), gone); out.Skip != learning.SkipNoRole {
 		t.Errorf("a turn naming no seat was not skipped: %q", out.Skip)
+	}
+}
+
+// flushProbe is the node's spend ledger as a pass sees it, noting how much the
+// pass had published at each flush.
+type flushProbe struct {
+	pub *recordingPub
+
+	mu      sync.Mutex
+	flushed []string
+	before  []int
+}
+
+func (f *flushProbe) FlushTurn(_ context.Context, turnID string) {
+	sent := len(f.pub.snapshot())
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushed = append(f.flushed, turnID)
+	f.before = append(f.before, sent)
+}
+
+// A PASS'S SENTINEL FOLLOWS WHAT ITS MODEL CALLS COST — on both of the paths
+// that publish one.
+//
+// The Turn screen asks for the turn again when `reflection_completed` lands
+// and draws the Reflection lane from the reflection stage's spend records,
+// which the node's ledger publishes. Left to its timer, they landed up to a
+// flush interval after the sentinel, so a page already open never showed
+// them. So the pass flushes the turn's records, and only then publishes the
+// sentinel — whether its workers ran or the turn was one it decided not to
+// learn from.
+func TestAPassFlushesItsSpendBeforeItsSentinel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*types.TurnCompleted)
+	}{
+		{"its workers ran", func(*types.TurnCompleted) {}},
+		{"it decided not to learn", func(x *types.TurnCompleted) { x.ToolSequence = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub := &recordingPub{}
+			probe := &flushProbe{pub: pub}
+			r, err := learning.NewReflector(devOrg(), pub, []learning.Worker{
+				&stubWorker{name: "w", out: types.TurnCompleted{}},
+			}, nil, probe)
+			if err != nil {
+				t.Fatalf("NewReflector: %v", err)
+			}
+			turn := settledTurn()
+			tc.mutate(&turn)
+			reflectOnce(r, turn)
+
+			sentinel := -1
+			for i, ev := range pub.snapshot() {
+				if ev.Type == "reflection_completed" {
+					sentinel = i
+				}
+			}
+			probe.mu.Lock()
+			defer probe.mu.Unlock()
+			if sentinel < 0 || len(probe.flushed) != 1 || probe.flushed[0] != turn.TurnID {
+				t.Fatalf("flushed %v, sentinel at %d — want one flush of %s and a sentinel",
+					probe.flushed, sentinel, turn.TurnID)
+			}
+			if probe.before[0] > sentinel {
+				t.Errorf("the flush came after the sentinel (%d events out, sentinel at %d)",
+					probe.before[0], sentinel)
+			}
+		})
 	}
 }

@@ -57,9 +57,16 @@ func Declaration(c Candidate) []error {
 	// detect its own mismatch: a strict loop over a compacted stream
 	// stalls on the first ordinary write, and a compacted loop over a log
 	// accepts a hole that is data loss.
-	spec := c.Domain.Stream()
+	spec := c.spec()
 	if err := spec.Validate(); err != nil {
 		add("%s declares a stream its own protocol refuses: %w", name, err)
+	}
+	// AND IT MUST BE ONE DECLARATION. Every runner, publisher and reader
+	// asks the domain for its stream separately and is held to what a
+	// second ask answers ([statelog.StreamSpec.Instantiates]), so a domain
+	// whose answer moves between two asks builds nothing at all.
+	if err := spec.Instantiates(c.Domain); err != nil {
+		add("%s answers a different stream each time it is asked: %w", name, err)
 	}
 
 	// AN ARBITRATED KIND IS A KIND THIS DOMAIN ACTUALLY PUBLISHES. A kind
@@ -87,11 +94,11 @@ func Declaration(c Candidate) []error {
 	// still has to say whether the answer landed.
 	if c.Domain.OpsTable() == "" {
 		if c.Domain.ReadinessInput() {
-			add("%s keeps no operation ledger and gates seat admission — a "+
+			add("%s keeps no operation ledger and is a readiness input — a "+
 				"domain whose apply is total enough to need no ledger is one "+
 				"whose gaps are a coverage number rather than a fault, and "+
-				"shedding a company's seats for one is the outage the number "+
-				"exists to avoid", name)
+				"taking a node's copy of the estate out of service for one is "+
+				"the outage the number exists to avoid", name)
 		}
 		if len(spec.ArbitratedKinds) != 0 {
 			add("%s keeps no operation ledger and arbitrates %v — an arbitrated "+

@@ -236,9 +236,33 @@ describe("a seat", () => {
     ]);
   });
 
+  // A STORED CEILING THIS FORM REFUSES IS SHOWN AND CAN BE REMOVED. The
+  // engine holds an int64, so YAML can store a ceiling above 2^53-1, which
+  // the reader refuses. Read as "no value" it would equal an emptied box, and
+  // emptying the box could never remove it.
+  test("a stored ceiling above 2^53-1 is shown, and emptying its box removes it", () => {
+    const huge = 2 ** 60;
+    const data: ConfigRole = { name: "Dev", token_budget: { month: huge } };
+    const initial = seatForm(data, "");
+    expect(initial.tokenBudget.month).toBe(String(huge));
+    expect(
+      seatParts(
+        "seat:dev",
+        data,
+        initial,
+        { ...initial, tokenBudget: { ...initial.tokenBudget, month: "" } },
+        { editableHandle: false },
+      ),
+    ).toEqual([
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["token_budget", "month"] }] },
+    ]);
+    // And left alone, it writes nothing.
+    expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
+  });
+
   test("a ceiling of 0 or a malformed one is refused before Apply, naming the window", () => {
-    // A stored 0 is SHOWN, not hidden as an empty box: it is the one value
-    // the engine refuses, and a form that hid it could never correct it.
+    // A typed 0 is refused before Apply, whatever the document holds:
+    // whatever number it holds is shown, so it can be corrected.
     expect(seatForm({ name: "X", token_budget: { day: 0 } }, "").tokenBudget.day).toBe("0");
     expect(tokenBudgetError("day", "0")).toBe(
       "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
@@ -310,6 +334,65 @@ describe("a seat", () => {
         ],
       },
     ]);
+  });
+
+  // A seat's project and space are VENDOR-NEUTRAL keys at the top of the seat
+  // (`config.Role.Project`, `config.Role.Space`): they name a container on
+  // whichever tracker and knowledge base the company runs, the engine's own
+  // included. Under `integrations:` they were a block the engine does not
+  // have, so the box read empty over a seat's real project and a save that
+  // wrote one was refused as an unknown key.
+  test("a seat's project and space are read and written at the top of the seat", () => {
+    const owner: ConfigRole = { name: "Dev", project: "OPS", space: "DOCS" };
+    const initial = seatForm(owner, "");
+    expect([initial.project, initial.space]).toEqual(["OPS", "DOCS"]);
+    const form = { ...initial, project: " SUP ", space: "" };
+    expect(seatParts("seat:dev", owner, initial, form, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["project"], value: "SUP" }, { path: ["space"] }],
+      },
+    ]);
+
+    // A unit's are the same two keys, at the top of the unit.
+    const unit = { name: "Ops", id: "ops", project: "OPS", space: "RUN" };
+    const unitInitial = unitForm(unit);
+    expect([unitInitial.project, unitInitial.space]).toEqual(["OPS", "RUN"]);
+    expect(
+      unitParts("unit:ops", unitInitial, { ...unitInitial, space: "OPS" }, { editableKey: false }),
+    ).toEqual([
+      { type: "updateUnit", target: "unit:ops", set: [{ path: ["space"], value: "OPS" }] },
+    ]);
+  });
+
+  // HOW AN AGENT IS DRAWN is written a half at a time, so a change of colour
+  // leaves the character to whatever the document says, its default included.
+  test("an agent's profile icon writes only the half that changed; a person has none", () => {
+    const initial = seatForm(dev(), "");
+    expect(initial.avatar).toEqual({ character: "crewlet", color: "purple" });
+    const recoloured = { ...initial, avatar: { character: "crewlet", color: "amber" } as const };
+    expect(seatParts("seat:dev", dev(), initial, recoloured, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["avatar", "color"], value: "amber" }],
+      },
+    ]);
+    const redrawn = { ...initial, avatar: { character: "octlet", color: "blue" } as const };
+    expect(seatParts("seat:dev", dev(), initial, redrawn, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [
+          { path: ["avatar", "character"], value: "octlet" },
+          { path: ["avatar", "color"], value: "blue" },
+        ],
+      },
+    ]);
+
+    const person: ConfigRole = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    expect(seatForm(person, "").avatar).toBeNull();
   });
 });
 

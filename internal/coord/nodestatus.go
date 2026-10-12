@@ -116,15 +116,15 @@ type NodeStatus struct {
 	// different order do not report a disagreement they do not have.
 	//
 	// EMPTY IS A NODE THAT IS NOT SAYING, never a node with an empty
-	// ceiling: a peer running a build older than this field publishes
-	// nothing here, and reading that as "grants nothing" would draw every
-	// such node as locked down.
+	// ceiling: a node that serves no API has no ceiling to state and
+	// publishes nothing here, and reading that as "grants nothing" would
+	// draw every such node as locked down.
 	GrantCeilingHash string
 
 	// MCP is what this node's MCP servers did when it last started them,
-	// one row per configured server. Nil is "this node started none"; a
-	// node that published no status at all did not say, which
-	// [StatusFromMeta] reports as absent.
+	// one row per configured server. Nil is "this node started none": a
+	// node that did not say is one whose heartbeat carried no status at
+	// all, which [StatusFromMeta] reports as absent.
 	//
 	// On the heartbeat rather than asked for, for the reason the rest of
 	// this struct is: every node already re-sends it, every peer already
@@ -242,10 +242,16 @@ func (s NodeStatus) Meta() map[string]any {
 //
 // # Absent is not zero
 //
-// A node that publishes no status (its status hook overran the heartbeat's
-// budget, or it is draining) is not a node with no work in flight. Reporting it as 0 would draw an
-// idle row for a process that is simply not saying, which is the confident-zero
-// mistake the whole surface is written to avoid.
+// A node that publishes no status — its status hook overran its budget on
+// that beat, so its heartbeat carried the placement half alone — is not a node
+// with no work in flight. Reporting it as 0 would draw an idle row for a
+// process that is simply not saying, which is the confident-zero mistake the
+// whole surface is written to avoid.
+//
+// A key this build does not know is IGNORED rather than refused: a successor
+// sharing the fleet publishes what it adds beside what this build reads, and a
+// status that failed to decode over it would read as absent for as long as the
+// successor ran.
 func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	raw, ok := meta[StatusKey].(map[string]any)
 	if !ok {
@@ -287,18 +293,12 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	return status, true
 }
 
-// listFromMeta accepts the typed slices this build writes and the []any a JSON
+// listFromMeta accepts the typed slice this build writes and the []any a JSON
 // round trip returns, for the reason [intFromMeta] accepts both numbers.
 func listFromMeta(v any) []any {
 	switch l := v.(type) {
 	case []any:
 		return l
-	case []string:
-		out := make([]any, len(l))
-		for i, s := range l {
-			out[i] = s
-		}
-		return out
 	case []map[string]any:
 		out := make([]any, len(l))
 		for i, m := range l {

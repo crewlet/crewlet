@@ -1,0 +1,67 @@
+-- What this node keeps about WHO: a write names its author beside the
+-- credential it went through, and an event's parties are seats by their agent
+-- id.
+--
+-- # A configuration revision and a stored secret name their author and their
+--   credential apart
+--
+-- Both trails had room for one name, and it was the credential: `created_by`
+-- and `updated_by` held a Tier A token's id, a signed-in person's login — and,
+-- for a person writing through their own machine token, `pat:<credential id>`.
+-- The token's row is the only thing that says whose it was, and the identity
+-- sweep collects it a week after it expires or is revoked; a revision is kept
+-- for ever. So a year on, `created_by` would name a credential nobody could
+-- resolve to anybody. Every other trail in the engine — a work item, a page,
+-- the identity log — records the two apart: the author whose authority was
+-- exercised, and the credential it was exercised through.
+--
+-- So these two do as well. `created_by` / `updated_by` are the AUTHOR —
+-- internal/iam's ActorFor name: a seat's handle for a person bound to one, a
+-- login otherwise, `token:<id>` for a Tier A token, the node for the engine's
+-- own writes — and beside each:
+--
+--   * `…_kind` — the author's KIND, an `iam.ActorKind` (agent, human,
+--     operator, system), which tells a seat a person is bound to from an
+--     agent's seat with the same handle. `company_config.created_by_kind` is
+--     0035's column, under the same name and the same `NOT NULL DEFAULT ''`;
+--     what this build writes into it is the ActorFor kind, a wider vocabulary
+--     than the `operator`/`node` that 0035's header describes;
+--   * `operator_id` — the credential the write was made through, EMPTY for a
+--     write no credential made: the engine's own, and a command run on the
+--     host while the engine was stopped.
+--
+-- NOTHING IS BACKFILLED: a node database is only ever created by running every
+-- migration from empty, so no row is older than these columns.
+--
+-- secret_values is this node's own bootstrap half of the secret store, migrated
+-- onto the fleet's at the next start — which carries every provenance column
+-- across, so the three facts travel with the value rather than being
+-- re-derived by the node that moved it.
+--
+-- NO INDEX on any of them, 0035's column included. Nothing selects on them:
+-- each is read one row at a time beside a revision or a secret somebody
+-- already named, and written once per write.
+ALTER TABLE company_config ADD COLUMN operator_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE secret_values ADD COLUMN updated_by_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE secret_values ADD COLUMN operator_id TEXT NOT NULL DEFAULT '';
+
+-- # The related-agent index is keyed on agent ids, never names
+--
+-- 0016 made "every event involving this agent" an index seek by writing one
+-- `crewlet_event_parties` row per (party, event). What it wrote as a party was
+-- a NAME: the event's actor, its `agent_role` tag — a seat's display name —
+-- and the `target`, `recipient` and `sender` tags as they came. A seat's name
+-- is prose two seats may share, so `GET /events?agent=` listed every
+-- namesake's work as one seat's; and an external sender who happened to share
+-- a seat's handle was filed under that seat.
+--
+-- A party is now an AGENT ID, derived from the seat's handle (ADR-0013): the
+-- event's own `agent_id`, and each seat a participant tag names, resolved
+-- through the organisation by the process that writes the event — see
+-- internal/store's `partiesOf`. The filter's `agent` parameter is resolved to
+-- an agent id the same way before it is compared.
+--
+-- NO STATEMENT FOLLOWS. The table's shape is 0016's — a party is TEXT either
+-- way — and what changed is the value its one writer puts there. A database is
+-- only ever created by running every migration from empty, so the table holds
+-- no row written under the old meaning for this file to rewrite.

@@ -42,6 +42,8 @@ const (
 	AgentInboxSuffix = ".inbox"
 	// AgentControlSuffix suffixes a seat's sandbox-control subject.
 	AgentControlSuffix = ".control"
+	// AgentReflectSuffix suffixes a seat's reflection subject.
+	AgentReflectSuffix = ".reflect"
 
 	// AgentGroupPrefix prefixes every per-seat durable consumer group.
 	//
@@ -62,6 +64,10 @@ const (
 	// and the two pairs differ in their topic. See
 	// TestGroupNamesAreNotUniqueOnTheirOwn.
 	AgentControlGroupSuffix = "-control"
+	// AgentReflectGroupSuffix distinguishes a seat's reflection group from
+	// its inbox and control groups — unique only with its topic, for the
+	// reason AgentControlGroupSuffix states.
+	AgentReflectGroupSuffix = "-reflect"
 
 	// EventsPrefix prefixes the engine's fleet-wide routing subjects.
 	EventsPrefix = "crewlet.events."
@@ -103,6 +109,18 @@ const (
 	// NotificationsInbound carries raw inbound webhook envelopes.
 	NotificationsInbound = NotificationsPrefix + "inbound"
 
+	// CustodyPrefix prefixes the subjects a node without the `data` role
+	// hands its events to the data nodes on, to be written into exactly one
+	// data node's event log (ADR-0025, internal/observe).
+	//
+	// NOT UNDER EventsPrefix, whose `>` is the broadcast every dashboard's
+	// projector streams: a batch there would send every stateless node's
+	// audit trail, a mebibyte at a time, to every live screen in the fleet,
+	// and every event inside it a second time.
+	CustodyPrefix = "crewlet.custody."
+	// CustodyRecords is the one topic every such node publishes its batches
+	// on, and one fleet-wide group on the data nodes reads.
+	CustodyRecords = CustodyPrefix + "records"
 	// ConfigPrefix prefixes the control-plane subjects, for the same
 	// reason NotificationsPrefix exists.
 	ConfigPrefix = "crewlet.config."
@@ -169,6 +187,22 @@ const (
 	// HeldRead is where one such read is scattered. Every node serves it
 	// and only the incarnation the seat's lease names answers.
 	HeldRead = HeldPrefix + "read"
+
+	// RelayPrefix prefixes the subjects a data node RELAYS what its own
+	// applier announced on, to a peer whose own copy is out of service
+	// (internal/engine, inboxrelay.go).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a relay is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], and what it carries —
+	// whose inbox moved — is a hint about rows every data node already
+	// holds, so a durable copy would be a second record of the same facts.
+	// And NOT under AgentInboxPrefix, whose `.inbox` subjects are seats'
+	// durable mailboxes: nothing here is anybody's mail.
+	RelayPrefix = "crewlet.relay."
+	// InboxRelayPrefix is followed by one data node's id, escaped as a
+	// subject token, and that node alone serves it: a follower reads ONE
+	// server's sequence of announced batches.
+	InboxRelayPrefix = RelayPrefix + "inbox."
 )
 
 // AgentInbox returns the inbox subject for the seat with this id.
@@ -221,6 +255,31 @@ func AgentControlGroup(seat uuid.UUID) string {
 	return AgentGroupPrefix + seat.String() + AgentControlGroupSuffix
 }
 
+// AgentReflect returns the seat's reflection subject: where the turn it ran is
+// put for post-turn reflection, by the node that ran it.
+//
+// A SEAT'S OWN SUBJECT rather than one fleet-wide group, because reflection
+// writes the seat's memory into the store of the node that runs it, and only
+// the node HOLDING the seat carries that memory to the next holder
+// (internal/learning/memsync). A fleet-wide group handed most reflections to a
+// node that held nothing of the seat, whose rows nobody ever read. Attached
+// and detached with the seat, like its control subject.
+func AgentReflect(seat uuid.UUID) string {
+	if seat == uuid.Nil {
+		return ""
+	}
+	return AgentInboxPrefix + seat.String() + AgentReflectSuffix
+}
+
+// AgentReflectGroup returns the durable consumer group for a seat's reflection
+// subject.
+func AgentReflectGroup(seat uuid.UUID) string {
+	if seat == uuid.Nil {
+		return ""
+	}
+	return AgentGroupPrefix + seat.String() + AgentReflectGroupSuffix
+}
+
 // SeatFromInbox recovers the seat id from an inbox subject, reporting
 // whether the subject was one. Used by diagnostics and by backends that log
 // per-seat activity without threading the id through.
@@ -265,15 +324,15 @@ func parseSeat(token string) (uuid.UUID, bool) {
 }
 
 // MailboxSeat reports the seat whose mailbox a durable subscription is, for
-// the two subscriptions a seat's mailbox comprises: its inbox and its
-// sandbox-control subscription.
+// the three subscriptions a seat's mailbox comprises: its inbox, its
+// sandbox-control subscription and its reflection subscription.
 //
 // The PAIR decides, never the topic alone: a subscription on a seat's inbox
 // subject under any other group is not that seat's mailbox, and deleting it as
 // one would destroy somebody else's consumer. It is the exact inverse of
-// [AgentInbox] with [AgentInboxGroup] and of [AgentControl] with
-// [AgentControlGroup], so it reports true only for a pair those could have
-// produced.
+// [AgentInbox] with [AgentInboxGroup], of [AgentControl] with
+// [AgentControlGroup] and of [AgentReflect] with [AgentReflectGroup], so it
+// reports true only for a pair those could have produced.
 func MailboxSeat(topic, group string) (uuid.UUID, bool) {
 	if id, ok := SeatFromInbox(topic); ok {
 		return id, group == AgentInboxGroup(id)
@@ -282,15 +341,19 @@ func MailboxSeat(topic, group string) (uuid.UUID, bool) {
 	if !ok {
 		return uuid.Nil, false
 	}
-	token, ok := strings.CutSuffix(rest, AgentControlSuffix)
-	if !ok {
-		return uuid.Nil, false
+	for _, pair := range []struct {
+		suffix string
+		group  func(uuid.UUID) string
+	}{{AgentControlSuffix, AgentControlGroup}, {AgentReflectSuffix, AgentReflectGroup}} {
+		token, ok := strings.CutSuffix(rest, pair.suffix)
+		if !ok {
+			continue
+		}
+		if id, ok := parseSeat(token); ok && group == pair.group(id) {
+			return id, true
+		}
 	}
-	id, ok := parseSeat(token)
-	if !ok || group != AgentControlGroup(id) {
-		return uuid.Nil, false
-	}
-	return id, true
+	return uuid.Nil, false
 }
 
 // Event returns the fleet-wide routing subject for an event type. Each of

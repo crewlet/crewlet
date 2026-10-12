@@ -299,12 +299,13 @@ func testAnAdoptedRevisionKeepsItsOriginsAuthor(t *testing.T, db *store.DB) {
 	// than a write to refuse: this node is running that revision either
 	// way.
 	configs := db.Configs()
+	activated := base.Add(time.Hour)
 	for id, kind := range map[string]iam.ActorKind{
-		"rev-op": iam.ActorOperator, "rev-new": "seat", "rev-unknown": "",
+		"rev-op": iam.ActorOperator, "rev-new": "seat",
 	} {
 		if err := configs.Adopt(t.Context(), store.Revision{
 			ID: id, CreatedBy: "maya", CreatedByKind: kind, OperatorID: "pat:42",
-			Source: "api", Summary: "adopted", CreatedAt: base,
+			Source: "api", Summary: "adopted", CreatedAt: base, ActivatedAt: activated,
 		}); err != nil {
 			t.Fatalf("adopt %s: %v", id, err)
 		}
@@ -317,33 +318,51 @@ func testAnAdoptedRevisionKeepsItsOriginsAuthor(t *testing.T, db *store.DB) {
 			t.Errorf("%s adopted as (%q, %q, %q, %q), want (maya, %q, pat:42, api)",
 				id, got.CreatedBy, got.CreatedByKind, got.OperatorID, got.Source, kind)
 		}
+		// ACTIVE FROM THE FLEET'S INSTANT, never from the revision's
+		// creation: the two differ on every re-activation of an older
+		// revision, and activated_at is what this node boots its chart with.
+		if !got.Active || !got.ActivatedAt.Equal(activated) || !got.CreatedAt.Equal(base) {
+			t.Errorf("%s adopted active=%v at %s, created %s; want active at %s, created %s",
+				id, got.Active, got.ActivatedAt, got.CreatedAt, activated, base)
+		}
 	}
 }
 
-func testAnAdoptionLearnsAnUnknownAuthor(t *testing.T, db *store.DB) {
-	// A ROW ADOPTED BEFORE THE FLEET SAID WHO WROTE IT IS FILLED IN LATER —
-	// the author, its kind and the credential together — and a row that
-	// knows its author is never overwritten: the node that stored its own
-	// write is the authority on it.
+func testAnAdoptionRefusesARevisionThatNamesNobody(t *testing.T, db *store.DB) {
+	// AN ADOPTION STORES WHAT THE POINTER SAYS, AND THE POINTER ALWAYS SAYS
+	// IT: a row with no author kind, no source or no instant would be a
+	// guess on the audit screen, so the store refuses it rather than
+	// recording one, and nothing is left behind. The credential alone may
+	// be absent — the engine's own write names none — and is not asked
+	// for here.
 	configs := db.Configs()
-	if err := configs.Adopt(t.Context(), store.Revision{
-		ID: "rev-1", Source: "fleet", Summary: "s", CreatedAt: base,
-	}); err != nil {
-		t.Fatalf("adopt with no author: %v", err)
-	}
-	if err := configs.Adopt(t.Context(), store.Revision{
-		ID: "rev-1", CreatedBy: "maya", CreatedByKind: iam.ActorHuman,
+	whole := store.Revision{
+		ID: "rev-1", CreatedBy: "maya", CreatedByKind: iam.ActorOperator,
 		OperatorID: "pat:42", Source: "api", Summary: "s", CreatedAt: base,
-	}); err != nil {
-		t.Fatalf("adopt again with the author: %v", err)
+		ActivatedAt: base,
 	}
-	got, _, err := configs.Get(t.Context(), "rev-1")
-	if err != nil || got.CreatedBy != "maya" || got.CreatedByKind != iam.ActorHuman ||
-		got.OperatorID != "pat:42" {
-		t.Fatalf("after the fleet named the author: (%q, %q, %q) err %v, want (maya, human, pat:42)",
-			got.CreatedBy, got.CreatedByKind, got.OperatorID, err)
+	for name, mutate := range map[string]func(*store.Revision){
+		"no author kind": func(r *store.Revision) { r.CreatedByKind = "" },
+		"no source":      func(r *store.Revision) { r.Source = "" },
+		"no creation":    func(r *store.Revision) { r.CreatedAt = time.Time{} },
+		"no activation":  func(r *store.Revision) { r.ActivatedAt = time.Time{} },
+	} {
+		r := whole
+		mutate(&r)
+		if err := configs.Adopt(t.Context(), r); err == nil {
+			t.Errorf("Adopt with %s was stored", name)
+		}
 	}
+	if all, err := configs.List(t.Context(), 0, 0); err != nil || len(all) != 0 {
+		t.Fatalf("a refused adoption left %d rows (err %v)", len(all), err)
+	}
+}
 
+func testAReAdoptionKeepsTheKnownAuthor(t *testing.T, db *store.DB) {
+	// A row this node already holds keeps its author: the node that stored
+	// its own write — or adopted it first — is the authority on it. Only
+	// its activation moves.
+	configs := db.Configs()
 	own, err := configs.InsertActive(t.Context(), store.Revision{
 		CreatedBy: "node-a", CreatedByKind: iam.ActorSystem, Source: "file",
 		Summary: "mine", CreatedAt: base,
@@ -351,16 +370,21 @@ func testAnAdoptionLearnsAnUnknownAuthor(t *testing.T, db *store.DB) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	later := base.Add(2 * time.Hour)
 	if err = configs.Adopt(t.Context(), store.Revision{
 		ID: own, CreatedBy: "somebody", CreatedByKind: iam.ActorOperator,
 		OperatorID: "token:somebody", Source: "api", Summary: "mine", CreatedAt: base,
+		ActivatedAt: later,
 	}); err != nil {
 		t.Fatalf("adopt over a known author: %v", err)
 	}
-	got, _, err = configs.Get(t.Context(), own)
+	got, _, err := configs.Get(t.Context(), own)
 	if err != nil || got.CreatedBy != "node-a" || got.CreatedByKind != iam.ActorSystem ||
-		got.OperatorID != "" {
-		t.Fatalf("a known author was overwritten: (%q, %q, %q) err %v, want (node-a, system, none)",
-			got.CreatedBy, got.CreatedByKind, got.OperatorID, err)
+		got.OperatorID != "" || got.Source != "file" {
+		t.Fatalf("a known author was overwritten: (%q, %q, %q, %q) err %v, want (node-a, system, none, file)",
+			got.CreatedBy, got.CreatedByKind, got.OperatorID, got.Source, err)
+	}
+	if !got.Active || !got.ActivatedAt.Equal(later) {
+		t.Fatalf("re-adopted active=%v at %s, want active at %s", got.Active, got.ActivatedAt, later)
 	}
 }

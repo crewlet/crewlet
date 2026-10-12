@@ -158,7 +158,7 @@ func TestOneSweepRecordSharesItsBudgetAcrossEveryTable(t *testing.T) {
 	rig := sweepRig(t, brokerAt)
 	bucket := iamdomain.BucketOf(sweptPerson)
 	const each = iamdomain.MaxSweepRows/2 + 10
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range each {
 			for _, class := range []iamdomain.HistoryClass{
 				iamdomain.ClassChange, iamdomain.ClassSession,
@@ -216,7 +216,7 @@ func TestASweepPastTheBucketCountIsRefused(t *testing.T) {
 	record := sweepRecord(t, iamdomain.Sweep{
 		V: iamdomain.DocumentVersion, Bucket: iamdomain.Buckets + 1, Changes: 1 << 40,
 	})
-	err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := rig.applier.Apply(t.Context(), tx, record,
 			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
 		return err
@@ -303,7 +303,7 @@ func (r *sweepRigT) fillTrail(n int) {
 func (r *sweepRigT) apply(rec statelog.Record, now time.Time) int {
 	r.t.Helper()
 	var rows int
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		var err error
 		rows, err = r.applier.Apply(r.t.Context(), tx, rec,
 			statelog.ApplyOptions{Now: now, StoredAt: rec.StoredAt})
@@ -440,7 +440,7 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 			t.Fatalf("SetCredentials: %v", err)
 		}
 		bucket := int64(iamdomain.BucketOf(person))
-		if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			for id, redeemed := range map[string]time.Time{
 				"spent-long-ago": long, "spent-recently": recent,
 			} {
@@ -622,12 +622,12 @@ func TestTheSweepCollectsAnInvitationWithNoExpiry(t *testing.T) {
 	rig := newWriteRig(t)
 	const address = "lee@example.com"
 	dead := uuid.Must(uuid.NewV7()).String()
-	applyLegacyInvitation(t, rig, dead, address, "a-secret",
+	applyInvitationByHand(t, rig, dead, address, "a-secret",
 		rig.vacantSeat("platform-lead"), time.Time{}, 1)
 	bucket := iamdomain.BucketOf(blindOf(t, address))
 	// AN OUTSTANDING ONE IN THE SAME BUCKET, which the sweep leaves alone:
 	// the control that the delete is about the expiry and not the bucket.
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO iam_invites (id, email_blind, expires_at, bucket,
 				created_at, version, document)

@@ -57,11 +57,12 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
+	d.by = req.By
 	prepared, err := s.prepare(ctx, d)
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.By)
+	return s.commit(ctx, prepared, req.Summary)
 }
 
 // EntityError reports an entity write the document refused: no such entity,

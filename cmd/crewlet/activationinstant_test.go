@@ -39,6 +39,7 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 		// revision — the credential-rotation gesture.
 		if _, err = fleet.Activate(t.Context(), coord.ActivationRequest{
 			RevisionID: first.ID, Payload: first.Payload, At: time.Now().Add(2 * time.Hour),
+			Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		}); err != nil {
 			t.Fatalf("peer activate: %v", err)
 		}
@@ -60,7 +61,8 @@ func TestAPublishKeepsThePointersInstantLocally(t *testing.T) {
 		real := coordmemory.NewFleet()
 		if _, err := real.Activate(t.Context(), coord.ActivationRequest{
 			RevisionID: "peer-revision", Payload: []byte(`{"name":"Peer"}`),
-			At: time.Now().Add(2 * time.Hour),
+			At:     time.Now().Add(2 * time.Hour),
+			Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		}); err != nil {
 			t.Fatalf("peer activate: %v", err)
 		}

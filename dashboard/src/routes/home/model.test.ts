@@ -222,17 +222,19 @@ describe("the figures", () => {
   });
 
   // A STOPPED SEAT WAITS ON A READER ONLY WHERE THEY CAN TAKE A WAY OUT:
-  // raise the ceiling (a `/config` write, under `config:write`) or hand the
-  // item on (`update_work_item`, and only with an item to hand).
+  // raise the ceiling (a `/config` write — `mayChangeConfig`: `config:write`
+  // and, on a managed document, one of its writers — or a seat's own window
+  // its lead may raise) or hand the item on (`update_work_item`, and only with
+  // an item to hand).
   test("a stopped seat is the reader's decision only where they can act on it", () => {
     const onItem = {
       row: { role: "SWE", turn: { work_item: { id: "t-1", key: "ENG-1" } } } as never,
     };
     const between = { row: { role: "DevRel" } as never };
-    const operator = { grants: ["config:write"], acts: [] };
-    const reassigner = { grants: ["state:read"], acts: ["update_work_item"] };
-    const neither = { grants: ["state:read"], acts: ["comment_on_work_item"] };
-    expect(seatDecisionsFor([onItem, between], operator)).toEqual({
+    const configurer = { configWrite: true, acts: [] };
+    const reassigner = { configWrite: false, acts: ["update_work_item"] };
+    const neither = { configWrite: false, acts: ["comment_on_work_item"] };
+    expect(seatDecisionsFor([onItem, between], configurer)).toEqual({
       mine: [onItem, between],
       others: [],
     });

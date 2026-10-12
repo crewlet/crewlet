@@ -14,17 +14,17 @@ import (
 func TestHumanSeatsAreMarkedInBothIdentityRenderings(t *testing.T) {
 	t.Parallel()
 	s := seatIn(mixedAcme(), "eng")
-	contains(t, BuildExecutor(s, ExecutorInput{}), "**Reports to:** Sarah Chen (human)")
+	contains(t, BuildExecutor(s, ExecutorInput{}).Text, "**Reports to:** Sarah Chen (human)")
 	contains(t, BuildIdentityLine(s), "Sarah Chen (human)")
 }
 
 func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	t.Parallel()
-	mixed := BuildExecutor(seatIn(mixedAcme(), "eng"), ExecutorInput{})
+	mixed := BuildExecutor(seatIn(mixedAcme(), "eng"), ExecutorInput{}).Text
 	contains(t, mixed, "## Human colleagues", "NOT on A2A", "asynchronously")
 
 	// A pure-agent company's prompts are unchanged by the feature existing.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "## Human colleagues")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Human colleagues")
 }
 
 // A human member's roster block renders their external identities, their
@@ -54,7 +54,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	}
 	o.Name = "Acme"
 	o.Normalize()
-	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**")
 	// Identities render generically, labelled by transport. The shared
@@ -93,12 +93,12 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 	o.Normalize()
 	seat := seatIn(o, "lead")
 
-	excludes(t, BuildExecutor(seat, ExecutorInput{}), "${SARAH_SLACK_ID}", "Slack ID:")
+	excludes(t, BuildExecutor(seat, ExecutorInput{}).Text, "${SARAH_SLACK_ID}", "Slack ID:")
 
 	seat.Env = func(name string) (string, bool) {
 		return "U0RESOLVED", name == "SARAH_SLACK_ID"
 	}
-	contains(t, BuildExecutor(seat, ExecutorInput{}), "Slack ID: U0RESOLVED")
+	contains(t, BuildExecutor(seat, ExecutorInput{}).Text, "Slack ID: U0RESOLVED")
 }
 
 // A seat missing its chart renders the phase contract and no identity,
@@ -107,10 +107,10 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 func TestZeroSeatRendersTheContractWithoutPanicking(t *testing.T) {
 	t.Parallel()
 	var s Seat
-	contains(t, BuildExecutor(s, ExecutorInput{}), "## Your turn")
-	contains(t, BuildReview(s, ReviewInput{}), "## REVIEW phase")
-	contains(t, BuildOnboarding(s, OnboardingInput{}), "## ONBOARDING phase")
-	excludes(t, BuildExecutor(s, ExecutorInput{}), "## Your Identity")
+	contains(t, BuildExecutor(s, ExecutorInput{}).Text, "## Your turn")
+	contains(t, BuildReview(s, ReviewInput{}).Text, "## REVIEW phase")
+	contains(t, BuildOnboarding(s, OnboardingInput{}).Text, "## ONBOARDING phase")
+	excludes(t, BuildExecutor(s, ExecutorInput{}).Text, "## Your Identity")
 }
 
 func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
@@ -161,7 +161,7 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Fatalf("a chart holding a person with no chat account is refused: %v", err)
 	}
-	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 
 	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")
 	excludes(t, p, "Crewlet ID:", "crewlet")
@@ -171,7 +171,7 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	// A colleague WITH a reachable account keeps the mention instruction.
 	o.Units[0].Roles[1].Contact.SlackUserID = "U0FOUNDER"
 	o.Normalize()
-	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
+	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
 	excludes(t, with, "nobody to @-mention")
 }
@@ -228,10 +228,10 @@ func TestEveryHeadingAPromptBuilderEmitsIsASibling(t *testing.T) {
 	// Zero inputs, so every heading counted below is one a builder in this
 	// package wrote — not one a caller passed in a catalogue or a skill body.
 	for name, prompt := range map[string]string{
-		"executor":   BuildExecutor(seat, ExecutorInput{}),
-		"review":     BuildReview(seat, ReviewInput{}),
-		"onboarding": BuildOnboarding(seat, OnboardingInput{}),
-		"subagent":   BuildSubagent(seat, SubagentInput{}),
+		"executor":   BuildExecutor(seat, ExecutorInput{}).Text,
+		"review":     BuildReview(seat, ReviewInput{}).Text,
+		"onboarding": BuildOnboarding(seat, OnboardingInput{}).Text,
+		"subagent":   BuildSubagent(seat, SubagentInput{}).Text,
 	} {
 		found := headingsIn(prompt)
 		// Guard the guard: a builder that emitted no heading at all would
@@ -260,7 +260,7 @@ func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 		TaskDescription:     "THE-ASK",
 		PriorWork:           "PRIOR-WORK",
 		ConversationHistory: "CONVERSATION-HISTORY",
-	})
+	}).Text
 	var levels []int
 	var texts []string
 	for _, h := range headingsIn(msg) {
@@ -306,10 +306,10 @@ func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
 	o.Normalize()
 	seat := seatIn(o, "lead")
 
-	contains(t, BuildExecutor(seat, ExecutorInput{}), "Slack ID: U0HUMAN")
+	contains(t, BuildExecutor(seat, ExecutorInput{}).Text, "Slack ID: U0HUMAN")
 
 	seat.Withheld = func(handle string) bool { return handle == "sarah-chen" }
-	p := BuildExecutor(seat, ExecutorInput{})
+	p := BuildExecutor(seat, ExecutorInput{}).Text
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**",
 		"cannot be reached on any chat or code-host account",
 		"Availability: CET business hours")
@@ -329,7 +329,7 @@ func TestTheExecutorIsToldToAskWithOptionsAndStopOnTheBranch(t *testing.T) {
 	t.Parallel()
 	asking := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"comment_on_work_item"},
-	})
+	}).Text
 	contains(t, asking,
 		"## When a decision is not yours to make",
 		"`ask` and `decision`",
@@ -345,5 +345,5 @@ func TestTheExecutorIsToldToAskWithOptionsAndStopOnTheBranch(t *testing.T) {
 	}
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"post_message"},
-	}), "## When a decision is not yours to make")
+	}).Text, "## When a decision is not yours to make")
 }

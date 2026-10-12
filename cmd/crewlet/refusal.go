@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
-// How this binary's node clients render a refusal.
+// How this binary's four node clients render a refusal.
 //
 // ONE RENDERER, because there are four of them — [configClient.refusal],
 // [secretsClient.refusal], [nodeError] and [iamRefusal] —
@@ -75,11 +78,10 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 // client has already built, each on its own indented line, skipping whichever
 // the body did not carry.
 //
-// THE MESSAGE IS THE CALLER'S, not this function's: what to say when the body
-// carried no `error` at all differs per client — a proxy's HTML page elided to
-// a screenful for the config surface, the raw answer for the others — and that
-// decision is theirs. What is shared is only what happens to `detail` and
-// `hint`, which is the part that was drifting.
+// THE MESSAGE IS THE CALLER'S, not this function's — each builds it from the
+// engine's `error`, or from [foreignAnswer] when the body carried none. What
+// is shared here is what happens to `detail` and `hint`, which is the part
+// that was drifting.
 //
 // `error` says WHAT happened and `hint` says WHAT TO DO, which is why dropping
 // the second is worse than it looks: "draining" tells an operator nothing they
@@ -91,4 +93,27 @@ func withRefusalDetail(msg, detail, hint string) string {
 		}
 	}
 	return msg
+}
+
+// foreignAnswer is what an answer that is NOT the engine's JSON said — a
+// proxy's page, a gateway's plain-text error — for an error a person reads.
+//
+// Through [httpx.Refusal], for every one of the four clients: an HTML page's
+// title, plain text as itself, and a body past what that reads marked. They
+// used to differ — the config client quoted the first two kilobytes of the
+// markup, the secrets client the whole answer, up to 68 KiB of it — and the
+// one sentence the page held was in neither. A body with nothing readable in
+// it says how large it was rather than reading as an empty one.
+func foreignAnswer(contentType string, raw []byte) string {
+	if said := httpx.Refusal(contentType, raw); said != "" {
+		return said
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "(an empty body)"
+	}
+	kind := contentType
+	if kind == "" {
+		kind = "an untyped body"
+	}
+	return fmt.Sprintf("(%d bytes of %s with nothing readable in them)", len(raw), kind)
 }

@@ -1,0 +1,20 @@
+-- A person's day is held nowhere: `usage_held` goes.
+--
+-- 0043 gave the usage publisher a table to keep a person's day in while some
+-- node applying the usage log could not read a person's record, so a restart
+-- in that window would not lose a day nobody derives again. Every node of
+-- this build reads it: a person's record is the usage log's base format,
+-- version 1, like a seat's and a schedule's, and the publisher sends it with
+-- the rest of its day the moment it is derived. So nothing is ever held, the
+-- publisher neither writes nor reads the table, and a table nothing reads or
+-- writes is dropped rather than kept as an invitation to wire something to
+-- it.
+--
+-- WHO HAS TO AGREE ON IT was this node alone — a hold was a fact about this
+-- node's own pending publishes — and the answer every node agrees on, the
+-- published day, was always the replicated usage domain's. That is now the
+-- only place a person's day is.
+--
+-- 0043 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+DROP TABLE IF EXISTS usage_held;

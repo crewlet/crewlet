@@ -20,8 +20,9 @@ type CredentialFeed interface {
 // pushIdentityMoved hands every open socket the identity move it is reached
 // by — see internal/api/stream's lifetime.go.
 //
-// NO FORWARDING BETWEEN NODES, and none is missing: every node applies every
-// identity record, whatever its roles, so every node hears every move from its
+// NO FORWARDING BETWEEN NODES, and none is missing: every node that serves
+// this API holds the estate — ingress requires the `data` role (ADR-0025) — and
+// applies every identity record, so every such node hears every move from its
 // own applier and decides the sockets it holds.
 //
 // NEVER BLOCKS, because its caller is the identity applier's post-commit hook,

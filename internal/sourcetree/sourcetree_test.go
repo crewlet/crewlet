@@ -395,6 +395,11 @@ func TestRootIsTheModuleHoldingThisPackage(t *testing.T) {
 			t.Errorf("Root() = %s, which holds no %s: %v", root, want, err)
 		}
 	}
+	// ModuleRoot is the same answer for a value computed once per binary,
+	// outside any one test: two roots would be two trees.
+	if again, err := ModuleRoot(); err != nil || again != root {
+		t.Errorf("ModuleRoot() = %q, %v; Root() = %q", again, err, root)
+	}
 }
 
 // THE NEAREST go.mod IS THE MODULE, which is how the go command defines the

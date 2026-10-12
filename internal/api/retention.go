@@ -269,7 +269,7 @@ func gateVerb(evict bool) string {
 //
 // A dropped request does not stop a gesture half-way: once its first record is
 // about to be written the engine finishes it under its own budget
-// ([engine.GateBudget]), and the caller that minted the `op_id` it sent can ask
+// ([engine.GateLogBudget]), and the caller that minted the `op_id` it sent can ask
 // again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

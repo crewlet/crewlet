@@ -29,7 +29,9 @@
  *  - each detached CODING RUN as its own span, keyed by its `launch_id` — two
  *    launches in one turn are two spans — from its announcement to its
  *    published record, or to now while it is still out;
- *  - the REFLECTION pass after the last phase, with its workers;
+ *  - the REFLECTION pass after the last phase, with what each of its workers
+ *    spent — one span per `auxiliary_spend` record of the `reflection` stage,
+ *    from its first call to its last;
  *  - "review pending" between an executor that finished and a reviewer that
  *    has not started, while the turn runs.
  *
@@ -40,16 +42,18 @@
  *
  * # What cannot be placed is still shown
  *
- * A record an older engine wrote has no instants at all, and an agent-mode
- * executor's rounds ran inside somebody else's loop. Those are UNTIMED rows —
- * listed under the waterfall as "not placed on this clock" — rather than bars
- * drawn at an invented position, or dropped. The list says PLACED rather than
+ * A call whose arguments did not parse was answered rather than run, and an
+ * agent-mode executor's rounds ran inside somebody else's loop; neither kind
+ * of call carries instants. Those are UNTIMED rows — listed under the
+ * waterfall as "not placed on this clock" — rather than bars drawn at an
+ * invented position, or dropped. The list says PLACED rather than
  * timed because a call can be measured and still have nowhere to go: timed
  * but unstamped, in a round with no model call of its own to follow. Whether
  * a call was measured at all is [callMeasured]'s, which every surface asks.
  */
 
 import type { EventRecord } from "~/protocol/index.ts";
+import { auxiliaryRecords, purposeLabel } from "./auxiliary.ts";
 import { tsKey } from "./format.ts";
 import { phaseStart, type PhaseRecord, type ToolCall } from "./phases.ts";
 
@@ -502,10 +506,13 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
 
   const workers = phases.filter((p) => p.hostPhase);
   const runs = phases.filter((p) => p.phase === "sandbox" && !p.hostPhase);
-  const reflection = phases.filter((p) => p.phase === "auxiliary" && !p.hostPhase);
-  const own = phases.filter(
-    (p) => !p.hostPhase && p.phase !== "sandbox" && p.phase !== "auxiliary",
-  );
+  const own = phases.filter((p) => !p.hostPhase && p.phase !== "sandbox");
+  // THE REFLECTION WORKERS ARE THEIR SPEND RECORDS. No phase record ever
+  // carried a reflection worker — the `auxiliary` phase this lane was drawn
+  // from had no producer, so the lane only ever held its sentinel — and what
+  // the engine records instead is one `auxiliary_spend` per purpose and model
+  // per flush, stamped with its first call's start and its last call's end.
+  const reflection = auxiliaryRecords(events).filter((r) => r.stage === "reflection");
 
   // THE CONTEXT: every prefetch the turn ran, from its own clock.
   for (const ev of events) {
@@ -547,24 +554,26 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
   if (reflection.length || events.some((e) => e.type === "reflection_completed")) {
     const children: Node[] = [];
     for (const w of reflection) {
-      const began = phaseBegan(w);
-      const end = w.live ? now : w.durationMs > 0 ? began + w.durationMs : 0;
-      const label = w.worker || "Reflection worker";
+      const began = at(w.startedAt);
+      const end = at(w.endedAt);
+      const label = purposeLabel(w.purpose);
+      const sub = `${w.model} · ${w.calls === 1 ? "1 call" : `${w.calls} calls`}`;
+      const id = `aux:${w.id}`;
       if (began <= 0 || end <= 0) {
-        untimed.push({ id: w.key, kind: "worker", label, sub: w.model, phaseKey: w.key });
+        untimed.push({ id, kind: "worker", label, sub, phaseKey: "" });
         continue;
       }
       children.push({
         span: span({
-          id: w.key,
+          id,
           kind: "worker",
           label,
-          sub: w.model,
+          sub,
           start: began,
-          end,
-          open: w.live,
-          failed: w.failed,
-          phaseKey: w.key,
+          end: Math.max(began, end),
+          // A RECORD OF CALLS THAT HAVE RETURNED, so never open; one with a
+          // failed call is marked, the rest of its calls still counted.
+          failed: w.failedCalls > 0,
         }),
         children: [],
       });

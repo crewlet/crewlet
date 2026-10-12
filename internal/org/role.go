@@ -687,7 +687,9 @@ type Role struct {
 	// reports that rather than quietly widening the constraint — widening
 	// is exactly what the operator asked it not to do.
 	//
-	// Only meaningful for an agent seat; a human seat is never claimed.
+	// An agent seat's alone: a human seat is never claimed, so a constraint
+	// on its claim is config that reads as live and does nothing, and
+	// [Role.Validate] refuses it there.
 	Placement placement.SeatPlacement `yaml:"placement,omitempty" json:"placement,omitzero"`
 
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
@@ -713,10 +715,13 @@ type Role struct {
 	// is a real, reportable half-built record. See [GitHubApp.Held].
 	GitHub *GitHubApp `yaml:"github,omitempty" json:"github,omitempty"`
 
-	// Project and Space are this seat's integration
-	// IDENTITY: where inbound activity with no better recipient routes, and
-	// where the seat files its work. Meaningful for a root-level seat; for
-	// a unit-nested one the unit carries it.
+	// Project and Space are this seat's tracker and knowledge IDENTITY:
+	// where inbound activity with no better recipient routes, and where the
+	// seat files its work. Meaningful for a root-level seat; for a
+	// unit-nested one the unit carries it. They are authored at the top of
+	// the seat rather than under `integrations:`, because each names a
+	// container on whichever backend the company runs rather than an
+	// identity at one vendor.
 	//
 	// Neither is an MCP credential, and neither scopes what the seat can
 	// READ — read scope is org-wide, on the Organization.
@@ -808,16 +813,28 @@ func (r *Role) ResolvedEmail(lookup EnvLookup) string {
 }
 
 // humanForbidden is the runtime-only surface a human seat must not carry,
-// in the order an error reports it. Human seats are never spawned, so every
-// one of these would be config that looks live and does nothing.
+// in the order an error reports it. Human seats are never spawned or
+// claimed, so every one of these would be config that looks live and does
+// nothing.
 //
-// The names are the ones an operator WROTE, because the error's job is to
-// point at a line in a file, and the problem a write answers is placed at
-// that path. A seat's chat apps are written under `integrations:`, and naming
-// them `slack` and `mattermost` sent an operator looking for a key no seat
-// has; the project and space it owns are its own `project` and `space`, and
-// naming them `integrations.jira` and `integrations.confluence` pointed at
-// keys a seat may not even carry (they are refused as retired).
+// The names are the keys an operator WROTE, because the error's job is to
+// point at a line in a file — and it is located there too: [fieldOf] makes
+// the name the refusal's field, which the config layer appends to the
+// seat's path. So a name that is not the authored key pins the refusal to a
+// line the document does not have. A seat's chat apps are written under
+// `integrations:` (integrations.slack, not slack). Its tracker project and
+// knowledge container are NOT: `project` and `space` are top-level seat
+// keys, vendor-neutral because they name a container on whichever backend
+// the company runs, and labelling them `integrations.jira` and
+// `integrations.confluence` sent an operator to the company's own vendor
+// blocks.
+//
+// A seat's own GitHub App ([Role.GitHub]) is refused on a human seat too,
+// but by the config layer, as an ADMISSION rule rather than one of these
+// runnable ones: nothing about running depends on the block, since every
+// path that creates, installs or reconciles an app skips a human seat, so a
+// stored revision carrying one runs as it did. Listing it here as well would
+// report one mistake twice.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string
@@ -834,6 +851,7 @@ func (r *Role) humanForbidden() []string {
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
+		{"placement", !r.Placement.IsAnywhere()},
 		{"integrations.slack", !r.Slack.IsZero()},
 		{"integrations.mattermost", !r.Mattermost.IsZero()},
 		{"project", r.Project != ""},

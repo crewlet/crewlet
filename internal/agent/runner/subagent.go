@@ -75,7 +75,7 @@ func (r *Runner) workerCatalogue() string {
 // there is a phase that can spend a batch of model calls on work the turn has
 // already done. Onboarding is a seat reading its own team's pages, which is
 // not fan-out work.
-func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
+func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, surface func() *tools.Surface,
 ) tools.Entry {
 	if r.cfg.Subagent == nil || ph != phase.Execute {
@@ -91,7 +91,9 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 	// that is the one hook the subagent package calls on every path a
 	// child can take, after its prompt was built.
 	offer := r.cfg.Skills.Offer()
-	emit := r.emitter().nestedAt(round)
+	// The workers' spend is the SURFACE's: a bridged executor's workers
+	// run after this segment ended, and are paid by the one that resumes.
+	emit := r.emitter().nestedAt(round).talliedOn(m.spend, m.mu)
 	tool := subagent.NewTool(subagent.Config{
 		Seat: r.cfg.Seat, Models: r.cfg.Models,
 		// The parent's UNIVERSE and its LIVE active list. The second is a
@@ -107,6 +109,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 			return s.Active()
 		},
 		Discovery: DiscoveryTools,
+		Compact:   m.compact,
 		Skills:    offer.Catalogue(),
 		Budget:    r.cfg.Budget,
 		// The parent's OWN fence, not a second one: a worker has no grant
@@ -122,7 +125,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 		Trace:           r.cfg.Turn.Trace,
 		// The parent turn, so every seat-scoped tool in the grant works.
 		// Without it a child is handed tools that always fail.
-		Turn: r.cfg.Turn.Context,
+		Turn: m.turn,
 		// And the parent's own load-before-use gate, so a child cannot
 		// reach by being spawned what its parent would have had to load a
 		// skill for.
@@ -162,6 +165,15 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 // cap, while an ERROR means the counter that enforces one could not be read.
 // Answering zero for the second would read as UNCAPPED and let a fan-out spend
 // without a ceiling on exactly the failure a budget exists for.
+//
+// AND SO DOES A READER THAT ANSWERS NOTHING LEFT. Zero from a reader is a
+// capped seat whose tightest window is spent — the engine hands no reader at
+// all to a seat nothing caps — and subagent reads a ParentRemaining of zero as
+// UNCAPPED. Passed on, an exhausted seat's fan-out got no slice, which is the
+// fail-open direction the error case is refused for; and there is nothing to
+// share, since the phase's own first call is refused in a window with no room
+// for a single token — held by the turn's meter before it is sent where the
+// meter has seen the window full, and its charge refused where it has not.
 func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 	if r.cfg.Subagent == nil || r.cfg.Subagent.Remaining == nil {
 		// No counter configured: the seat itself runs uncapped, so its
@@ -175,7 +187,10 @@ func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 				"offered with no ceiling")
 		return 0, false
 	}
-	if remaining < 0 {
+	if remaining <= 0 {
+		log.InfoContext(ctx, "subagent_budget_spent", "remaining", remaining,
+			"detail", "the seat has no token budget left to share, so the spawner is left "+
+				"off this phase's surface rather than offered with no ceiling")
 		return 0, false
 	}
 	return remaining, true

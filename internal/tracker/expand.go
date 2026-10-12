@@ -33,7 +33,8 @@ import (
 //
 // A saved view carrying `view=` would expand into itself, and one carrying
 // `cursor=` would resume a page the caller never asked for. Both are refused
-// at the SAVE — see [checkView] — so no stored view carries either.
+// at the SAVE — see [checkView] — which is the only writer of a view's
+// parameters, so no stored view carries one.
 
 // The presets, and there are exactly five: each is a question a person asks
 // often enough that a screen puts it on a tab.

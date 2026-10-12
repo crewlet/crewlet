@@ -73,7 +73,7 @@ import (
 //
 // # Resolved values: what a seat runs on and what it can reach
 //
-// Two seat fields are RESOLVED rather than authored, and both for the reason
+// Three seat fields are RESOLVED rather than authored, and all for the reason
 // the derived hierarchy is: the rule is one a second implementation gets
 // wrong. [OrgSeat.LLM] is every phase's provider chain as a turn resolves it
 // ([phase.Resolve], the function the turn's own chain goes through) — a seat
@@ -98,6 +98,13 @@ import (
 // and GET /org alike. What they never carry, for any audience, is anything a
 // reader could act with: the entries they name, and every credential under
 // `mcp_env`, stay guarded.
+//
+// [OrgSeat.Avatar] is resolved too, and reaches every audience: the character
+// and colour an agent seat is drawn as ([config.RoleAvatar.Resolved]), its
+// defaults filled in, so no screen keeps a copy of what an unset avatar looks
+// like. It is presentation and nothing else — no account, no credential and
+// nothing a reader could dial — and a seat drawn one way for one reader and
+// another way for the next would be two seats.
 
 // OrgProjection is the reader's view of a company: what `state:read` sees.
 //
@@ -163,6 +170,13 @@ type OrgSeat struct {
 	Manages              []string `json:"manages,omitempty"`
 	Availability         string   `json:"availability,omitempty"`
 
+	// Avatar is RESOLVED (see the package doc): the Crewlet character and the
+	// colour an agent seat is drawn as, each as written or its default where
+	// the seat names none, so every reader draws the same seat the same way
+	// without knowing the defaults. Absent on a human seat, which is drawn as
+	// the person it is.
+	Avatar *OrgAvatar `json:"avatar,omitempty"`
+
 	// TokenBudget is this seat's own ceilings, as the document writes
 	// them; a window it does not name is capped only by the company's.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
@@ -185,6 +199,13 @@ type OrgSeat struct {
 	// it failed. Absent on a human seat and for every reader without
 	// `config:read`.
 	ToolSources []string `json:"tool_sources,omitempty"`
+}
+
+// OrgAvatar is how an agent seat is drawn: a character id and a colour name,
+// as plain strings for the reason OrgSeat spells its enums as strings.
+type OrgAvatar struct {
+	Character string `json:"character"`
+	Color     string `json:"color"`
 }
 
 // OrgTokenBudget is a token budget on the wire: the most one scope may spend
@@ -283,6 +304,7 @@ func orgProjection(company func() (*config.Company, *org.Organization)) OrgProje
 	b := orgBuilder{
 		providers: c.Providers.ProviderOrder(),
 		servers:   c.MCPServers,
+		avatars:   avatars(c),
 	}
 	return OrgProjection{
 		Name:        c.Name,
@@ -321,6 +343,25 @@ type orgBuilder struct {
 	// providers is providers.llm's keys in config order.
 	providers []string
 	servers   []config.MCPServer
+
+	// avatars is each authored seat's avatar by handle. The DOCUMENT's, not
+	// the running organisation's: how a seat is drawn is presentation the
+	// runtime model has no use for, so it is read where it is written, and
+	// found by the handle both shapes carry — the one key that names a seat
+	// in either.
+	avatars map[string]*config.RoleAvatar
+}
+
+// avatars is every seat's authored avatar in c, keyed by the handle the seat
+// runs under ([config.Role.IdentityKey], the one the running organisation
+// carries) — nil entries included, which [config.RoleAvatar.Resolved] answers
+// with the defaults.
+func avatars(c *config.Company) map[string]*config.RoleAvatar {
+	out := map[string]*config.RoleAvatar{}
+	for role := range c.EachRole() {
+		out[role.IdentityKey()] = role.Avatar
+	}
+	return out
 }
 
 // seats is the public half of a list of seats, with the resolved fields of
@@ -352,6 +393,8 @@ func (b orgBuilder) seats(roles []*org.Role) []OrgSeat {
 		if r.IsAgent() {
 			seat.LLM = b.llm(r)
 			seat.ToolSources = b.toolSources(r)
+			look := b.avatars[r.Handle()].Resolved()
+			seat.Avatar = &OrgAvatar{Character: string(look.Character), Color: string(look.Color)}
 		}
 		out = append(out, seat)
 	}

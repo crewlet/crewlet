@@ -104,7 +104,7 @@ const (
 // third while a cross-project move fails closed over it. Collapsed to two
 // values, one of those two behaviours would have to be wrong.
 type Claims interface {
-	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
@@ -115,9 +115,18 @@ type Claims interface {
 // concurrency it was taken to exclude.
 //
 // Built through [coord.Class] like every other lease, because these land in
-// the SAME bucket as the fleet's own and a bucket with two naming conventions
-// in it has two grammars to keep right. The class is the key's leading
-// SUBJECT TOKEN, so each of these is filterable on its own.
+// the SAME store as the fleet's own — on the KV backend the same bucket as the
+// fleet's duties — and a store with two naming conventions in it has two
+// grammars to keep right. The class is the key's leading SUBJECT TOKEN, so
+// each of these is filterable on its own.
+//
+// AND HELD TO THE CONTRACT'S CEILING, NEVER TO THE SEAT LEASE TTL: a class
+// that is not a seat or a node's presence is honoured at any TTL up to
+// [coord.MaxDutyTTL] on every backend ([coord.HeldToSeatTTL]), so [ClaimTTL]
+// and a bulk admission's projection are this package's own arithmetic and
+// move with nothing an operator tunes for failover. Until that was the
+// contract's, the KV store held these to its seat lease bucket's age, and at
+// the shipped 45 seconds refused the 60-second walk claim on every fleet.
 const (
 	classBulk  coord.Class = "bulk"
 	classMove  coord.Class = "move"
@@ -141,7 +150,7 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // gesture's mint instant: the ledger's vouching reads it off the step's id,
 // and a step spelled here in a shape that grammar did not recognise would be
 // read as minted at the zero instant — answered `unknown` on any node whose
-// ledger ever lost a row to its sweep.
+// ledger's sweep ever lost a row.
 func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
 // ErrStepUnresolved reports a walking sequence that stopped at a step whose
@@ -395,8 +404,8 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 // # Why it is not "not made"
 //
 // The operation was minted before the ledger may have lost rows — a seat
-// re-running a turn whose trigger was queued before its node adopted a
-// snapshot, a caller finishing a month-old `unknown` — so its first run may
+// re-running a turn whose trigger predates the ledger's thirty-day sweep, a
+// caller finishing a month-old `unknown` — so its first run may
 // well have filed the task, on this node or another. An unknown counter was
 // turned into ErrUnavailable, which every caller read as "the change was NOT
 // made": the seat then rephrased and filed a duplicate under a new operation,
@@ -411,11 +420,11 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 func (w *Writer) unvouchedCreate(ctx context.Context, opID string, task Task,
 	minted statelog.Result) (WriteResult, error) {
 
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{Result: minted}, nil
 	}
 	var held bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		_, held, err = readTask(ctx, tx, task.ID)
 		return err
@@ -472,7 +481,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 			"counter value it minted: %w", task.Project, n, err)
 	}
 	at := w.Now()
-	task.Key = fmt.Sprintf("%s-%d", task.Project, n)
+	task.Key = mintedKey(task.Project, n)
 	task.Rank = rank
 	task.CreatedAt, task.UpdatedAt = at, at
 	if task.Status == "" {
@@ -570,7 +579,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	id string) (WriteResult, error) {
 
 	out := WriteResult{Result: result}
-	if w.db == nil {
+	if w.db.IsZero() {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
 			"earlier copy of this operation, and this writer has no store to "+
 			"read its key from", id))
@@ -578,7 +587,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	}
 	var task Task
 	var held, collision bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		task, held, err = readTask(ctx, tx, id)
 		if err != nil || !held {
@@ -759,7 +768,14 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
-	scope := ScopeSet{Subject: true, Container: task.Project}
+	// THE TASK AND EVERY KEY IT CARRIES, because the create's apply claims
+	// each one that is not already claimed, and which task holds a key is
+	// decided in log order: on a node that retained another create of the
+	// same key, this one applied first would take the claim every other
+	// node gave to that one (see [keyTerm]). The keys are the task's own,
+	// fixed before the request, so the scope cannot come up short of them.
+	scope := ScopeSet{Subject: true, Container: task.Project}.
+		withKeys(task.ID, keysOf(task)).capped()
 	// WHETHER THE KEY THIS CREATE TOOK IS ANOTHER TASK'S, from the snapshot
 	// the last round decided in — the round whose record was published.
 	var collision bool
@@ -1073,7 +1089,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 //
 // # An absent parent is one of two facts
 //
-// See [absentTask]: a PURGED parent is gone for good and is refused as such,
+// See [missingTask]: a PURGED parent is gone for good and is refused as such,
 // while one this node holds no row of at all may be a create it has not
 // applied yet, which is the only absence worth coming back for.
 func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) error {
@@ -1082,7 +1098,7 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 	case err != nil:
 		return err
 	case !held:
-		return absentTask(ctx, tx, parentID, "parent task")
+		return missingTask(ctx, tx, parentID, "nothing can be filed under it")
 	case parent.Removed != nil:
 		return invalid("parent task %s (%s) was removed by %s at "+
 			"%s; restore it before filing anything under it", parent.Key,
@@ -1240,48 +1256,6 @@ func inSubtree(ctx context.Context, tx *sql.Tx, root, candidate string) (bool, e
 	return found == 1, nil
 }
 
-// absentTask is the answer for a task a sequence names and this snapshot holds
-// no row of — THREE-VALUED, because the absence is two different facts and
-// the third value is the read failing.
-//
-// A PURGE LEAVES A MARKER that outlives the row (see [taskGuards]), so a task
-// carrying one is gone on every node and for good: that is a REFUSAL, and it
-// says so. Answered as [statelog.ErrUnavailable] — "not on this node" — it
-// told the caller to come back to a task that will never return, and a merge
-// walk or a duty retrying it did so on every tick for ever. Only a task with
-// no row AND no marker is one this node may simply not have applied yet,
-// which is the absence worth coming back for.
-func absentTask(ctx context.Context, tx *sql.Tx, id, role string) error {
-	key, purged, err := purgedTask(ctx, tx, id)
-	switch {
-	case err != nil:
-		return err
-	case !purged:
-		return fmt.Errorf("tracker: %s %s is not on this node: %w", role, id,
-			statelog.ErrUnavailable)
-	}
-	// A REFUSAL ON WHAT WAS ASKED, and marked as one ([ErrInvalid]): left
-	// unmarked it read as the node's own failure, which a caller retries.
-	return invalid("%s %s (%s) was purged, and a purge is permanent — name "+
-		"another task", role, key, id)
-}
-
-// purgedTask reads a task's deletion marker: the key it held, and whether a
-// purge destroyed it.
-func purgedTask(ctx context.Context, tx *sql.Tx, id string) (string, bool, error) {
-	var key string
-	err := tx.QueryRowContext(ctx,
-		`SELECT task_key FROM tracker_deletions WHERE task_id = ?`, id).Scan(&key)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("tracker: read whether task %s was "+
-			"purged: %w", id, err)
-	}
-	return key, true, nil
-}
-
 // declaredType refuses a task naming a type the company has not declared.
 //
 // THE TOOL HAS ALWAYS SAID SO — `create_work_item` asks for "a task type from
@@ -1391,21 +1365,21 @@ func bodyWarnings(body string) []string {
 
 // taskProject is the project a task is in, read outside any decision — for a
 // sequence's later step, whose scope names the container and whose own decide
-// re-reads everything it acts on.
-func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
-	if w.db == nil {
+// re-reads everything it acts on. refused completes the final refusal of a
+// purged task ([missingTask]): what the step cannot do to it.
+func (w *Writer) taskProject(ctx context.Context, id, refused string) (string, error) {
+	if w.db.IsZero() {
 		return "", fmt.Errorf("tracker: this writer has no store to read task "+
 			"%s's project from", id)
 	}
 	var project string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		task, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, refused)
 		}
 		project = task.Project
 		return nil
@@ -1439,7 +1413,7 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 			"nodes rewriting one subtree", resource)
 	}
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ClaimTTL,
 	})
 	switch {
@@ -1449,10 +1423,20 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 		// produce a subtree keyed into two projects, which no duty can
 		// tell from an abandoned walk.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
-	case lease == nil:
+	case lease == nil && refused == coord.RefusedHeld:
 		return nil, fmt.Errorf("tracker: %s is held by another walk, on this "+
 			"node or a peer, so this walk is already running: %w", resource,
 			statelog.ErrUnavailable)
+	case lease == nil:
+		// NOT "another walk": the protocol gate refuses every claim this
+		// node makes while a node on a lower lease protocol is live, and a
+		// walk is refused with them — it fails closed for the reason
+		// above. Told it was already running, a caller would wait for a
+		// walk nobody had started, for as long as that node stayed.
+		return nil, fmt.Errorf("tracker: %s was refused (%s): a node on a "+
+			"lower lease protocol is live in this fleet and this node takes no "+
+			"claim beside it, so the walk waits until that node has left: %w",
+			resource, refused, statelog.ErrUnavailable)
 	}
 	h := &held{
 		claims: w.claims, resource: resource, owner: owner,
@@ -1708,19 +1692,18 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		// with, and names its root by when its walk stops.
 		rootCollision bool
 	)
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the subtree a cross-project move re-keys")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, taskID)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				taskID, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, taskID, "it cannot be moved")
 		case current.Parent != nil && *current.Parent != "":
 			return invalid("task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
@@ -1830,8 +1813,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	// THE MARK RIDES THE ROOT'S OWN MOVE, and only when a subtree is
 	// behind it: a leaf's move is one append, finished the moment it lands,
 	// and a mark on it would be one more append to take it down.
-	former := append(append([]string{}, root.FormerKeys...), root.Key)
-	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
+	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target,
 		&KeyMint{N: base}, len(subtree) > 0, notify)
 	// A ROOT WHOSE MOVE IS UNKNOWN HAS NO SUBTREE TO FOLLOW IT: moving the
 	// descendants under a root that may still be in its old project splits
@@ -1871,7 +1853,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			// THE ROOT MOVED, so whatever stopped the walk is a stop
 			// and never a refusal of the move: see [MoveStopped].
 			return result, w.moveStopped(ctx, result, opID, root, target,
-				fmt.Sprintf("%s-%d", target, base), followed, len(subtree), err)
+				mintedKey(target, base), followed, len(subtree), err)
 		}
 	}
 	if result.Collapsed {
@@ -1884,7 +1866,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	if err != nil {
 		return result, err
 	}
-	result.Key, result.Rank = fmt.Sprintf("%s-%d", target, base), rootRank
+	result.Key, result.Rank = mintedKey(target, base), rootRank
 	return result, nil
 }
 
@@ -1943,7 +1925,7 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 // down is a move that is done, and one in the trash is frozen until somebody
 // restores it.
 func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return false, fmt.Errorf("tracker: this writer has no store, so it " +
 			"cannot read the subtree an abandoned move left behind")
 	}
@@ -1953,14 +1935,13 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 		marked    bool
 		collision bool
 	)
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is marked mid-move and not on "+
-				"this node: %w", id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, "there is no move of it left to finish")
 		case !current.Moving || current.Removed != nil:
 			return nil
 		}
@@ -1990,7 +1971,7 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 // is left out of the pass rather than waited for — with the mark down there is
 // no walk to hold open for it, and its restore brings it back to the duty.
 func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return 0, fmt.Errorf("tracker: this writer has no store, so it " +
 			"cannot read the subtree a move left a task behind in")
 	}
@@ -2000,7 +1981,7 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 		left      int
 		collision bool
 	)
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -2150,11 +2131,11 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 // reference that is never wrong — only less readable — and this names a task
 // to somebody about to act on it.
 func (w *Writer) addressOf(ctx context.Context, task Task) string {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return task.ID
 	}
 	var collision bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		collision, err = keyHeldByAnother(ctx, tx, task.Key, task.ID)
 		return err
@@ -2197,9 +2178,7 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 	var last statelog.Position
 	for i, descendant := range descendants {
 		moved, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
-			descendant, target,
-			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: base + uint64(i)}, false, nil)
+			descendant, target, &KeyMint{N: base + uint64(i)}, false, nil)
 		// AN UNKNOWN DESCENDANT STOPS THE WALK like a refused one, and
 		// the root's mark stays up over it: lowering the mark past a
 		// task that may still be in the old project is the split subtree
@@ -2247,11 +2226,16 @@ func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID strin
 // second walk over the same subtree harmless: a task somebody already carried
 // is in another project by the time its step decides, and [Writer.UpdateTask]
 // refuses a write naming the wrong one rather than re-keying it again.
+//
+// THE KEY IT LEAVES IS NOT NAMED HERE: the mint re-keys the task, and the
+// decide turns whatever key it holds in its own snapshot into a former one
+// ([formerKeysAfterRekey]) — a list formed from the read that started the walk
+// replaced the former keys a task had gained since with the ones it held then.
 func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
-	target string, former []string, mint *KeyMint, mark bool,
+	target string, mint *KeyMint, mark bool,
 	notify *Notify) (WriteResult, error) {
 
-	patch := TaskPatch{Project: &target, FormerKeys: &former, Mint: mint}
+	patch := TaskPatch{Project: &target, Mint: mint}
 	if mark {
 		patch.Moving = &mark
 	}
@@ -2262,7 +2246,7 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	// the last is the one whose record was published.
 	var key string
 	if mint != nil {
-		key = fmt.Sprintf("%s-%d", target, mint.N)
+		key = mintedKey(target, mint.N)
 	}
 	var collision bool
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant, whose caller
@@ -2349,7 +2333,7 @@ func (w *Writer) followedTags(ctx context.Context, left []Task) ([]Tag, error) {
 	slices.Sort(projects)
 	var out []Tag
 	seen := map[string]bool{}
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		for _, project := range projects {
 			tags, err := carriedTags(ctx, tx, project, byProject[project])
 			if err != nil {
@@ -2471,18 +2455,18 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	defer claim.release(ctx)
 
 	var task Task
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, duplicate)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return absentTask(ctx, tx, duplicate, "task")
+			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
@@ -2495,7 +2479,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return absentTask(ctx, tx, into, "task")
+			return missingTask(ctx, tx, into, "nothing can be merged into it")
 		case survivor.Removed != nil:
 			// REFUSED BEFORE THE MARK, WHICHEVER WAY THE SUBTASKS GO.
 			// Moving them, every re-parent is refused on its own
@@ -2634,7 +2618,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // is not selected stays under the duplicate, where the trash's frozen children
 // stay too.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
-	project, err := w.taskProject(ctx, into)
+	project, err := w.taskProject(ctx, into, "nothing can be merged into it")
 	if err != nil {
 		return 0, err
 	}
@@ -2642,7 +2626,7 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 	var after string
 	for {
 		var batch []Task
-		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 			var err error
 			batch, err = readChildBatch(ctx, tx, duplicate, project, after, WalkBatch)
 			return err
@@ -2724,7 +2708,11 @@ var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 // It fails open because a refused bulk on a coordination blip is a seat told a
 // colleague is editing when nobody is, and the log is CORRECT with two bulks in
 // flight and merely slow. That is coordination's founding rule applied to
-// admission: unknown is not "somebody else holds it".
+// admission: unknown is not "somebody else holds it". But a bulk let through
+// that way runs outside the bound, so it is counted as `fail_open` rather than
+// `admitted` and warned about (`tracker_bulk_admitted_unbounded`): failing
+// open is a decision about the caller, never a reason to stop telling the
+// operator the bound is not being kept.
 //
 // # What this costs the caller's NEXT write, stated because it is the ordinary case
 //
@@ -2775,13 +2763,12 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 			"fewer tasks per call", len(subjects), total, MaxBulkBytes)
 	}
 
-	release, err := w.admit(ctx, len(subjects))
+	release, admission, err := w.admit(ctx, len(subjects))
+	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": string(admission)})
 	if err != nil {
-		w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "refused"})
 		return WriteResult{}, err
 	}
 	defer release()
-	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "admitted"})
 
 	result := WriteResult{Failed: map[string]string{}}
 	for _, id := range subjects {
@@ -2804,15 +2791,45 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	return result, nil
 }
 
+// bulkAdmission is how a bulk edit's admission was answered, and the `result`
+// the bulk calls counter ([metrics.TrackerBulkCalls]) records — a closed set,
+// as every attribute there is.
+type bulkAdmission string
+
+const (
+	// bulkAdmitted is a bulk running under the fleet's bulk lease, the one
+	// shape in which the fleet-wide bound holds.
+	bulkAdmitted bulkAdmission = "admitted"
+
+	// bulkRefused is a bulk turned away because another is applying.
+	bulkRefused bulkAdmission = "refused"
+
+	// bulkFailedOpen is a bulk let through with NO lease held: the
+	// coordination store did not answer the claim, the mixed-version gate
+	// refused it, or the writer has no coordination at all. Admitting it is
+	// right (see [Writer.UpdateTasks]) and counting it `admitted` was not:
+	// it runs outside the bound, and a store that refused every admission
+	// looked exactly like a fleet whose bulks never collided.
+	bulkFailedOpen bulkAdmission = "fail_open"
+)
+
 // admit takes the fleet-wide bulk lease, or reports why it did not.
 //
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
 // held lease runs, a peer's lease refuses with the holder's remaining time as
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
-// see the sequence's own doc for why those last two must differ.
-func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
+// see the sequence's own doc for why those last two must differ. A claim the
+// mixed-version gate refused admits too: it is a refusal that names no peer,
+// and the admission bounds a rate rather than guarding a correctness.
+//
+// AN ADMISSION THAT FAILED OPEN SAYS SO, in the answer it hands back
+// ([bulkFailedOpen]) and in a warning naming why, because it is the one
+// outcome that leaves nothing else behind: the bulk applies exactly as a
+// bounded one does, and a fleet whose store refused every admission's TTL ran
+// with no bulk bound and no sign of it.
+func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, error) {
 	if w.claims == nil {
-		return func() {}, nil
+		return func() {}, bulkFailedOpen, nil
 	}
 	resource := bulkClaim(trackerStream)
 	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
@@ -2836,7 +2853,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	// rather than being refused, and whichever finished first released the
 	// other's.
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ttl,
 	})
 	switch {
@@ -2844,21 +2861,41 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
+		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
+			"resource", resource, "rows", rows, "ttl", ttl, "cause", "unknown", "error", err,
+			"detail", "the coordination store did not answer the bulk admission, so this bulk "+
+				"edit runs outside the fleet-wide bound on bulk edits; the log stays correct "+
+				"with two in flight, and every node's reads are behind for longer")
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
-		return func() {}, nil
+		return func() {}, bulkFailedOpen, nil
+	case lease == nil && refused != coord.RefusedHeld:
+		// FAIL OPEN, for the unknown's reason: the protocol gate refused
+		// the claim, which says a node on a lower lease protocol is live
+		// and nothing about a colleague editing. Refused as a bulk in
+		// flight, every seat's bulk edit would be told to retry "in about
+		// a second" — the hint reading the remaining time off a holder
+		// there is none of — for as long as that node stayed.
+		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
+			"resource", resource, "rows", rows, "ttl", ttl, "cause", "refused",
+			"refused", string(refused),
+			"detail", "the bulk admission was refused by a rule that names no bulk in flight "+
+				"(a node on a lower lease protocol is live, and this node takes no claim beside "+
+				"it), so this bulk edit runs outside the fleet-wide bound on bulk edits until "+
+				"that node has left")
+		return func() {}, bulkFailedOpen, nil
 	case lease == nil:
 		remaining := time.Duration(0)
 		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
 			remaining = time.Until(held.ExpiresAt)
 		}
-		return nil, fmt.Errorf("%w; retry in about %d seconds: %w",
+		return nil, bulkRefused, fmt.Errorf("%w; retry in about %d seconds: %w",
 			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
 			statelog.ErrUnavailable)
 	}
 	epoch := lease.Epoch
 	return func() {
 		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, owner, epoch)
-	}, nil
+	}, bulkAdmitted, nil
 }
 
 // drainRows is the applier's measured rows a second, and the divisor of every

@@ -63,11 +63,11 @@ func TestAnIamWritePassesTheNodesCrossSiteCheck(t *testing.T) {
 // the answer an operator spends an afternoon on.
 func TestTheFirstTokenFallbackIsGone(t *testing.T) {
 	t.Setenv(apiTokenEnv, "")
-	if got := nodeTokenOrEmpty(); got != "" {
+	if got := nodeTokenOrEmpty(config.EnvSource{}); got != "" {
 		t.Errorf("with no environment variable the CLI produced a token (%q), "+
 			"so it is reading one out of somewhere it should not", got)
 	}
-	_, err := nodeAPIToken("/iam")
+	_, err := nodeAPIToken(config.EnvSource{}, "/iam")
 	if err == nil {
 		t.Fatal("a command with no credential was allowed to proceed")
 	}
@@ -78,7 +78,7 @@ func TestTheFirstTokenFallbackIsGone(t *testing.T) {
 	// AND THE ENVIRONMENT IS STILL READ, which is the control: without it
 	// the case above would pass on a CLI that could never authenticate.
 	t.Setenv(apiTokenEnv, "a-token")
-	if got := nodeTokenOrEmpty(); got != "a-token" {
+	if got := nodeTokenOrEmpty(config.EnvSource{}); got != "a-token" {
 		t.Errorf("the environment token resolved to %q", got)
 	}
 }
@@ -95,7 +95,7 @@ func TestTheFirstTokenFallbackIsGone(t *testing.T) {
 func TestEveryIamSubcommandIsDispatchedAndAdvertised(t *testing.T) {
 	t.Parallel()
 	var out, errs bytes.Buffer
-	if err := runIAM(nil, nil, &out, &errs); err == nil {
+	if err := runIAM(noEnviron, nil, nil, &out, &errs); err == nil {
 		t.Error("`crewlet iam` with no subcommand did not ask for one")
 	}
 	usage := out.String()
@@ -162,7 +162,7 @@ func TestAnIamNewcomerIsToldWhatItLacksBeforeAnythingIsSent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errs bytes.Buffer
-			err := runIAM(append(tc.args, "-config",
+			err := runIAM(noEnviron, append(tc.args, "-config",
 				"/nonexistent/crewlet.yaml"), nil, &out, &errs)
 			if err == nil {
 				t.Fatal("the command went through with no config file at all")
@@ -329,26 +329,26 @@ func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
 	}
 }
 
-// A FINDING NAMES WHO IT IS ABOUT BY THEIR LOGIN, and by their id where they
-// have none — a person recorded before every person held a seat
-// (`person_without_seat`) included, since the remedy is a command naming them.
+// A FINDING NAMES WHO IT IS ABOUT BY THEIR LOGIN, and by their id where the
+// finding carries none, since the remedy is a command naming them.
 // Mutation: print the id whatever the row carries and the login row fails.
 func TestAFindingNamesWhoItIsAbout(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	if err := (&iamPrinter{w: &out}).check(map[string]any{"position": "1:40",
 		"findings": []any{
-			map[string]any{"kind": "person_without_seat", "person": "p-1",
-				"login": "jane.doe", "detail": "holds no seat"},
+			map[string]any{"kind": "binding_dangling", "person": "p-1",
+				"login": "jane.doe", "seat": "platform-lead",
+				"detail": "the seat is gone"},
 			map[string]any{"kind": "person_without_credential", "person": "p-2",
 				"detail": "cannot sign in"},
 		}}, nil); err != nil {
 		t.Fatalf("check: %v", err)
 	}
 	lines := strings.Split(out.String(), "\n")
-	if len(lines) < 3 || !strings.Contains(lines[1], "person_without_seat") ||
+	if len(lines) < 3 || !strings.Contains(lines[1], "binding_dangling") ||
 		!strings.Contains(lines[1], "jane.doe") || strings.Contains(lines[1], "p-1") {
-		t.Errorf("the seatless person's finding printed %q", lines)
+		t.Errorf("a finding about somebody with a login printed %q", lines)
 	}
 	if !strings.Contains(lines[2], "p-2") {
 		t.Errorf("a finding about somebody with no login printed %q", lines[2])

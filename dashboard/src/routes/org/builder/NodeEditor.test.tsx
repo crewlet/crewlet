@@ -32,6 +32,7 @@ import {
   warningAt,
 } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
+import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -154,6 +155,31 @@ describe("applying", () => {
     expect(view.onClose).toHaveBeenCalledTimes(1);
   });
 
+  // A seat's project and space are its OWN keys, vendor-neutral, and mean
+  // something on the engine's own tracker and knowledge base, which a company
+  // that connected nothing runs. Written under `integrations:` they were a
+  // block the engine does not have, and the save was refused.
+  test("a seat's project and space are offered on the engine's own backends and written on the seat", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Tracker project", "OPS");
+    type("Knowledge space", "DOCS");
+    apply();
+    const data = seatData(view.state(), "seat:dev");
+    expect(data).toMatchObject({ project: "OPS", space: "DOCS" });
+    expect(data.integrations).toBeUndefined();
+  });
+
+  test("a company that runs no tracker or knowledge base says so instead of offering a project or a space", () => {
+    const doc = fixtureCompany();
+    doc.tracker = { backend: "none" };
+    doc.knowledge = { backend: "none" };
+    edit(keyedState(doc), "unit:engineering");
+    expect(screen.queryByLabelText(labelled("Tracker project"))).toBeNull();
+    expect(screen.queryByLabelText(labelled("Knowledge space"))).toBeNull();
+    expect(screen.getByText(/runs no work tracker/)).toBeDefined();
+    expect(screen.getByText(/runs no knowledge base/)).toBeDefined();
+  });
+
   test("an untouched form records nothing and closes without asking", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     apply();
@@ -200,7 +226,7 @@ describe("applying", () => {
     cleanup();
 
     edit(keyedState(fixtureCompany()), "unit:engineering", readOnly);
-    expect(field("Type")).toBeDefined();
+    expect(screen.getByRole("group", { name: labelled("Type") })).toBeDefined();
     expect(enabled()).toEqual([]);
     cleanup();
 
@@ -321,26 +347,65 @@ describe("the head", () => {
 });
 
 /*
- * NO NODE HAS A COLOUR TO STATE. Colour on this dashboard says what a seat is
- * DOING, never who it is, so the chart draws every node on its own neutral
- * surface and there is no hue for an editor to explain. It used to end an
- * agent seat's form with a read-only "Colour" fact naming a hue hashed from
- * the seat's key — a legend for a decoration the live chart never drew.
+ * HOW AN AGENT IS DRAWN IS ITS AUTHOR'S CHOICE, and only an agent's: its
+ * editor offers a Crewlet character and a colour, both written to the seat's
+ * own `avatar` block, and a person's editor and a unit's offer neither. A
+ * colour is never offered on a node that is not an agent: a person is drawn
+ * as themself and a unit is the chart's neutral surface.
  */
-test("no node's editor states or offers a colour", () => {
-  const human = fixtureCompany();
-  human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
-  for (const [doc, key] of [
-    [fixtureCompany(), "seat:dev"],
-    [human, "seat:dev"],
-    [fixtureCompany(), "unit:engineering"],
-  ] as const) {
-    edit(keyedState(doc), key);
-    expect(screen.queryByText("Colour"), key).toBeNull();
-    expect(screen.queryByText(/\bhue\b/i), key).toBeNull();
-    expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
-    cleanup();
-  }
+describe("an agent seat's profile icon", () => {
+  test("only an agent seat's editor offers a character and a colour", () => {
+    const human = fixtureCompany();
+    human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    for (const [doc, key] of [
+      [human, "seat:dev"],
+      [fixtureCompany(), "unit:engineering"],
+    ] as const) {
+      edit(keyedState(doc), key);
+      expect(screen.queryByRole("radiogroup", { name: "Character" }), key).toBeNull();
+      expect(screen.queryByRole("radiogroup", { name: "Color" }), key).toBeNull();
+      cleanup();
+    }
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.getAllByRole("radio", { name: /let$/ })).toHaveLength(AVATAR_CHARACTERS.length);
+    const colors = within(screen.getByRole("radiogroup", { name: "Color" })).getAllByRole("radio");
+    expect(colors.map((c) => c.textContent)).toEqual([
+      "Purple",
+      "Cyan",
+      "Green",
+      "Amber",
+      "Rose",
+      "Blue",
+    ]);
+  });
+
+  test("a seat that chose nothing shows the original Crewlet in purple, and writes nothing untouched", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.getByRole("radio", { name: "Crewlet", checked: true })).toBeDefined();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", {
+        checked: true,
+      }).textContent,
+    ).toBe("Purple");
+    type("Goal", "Ship");
+    apply();
+    expect(seatData(view.state(), "seat:dev").avatar).toBeUndefined();
+  });
+
+  test("the chosen character and colour are written to the seat's avatar, part by part", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    fireEvent.click(screen.getByRole("radio", { name: "Hexlet" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", {
+        name: "Cyan",
+      }),
+    );
+    apply();
+    expect(seatData(view.state(), "seat:dev").avatar).toEqual({
+      character: "hexlet",
+      color: "cyan",
+    });
+  });
 });
 
 describe("the unsaved-changes prompt", () => {
@@ -819,7 +884,10 @@ describe("integrations", () => {
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
     // WHAT A SEAT OWNS IS NO TOOL'S. The tracker project and the knowledge
     // space are the document's own fields, whichever backend runs either, so
-    // they are drawn with no vendor connected.
+    // they are drawn with no vendor connected, and neither says Jira or
+    // Confluence is missing.
+    expect(screen.queryByText("Jira is not connected.", { exact: false })).toBeNull();
+    expect(screen.queryByText("Confluence is not connected.", { exact: false })).toBeNull();
     expect(field("Tracker project")).toBeDefined();
     expect(field("Knowledge space")).toBeDefined();
     // GitLab provisioning is connected in the fixture.
@@ -846,9 +914,11 @@ describe("integrations", () => {
     // A tool's section is a part of Integrations, and is heard as one.
     expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
     expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
-    // A seat's Slack app carries no channel: there is nothing here to set.
+    // A seat's Slack app has no channel of its own: the seat speaks in its
+    // unit's, so the section says so rather than offering a box the engine
+    // refuses on every save.
+    expect(screen.getByText(/speaks as its own Slack app, in its unit's channel/)).toBeDefined();
     expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
-    expect(screen.getByText(/speaks through a Slack app of its own/)).toBeDefined();
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
@@ -1007,6 +1077,38 @@ describe("problems", () => {
     const unitAlerts = screen.getAllByRole("alert");
     expect(unitAlerts).toHaveLength(1);
     expect(describesAControl(unitAlerts[0]!)).toBe(false);
+    cleanup();
+
+    // A company that runs no tracker draws no project field at all.
+    const noTracker = fixtureCompany();
+    noTracker.tracker = { backend: "none" };
+    const projectProblem = problemAt(
+      ["units", 0, "roles", 1, "project"],
+      'units[0].roles[1].project: "ops" is not a project key',
+    );
+    edit(checkWithProblems(keyedState(noTracker), [projectProblem]), "seat:dev");
+    const missing = screen.getAllByRole("alert");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.textContent).toContain("is not a project key");
+    expect(describesAControl(missing[0]!)).toBe(false);
+    cleanup();
+
+    // The same for a unit, whose space field is not drawn either.
+    const noKnowledge = fixtureCompany();
+    noKnowledge.knowledge = { backend: "none" };
+    const spaceProblem = problemAt(["units", 0, "space"], 'units[0].space: "TS" is reserved');
+    edit(checkWithProblems(keyedState(noKnowledge), [spaceProblem]), "unit:engineering");
+    const spaceAlerts = screen.getAllByRole("alert");
+    expect(spaceAlerts).toHaveLength(1);
+    expect(describesAControl(spaceAlerts[0]!)).toBe(false);
+    cleanup();
+
+    // On the engine's own tracker, which the fixture runs, the same problem
+    // sits under the field that wrote it.
+    edit(checkWithProblems(keyedState(fixtureCompany()), [projectProblem]), "seat:dev");
+    const drawn = screen.getAllByRole("alert");
+    expect(drawn).toHaveLength(1);
+    expect(errorOf(field("Tracker project"))).toBe(drawn[0]);
   });
 
   test("a schedule problem is shown in the schedules panel, where the toggle that fixes it is", () => {
@@ -1155,27 +1257,66 @@ describe("a unit", () => {
   });
 
   /*
-   * ONE CONTROL FOR ONE STRING. The type used to be a select whose "Custom
-   * type" option revealed a SECOND labelled field below it, so a custom type
-   * cost two stacked controls. It is one field that offers the engine's nine
-   * names and takes whatever is typed, which is exactly what the engine
-   * accepts.
+   * ONE ROW OF CHIPS, THE CONSOLE'S: a chip per name the engine knows, and a
+   * Custom chip whose box opens in the row after it. Every answer is on screen
+   * at once, where the box before it offered the names behind a click.
    */
-  test("a unit type the engine does not name is typed in the same one box", () => {
+  test("the nine names the engine knows are chips, and choosing one sets the type", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:platform");
-    expect(screen.queryByLabelText(labelled("Custom type"))).toBeNull();
-    type("Type", "tribe");
+    const row = screen.getByRole("radiogroup", { name: "Unit type" });
+    expect(
+      within(row)
+        .getAllByRole("radio")
+        .map((chip) => chip.textContent),
+    ).toEqual([
+      "Division",
+      "Department",
+      "Group",
+      "Team",
+      "Squad",
+      "Pod",
+      "Guild",
+      "Chapter",
+      "Unit",
+      "Custom",
+    ]);
+    fireEvent.click(within(row).getByRole("radio", { name: "Department" }));
+    apply();
+    const found = locate(view.state().draft, "unit:platform");
+    expect(found?.kind === "unit" && found.node.data.type).toBe("department");
+  });
+
+  // A UNIT THAT NAMES NO TYPE IS A TEAM to the engine, so that is the chip on.
+  test("a unit with no type shows the engine's default, Team, as the chosen chip", () => {
+    edit(keyedState(fixtureCompany()), "unit:platform");
+    const row = screen.getByRole("radiogroup", { name: "Unit type" });
+    expect(within(row).getByRole("radio", { name: "Team" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  test("a unit type the engine does not name is typed in the Custom chip's box", () => {
+    const view = edit(keyedState(fixtureCompany()), "unit:platform");
+    expect(screen.queryByRole("textbox", { name: "Custom type" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    const box = screen.getByRole("textbox", { name: "Custom type" });
+    // The reader is put in the box the chip asked for.
+    expect(document.activeElement).toBe(box);
+    fireEvent.change(box, { target: { value: "tribe" } });
     apply();
     const found = locate(view.state().draft, "unit:platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
   });
 
-  test("the nine names the engine knows are offered in that same box", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:platform");
-    choose("Type", "Department");
-    apply();
-    const found = locate(view.state().draft, "unit:platform");
-    expect(found?.kind === "unit" && found.node.data.type).toBe("department");
+  // A TYPE ALREADY CUSTOM opens with its box, so the value is never hidden.
+  test("a unit whose type is custom opens with Custom chosen and its box holding the type", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.type = "tribe";
+    edit(keyedState(doc), `unit:${doc.units![0]!.id}` as NodeKey);
+    expect(screen.getByRole("radio", { name: "Custom" }).getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByRole("textbox", { name: "Custom type" }) as HTMLInputElement).value).toBe(
+      "tribe",
+    );
   });
 
   // A MASK IS RESTORED BY THE UNIT'S KEY, which a rename does not move, so a
@@ -1223,7 +1364,7 @@ describe("a unit", () => {
     apply();
     const found = locate(view.state().draft, "unit:engineering");
     expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
-    expect(screen.getByText(/^Knowledge$/)).toBeDefined();
+    expect(screen.getByText(/^Knowledge( \(optional\))?$/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
   });
 });

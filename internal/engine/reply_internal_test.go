@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -105,11 +104,11 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	if got := ReplyFor([]*events.Event{&back}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification off the wire = %s, want tool", got)
 	}
-	// ABSENT DECODES AS UNADDRESSED, which is the safe half: an event
-	// written by a build that predates the field is a freedom to stay
-	// silent rather than an obligation nobody recorded.
-	older := &events.Event{Type: types.ExternalNotification{}.EventType()}
-	if got := ReplyFor([]*events.Event{older}); got.Kind != turn.ReplyNone {
+	// ABSENT DECODES AS UNADDRESSED, which is how an unaddressed
+	// notification is written: an omission is a freedom to stay silent
+	// rather than an obligation nobody recorded.
+	unflagged := &events.Event{Type: types.ExternalNotification{}.EventType()}
+	if got := ReplyFor([]*events.Event{unflagged}); got.Kind != turn.ReplyNone {
 		t.Errorf("an event with no flag = %s, want none", got)
 	}
 }
@@ -159,22 +158,6 @@ func TestReplyForSkipsNilEvents(t *testing.T) {
 	t.Parallel()
 	if got := ReplyFor([]*events.Event{nil, wake(t, types.A2ARequestType)}); got.Kind != turn.ReplyEngine {
 		t.Errorf("ReplyFor with a nil entry = %s", got)
-	}
-}
-
-// SKIP OR NOTHING. The field's one surviving reader gates on
-// PlanDecisionSkip, so any other value on a turn that engaged would
-// short-circuit every learning worker — silently, on exactly the successful
-// turns worth learning from.
-func TestOnlyASkippedTurnWritesAPlanDecision(t *testing.T) {
-	t.Parallel()
-	if got := skipDecision(string(phase.Skipped)); got != types.PlanDecisionSkip {
-		t.Errorf("a skipped turn wrote %q, want skip", got)
-	}
-	for _, decision := range []phase.Decision{phase.Done, phase.Failed, phase.SelfIterate} {
-		if got := skipDecision(string(decision)); got != "" {
-			t.Errorf("a %s turn wrote plan_decision %q, want empty", decision, got)
-		}
 	}
 }
 

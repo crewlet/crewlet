@@ -179,6 +179,22 @@ func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 	r.record(name, KindCounter, float64(n), attrs)
 }
 
+// AddAt increments a counter by a whole number of events that happened at at,
+// which is where the rolling window files them ([Window.AddAt]). The cumulative
+// series counts them whenever they are recorded, since an exporter diffs its
+// own scrapes.
+func (r *Recorder) AddAt(name string, n uint64, at time.Time, attrs Attrs) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inst, known := r.byName[name]
+	if !known || inst.Kind != KindCounter {
+		return
+	}
+	s := r.seriesFor(inst, attrs)
+	s.total += n
+	r.window.AddAt(seriesKey(inst.Name, inst.Attributes, attrs), n, at)
+}
+
 // AddValue increments a counter by a fractional amount.
 //
 // A COUNTER NEED NOT COUNT EVENTS. Some of what is summed here is a duration

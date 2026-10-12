@@ -33,7 +33,7 @@ func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 	unguarded := testing.AllocsPerRun(100, func() {
 		s := text
 		for _, r := range rules {
-			s = r.pattern.ReplaceAllString(s, r.with)
+			s = r.pattern.ReplaceAllLiteralString(s, r.with)
 		}
 		_ = s
 	})

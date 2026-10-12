@@ -10,7 +10,9 @@
  *  - the scope is All or Pages — a person in Tasks, Agents or Actions is
  *    looking for a row, not a paragraph;
  *  - the term reads as a question ([answerable]: three words, twelve
- *    characters);
+ *    characters) and is within the engine's search bound
+ *    (`SEARCH_QUERY_MAX`) — the question IS the search text, and one past it
+ *    is refused, so the palette says why instead of asking;
  *  - typing has paused for [ANSWER_IDLE_MS];
  *  - this browser may make the call (`useWriteAccess`) and is BOUND to a seat:
  *    the answer is written by the seat's own model, so the engine refuses a
@@ -37,6 +39,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { searchTooLong } from "~/lib/search.ts";
 import { ANSWER_IDLE_MS, answerable, normalizeQuestion } from "./hits.ts";
 
 /** One document an answer was written from; source [n] is the n-th. */
@@ -123,7 +126,7 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
   const write = useAct("answer_knowledge");
   const { unbound } = useViewer();
   const key = normalizeQuestion(term);
-  const question = wanted && answerable(term);
+  const question = wanted && answerable(term) && searchTooLong(term) === null;
   const eligible = question && write.access.can && !unbound;
   const [settled, setSettled] = useState<{ key: string; state: AnswerState } | null>(null);
   const [sent, setSent] = useState("");

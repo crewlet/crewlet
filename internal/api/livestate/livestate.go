@@ -8,8 +8,8 @@
 // IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in flight,
 // reconciled against their durable record (sandbox.go). What a seat has SPENT
 // is not held per seat: it is the per-agent row of the spend rollup, folded
-// from the same records by internal/tokens, so a seat card and the Spend
-// screen cannot disagree about one seat.
+// from the same records by internal/tokens, so the projection holds no second
+// total that could disagree with its own rollup.
 //
 // KEYED BY THE SEAT'S AGENT ID, the `agent_id` every seat-level event carries
 // and the one the roster row it is merged onto carries too — and the one the
@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -81,16 +82,44 @@ const (
 	// holds. Any wider window the Tokens view offers is a store query.
 	LiveSpendWindow = 24 * time.Hour
 
-	// SpendRecordLimit is a memory and latency backstop on retained
-	// per-phase records. The real bound is the window above; this only
-	// binds for an org emitting more than this in a day. Truncation drops
-	// the OLDEST records, so an org past the cap sees a rollup covering
-	// slightly less than a day rather than a wrong total.
+	// SpendRecordLimit is a memory and latency backstop on retained spend
+	// records. The real bound is the window above; this only binds for an
+	// org emitting more than this in a day. Truncation drops the OLDEST
+	// records — any whose stamp does not parse, then the first to age out —
+	// so an org past the cap sees a rollup covering slightly less than a day
+	// rather than a wrong total.
+	//
+	// THE WHOLE COMPANY'S, per projection: every node's projection is fed
+	// by a fleet-wide broadcast, so this is one company's day on every node
+	// rather than one node's share of it.
+	//
+	// 24 000, sized in TURNS rather than records, which is what an operator
+	// can reason about. A turn wrote about three spend records — its
+	// executor, its reviewer, a worker or a judge now and then — so the 8
+	// 000 this was put the cap at roughly 2 600 turns a company-day. The
+	// auxiliary records (types.AuxiliarySpend) add about six per turn — one
+	// per turn-start call, per compaction kind and per reflection worker,
+	// coalesced per flush — so nine records a turn would have halved that
+	// to about 900. Three times the records keeps the same 2 600 turns. A
+	// record held here is several hundred bytes with its parsed stamp and
+	// its index entry, so the cap is under 20 MB; the fold the stream
+	// makes on its five-second tick measured 12 ms on one core at the cap
+	// (24 000 records over 2 700 turns), outside this projection's lock,
+	// and an arrival — past the cap or not — costs the records it moves
+	// rather than a pass over the window (see holdSpend).
+	//
+	// THE TRANSPORT IS NOT WHAT BOUNDS IT. A spend record crosses the
+	// history scatter as about 590 bytes of JSON, so the whole cap is about
+	// 13.5 MiB — past the 8 MiB one reply carries (queue.MaxPayloadBytes),
+	// which a single node holding more than about 14 000 of the day's
+	// records reached on its own. So the seed reads the window in pages of
+	// eventfan.PhaseTokenPage records a node, each well under the ceiling,
+	// and this cap is free to be sized by memory and the fold alone.
 	//
 	// Exported because the startup seed reads no more than this from the
 	// store: a record past the cap would be dropped on arrival, so reading
 	// it costs the seed's time budget and buys nothing.
-	SpendRecordLimit = 8000
+	SpendRecordLimit = 24_000
 )
 
 // stateEvents are the events the seat's state machine below reads.
@@ -100,12 +129,16 @@ const (
 // applyState is ever reached, so an entry here would be read by nothing.
 //
 // agent_turn_completed ENDS THE WORK, and reflection_completed only the
-// learning pass that follows it. Reflection is the trailing sentinel for the
-// auxiliary phases, and the reflector returns without publishing it on five
-// paths (no workers configured, an unknown role, a per-role
-// `learning_enabled: false`, a spent token budget, a redelivery it has already
-// marked) — so a seat whose turn end was read only off reflection stayed
-// mid-phase, in a phase that had ended, for the life of the process.
+// learning pass that follows it. Reflection is the pass's trailing sentinel,
+// and the reflector returns without publishing it on five paths (no workers
+// configured, an unknown role, a per-role `learning_enabled: false`, a spent
+// token budget, a redelivery it has already marked) — so a seat whose turn end
+// was read only off reflection stayed mid-phase, in a phase that had ended,
+// for the life of the process.
+//
+// auxiliary_spend is deliberately ABSENT: what the reflection's workers — and
+// every other auxiliary call — spent is a record of spend, published after the
+// turn ended, and a seat state that read it would reopen the turn it names.
 var stateEvents = map[string]struct{}{
 	"agent_spawned":         {},
 	"agent_terminated":      {},
@@ -160,7 +193,12 @@ type agentLive struct {
 
 	lastError *ErrorInfo
 	liveCall  *LiveCall
-	budget    *BudgetMeter
+	// liveCallSeq is the projection sequence at which liveCall last
+	// changed — set, folded, frozen or cleared — carried on the overlay so
+	// a tab can order a live_call slot across keys and across a clear. See
+	// [Overlay.LiveCallSeq].
+	liveCallSeq int
+	budget      *BudgetMeter
 
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
@@ -192,6 +230,7 @@ func (a *agentLive) overlay() Overlay {
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
 		LiveCall:         a.liveCall.clone(),
+		LiveCallSeq:      a.liveCallSeq,
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
 		Turn:             a.turn.clone(),
@@ -253,13 +292,14 @@ type LiveState struct {
 	// or both, in either order.
 	//
 	// EXACT rather than bounded like finishedCalls below, because it tracks
-	// s.spend and shrinks with it — the same shape feedIDs has, and for the
-	// same reason. A bounded set could not do it: its cap was the number of
-	// records the seed reads, and the ids the live stream had already put
-	// there sat at the FRONT of its eviction order, so a full seed evicted
-	// them before its own loop reached the store's copies of those very
-	// phases and counted each of them twice. See pruneSpend, which is where
-	// this shrinks.
+	// s.spend and s.undatedSpend, shrinks with them and takes no id they
+	// do not hold — the same shape feedIDs has, and for the same reason. A
+	// bounded set could not do it: its cap was the number of records the
+	// seed reads, and the ids the live stream had already put there sat at
+	// the FRONT of its eviction order, so a full seed evicted them before
+	// its own loop reached the store's copies of those very phases and
+	// counted each of them twice. See dropSpend, which is where this
+	// shrinks.
 	spendIDs map[string]struct{}
 
 	// finishedCalls maps a phase invocation to the instant its completion
@@ -283,7 +323,16 @@ type LiveState struct {
 	// aggregation has exactly one implementation instead of the three it
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
+	//
+	// These are the DATED records, oldest first by the instant each is aged
+	// from (ageingStamp) — the order they age out in, which makes an arrival
+	// in that order an append and an expiry a prefix (see holdSpend).
 	spend []spendEntry
+
+	// undatedSpend are the records whose stamp did not parse, in the order
+	// they arrived: they cannot be placed in the window's order or aged out
+	// of it, and the count cap drops them first.
+	undatedSpend []spendEntry
 
 	// budget is the company's meter as the last report stated it, and NIL
 	// UNTIL ONE HAS. Three facts, not two: before a report nobody has read
@@ -294,8 +343,8 @@ type LiveState struct {
 	budget *OrgBudget
 
 	// placement is which of the company's agent seats some node holds,
-	// keyed by role, as the last read of the seat leases found it — nil
-	// until one lands. See [LiveState.SetPlacement].
+	// keyed by agent id, as the last read of the seat leases found it —
+	// nil until one lands. See [LiveState.SetPlacement].
 	placement map[string]bool
 
 	// budgetAt is when the held report was read, the guard against a
@@ -306,8 +355,14 @@ type LiveState struct {
 	// ran. See [LiveState.SeededFrom].
 	seededFrom *eventfan.Coverage
 
-	// now is injectable so a test can pin the clock the spend window and
-	// the sandbox reconcile read. Nil takes the wall clock.
+	// versions is the last version a live call's heavy field was stamped
+	// with ([CallVersions]): one sequence for the projection, so no version
+	// is ever handed out twice.
+	versions int
+
+	// now is injectable so a test can pin the clock the spend window is
+	// aged and labelled by, the sandbox reconcile reads and a budget's
+	// windows are judged against. Nil takes the wall clock.
 	now func() time.Time
 }
 
@@ -341,7 +396,8 @@ func WithFeedLimit(n int) Option {
 	}
 }
 
-// WithClock pins the clock the spend window and the sandbox reconcile read.
+// WithClock pins the clock the spend window is aged and labelled by, the
+// sandbox reconcile reads and a budget's windows are judged against.
 func WithClock(now func() time.Time) Option {
 	return func(s *LiveState) { s.now = now }
 }
@@ -528,7 +584,13 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// already listed came out of the store without its payload, and the
 	// envelope is the only frame that carries it: a client keeps a completed
 	// phase's payload beside its feed, and dedupes the feed row itself by id.
-	if env.Category != "" {
+	//
+	// EXCEPT A TYPE THE FEED DOES NOT CARRY ([events.KeptOutOfFeed]): persisted, and
+	// accounting rather than activity, so it neither takes a row of the
+	// company's feed nor goes out as an `event` frame. The rule is the event
+	// catalogue's, asked here and by the startup seed's read alike, so the two
+	// halves of the feed cannot disagree about what it holds.
+	if env.Category != "" && !events.KeptOutOfFeed(env.Type) {
 		s.recordEvent(env)
 		change.Events = true
 	}
@@ -550,7 +612,11 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		return change
 	}
 
-	if env.Type == "agent_phase_completed" {
+	// BOTH SPEND TYPES. An auxiliary record goes on through the seat's
+	// guards below like any event and moves nothing there: it is in no state
+	// set, and it carries no `failed` key — which is what keeps it inert,
+	// rather than a branch here that would hide a record that one day did.
+	if spendTypes[env.Type] {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 
@@ -689,7 +755,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			agent.terminated = false
 			agent.failure = ""
 			agent.lastError = nil
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 		// AND THE CALL OF A TURN THE SPAWN ENDED. The turn itself was
 		// taken off the seat above (applyTurnEvent) when the spawn is
@@ -698,7 +764,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// drawn on a seat that is idle. A spawn OLDER than the turn is one
 		// that lost a race to it, and the turn and its call stand.
 		if agent.turn == nil {
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 
 	case env.Type == "agent_phase_started":
@@ -718,6 +784,8 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		if !agent.liveCall.sameCall(str(payload, "turn_id"),
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
+			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)
+			agent.liveCallSeq = s.versions
 		}
 
 	case env.Type == "agent_phase_completed":
@@ -728,11 +796,11 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		s.finishLiveCall(agent, env, payload)
 
 	case env.Type == "agent_turn_completed" || env.Type == "reflection_completed":
-		endTurn(agent, str(payload, "turn_id"))
+		s.endTurn(agent, str(payload, "turn_id"))
 
 	case env.Type == "agent_terminated":
 		agent.terminated = true
-		agent.liveCall = nil
+		s.clearCall(agent)
 
 	default:
 		if _, ok := failureEvents[env.Type]; !ok {
@@ -744,7 +812,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// run, the error. The failure event that follows a failed phase would
 		// otherwise wipe it a moment later.
 		if agent.liveCall == nil || !agent.liveCall.Failed {
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 		kind := str(payload, "last_error_kind", "kind")
 		if kind == "" {
@@ -778,7 +846,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 // deliberately never advances stateTS, so a seat whose only events since the
 // last phase boundary are progress rounds still carries the older stamp and
 // lets a late completion through.
-func endTurn(agent *agentLive, turnID string) {
+func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 	// A live call for ANOTHER turn is the seat having moved on. Neither the
 	// row nor the state belongs to the turn ending here.
 	if agent.liveCall != nil && turnID != "" && agent.liveCall.TurnID != turnID {
@@ -801,7 +869,7 @@ func endTurn(agent *agentLive, turnID string) {
 		return
 	}
 	agent.terminated = false
-	agent.liveCall = nil
+	s.clearCall(agent)
 }
 
 // ensureAgent returns the live entry for the seat with this agent id, creating

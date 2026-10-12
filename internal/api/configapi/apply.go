@@ -195,7 +195,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.By)
+	return s.commit(ctx, prepared, req.Summary)
 }
 
 // base is the active revision a write is built on, opened.
@@ -237,6 +237,15 @@ type draft struct {
 	// [Service.mayReach] admitted the caller to, which is answered even when
 	// it changes nothing (admission.go).
 	addressedCheck bool
+	// by is who the write is made as: the credential [Service.Authorize]
+	// judges, and the author the revision records — one value for both, so
+	// the party a write was admitted as is the party it is stored under.
+	by iam.Actor
+	// republishes is a write that re-publishes the active document's
+	// stored bytes unchanged ([Service.Reload]). It changes nothing about
+	// the company, so a managed document does not refuse it: see
+	// [Service.Authorize].
+	republishes bool
 }
 
 // prepared is a write built and checked, and not yet stored: everything a dry
@@ -251,12 +260,18 @@ type prepared struct {
 	document []byte
 	warnings []config.Warning
 	derived  config.Derived
+	// by is the draft's party, carried rather than passed again to
+	// [Service.commit], so the author stored is the one prepare judged.
+	by iam.Actor
 }
 
 // prepare builds and checks a write, storing nothing.
 //
 // # In this order, and each step for a reason
 //
+//   - Whether the CREDENTIAL may change a managed document at all
+//     (managed.go), before anything is read: it is a question about who
+//     is asking and never about what they sent.
 //   - The active revision, and what the caller built on. A stale base is
 //     refused before any work, because nothing built on it can be kept.
 //   - The stored document, opened and held to no rule: it is the merge base
@@ -272,6 +287,17 @@ type prepared struct {
 //     open invitation holding it, which is the one step that reads outside
 //     this node (seatheld.go).
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
+	// WHO MAY CHANGE THE DOCUMENT, before this reads or stores anything: a
+	// credential a managed deployment does not let write is refused, and a
+	// dry run is held to it too, because a check that answered "valid" for a
+	// write the save would refuse is the one thing a dry run must never do.
+	// The HTTP routes have already asked, before they read the request
+	// ([Service.refusedManaged]); this is the rule for every other caller.
+	if !d.republishes {
+		if err := s.Authorize(d.by); err != nil {
+			return nil, err
+		}
+	}
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: read the active revision: %w", err)
@@ -325,8 +351,9 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
 		return nil, err
 	}
-	p := &prepared{document: document, warnings: company.Warnings(),
-		derived: derived}
+	p := &prepared{
+		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+	}
 	if found {
 		p.base = active.ID
 	}
@@ -354,9 +381,10 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 // revision is kept for ever, and one that named only the credential — a
 // person's machine token, `pat:<id>` — named something the identity sweep
 // deletes a week after it lapses, and with it the only record of whose it was.
-func (s *Service) commit(ctx context.Context, p *prepared, summary string,
-	by iam.Actor) (Applied, error) {
-
+// It is the prepared write's own party rather than an argument, so the author
+// a revision is stored under is the one [Service.Authorize] judged.
+func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
+	by := p.by
 	payload, err := secrets.Seal(s.cipher, p.document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
@@ -441,7 +469,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string,
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
-		expect: req.Expect, requireActive: true,
+		expect: req.Expect, requireActive: true, by: req.By,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
@@ -491,9 +519,9 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 // or empty for nothing, which refuses the write if a revision has appeared
 // since. A full replacement built on nothing and landing on something would
 // discard a company its author never saw.
-func replaceDraft(incoming *config.Company, built string) draft {
+func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
-		expect: built, expectAbsent: built == "",
+		expect: built, expectAbsent: built == "", by: by,
 		rules: (*config.Company).Validate,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
@@ -642,15 +670,23 @@ func onlyUnknownField(_ *config.Company, err error) error {
 // reloaded at 04:12" is a fact somebody can find later.
 func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (Applied, error) {
 	prepared, err := s.prepare(ctx, draft{
-		requireActive: true,
+		requireActive: true, by: by,
+		// NOT A CHANGE TO THE COMPANY, so a managed document does not
+		// refuse it: the bytes below are the active revision's own, and
+		// what a reload exists for is the credential rotation a person
+		// may have to make while the managing system cannot — see
+		// [Service.Authorize].
+		republishes: true,
 		// VALIDATED, because a reload is an apply: every node rebuilds its
 		// epoch from what this activates, and re-publishing a company this
 		// build cannot run would move every node onto a refusal. The answer
 		// names the field, and PUT or PATCH is how it is corrected.
 		//
-		// The RUNNABLE rules only. A reload is the credential-rotation
-		// gesture, and refusing it for an admission rule the stored
-		// document predates would make a rotation impossible until somebody
+		// The RUNNABLE rules only, like every apply. A reload is the
+		// credential-rotation gesture, and refusing it for an admission
+		// rule — which an apply does not enforce, since a newer peer may
+		// have admitted the document under rules this build does not
+		// share — would make a rotation impossible until somebody
 		// restructured the org. The answer's warnings name each one.
 		rules: (*config.Company).ValidateRunnable,
 		// THE STORED BYTES, UNCHANGED, which is what re-publishing the
@@ -667,5 +703,5 @@ func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (App
 	if summary == "" {
 		summary = "reload configuration"
 	}
-	return s.commit(ctx, prepared, summary, by)
+	return s.commit(ctx, prepared, summary)
 }

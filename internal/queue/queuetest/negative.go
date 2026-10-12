@@ -50,16 +50,19 @@ import (
 // the check costs. This suite has made that mistake twice: it required a free
 // deferral, which JetStream trades away (a deferred message costs a
 // redelivery there, measured), and it required head-replay on nak, which only
-// the twin does.
+// the twin did.
 //
-// The two repairs went opposite ways, and the difference is the lesson.
-// Head-replay is a genuine degradation — the contract does not state an order
-// for a redelivered message and the engine depends on neither answer — so it
-// is a [Capabilities] flag. The deferral cost was not: the contract DOES
-// state it (see queue.OutcomeDefer), a flag exempting the twin left the case
-// certifying the twin against itself, and the repair was to make the twin
-// match the broker. A flag is for a property the contract leaves open, never
-// for one backend's disagreement with a rule the contract states.
+// Both repairs ended the same way, and the second took two attempts to get
+// there. Head-replay was first made a [Capabilities] flag, on the reading that
+// the contract stated no order for a redelivered message and the engine
+// depended on neither answer. Both halves of that were wrong: the engine's
+// answer route and its turn retry did lean on the twin's order, and a flag
+// exempting the twin left every engine and node suite certifying a broker
+// nobody runs. The repair was the deferral's: state the order in the contract
+// (queue.OutcomeNak, queue.OutcomeDefer) and make the twin match the broker.
+// A flag is for a property the contract genuinely leaves open AND nothing
+// above the queue is tested against — never for one backend's disagreement
+// with the broker the engine ships on.
 //
 // The four cases below were checked that way rather than by waiting for a
 // failure. The contract defines all four attachment verbs and permits none of

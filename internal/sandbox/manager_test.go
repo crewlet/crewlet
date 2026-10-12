@@ -35,6 +35,7 @@ func ptr[T any](v T) *T { return &v }
 // escape a company-wide cap, because its "no cap" and its "say nothing" would
 // both be zero — the same mistake pause_ttl_seconds was written to avoid.
 func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		company int
@@ -65,6 +66,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 // It was carried on LaunchRequest and set by nobody, so every coding run went
 // out uncapped while the field looked wired.
 func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.manager = specManager(t, ManagerOptions{DefaultMaxTurns: 40})
 	rig.manager.providers = map[Placement]Provider{Direct: rig.provider}
@@ -72,7 +74,7 @@ func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 
 	req := launchReq("t1")
 	req.Spec = rig.manager.BuildSpec(SpecInput{CodingAgent: "claude-code"})
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 
@@ -88,6 +90,7 @@ func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 
 // The box TTL is not a run cap and must not become one by accident.
 func TestTheBoxTtlAndTheRoundCapAreSeparateKnobs(t *testing.T) {
+	t.Parallel()
 	m := specManager(t, ManagerOptions{
 		DefaultTimeout: 90 * time.Second, DefaultMaxTurns: 7,
 	})
@@ -117,6 +120,7 @@ func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
 		DefaultPlacement: Direct,
 	})
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease: leased(rigLease),
 		Queue: &recorder{}, Pending: NewCoordStore(memory.NewFleet()),
 		Manager: both, Resume: resumeNothing{}, Audience: &audienceSpy{},
 	})

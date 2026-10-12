@@ -196,8 +196,8 @@ A few things worth knowing when deploying Crewlet:
   bound on a `config:write` holder.
 - **A child process is handed an allowlisted environment, never the
   engine's.** The engine's environment is where Tier A's `${VAR}` references
-  resolve from — the keyring, every `api.auth.tokens` value, the identity
-  provider's client secret, any credential in an external `stream.url` — and
+  resolve from — the keyring, every `api.auth.tokens` value, any credential
+  in an external `stream.url` — and
   where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
   often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
   `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
@@ -215,6 +215,34 @@ A few things worth knowing when deploying Crewlet:
   this deployment is reached at. An absent `Origin` is allowed for a bearer
   client — a cross-site page cannot make a bearer travel — and refused for a
   cookie-authenticated request, which a browser would always have sent one on.
+- **Only the webhook and sandbox routes need to be public.** The routes
+  outside parties call — `/webhooks/*` (vendor deliveries, verified by each
+  vendor's signature or shared token) and the sandbox endpoints
+  `/otlp/{token}` and `/mcp/{token}` (a signed, expiring per-run token in the
+  path) — hold no credential of a person's. Setting `api.public.port` serves
+  them on a listener of their own and nowhere else, and every other route —
+  `/config`, `/secrets`, `/iam` and the sign-in routes under `/auth` included —
+  only on `api.port`, so a deployment can publish the first and keep the
+  second private without filtering paths in a proxy. A vendor is handed the
+  public listener's own address, `api.public.external_url`, and a person
+  `api.external_url`, so no link anybody follows points at the published
+  socket. The public listener answers every route it does not serve with the
+  same `404` it gives a path nothing serves, whatever credential is sent — so
+  the published socket neither reveals the admin routes behind it nor answers
+  differently to a valid one
+  (`docs/guides/deployment.md#exposing-webhooks-without-the-admin-api`).
+- **`api.auth.company_writers` prevents drift; it is not a privilege
+  boundary.** It refuses a change to a managed company document from every
+  credential but a listed Tier A token — a person's session, a machine token
+  and a lead editing their own team included — but every credential holding
+  `secrets:write` still writes the secret store, and a `config:write` holder
+  can reload (`POST /config/reload`), so between them they can rewrite any
+  value the document references through a `${VAR}` — a model key, a webhook
+  secret, an endpoint — and publish it. A value `secrets:write` rewrites alone
+  still takes effect at the next activation: a reload, the managing system's
+  next apply, or a restart. Do not grant `secrets:write` or `config:write` to
+  anyone you would not let change what the company does
+  (`docs/concepts/configuration.md#managed-configuration`).
 - **A node that cannot read identity answers `503`, never `401`.** The
   principal a node could not check and the principal that presented nothing are
   the same empty value, and reporting the first as the second tells everybody
@@ -230,10 +258,10 @@ A few things worth knowing when deploying Crewlet:
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` — required and non-empty — and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
-  cannot be the way around the rule. At least one is required on every
-  backend: a fresh deployment's identity estate is empty, so it is what creates
-  the first person, and on a running one it is the way back in when an
-  administrator has locked themselves out.
+  cannot be the way around the rule. At least one is required on every node
+  that serves the API: a fresh deployment's identity estate is empty, so it is
+  what creates the first person, and on a running one it is the way back in
+  when an administrator has locked themselves out.
 - **The company configuration is always sealed at rest.** Every revision is
   encrypted and authenticated under the Tier A keyring before it reaches the
   store — there is no plaintext mode, and a node reads only sealed revisions —
@@ -241,6 +269,30 @@ A few things worth knowing when deploying Crewlet:
   alone. The keyring is the root of trust: keep it out of the store's backup
   domain. See
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
+- **The fleet's broker authenticates nothing itself, so what crosses it as an
+  instruction is signed.** A fleet's embedded members route to each other on
+  `stream.cluster.port`, and a node without `data` reaches them on
+  `stream.leaf.port`. Every state-log record is signed under the Tier A keyring
+  and verified before any node applies it, and so is every request one node
+  asks another to CARRY OUT, and every reply, on each of the three channels
+  that carry one: a node without `data` asking a data node's estate service to
+  write (the data node writes as the actor the request names), any node asking
+  a broker member to remove a voter from the metadata group (the member does it
+  through its own system account, changing the quorum every election runs on),
+  and a person's note to a running turn (the running node offers it as the
+  person it names). Unsigned, each would let anybody who reaches either port
+  write as anybody, change the broker's quorum past every check the operator's
+  route makes, or put words in front of a running agent under anybody's name.
+  Each request is bound to an id and a deadline inside its signature, so one
+  captured off the wire is not carried out twice. A frame under a key the
+  receiver does not hold is not applied, or not run; one that fails under a key
+  it holds is refused and logged. Signing authenticates and does not encrypt:
+  the records, the event stream and the coordination store are readable by
+  anything that reaches those ports, the coordination store's writes are
+  guarded by compare-and-set rather than a signature, and the scatters that
+  only READ — history, search, a seat's memory, a sandbox's tail — are not
+  signed. Keep both ports on a private network. The decision is
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
 - **Removing a person erases their values from every node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
@@ -269,9 +321,8 @@ A few things worth knowing when deploying Crewlet:
   them, because a history whose authors evaporate is not an audit trail.
   **Their login outlives it too, in the clear**: it is on the removal record in
   the identity log (so in every backup and donated snapshot), in the
-  tombstone's `iam_removed.claims_json`, in the trail's reasons
-  (`suspended by jane.doe`), and in any rows a person recorded before every
-  person held a seat wrote under it. A login is deliberately not sealed — it is
+  tombstone's `iam_removed.claims_json`, and in the trail's reasons
+  (`suspended by jane.doe`). A login is deliberately not sealed — it is
   printed beside everything its holder does — and the one an invitation's form
   or an administrator's create proposes is derived from the address (`jane.doe@example.com` proposes
   `jane.doe`), so after a removal the address's local part is usually still
@@ -300,3 +351,7 @@ A few things worth knowing when deploying Crewlet:
   work is untrusted. Treat anything you inject into a sandbox (tokens in
   `role.sandbox.env`) as visible to the code that runs there. See
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
+  E2B boxes are created with secured access, so a box's in-box agent runs a
+  command or serves a file only for a holder of that box's access token,
+  which the engine reads from E2B and never stores
+  (`docs/concepts/code-sandbox.md#sandbox-backends`).

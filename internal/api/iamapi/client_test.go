@@ -174,8 +174,7 @@ func TestTheDashboardMintsWithinTheEnginesTokenLifetimes(t *testing.T) {
 // People & access words each kind `GET /iam/check` reports off
 // `FINDING_KINDS`, which promises the order the report is sorted in — and it
 // was a copy nothing held: a kind the engine grew and the list lacked was drawn
-// as its raw code, which is what `person_without_seat` would have been. Held
-// in both directions and in order, against [iamapi.FindingKinds], which the
+// as its raw code. Held in both directions and in order, against [iamapi.FindingKinds], which the
 // report itself sorts by.
 //
 // Mutation: drop a kind from either side, or swap two, and this fails.

@@ -4,14 +4,14 @@ import "strings"
 
 // ---- the unit seam ------------------------------------------------------ //
 //
-// A unit reference stored here is a STRING, and the same unit answers to
-// several of them: its KEY — the unit's `id` in the company document — and,
-// for a unit built with no key, its NAME. Which spelling a row holds depends
-// on when it was written, because a task's `filed_unit` is a record of what
-// was true and nothing rewrites it. So every question about a unit — what to
-// store, what to display, which rows to match, whose lead to wake — goes
-// through one resolution, and the running organisation is the only thing that
-// can perform it.
+// A unit reference stored here is a STRING, and it is the unit's KEY — the
+// unit's `id` in the company document, which a write mints into the stored
+// document and nothing changes in place, so a team keeps one key for its whole
+// life. A caller may NAME a unit either way — a board's own column hands back
+// the key, a person or a model types the name — so every question about a
+// unit — what to store, what to display, which rows to match, whose lead to
+// wake — goes through one resolution, and the running organisation is the only
+// thing that can perform it.
 
 // Units is what a CHART can answer about a unit.
 //
@@ -30,22 +30,6 @@ type Units interface {
 	// spellings (its key or its name), however it is cased — and false
 	// where the chart has no such unit.
 	ResolveUnit(ref string) (ChartUnit, bool)
-
-	// AllUnits is every unit the chart holds, for the one question
-	// resolution cannot answer: the BOARD groups rows it has not read yet,
-	// so it has to fold the spellings onto their keys inside the statement
-	// — see [unitAxis] — and that needs the whole set up front.
-	//
-	// ON THE INTERFACE rather than a second one the grouping asserts for,
-	// which is the choice that fails LOUDLY: a chart that could not
-	// enumerate would silently group on the stored string, which is
-	// exactly the split-column defect this removes and is invisible in the
-	// answer. One method on one seam is a compile error instead.
-	//
-	// The order is the chart's own walk. Nothing here depends on it: the
-	// arms of one CASE are mutually exclusive by construction, since a
-	// unit key is unique across the company by admission rule.
-	AllUnits() []ChartUnit
 }
 
 // ChartUnit is one unit as the chart answers it.
@@ -53,7 +37,7 @@ type Units interface {
 // FOUR ANSWERS FROM ONE RESOLUTION, because the callers ask in four
 // directions and a seam that answered one of them would be resolved twice:
 // a write stores the Key, a screen renders the Name, a wake reaches the Lead,
-// and a filter or a board matches every spelling a row may hold.
+// and a filter or a board resolves whatever a caller typed to the Key.
 type ChartUnit struct {
 	// Key is the unit's key — `org.Unit.Key`: its id where the document
 	// gave it one, its name where it did not. IT IS WHAT EVERY WRITE HERE
@@ -86,8 +70,7 @@ type LeadRef struct {
 // KEY IS WHAT THE ROW HOLDS, not what the chart would write today: these rows
 // are records, and a reader showing a spelling the row does not carry cannot
 // be used to find it again. Name is the chart's, which is what makes the pair
-// useful — a row filed under a name before an id was added still renders the
-// team's current name.
+// useful — a row keyed on a team renders the team's current name.
 type UnitRef struct {
 	Key      string `json:"key,omitempty"`
 	Name     string `json:"name,omitempty"`

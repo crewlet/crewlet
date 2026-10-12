@@ -10,7 +10,7 @@
  *
  *  - ALL — screens, a pasted event / trace / turn id, the company's tasks and
  *    pages (three of each), seats and units, tools, and the three actions;
- *    recents when nothing is typed;
+ *    when nothing is typed, the turns running now and then the recents;
  *  - TASKS — `work_search`, hybrid, eight hits, with its four answers kept
  *    apart (too short, searching, refused, nothing matched) and a row to the
  *    full search screen;
@@ -76,6 +76,7 @@ import {
 import { useNavigator, useRoute } from "../router.tsx";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
@@ -89,16 +90,19 @@ import {
   liveRowFor,
   nameOfIn,
   ringOf,
+  stateLine,
   unitRoute,
+  workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
+import { turnIdOf, watchLink } from "~/lib/turns.ts";
 import { itemPath, statusLabel } from "~/lib/work.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { ActResult } from "~/protocol/act.ts";
 import type { LogRefusal, QueryRefusal, SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
-import { SEARCH_MODES, modeLabel, servedNote } from "~/lib/search.ts";
+import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
@@ -192,6 +196,20 @@ export function CommandPalette({
   // held, through the gate every write reads.
   const served = useConnection().accessRefused === null;
 
+  // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
+  // now offers and in what order. The kit's listbox holds the highlight by
+  // INDEX, so a group that gained or lost a row on an agents push (twice a
+  // tool-loop round) moved every row under it, and Enter committed a row
+  // nobody highlighted. Opening is this surface's re-sort boundary: it is
+  // mounted only while open (`app/Shell.tsx`), so a fresh ⌘K reads afresh.
+  // Later pushes reach only each row's words.
+  const [running] = useState(() =>
+    workingLongestFirst(agents).flatMap((row) => {
+      const turnId = turnIdOf(row);
+      return turnId ? [{ id: row.id, turnId }] : [];
+    }),
+  );
+
   const [scope, setScope] = useState<ScopeId>("all");
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState<Pick | null>(null);
@@ -220,16 +238,29 @@ export function CommandPalette({
   const pickTerm = pickQuery.trim();
 
   // ---- the three questions ---------------------------------------------
+  // A TERM PAST THE ENGINE'S SEARCH BOUND ASKS NEITHER SEARCH NOR THE ANSWER,
+  // and the lead says why (`searchTooLong`): sent, both would be refused, and
+  // a list that silently lost its tasks and pages reads as nothing matching.
+  const searchable = (scope === "all" || scope === "tasks" || scope === "pages") && !picking;
+  const tooLong = searchable ? searchTooLong(term) : null;
   const wantsTasks =
-    served && !picking && (scope === "all" || scope === "tasks") && term.length >= SEARCH_MIN;
-  const tasks = useQuery(
+    served &&
+    !picking &&
+    (scope === "all" || scope === "tasks") &&
+    term.length >= SEARCH_MIN &&
+    tooLong === null;
+  const tasks = useSearchQuery(
     "work_search",
     { q: term, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
   );
   const wantsPages =
-    served && !picking && (scope === "all" || scope === "pages") && term.length >= SEARCH_MIN;
-  const pages = useQuery("knowledge", { q: term }, { enabled: wantsPages });
+    served &&
+    !picking &&
+    (scope === "all" || scope === "pages") &&
+    term.length >= SEARCH_MIN &&
+    tooLong === null;
+  const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =
@@ -331,6 +362,7 @@ export function CommandPalette({
         <SeatAvatar
           name={seat.name}
           kind={seat.kind}
+          avatar={seat.avatar}
           size="xs"
           ring={seat.kind === "agent" ? ringOf(state) : undefined}
           decorative
@@ -517,6 +549,49 @@ export function CommandPalette({
       hint: h.hint,
       onSelect: h.go,
     }));
+
+  /**
+   * THE TURNS RUNNING AS THE PALETTE OPENED, under Recent in an empty
+   * palette: one row per seat the engine said was working, oldest first as
+   * every list of them is, each going to the turn's watch link — its
+   * Transcript, the phase it is on open. A seat whose turn had no id yet is
+   * left out rather than offered as a way to nowhere.
+   *
+   * UNDER RECENT, NOT ABOVE IT: "⌘K, Enter" is the reader's way back to where
+   * they just were, and a group above Recent would make that habit open a
+   * running turn instead whenever the company happens to be working.
+   *
+   * A TURN THAT ENDS WHILE THE PALETTE IS OPEN KEEPS ITS ROW (see `running`
+   * above), still opening that turn, and says it finished — the row a reader
+   * is reaching for must not leave under the pointer.
+   */
+  const runningRows = (): CommandPaletteItem[] =>
+    running.map(({ id, turnId }) => {
+      const row = agents.find((a) => a.id === id) ?? null;
+      const seat = index.byHandle.get(row?.handle ?? "") ?? null;
+      const name = seat?.name ?? row?.role ?? id;
+      const watch = watchLink(turnId);
+      return {
+        id: `running-${id}`,
+        icon: (
+          <SeatAvatar
+            name={name}
+            kind="agent"
+            avatar={seat?.avatar}
+            size="xs"
+            ring={ringOf(activityOf(row))}
+            decorative
+          />
+        ),
+        label: name,
+        // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
+        // says ("Executing ENG-412", "3 workers on ENG-405") — while the seat
+        // is still on the turn the row was read for.
+        hint:
+          row && turnIdOf(row) === turnId ? stateLine(row, { now: Date.now(), seat }) : "Finished",
+        onSelect: () => nav.to(watch.path, watch.query),
+      };
+    });
 
   const taskRows = (cap: number): CommandPaletteItem[] => {
     const hits = taskAnswer.data?.hits ?? [];
@@ -755,6 +830,7 @@ export function CommandPalette({
   } else if (scope === "all") {
     if (!term) {
       push("recent", "Recent", asItems(recentHits(recents, nav)));
+      push("running", "Running now", runningRows());
       push("go", "Go to", asItems(destinationHits("", nav, Infinity, standing)));
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));
@@ -826,6 +902,7 @@ export function CommandPalette({
     if (scope === "tasks") {
       if (term.length < SEARCH_MIN)
         return "Type at least two characters to search the company’s work.";
+      if (tooLong) return tooLong;
       if (taskAnswer.error) return "Task search did not run — the note above says why.";
       if (!taskAnswer.data) return "Searching…";
       if (taskAnswer.data.available === false) {
@@ -836,6 +913,7 @@ export function CommandPalette({
     if (scope === "pages") {
       if (term.length < SEARCH_MIN)
         return "Type at least two characters to search the knowledge base.";
+      if (tooLong) return tooLong;
       if (pageAnswer.error) return "Knowledge search did not run — the note above says why.";
       if (!pageAnswer.data) return "Searching…";
       if (pageAnswer.data.available === false)
@@ -876,6 +954,11 @@ export function CommandPalette({
           detail={scopeRead?.detail ?? undefined}
           loading={false}
         />
+      ) : tooLong ? (
+        // NOT SENT, and said where an answer would be: All still lists the
+        // screens and actions the term matches, and nothing else on the
+        // surface would say why its tasks and pages are missing.
+        <p className="palette-answer-note">{tooLong}</p>
       ) : (
         <AnswerLead state={answer} nav={nav} openPage={openPage} />
       )}

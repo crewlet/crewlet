@@ -10,9 +10,9 @@
 // anything: an argon2id digest with its own parameters beside it, a SHA-256 of
 // a machine token or a reset link's secret, a TOTP shared secret sealed under the fleet keyring and
 // bound to its person and its credential.
-// The estate is replicated to every node, snapshotted, backed up and donated
-// to joining peers — so a value that could be replayed out of it would be a
-// credential every operator with a backup holds.
+// The estate is replicated to every data node, snapshotted, backed up and
+// donated to joining peers — so a value that could be replayed out of it would
+// be a credential every operator with a backup holds.
 //
 // # The enumeration oracle, which is the failure this package is shaped by
 //

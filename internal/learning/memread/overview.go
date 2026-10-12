@@ -33,7 +33,7 @@ import (
 //
 // The rules are [Reader.Memory]'s, per seat: a seat no node holds has no
 // current copy and is sent with `held_by: none` and nothing counted; a seat
-// whose holder did not answer — silent, on a build that cannot, or still
+// whose holder did not answer — silent, its answer unreadable, or still
 // taking it — is sent with its `unavailable` reason rather than with zeros,
 // because "this seat remembers nothing" and "its holder did not say" are
 // opposite facts on a screen. The COVERAGE names every holder that was asked
@@ -171,10 +171,9 @@ func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
 	// ASKED: every holder but this incarnation.
 	asked := map[string][]Seat{}
 	for owner, seats := range byOwner {
-		if owner == r.Owner {
-			continue
+		if owner != r.Owner {
+			asked[owner] = seats
 		}
-		asked[owner] = seats
 	}
 
 	type scattered struct {

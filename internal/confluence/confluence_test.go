@@ -187,6 +187,45 @@ func TestConfluenceIsKeywordOnlyAndSaysSo(t *testing.T) {
 	}
 }
 
+// A SITE THAT FAILS IS A SEARCH THAT DID NOT RUN, never one that found nothing.
+//
+// Search is best effort and reports no error, so the outcome is the only thing
+// that can say the site never answered: no mode served and the coverage not
+// complete — which the turn-start block and search_knowledge render as "the
+// knowledge base could not be searched". Set the served mode before the call,
+// or call a failure complete, and every seat on a company whose wiki is down
+// is told the company has written nothing down — and writes a duplicate of a
+// page that exists.
+func TestASiteThatFailsTheSearchServesNoMode(t *testing.T) {
+	t.Parallel()
+	var asked atomic.Int64
+	inst := newInstance(t, func(string) (int, string) {
+		asked.Add(1)
+		return 503, `{"message":"service unavailable"}`
+	})
+	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe"}
+	searcher := confluence.NewSearcher(confluence.SearcherOptions{
+		Org: client(t, inst),
+		ForSeat: func(*org.Role) (*confluence.Client, bool) {
+			return client(t, inst), true
+		},
+	})
+	o := &org.Organization{Name: "nimbus"}
+	o.Normalize()
+
+	got := searcher.Search(context.Background(), knowledge.Query{
+		Text: "how do we deploy", Org: o, Seat: seat, Mode: knowledge.ModeKeyword,
+	})
+	if asked.Load() == 0 {
+		t.Fatal("the site was never asked, so this certified a gate, not a failure")
+	}
+	if len(got.Hits) != 0 || got.ServedMode != "" || got.Coverage.Complete {
+		t.Errorf("a failed search answered %d hits, served %q, complete %v — "+
+			"want none, nothing served, not complete", len(got.Hits), got.ServedMode,
+			got.Coverage.Complete)
+	}
+}
+
 // A SEAT WITH ITS OWN CREDENTIAL SEARCHES UNSCOPED, because Confluence's own
 // ACLs bound what comes back.
 func TestASeatWithItsOwnCredentialSearchesUnscoped(t *testing.T) {

@@ -1,8 +1,9 @@
 // Package cliagent drives a coding CLI the operator already pays a
 // subscription for as a headless text model behind [llm.Provider].
 //
-// WHICH CLIs is profiles.yaml's answer, not this comment's — [BuiltinNames]
-// reads the shipped table and `profile_test.go` holds it to the contract. A
+// WHICH CLIs is the profile table's answer, not this comment's —
+// [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it
+// to the agent names a document may write. A
 // prose list here would be a second copy of that answer with nothing checking
 // it, and it already went stale by three.
 //
@@ -25,7 +26,7 @@
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
-//     than a Go literal that needs a Crewlet release — see profiles.yaml.
+//     than a Go literal that needs a Crewlet release — see [cliprofile].
 //
 // The backend obeys the same two rules as every other member of this
 // contract: it does not retry, and it classifies a failure no further than a
@@ -45,11 +46,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 var log = logging.Get("llm.cliagent")
 
-// providerName is what a classified failure calls this backend.
+// providerName is what a classified failure calls this backend, and what a
+// completion records as its [llm.Origin.Provider].
 const providerName = "cli-agent"
 
 // Config is one cli-agent provider entry, fully resolved.
@@ -93,11 +96,17 @@ type Provider struct {
 	model     string
 	agent     string
 	agentMode bool
-	profile   Profile
+	profile   cliprofile.Profile
 	ws        *Workspace
 	env       map[string]string
 	auth      Auth
 	timeout   time.Duration
+
+	// termGrace is how long every child this provider starts has to exit once
+	// signalled — always [termGrace]. A field rather than the constant at each
+	// exec so that one value reaches all of them, and so the suite can watch a
+	// stubborn child be killed at a grace it can afford to wait out.
+	termGrace time.Duration
 
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
@@ -116,14 +125,17 @@ var _ llm.Provider = (*Provider)(nil)
 // refused to exist would take the whole company down at boot over one
 // provider's credentials.
 func New(cfg Config) (*Provider, error) {
-	profile, err := Load(cfg.Agent, cfg.Overrides)
+	profile, err := cliprofile.Load(cfg.Agent, cfg.Overrides)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Model != "" && len(profile.ModelArgs) == 0 {
+	// Config refuses the same shape (on every write and at apply), so a
+	// document that reaches here with it was never validated — a caller
+	// building the provider from code.
+	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: the %q CLI takes no model flag, so model %q would be ignored — "+
-				"remove it, or declare cli.overrides.model_args",
+			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
+				"would be ignored — remove it, or declare cli.overrides.model_args with {model}",
 			cfg.Key, cfg.Agent, cfg.Model)
 	}
 	if cfg.StateDir == "" {
@@ -148,6 +160,7 @@ func New(cfg Config) (*Provider, error) {
 		env:       cfg.Env,
 		auth:      cfg.Auth,
 		timeout:   cfg.Timeout,
+		termGrace: termGrace,
 		slots:     make(chan struct{}, slots),
 	}
 	if p.timeout <= 0 {
@@ -170,6 +183,11 @@ func New(cfg Config) (*Provider, error) {
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
 
+// ModelArgument is the model exactly as this entry's text calls hand it to the
+// CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
+// is handed too, so a box and a text call on one entry name one model.
+func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
+
 // AgentMode reports whether this entry runs a seat's executor as the CLI's own
 // agentic run rather than as a text completion behind the engine's tool loop.
 //
@@ -190,7 +208,7 @@ func (p *Provider) AgentMode() bool { return p.agentMode }
 func (p *Provider) CodingAgent() string { return p.agent }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
-func (p *Provider) Profile() Profile { return p.profile }
+func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 
 // Workspace is the state directory this provider shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
@@ -204,6 +222,12 @@ func (p *Provider) String() string {
 }
 
 // Complete runs one CLI invocation and reads its answer.
+//
+// [llm.Request.Effort] is NOT applied, deliberately: a CLI reads its effort
+// from its own configuration in the seat's state directory, and no profile has
+// a per-invocation flag to carry a ceiling on. A ceiling it cannot carry is
+// not one it may fake — rewriting the CLI's settings per call would race every
+// concurrent call sharing the directory — so the call runs at the CLI's own level.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
@@ -211,7 +235,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
 	// before the transcript is rendered, so it is never both.
 	var system string
-	if p.profile.hasSystemChannel() {
+	if p.profile.HasSystemChannel() {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -250,6 +274,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		dir:     checkout.Work,
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
+		grace:   p.termGrace,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
@@ -257,7 +282,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// there is no faithful incremental view of them, and forwarding raw
 	// lines would stream a banner and a half-written fence as though they
 	// were what the model said.
-	if req.Streaming() && p.profile.output() == OutputJSONL {
+	if req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
 		in.onLine = func(line string) {
 			doc, ok := decodeObject(strings.TrimSpace(line))
 			if !ok {
@@ -291,7 +316,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
-	// have something to put in it — see [SystemPromptFile]. A profile whose
+	// have something to put in it — see [cliprofile.SystemPromptFile]. A profile whose
 	// prompt channel is a vendor agent file declares that CLI's tool
 	// denial in the same file, so skipping it on a request with no system
 	// prompt would hand the vendor's default agent, and every tool it has,
@@ -325,14 +350,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// profile puts the model flag before it: a CLI taking its prompt on
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
-	switch p.profile.mode() {
-	case PromptArgv:
+	switch p.profile.EffectivePromptMode() {
+	case cliprofile.PromptArgv:
 		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
 		// takes its prompt as a flag's value needs the two together, and
 		// anything appended between them becomes the prompt instead.
 		in.args = append(in.args, p.profile.PromptArgs...)
 		in.args = append(in.args, prompt)
-	case PromptFile:
+	case cliprofile.PromptFile:
 		// Only the flag and the PATH go on argv; the transcript itself
 		// stays in the per-call working directory at 0600.
 		rendered, writeErr := promptArgs(p.profile.PromptArgs, prompt, checkout.Work)
@@ -487,7 +512,7 @@ func (p *Provider) completion(
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
-			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
+			p.agent, cliprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
 	// exited 0, reported no error, and the path this profile looks in
@@ -512,9 +537,10 @@ func (p *Provider) completion(
 	// them without ever reaching a budget.
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
-		Model:        p.model,
-		Content:      env.Message,
-		FinishReason: "stop",
+		Model:      p.model,
+		Provider:   providerName,
+		Content:    env.Message,
+		StopReason: llm.StopEnd,
 	}
 	if !env.Parsed {
 		comp.Content = out.text
@@ -527,10 +553,19 @@ func (p *Provider) completion(
 			ID:        fmt.Sprintf("cli_%d", i),
 			Name:      call.Name,
 			Arguments: call.Arguments,
+			// Arguments the envelope could not read: the tool loop
+			// answers the call with this instead of running it on an
+			// empty map, as it does for every other backend.
+			ArgumentsError: call.ArgumentsError,
 		})
 	}
 	if len(comp.ToolCalls) > 0 {
-		comp.FinishReason = "tool_calls"
+		// The CLI reports no stop reason of its own in text mode: the
+		// envelope it was asked for is either an answer or a set of
+		// calls, so those are the only two this backend can honestly
+		// name. A CLI that hit its own cap or refused returns that as
+		// prose or a failure the exit path classifies.
+		comp.StopReason = llm.StopToolUse
 	}
 
 	if out.reported {
@@ -555,7 +590,7 @@ func (p *Provider) completion(
 		// needs if it turns out to be profile drift after all. Same
 		// shape as agent/prefetch's own answered-nothing warning.
 		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
-			"agent", p.agent, "model", p.model, "text_paths", PathList(p.profile.TextPaths),
+			"agent", p.agent, "model", p.model, "text_paths", cliprofile.PathList(p.profile.TextPaths),
 			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}
 	return comp, nil
@@ -574,16 +609,16 @@ func (p *Provider) completion(
 // spent plan looks like is a property of the profile table, and the only way
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
-func classifyMarkers(p Profile, text, stderr string) (markerHit, bool) {
+func classifyMarkers(p cliprofile.Profile, text, stderr string) (markerHit, bool) {
 	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
-	// ONE — see [MarkerScope]. Searching the model's own words is what
+	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
 	// makes a spent Claude Code plan recognisable at all, and it is also
 	// how a seat asked "what is our quota?" answers in prose that benches
 	// its own credential. A profile whose CLI reports on stderr and
 	// nowhere else opts out, and then no sentence the model writes can
 	// classify anything.
 	haystacks := []string{text, stderr}
-	if p.markerScope() == MarkerScopeStderr {
+	if p.EffectiveMarkerScope() == cliprofile.MarkerScopeStderr {
 		haystacks = []string{stderr}
 	}
 	for _, marker := range p.LimitMarkers {
@@ -639,7 +674,7 @@ func lineAt(s string, idx int) string {
 //
 // Zero when the vendor gave none, which the credential pool reads as "use the
 // configured cooldown" — the honest answer, rather than inventing a window.
-func resetAfter(from string, marker LimitMarker) time.Duration {
+func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 	if marker.ResetSeparator == "" {
 		return 0
 	}

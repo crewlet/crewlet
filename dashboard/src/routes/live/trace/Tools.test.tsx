@@ -23,7 +23,7 @@ const PHASE = phaseRecord({
   durationMs: 4_000,
   tools: [
     toolCall({ name: "submit_work", startedAt: "2026-09-28T10:00:03Z", durationMs: 0 }),
-    toolCall({ name: "legacy_call", startedAt: "", durationMs: 0 }),
+    toolCall({ name: "bridged_call", startedAt: "", durationMs: 0 }),
   ],
 });
 
@@ -55,9 +55,9 @@ test("a stamped call that took under a millisecond is timed on both tabs", () =>
 
 test("a call nothing measured is not timed on both tabs", () => {
   const { model } = mount();
-  expect(model.spans.find((s) => s.label === "legacy_call")).toBeUndefined();
-  expect(model.untimed.map((u) => u.label)).toContain("legacy_call");
-  expect(within(row("legacy_call")).getByText("not timed")).toBeTruthy();
+  expect(model.spans.find((s) => s.label === "bridged_call")).toBeUndefined();
+  expect(model.untimed.map((u) => u.label)).toContain("bridged_call");
+  expect(within(row("bridged_call")).getByText("not timed")).toBeTruthy();
 });
 
 // A ROW OPENS WHAT HOLDS IT: its own span where the Timeline drew one, and the
@@ -68,6 +68,6 @@ test("a row opens its span, or the Timeline when it has none", () => {
   fireEvent.click(row("submit_work"));
   const id = model.spans.find((s) => s.label === "submit_work")!.id;
   expect(onOpen).toHaveBeenLastCalledWith(id);
-  fireEvent.click(row("legacy_call"));
+  fireEvent.click(row("bridged_call"));
   expect(onOpen).toHaveBeenLastCalledWith("");
 });

@@ -443,6 +443,41 @@ func TestSecondReleaseIsANoOp(t *testing.T) {
 	}
 }
 
+// RELEASE IS AN ABSTENTION. It returns the key without a verdict: nothing is
+// benched, and an auth backoff a real call earned survives it — a success on a
+// route that says nothing about the key must not forgive a key the messages
+// route refused, or the next refusal there is benched for the base TTL again
+// instead of the doubled one.
+func TestReleaseReturnsTheKeyWithoutAVerdict(t *testing.T) {
+	t.Parallel()
+	const ttl = time.Minute
+	p, clock := newTestPool(t, []string{"k"}, Policy{Auth: ttl})
+
+	lease, _ := p.Acquire()
+	lease.Release()
+	if s := p.Stats()[0]; s.InFlight != 0 || s.Cooling != 0 {
+		t.Fatalf("after Release: InFlight %d, Cooling %v; want the key back and unbenched", s.InFlight, s.Cooling)
+	}
+
+	lease, _ = p.Acquire()
+	lease.Fail(t.Context(), llm.KindAuth, 0)
+	clock.advance(ttl)
+	lease, ok := p.Acquire()
+	if !ok {
+		t.Fatal("the key did not come back after its bench")
+	}
+	lease.Release()
+	lease.Release() // a second release is a no-op, as for the verdicts
+	if got := p.Stats()[0].InFlight; got != 0 {
+		t.Fatalf("InFlight = %d after a double Release, want 0", got)
+	}
+	lease, _ = p.Acquire()
+	lease.Fail(t.Context(), llm.KindAuth, 0)
+	if got := coolingOf(t, p, Hint("k")); got != 2*ttl {
+		t.Fatalf("second auth failure benched for %v, want %v: Release forgave the first", got, 2*ttl)
+	}
+}
+
 func TestSucceedReleasesTheInFlightCount(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{})
@@ -611,6 +646,45 @@ func TestRotateExhaustionCarriesTheLastKind(t *testing.T) {
 	if classified.Provider != "anthropic" || classified.Model != "claude" {
 		t.Fatalf("error names %s/%s, want the caller's identity",
 			classified.Provider, classified.Model)
+	}
+}
+
+// AN EXHAUSTED POOL SAYS WHAT ITS LAST KEY WAS TOLD.
+//
+// The kinds that bench a key share a status with the reasons an operator
+// acts on differently — a revoked key, a quota run out, a throttle that clears
+// by itself — so the pool's own sentence alone made a seat whose one key was
+// revoked read exactly like one briefly throttled. The last refusal travels
+// with it, its cause and the provider's own words both, and the error is still
+// the pool's: its kind, its identity and errors.Is(ErrExhausted).
+func TestAnExhaustedPoolSaysWhatItsLastKeyWasTold(t *testing.T) {
+	t.Parallel()
+	p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
+	calls := 0
+	_, err := Rotate(t.Context(), p, Identity{Provider: "openai", Model: "gpt"},
+		func(err error) *llm.Error {
+			return &llm.Error{Kind: llm.KindAuth, Provider: "openai", Model: "gpt", Status: 401,
+				Err: err, Detail: "Incorrect API key provided (code invalid_api_key)"}
+		},
+		func(key string) (string, error) {
+			calls++
+			return "", fmt.Errorf("401 Unauthorized for %s", key)
+		})
+	if calls != 2 {
+		t.Fatalf("made %d calls, want one per key", calls)
+	}
+	if !errors.Is(err, ErrExhausted) || llm.KindOf(err) != llm.KindAuth {
+		t.Fatalf("err = %v, want the pool's exhausted auth error", err)
+	}
+	for _, want := range []string{"all 2 credentials cooling after auth", "401 Unauthorized for k1",
+		"Incorrect API key provided (code invalid_api_key)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+	var classified *llm.Error
+	if !errors.As(err, &classified) || classified.Provider != "openai" || classified.Model != "gpt" {
+		t.Fatalf("errors.As found %+v, want the pool's own error first", classified)
 	}
 }
 

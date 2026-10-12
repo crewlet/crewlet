@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // Workspace owns one state directory: the shared login, and a home per seat.
@@ -21,7 +23,7 @@ import (
 type Workspace struct {
 	root    string
 	agent   string
-	profile Profile
+	profile cliprofile.Profile
 
 	mu    sync.Mutex
 	seats map[string]*seatState
@@ -49,7 +51,7 @@ var registry = struct {
 // conversation memory, so each would prune the other's login. Config
 // validation catches this at `crewlet validate`; this is the backstop for a
 // directory two processes reached by different paths.
-func Shared(stateDir, agent string, profile Profile) (*Workspace, error) {
+func Shared(stateDir, agent string, profile cliprofile.Profile) (*Workspace, error) {
 	resolved, err := filepath.Abs(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("cli-agent: resolving state_dir %q: %w", stateDir, err)
@@ -203,7 +205,7 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 	}
 	// The working directory is this call's own, so its settings files
 	// are written per call rather than per seat generation.
-	if err := w.seedFiles(work, SeedWork); err != nil {
+	if err := w.seedFiles(work, cliprofile.SeedWork); err != nil {
 		return nil, err
 	}
 	state.inflight++
@@ -259,7 +261,7 @@ func (w *Workspace) seatState(seat string) *seatState {
 // prune deletes the profile's volatile paths from a seat home.
 func (w *Workspace) prune(home string) error {
 	for _, rel := range w.profile.VolatilePaths {
-		target, err := underRoot(home, rel)
+		target, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return err
 		}
@@ -294,7 +296,7 @@ func (w *Workspace) seed(home string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("cli-agent: shared login %q is not a regular file", src)
 		}
-		dst, err := underRoot(home, rel)
+		dst, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return err
 		}
@@ -302,7 +304,7 @@ func (w *Workspace) seed(home string) error {
 			return err
 		}
 	}
-	return w.seedFiles(home, SeedHome)
+	return w.seedFiles(home, cliprofile.SeedHome)
 }
 
 // seedFiles writes the profile's settings files for one scope into root.
@@ -311,12 +313,12 @@ func (w *Workspace) seed(home string) error {
 // settings file during a call, and a vendor's tool policy that quietly
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
-func (w *Workspace) seedFiles(root string, scope SeedScope) error {
+func (w *Workspace) seedFiles(root string, scope cliprofile.SeedScope) error {
 	for _, f := range w.profile.SeedFiles {
-		if f.scope() != scope {
+		if f.Scope() != scope {
 			continue
 		}
-		dst, err := underRoot(root, f.Path)
+		dst, err := cliprofile.UnderRoot(root, f.Path)
 		if err != nil {
 			return err
 		}
@@ -340,11 +342,11 @@ func (w *Workspace) seedFiles(root string, scope SeedScope) error {
 func (w *Workspace) syncCredentialsOut(home string) error {
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
-		src, err := underRoot(home, rel)
+		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return err
 		}
-		updated, err := os.ReadFile(src) //nolint:gosec // path is rooted by underRoot
+		updated, err := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -387,23 +389,6 @@ func (w *Workspace) LoginFiles() []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// underRoot joins a profile-declared relative path onto a root and refuses
-// one that escapes it.
-//
-// Profile paths are operator-overridable, so "../../.ssh" is reachable from
-// config — and prune() calls RemoveAll on whatever this returns.
-func underRoot(root, rel string) (string, error) {
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("cli-agent: path %q must be relative to the seat home", rel)
-	}
-	joined := filepath.Join(root, rel)
-	cleanRoot := filepath.Clean(root)
-	if joined != cleanRoot && !strings.HasPrefix(joined, cleanRoot+string(filepath.Separator)) {
-		return "", fmt.Errorf("cli-agent: path %q escapes the seat home", rel)
-	}
-	return joined, nil
 }
 
 // copyFile copies one regular file, creating its parent, at 0600.

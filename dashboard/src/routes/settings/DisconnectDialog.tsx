@@ -19,6 +19,7 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -84,11 +85,14 @@ export function DisconnectDialog({
   stuck,
   apps,
   appPath,
+  avatarOf,
   onClose,
   onDone,
 }: {
   /** The tool's name, as the catalogue writes it. */
   name: string;
+  /** How each agent whose app is removed is drawn, by handle, off the chart. */
+  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
   /** The wire key of the surface being disconnected. */
   /**
    * Every surface this card covers, in the order they are taken away.
@@ -348,7 +352,13 @@ export function DisconnectDialog({
                 {/* DECORATIVE: the row states the agent's name in the line
                       beside it, and an avatar that announced it too would say
                       one thing twice. */}
-                <SeatAvatar name={app.name || app.handle} kind="agent" size="sm" decorative />
+                <SeatAvatar
+                  name={app.name || app.handle}
+                  kind="agent"
+                  avatar={avatarOf?.(app.handle)}
+                  size="sm"
+                  decorative
+                />
                 <div className="int-row-identity">
                   <span className="int-row-name">{app.name || app.handle}</span>
                 </div>

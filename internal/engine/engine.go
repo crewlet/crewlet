@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -46,6 +47,15 @@ type Company struct {
 	// is refused rather than crashed.
 	Models *phase.Registry
 
+	// endpoints is every API entry's model, base URL and keys as this
+	// epoch's providers were built with them, keyed on the entry — what a
+	// coding box run on that entry addresses and signs in with ([runLLM]).
+	// From the build's own resolution, for the reason credentials below
+	// is: the resolver exists only while the epoch is being built, and a
+	// value resolved through any other would describe an endpoint no call
+	// of this epoch uses.
+	endpoints map[string]endpoint
+
 	// credentials is where each pooled provider's keys came from, as this
 	// epoch resolved them — the variable each names and a hint of what it
 	// resolved to, never a value — for [Engine.CredentialPools]. Keyed on
@@ -54,6 +64,14 @@ type Company struct {
 	// built, and a key's provenance read through any other resolver would
 	// describe credentials no pool holds.
 	credentials map[string][]credentialSource
+
+	// contacts resolves the `${VAR}` contact ids a teammate in the prompts'
+	// roster may carry: the resolver this epoch was built through, which on
+	// a running node is its own chain — the secret store, then the
+	// environment it was handed — so a teammate's id reads in a prompt as
+	// notification routing reads it. Never the process environment behind
+	// the chain's back.
+	contacts org.EnvLookup
 
 	// Tools is the catalogue every seat's surface is cut from: the
 	// builtins, plus the SHARED MCP servers, which one company-wide child
@@ -73,10 +91,13 @@ type Company struct {
 
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
-	// or a boot's reading of the active revision's `activated_at` — and
-	// zero for a company no activation has named yet: a Tier B file a node
+	// or a boot's reading of the active revision's `activated_at` — in UTC,
+	// stamped ONCE, as the company is built ([stampActivation]).
+	//
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET: a Tier B file a node
 	// booted with, which its reconciler publishes and applies with the
-	// pointer's instant before a seat is claimed.
+	// pointer's instant before a seat is claimed. A zero instant is a
+	// configuration nothing derived from it may be written from.
 	//
 	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
 	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
@@ -127,10 +148,10 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	// seat walk needs no empty-handle guard.
 	//
 	// The RUNNABLE rules only. An epoch is built from stored revisions, and
-	// one that breaks an admission rule added after it was stored still runs
-	// as it always did; refusing to build it would take a working company
-	// down on upgrade. A submitted document met the admission rules at the
-	// door it came through. See [config.Company.ValidateRunnable].
+	// one a newer peer admitted under rules this build does not share still
+	// runs; refusing to build it would split the fleet's epoch. A document
+	// submitted to this build met its admission rules at the door it came
+	// through. See [config.Company.ValidateRunnable].
 	if err := c.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("engine: invalid company config: %w", err)
 	}
@@ -138,7 +159,7 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, err := buildProviders(c, env)
+	models, endpoints, err := buildProviders(c, env)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +168,9 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 		Org:         organization,
 		Models:      models,
 		Tools:       tools.NewRegistry(),
+		endpoints:   endpoints,
 		credentials: credentialSources(c, env),
+		contacts:    env.LookupOK,
 	}, nil
 }
 
@@ -243,8 +266,10 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	del := te.Delegation
 	return runner.New(runner.Config{
 		// THE TURN'S OWN READING of who may be reached, so the roster its
-		// prompt renders leaves out exactly the people its tools do.
-		Seat:     prompts.Seat{Org: c.Org, Role: role, Withheld: in.Turn.Context.WithholdsContacts},
+		// prompt renders leaves out exactly the people its tools do — and
+		// the chain the roster's ${VAR} contact ids resolve through.
+		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
+			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{
@@ -255,6 +280,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
+		// BOUND TO THE TURN'S ATTRIBUTION, so every rewrite the runner, its
+		// ledgers and its delegate workers ask for is this turn's cost.
+		Compact: in.Compact.For(role, in.Turn.Context.Aux()),
 		// Threaded from the caller rather than resolved here, because
 		// whether this node holds the seat is a fact about its leases and
 		// not about the configuration — the same reason reg is a
@@ -315,6 +343,11 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Compact is the epoch's compactor; the runner binds it to the seat.
+	// Nil rewrites nothing, and every reader of it then carries a payload
+	// whole or names it by its size — never a cut.
+	Compact *compact.Compactor
 
 	// Skills is the company's tool-skill registry, threaded per turn like
 	// everything else the runner reads: the registry itself outlives an

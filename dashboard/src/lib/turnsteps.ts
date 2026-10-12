@@ -166,6 +166,5 @@ export function lastCallLine(row: AgentRow): string {
   }
   const done = call.tool_executions?.at(-1);
   if (!done) return "";
-  const name = done.name ?? done.tool ?? "";
-  return `${name} ${callWords(done.arguments ?? done.args)}`.trim();
+  return `${done.name} ${callWords(done.arguments)}`.trim();
 }

@@ -91,12 +91,16 @@ type ViewQuery struct {
 	// views but the shared ones.
 	Viewer string
 
-	// Units resolves a UNIT container's two spellings, so a strip asked
-	// for by a team's id carries the views saved against its name and the
-	// other way round — see [Units] and [CanonicalContainer]. Nil matches
-	// the container as asked, which is the honest answer for a surface
-	// holding no chart.
-	Units Units
+	// Units resolves a UNIT container to its team's KEY, which is what a
+	// save stores ([CanonicalContainer]), so a strip asked for by the
+	// team's name or its key finds the same views — see [Units]. Nil
+	// matches the container as asked, which is the honest answer for a
+	// surface holding no chart.
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Level statelog.ReadLevel
 
@@ -125,7 +129,7 @@ type ViewQuery struct {
 	// pinned "due this week" counts the week the board it opens draws.
 	Counts bool
 	Now    time.Time
-	Zone   *time.Location
+	Zone   *time.Location `json:"-"`
 }
 
 // ViewListing is the strip, with the framework's own verdict on the read.

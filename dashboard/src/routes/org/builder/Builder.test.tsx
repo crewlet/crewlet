@@ -25,6 +25,7 @@ import {
   mountBuilder,
   refusal,
 } from "./testkit.tsx";
+import { withDerived } from "~/test/org.ts";
 
 /** Nobody signed in, as the `viewer` question answers it. */
 const NOBODY = { login: "", owner: "", grants: [] };
@@ -391,9 +392,9 @@ describe("the views the builder hosts", () => {
   });
 
   /*
-   * WHICH NODE A SURFACE IS ABOUT reaches the chart, so it can ease onto it
-   * and push the rest of itself back: an add is about the PARENT the child
-   * will hang from, and closing gives the reader their view back.
+   * WHICH NODE A SURFACE IS ABOUT reaches the chart, so it can push itself
+   * back behind the decision: an add is about the PARENT the child will hang
+   * from, and closing draws the chart plainly again.
    */
   test("the chart is told which node an open surface is about", async () => {
     const engine = new Engine(company());
@@ -544,6 +545,43 @@ describe("the selection in the URL", () => {
     expect(location.hash).not.toContain("Engineering");
   });
 
+  // A CLICK ON NOTHING LETS THE SELECTION GO, and only a click on nothing: a
+  // control acts and keeps it, and nothing under an open dialog is the space
+  // beside the views. A selection used to stay put wherever the reader
+  // clicked next.
+  test("a click on nothing clears the selection, and a click on a control keeps it", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
+
+    // The toolbar's own actions for the selection are a control.
+    fireEvent.click(await screen.findByRole("button", { name: "Engineering" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering" });
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(location.hash).toContain("unit=engineering");
+
+    // Words on the page are nothing to select.
+    fireEvent.click(screen.getByText("editable"));
+    await waitFor(() => expect(location.hash).not.toContain("unit="));
+    expect(screen.queryByRole("button", { name: "Engineering" })).toBeNull();
+  });
+
+  test("a click under an open dialog keeps the selection the dialog is about", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
+    await waitFor(() => expect(location.hash).toContain("seat=ceo"));
+    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Edit\b/ }));
+    await screen.findByRole("dialog", { name: "Edit CEO" });
+    fireEvent.click(screen.getByText("editable"));
+    expect(location.hash).toContain("seat=ceo");
+  });
+
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,
@@ -670,7 +708,7 @@ describe("a revision saved by somebody else", () => {
     next.roles![1]!.goal = "Design things";
     engine.document = next;
     engine.revision = "r2";
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
 
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
     expect(await screen.findByText("No problems")).toBeDefined();
@@ -688,7 +726,7 @@ describe("a revision saved by somebody else", () => {
     engine.document = company();
     engine.revision = "r2";
     const reads = engine.sent("GET").length;
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
 
     expect(await screen.findByText("The configuration changed")).toBeDefined();
     expect(engine.sent("GET")).toHaveLength(reads);
@@ -871,5 +909,70 @@ describe("the builder that fills the window", () => {
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });
     expect(calls).not.toContain(true);
+  });
+});
+
+// A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030). The builder stays a
+// reader of it: the chart is drawn, every edit is paused with who manages it,
+// and the sentence says where the change is made instead — for whoever reads,
+// since where the company is written is no question of who may write it.
+describe("a document another system manages", () => {
+  const MANAGED = { ...EDITOR, config_writer: false, config_managed_by: ["gitops"] };
+
+  test("the viewer's answer pauses every edit, naming who manages it", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine, viewer: () => MANAGED });
+    expect(await screen.findByText("CEO")).toBeDefined();
+    expect(
+      await screen.findByText(
+        /This company's configuration is managed by gitops — change it there/,
+      ),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(liveRegion().textContent).toBe(
+        "Editing is paused. This company's configuration is managed by gitops.",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const menu = await screen.findByRole("menu", { name: "Add to the organization" });
+    expect(
+      within(menu).getByRole("menuitem", { name: "Add unit" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  // AND THE ENGINE'S OWN REFUSAL DECIDES THE SAME WAY, when a check is
+  // answered `config_managed` before the viewer has said anything: it halts,
+  // and it is not mistaken for a grant the reader lacks — whose banner would
+  // send somebody holding config:write to an administrator for nothing.
+  test("a check answered config_managed halts as managed, not as a missing grant", async () => {
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true"
+        ? json(
+            { error: "config_managed", managed_by: ["gitops"], detail: "managed", hint: "there" },
+            403,
+          )
+        : null;
+    mountBuilder({ engine });
+    expect(await screen.findByText("Managed by another system")).toBeDefined();
+    expect(screen.queryByText("Needs config:write")).toBeNull();
+    expect(screen.queryByText("Refused")).toBeNull();
+    expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
+    const checks = engine.checks().length;
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
+    expect(engine.checks()).toHaveLength(checks);
+  });
+
+  test("a writer the viewer names edits as before", async () => {
+    const engine = new Engine(company());
+    mountBuilder({
+      engine,
+      viewer: () => ({ ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }),
+    });
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(screen.queryByText(/managed by gitops/)).toBeNull();
   });
 });

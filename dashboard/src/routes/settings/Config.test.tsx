@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { changeValue, ConfigScreen, RevisionAuthor, RevisionPeek } from "./Config.tsx";
+import { changeValue, ConfigScreen, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -30,6 +30,7 @@ const revisions = [
     created_at: "2026-08-23T15:00:00Z",
     created_by: "founder",
     created_by_kind: "operator",
+    operator_id: "",
     source: "api",
     summary: "connect datadog",
     is_active: true,
@@ -38,7 +39,8 @@ const revisions = [
     revision_id: "01JCFGBBBB0000000000000002",
     created_at: "2026-08-22T15:00:00Z",
     created_by: "node-a",
-    created_by_kind: "node",
+    created_by_kind: "system",
+    operator_id: "",
     source: "file",
     summary: "first import",
     is_active: false,
@@ -136,12 +138,12 @@ test("a revision row renders the server's own field names", async () => {
   expect(screen.getByText("01JCFGBBBB")).toBeDefined();
   expect(screen.getByText("connect datadog")).toBeDefined();
   // The author, WHAT the author is, and the active marker. The kind is the
-  // revision's own word: a node's seed reads as the node's, never as a
-  // person's.
+  // revision's own word: a node's seed reads as the engine's (`system`),
+  // never as a person's.
   expect(screen.getByText("founder")).toBeDefined();
   expect(screen.getByText("node-a")).toBeDefined();
   expect(screen.getByText("operator")).toBeDefined();
-  expect(screen.getByText("node")).toBeDefined();
+  expect(screen.getByText("system")).toBeDefined();
   expect(screen.getAllByText("active").length).toBe(1);
 });
 
@@ -403,27 +405,6 @@ test("with no side named the diff is read against the active revision", async ()
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
   expect(againstAsked()).toEqual(["active"]);
   expect(screen.getByText("against the active revision")).toBeDefined();
-});
-
-// A REVISION NOBODY RECORDED AN AUTHOR FOR SAYS SO. It was adopted from an
-// older engine's pointer, which named nobody — and "not recorded" is a
-// different fact from "the engine wrote it" or from an empty name.
-test("a revision with no recorded author says so rather than naming anybody", () => {
-  const { container } = render(
-    <RevisionAuthor
-      revision={{
-        revision_id: "r",
-        summary: "",
-        source: "fleet",
-        created_by: "",
-        created_by_kind: "",
-        operator_id: "",
-        created_at: "2026-08-22T15:00:00Z",
-      }}
-    />,
-  );
-  expect(container.textContent).toContain("Not recorded");
-  expect(container.querySelector(".crewlet-tag")).toBeNull();
 });
 
 // THE LIST SAYS WHICH ONE IS OPEN, to a reader who cannot see the fill: the

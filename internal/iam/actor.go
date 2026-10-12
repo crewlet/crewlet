@@ -102,14 +102,13 @@ type Actor struct {
 // read at all, which becomes an operator: that claims neither a seat nor the
 // engine, which is the least this can claim and still be total.
 //
-// A PERSON SPLITS ON THEIR SEAT, and that split is the whole point of the
-// seat binding the identity directory holds: bound, they act as themselves and
-// their work lands under their own seat handle. Every person holds one human
-// seat for as long as they are here (ADR-0026), so the unbound arm is a
-// person recorded before that rule — which `iam check` reports as
-// `person_without_seat` — acting as the credential, under its login. It is
-// the arm every MACHINE takes when nothing binds it — a pipeline, an
-// automation, a Tier A token — and for a machine that is ordinary.
+// A PRINCIPAL SPLITS ON ITS SEAT, and that split is the whole point of the
+// seat binding the identity directory holds: bound, it acts as the seat and
+// its work lands under the seat's handle. Every person holds one human seat
+// for as long as they are here (ADR-0032), so a person is always bound; the
+// unbound arm — acting as the credential, under its login — is the one every
+// MACHINE takes when nothing binds it, a pipeline, an automation, a Tier A
+// token, and for a machine that is ordinary.
 //
 // THE NAME IS [RecordOwner]'s, degraded — one function decides which of a
 // principal's names it acts under, and this one only adds the kind and the
@@ -168,12 +167,11 @@ func ActorFor(p Principal) Actor {
 //
 // # Which name
 //
-// A person's is their SEAT — every person holds one (ADR-0026) — because that
+// A person's is their SEAT — every person holds one (ADR-0032) — because that
 // is where the company's work finds them: an assignment, a mention and a
 // lead's priority list are all addressed to the seat. Every unbound machine's
-// is its LOGIN, and so is a person's recorded before every person held a
-// seat — the colon or the dot in it keeps it out of the seat namespace, so it
-// can never be read as somebody's seat. A seat's is its handle.
+// is its LOGIN — the colon in it keeps it out of the seat namespace, so it can
+// never be read as somebody's seat. A seat's is its handle.
 //
 // EMPTY FOR NOBODY, and never [AnonymousActor]: a principal of no known kind,
 // or one missing the name its kind is kept under, has no record, and an empty
@@ -244,8 +242,7 @@ type Holders interface {
 	// kept under: [RecordOwner] of the principal they act as — their seat,
 	// as the chart knows it NOW, when the identity directory binds them to
 	// one, as it does every person, and the login itself when it binds them
-	// to none (a service account, or a person recorded before every person
-	// held a seat).
+	// to none (a service account).
 	//
 	// THREE-VALUED. [ErrNoHolder] is a login nobody holds;
 	// [ErrHolderUnseated] is a holder bound to a seat the chart no longer

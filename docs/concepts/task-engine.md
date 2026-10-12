@@ -15,7 +15,7 @@ same question, and each is coherent on its own terms.
 ## `native` — the engine is the tracker
 
 Every change to the company's work is one **record on an ordered log the whole
-fleet shares**, and every node derives the same SQL tables from that log — see
+fleet shares**, and every data node derives the same SQL tables from that log — see
 [the log and the copies](#the-log-and-the-copies). There is a board on the
 dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
@@ -38,7 +38,9 @@ creates the project, on every node, with no gesture from anybody.
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
 assignee, a thread, a history, subtasks, tags, typed custom fields,
-and saved views in five shapes. The line is between **structure a
+saved views in five shapes, and a project's **files** — whose rows are the
+tracker's and whose bytes the [object store](object-store.md) keeps in one store the
+whole fleet shares rather than in every data node's database. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
 hides a field from a role, and no setup form standing between a
@@ -110,11 +112,10 @@ already on it.
 
 ## `jira` — the tracker is somebody else's
 
-Task lifecycle lives entirely in an external PM tool — Jira, GitHub or GitLab
-issues — and **the engine mirrors none of it**: no task table, no status
-field, no assignee map, no dependency graph, no reconciliation poller. A
-ticket's state is whatever the PM tool says it is, read live through an
-agent's own MCP tools.
+Task lifecycle lives entirely in Jira, and **the engine mirrors none of it**:
+no task table, no status field, no assignee map, no dependency graph, no
+reconciliation poller. A ticket's state is whatever Jira says it is, read live
+through an agent's own MCP tools.
 
 That is the design, not a gap. A mirror of somebody else's task state is a
 cache with no invalidation story: every webhook you miss, every edit made in
@@ -122,12 +123,25 @@ the PM tool's own UI, and every retry that arrives out of order leaves the
 engine confidently wrong about work a person can see is finished. Keeping
 nothing means there is nothing to be stale.
 
+Jira is the one external tracker the field names. Work kept in **GitHub or
+GitLab issues** needs no tracker setting at all: the
+[GitHub](../integrations/github.md) and [GitLab](../integrations/gitlab.md)
+integrations route their issue webhooks to seats whatever `tracker.backend`
+says, and agents act on issues through those vendors' MCP tools — beside the
+engine's own tracker, or with `tracker.backend: none`, where the engine runs no
+tracker of its own.
+
 ## What is identical either way
 
-Everything below this line. Routing, assignment, hand-offs, the lead fallback,
-the way a webhook becomes a turn — none of it knows which backend answered. A
+Everything below this line is the same **decision** on either backend:
+routing, who assigns, hand-offs, the lead fallback, a change becoming a turn. A
 unit's `project` key names its project on whichever tracker the company runs,
 which is why the field is not called `jira_project`.
+
+What differs is only the **write** that carries a decision and the signal that
+follows it. On `native` a seat writes through the engine's own tools, and the
+committed record is what wakes the next seat. On `jira` it writes through
+Jira's tools over MCP, and Jira's webhook is what wakes the next seat.
 
 ## The log and the copies
 
@@ -135,11 +149,11 @@ On the native backend a write does not go to a node's database. It is
 **published as a record** onto the domain's own log, on the subject of the
 object it changes — one task, one project, one saved view — and the broker
 arbitrates: two writers racing on one task contend there and exactly one wins,
-while two writers on different tasks never contend at all. Every node then
+while two writers on different tasks never contend at all. Every data node then
 consumes that log in order and applies the same records into its own SQL
 tables, committing **the rows and its position on the log in one
 transaction**. There is no node whose copy is the real one and no leader, and
-every node arrives at the same rows because they all replay the same order.
+every data node arrives at the same rows because they all replay the same order.
 
 What that shape buys is that a copy can say exactly how far along it is, which
 a cache cannot:
@@ -156,8 +170,8 @@ a cache cannot:
   duplicate rather than filing one. The id carries the instant it was minted,
   so a retry — a turn re-run included — is judged by when the operation began
   rather than when it was retried: on a node whose record of what already
-  landed may have lost that operation's row since — to its thirty-day sweep,
-  or to a snapshot adopted from a peer on an older build — it answers
+  landed may have lost that operation's row since — to its thirty-day sweep —
+  it answers
   `unknown` rather than applying it twice (see
   [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
   A gesture that writes **several** records in order — a cross-project move, a
@@ -207,7 +221,7 @@ starts anyway, on the history it has, and says what it cannot account for.
 Retention is the one asymmetry worth knowing: tasks, comments and pages are
 kept **for ever** — a tracker that forgot would stop answering the question it
 exists for — while a domain's log keeps only the replay window, which is
-bounded by durability rather than by age: a record is trimmed once every node
+bounded by durability rather than by age: a record is trimmed once every data node
 has applied past it, a complete backup covers it, and it is at least a week
 old. A company that never backs up never trims, deliberately.
 
@@ -219,7 +233,7 @@ A change is a change, whoever recorded it: a Jira webhook and a native item's
 own change record both arrive at the notification service as a delivery and
 both become an `ExternalNotification`. Nothing above that seam knows which.
 
-PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `external_notification` delivered to the routed agents' inboxes: the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
+PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `external_notification` delivered to the routed agents' inboxes: the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the item through the tracker's own tools: the engine's builtins (`update_work_item`, `comment_on_work_item` and the rest) on `native`, and its MCP tools on Jira.
 
 ```mermaid
 sequenceDiagram
@@ -243,9 +257,12 @@ The `task_assigned` event type (`types.TaskAssigned`) exists for engine-internal
 
 See [Organization Model](organization-model.md#unit-lead) for how unit leads and rosters are configured.
 
-Task assignment is **not** an algorithmic strategy: it is a **team lead agent's reasoning decision**. When a work item appears in the PM tool, its webhook reaches the team lead (as the project lead, or because the lead is assigned, watching or mentioned). The lead reasons from the team roster in its prompt (each direct report's background, goal and responsibilities) and assigns the item by setting the assignee in the PM tool through its MCP tools; there is no engine assignment tool. The assignment webhook then wakes the assigned agent.
+Task assignment is **not** an algorithmic strategy: it is a **team lead agent's reasoning decision**, on either backend. When a work item appears, the change reaches the team lead — through the lead fallback when it names nobody else, or because the lead is assigned, watching or mentioned. The lead reasons from the team roster in its prompt (each direct report's background, goal and responsibilities) and assigns the item. Only the write differs:
 
-A human can also assign directly in the PM tool — the same webhook fires, the same agent wakes up. For **top-level tasks** (no team lead above), the founder assigns directly in the PM tool, or a C-level agent role acts as the top-level assigner.
+- **`native`** — the lead calls `update_work_item` with an `assignee` (or files the item already assigned, with `create_work_item`), and may add a one-line `reason` that the new assignee is woken with and the item's history shows beside the hand-off. The committed record is what wakes the assignee: the wake is derived from the log, so there is no webhook to wait for and none to miss. An agent moving the assignee spends one of the task's **8 hand-offs**, and any touch by a person or an operator returns them all — see [Hand-offs are bounded on the task](../guides/work-tracker.md#hand-offs-are-bounded-on-the-task).
+- **`jira`** — the lead sets the assignee in Jira through its own MCP tools, and the assignment webhook wakes the assigned agent.
+
+A human can also assign directly — on `native` from the dashboard, which writes as the person their token is bound to ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)), or through their own assistant over the [operator MCP](../reference/api-endpoints.md#operatormcp--your-own-assistant); on `jira` in Jira itself — and the same agent wakes up. For **top-level tasks** (no team lead above), the founder assigns directly, or a C-level agent role acts as the top-level assigner.
 
 ---
 
@@ -253,7 +270,7 @@ A human can also assign directly in the PM tool — the same webhook fires, the 
 
 There is no special escalation mechanism in Crewlet. When an agent is blocked or out of its depth, it hands off the same way a human would:
 
-- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a Jira comment, a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach. Once the handoff *has* been made, the reviewer ends the turn `done`: the manager's reply is what re-triggers the agent, so no further round of that turn can produce it.
+- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a comment on the work item (`comment_on_work_item` on `native`, a Jira comment on `jira`), a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach. Once the handoff *has* been made, the reviewer ends the turn `done`: the manager's reply is what re-triggers the agent, so no further round of that turn can produce it.
 - The `getting-unstuck` tool skill (see `examples/tool-skills/getting-unstuck.md`) teaches the agent the discipline: include what you tried, options you see, your recommendation, and urgency. Never hand a naked problem.
 - The agent's identity prompt names its manager, so the handoff target is always resolvable.
 
@@ -263,7 +280,22 @@ When the engine itself stops a turn it ends it as `failed` and publishes the cau
 
 ## Data Flow Examples
 
-### Task Created in PM Tool
+### Task Created on the Native Tracker
+
+```mermaid
+flowchart TD
+    NEW["<b>Native tracker</b><br/>A person files 'Build auth API' in project AUTH<br/>from the dashboard, with no assignee"]
+    FEED["<b>Engine</b><br/>the committed record names nobody else,<br/>so the lead fallback wakes the team lead"]
+    TAKE["Team lead reads the task, queries knowledge,<br/>and assigns it to itself with update_work_item"]
+    SUB["Team lead files subtasks with create_work_item, each assigned:<br/>'Design auth endpoints' → Senior Engineer<br/>'Implement JWT middleware' → Senior Engineer<br/>'Write auth tests' → Junior Engineer"]
+    WAKE["Each committed subtask wakes its assignee —<br/>derived from the log, with no webhook in between"]
+    WORK["Agents work in parallel, moving status with update_work_item"]
+    DONE["A subtask reaching done wakes the parent's assignee: the lead"]
+    REVIEW["Lead reviews results and moves the parent task to done"]
+    NEW --> FEED --> TAKE --> SUB --> WAKE --> WORK --> DONE --> REVIEW
+```
+
+### Task Created in Jira
 
 ```mermaid
 flowchart TD
@@ -288,7 +320,7 @@ flowchart TD
         direction TB
         A["Agent (e.g. Junior Engineer)<br/>working on task, encounters blocker"]
         B["The executor calls the colleague-surface tool for the manager<br/>(or the reviewer returns self_iterate so the next round makes it),<br/>targeting the surface that fits where the work lives.<br/>Once it has fired, the reviewer ends the turn done"]
-        C["Colleague-surface tool fires<br/>(slack / jira / confluence / a2a)"]
+        C["Colleague-surface tool fires<br/>(a work-item comment / slack / jira / confluence / a2a)"]
         D["Manager sees the mention on the same surface they already<br/>use for human teammates; their next turn fires when they reply"]
         A --> B --> C --> D
     end

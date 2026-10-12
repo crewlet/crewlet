@@ -37,11 +37,11 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
-			// THE PRODUCTION TABLE, which is empty: the base format is
-			// every field this build writes. A row added to it needs a
-			// Carrying here that builds a record carrying the field
-			// through the writer's own encoder, and the suite refuses
-			// a table without one.
+			// THE VERSIONED-FIELD TABLE. It is empty — every field the
+			// knowledge base writes is in the base format — so there is
+			// no record to carry; the field this build's successor adds
+			// brings a Carrying case, which the suite refuses to run
+			// without.
 			Fields: pages.VersionedFields(),
 			Kinds:  suiteKinds(),
 			Rows:   pages.NewRows,
@@ -82,7 +82,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the knowledge base's own [pages.Store] —
 // the builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	s, err := pages.NewStore(pages.Options{Publisher: pub, DB: db})
 	if err != nil {
 		return err
@@ -170,12 +170,12 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		}, pages.ScopeSet{Subject: true, Container: suiteContainer}
 	case pages.KindEviction:
 		return pages.OpEviction, pages.Eviction{
-			V: pages.DocumentVersion, NodeID: id, EvictedBy: "suite",
+			V: pages.GateRecordVersion, NodeID: id, EvictedBy: "suite",
 			EvictedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindGeneration:
 		return pages.OpGeneration, pages.Generation{
-			V: pages.DocumentVersion, Generation: 2, By: "suite",
+			V: pages.GateRecordVersion, Generation: 2, By: "suite",
 			StreamCreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindBarrier:
@@ -206,8 +206,9 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return pages.NewGates(db) },
-			Kind:   string(pages.KindPage),
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return pages.NewGates(db) },
+			Kind:         string(pages.KindPage),
+			SubjectKinds: kindNames(pages.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.TitleSubject(suiteContainer, "Page "+id),
 					pages.OpCreate, writer, opID, pages.CreatePayload{
@@ -236,6 +237,17 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 	})
 }
 
+// kindNames is every kind the knowledge base writes, as the strings its
+// envelope carries — the build's own list rather than one kept beside it, so a
+// kind added to the domain is a kind the gate family asks about.
+func kindNames(kinds []pages.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
+}
+
 // gateSuiteRecord is one record the gate family applies, written by writer.
 func gateSuiteRecord(subject pages.Subject, op pages.OpKind, writer, opID string,
 	payload any) ([]byte, error) {
@@ -261,7 +273,7 @@ func gateSuiteRecord(subject pages.Subject, op pages.OpKind, writer, opID string
 // gateSuiteEviction is an eviction of node, or its readmission.
 func gateSuiteEviction(node string, readmitted bool) pages.Eviction {
 	return pages.Eviction{
-		V: pages.DocumentVersion, NodeID: node, EvictedBy: "suite",
+		V: pages.GateRecordVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
 	}
 }

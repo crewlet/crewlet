@@ -126,6 +126,7 @@ func configCmd(t *testing.T, cfg string, args ...string) (string, string, error)
 // ignoring an edited file would be the worst of the three — an operator
 // changes a config, runs the command, and nothing happens.
 func TestImportingIsIdempotentByContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	company := companyFile(t, dir, "company.yaml", nil)
@@ -173,6 +174,7 @@ func TestImportingIsIdempotentByContent(t *testing.T) {
 // reporting its own failure — a fleet-wide incident from a typo that could
 // have been caught here.
 func TestABrokenDocumentIsNeverStored(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	broken := companyFile(t, dir, "broken.yaml", func(doc string) string {
@@ -192,6 +194,7 @@ func TestABrokenDocumentIsNeverStored(t *testing.T) {
 // THE ACTIVE REVISION IS MARKED, because "which is running" is the question
 // this list is opened to answer and an id alone cannot answer it.
 func TestTheRevisionListingMarksTheActiveOne(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	for i, name := range []string{"Nimbus One", "Nimbus Two"} {
@@ -216,6 +219,7 @@ func TestTheRevisionListingMarksTheActiveOne(t *testing.T) {
 // operator pastes into a ticket to ask whether a change looks right, and
 // that is the single most likely way a credential leaves the machine.
 func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	first := companyFile(t, dir, "one.yaml", nil)
@@ -264,6 +268,7 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 // A STRING AND THE SAME TEXT UNQUOTED ARE DIFFERENT SETTINGS, and a renderer
 // that printed both bare would show a type change as no change at all.
 func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "import",
@@ -296,6 +301,7 @@ func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
 // a pager, a file or a grep. A cut taken inside the differ meant the reader
 // best equipped to read a long diff was the only one who could not.
 func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	// A document whose every provider names one model, so two of them
@@ -348,6 +354,7 @@ func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 // IDENTICAL REVISIONS SAY SO rather than printing an empty diff, which
 // reads as a broken command.
 func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "one.yaml", nil)); err != nil {
@@ -381,6 +388,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
 func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	imported, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil))
@@ -453,6 +461,7 @@ func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
 }
 
 func TestActivatingAnUnknownRevisionIsRefused(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "activate", "no-such-revision"); err == nil {
@@ -482,6 +491,7 @@ func activeRevisionID(t *testing.T, cfg string) string {
 }
 
 func TestTheConfigSubcommandsAreChecked(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	for _, tc := range []struct {
@@ -507,6 +517,7 @@ func TestTheConfigSubcommandsAreChecked(t *testing.T) {
 // — so proving redaction needs a config that inlines the real thing, which
 // is what an operator who has not adopted the secret store has.
 func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	literal := companyFile(t, dir, "literal.yaml", func(doc string) string {
@@ -588,7 +599,7 @@ func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var out, errOut bytes.Buffer
-			err := runConfig(tc.args, &out, &errOut)
+			err := runConfig(noEnviron, tc.args, &out, &errOut)
 			if err == nil {
 				t.Fatalf("runConfig(%v) succeeded, want a refusal", tc.args)
 			}
@@ -612,6 +623,7 @@ func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
 // only be checked from outside: a flag that parses and is dropped leaves no
 // trace in the output to assert on, which is exactly why it survived.
 func TestAFlagAnotherSubcommandOwnsIsRefused(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })
@@ -657,6 +669,7 @@ func TestAFlagAnotherSubcommandOwnsIsRefused(t *testing.T) {
 // it — a refusal everywhere is indistinguishable from a working allowlist
 // until this runs.
 func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })

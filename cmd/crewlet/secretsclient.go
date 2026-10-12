@@ -56,12 +56,12 @@ type secretsClient struct {
 // destination means nothing at all. They resolve to loopback here, because
 // this command runs on the node whose config it just read — and `-api` is
 // there for the case where it does not.
-func newSecretsClient(boot *config.Bootstrap, override string) (*secretsClient, error) {
+func newSecretsClient(environ config.Source, boot *config.Bootstrap, override string) (*secretsClient, error) {
 	base, err := nodeBaseURL(boot, override, "the fleet's secret store")
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken("/secrets")
+	token, err := nodeAPIToken(environ, "/secrets")
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 				"one would be worse than none", path, maxSecretResponseBytes)
 	}
 	if resp.StatusCode/100 != 2 {
-		return c.refusal(resp.StatusCode, path, raw)
+		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
 	}
 	if out == nil {
 		return nil
@@ -257,7 +257,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 const maxSecretResponseBytes = (64 << 10) + (4 << 10)
 
 // refusal turns a status code into something an operator can act on.
-func (c *secretsClient) refusal(status int, path string, raw []byte) error {
+func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
 	var body struct {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`
@@ -273,9 +273,7 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
 	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
-			"from before secrets moved onto the fleet, or it cannot reach the "+
-			"coordination store", c.base)
+		return missingSurface(c.base, "/secrets", body.Error)
 	case status == http.StatusForbidden && body.Error == "reserved_name":
 		// THE SENTINEL again, for the same reason: the name is the
 		// engine's own, which no grant changes — a caller that read this
@@ -289,7 +287,7 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = strings.TrimSpace(string(raw))
+		msg = foreignAnswer(contentType, raw)
 	}
 	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
 		withRefusalDetail(msg, body.Detail, body.Hint))

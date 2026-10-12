@@ -91,11 +91,19 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     so its schema arrives on the next round. Nothing is named in
    │     advance, so nothing has to be reconciled afterwards.
    └── Ends by calling submit_work: outcome, summary, deliveries,
-         checked against the engine's own record of the turn
+         checked against the engine's own record of the turn — every
+         round of it, so a delivery an earlier round made is citable.
+         A round that ends in prose instead is not an end: the loop
+         asks again, naming submit_work, at most twice in a row, before
+         the phase is rescued as incomplete. A round that did not FINISH
+         never gets that far: a refusal, a response cut off at the output
+         cap, a full context window or a paused turn ends the phase by
+         name, with nothing rescued and nothing re-asked
 
-3. Engine check (no model call)
+3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
    └── a claim the record refutes -> loop back with a correction
+         naming the tools that deliver where the asker is waiting
 
 4. Reviewer phase
    ├── submit_review emits a decision
@@ -142,7 +150,10 @@ flowchart TD
     S2 --> LLM
     LLM --> S3
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
+    S3 -->|"stop reason: refusal, max_tokens,<br/>context_exceeded or paused"| FAIL["phase fails by name<br/>(its calls are not run)"]
 ```
+
+Step 3 reads **why the model stopped** before anything else reads the response. Every backend normalises its own stop reason (`end_turn`, `length`, `content_filter`, …) onto one vocabulary, and a round the output cap cut off, one that filled the context window, a turn the provider paused, or a model that **declined** the request ends the phase with that reason as its `error_kind` — the tools that round asked for are not run, and no corrective is sent. A refusal is never handed to the next model in the fallback chain and its turn is not redelivered. A tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [A round that did not finish](turn-engine.md#a-round-that-did-not-finish).
 
 Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 
@@ -159,6 +170,8 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 | **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, and end by calling `submit_result`). |
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
+
+Every builder returns its prompt with an **outline** beside it — the parts it appended, each with a stable key, a title and its length — and the phase record publishes both, so a screen shows a prompt as the parts the engine assembled rather than guessing them from `##` lines that embedded content brings with it. The outline never changes a byte of the prompt. See [a prompt carries its outline](turn-engine.md#what-streams-during-a-turn).
 
 ### Built-in engine scaffolding
 
@@ -181,10 +194,12 @@ So the engine reads it instead, at turn start, and renders it as ``## The thread
 What lands in the prompt:
 
 - **Oldest first**, with the thread's root always kept — it is what the thread is about — and then the newest messages. The root keeps its place even when there is nothing to render in it: an alert app posts its payload in blocks or attachments and no text at all, a system line is channel bookkeeping, and Mattermost leaves a *deleted* root out of its answer while every reply to it stays. The block then carries one line saying the first message could not be shown, which is the honest alternative to the silent one — dropping it promotes the oldest surviving reply into the root's slot, where every bound protects it and the preamble calls it what the thread is about.
-- **Bounded by whole messages, never a cut inside one**: at most 30 messages and 8000 characters, dropped oldest-first, and the block **says how many it dropped**. The root (or the line standing in for it) and the newest message survive both bounds however long they are. 8000 is one third of the conversation ledger's 24000-character budget, because both blocks are frozen into the same system prompt and re-sent on every round of every phase, and the thread must not crowd out the seat's own cross-turn history. Neither bound is configurable.
+- **Bounded by whole messages, never a cut inside one**: 8000 bytes. A thread within it is handed over whole, however many messages it has. Past it, the root (or the line standing in for it) and the newest messages that fit take three quarters of the room verbatim, and the messages between them are **condensed** into one account by the seat's auxiliary model in the last quarter, marked as a rewrite and with the number of messages it stands for — so the decision made in the middle of a long thread is still in front of the seat. Only where no rewrite can be had are those messages left out, and the block then **says how many it dropped**. The root and the newest message survive however long they are. 8000 is one third of the conversation ledger's 24000-byte budget, because both blocks are frozen into the same system prompt and re-sent on every round of every phase, and the thread must not crowd out the seat's own cross-turn history. It is not configurable. A second bound of 30 messages used to drop everything older whatever its size; with the middle condensed rather than dropped it bounded nothing the bytes do not.
 - **Senders resolved through the party registry**, so a colleague reads as `Tech Lead (lead)` rather than an opaque platform id; a stranger renders as whatever the backend volunteered and then as the raw id, and never as a blank.
 - **The seat's own earlier replies marked `**you**`**, resolved by the transport from the identity it learned at connect. On Slack that takes *both* the bot user id and the app id, because a `bot_message` echo of the seat's own post carries the app id and no user id at all.
 - **A thread too long to read says so, in place of the claim it would otherwise make.** Slack pages `conversations.replies` from the *oldest* end, 100 messages at a time, up to 10 pages — so a thread past ~1000 messages cannot be reached at its newest end at all. The walk keeps the root and the newest of what it did reach rather than the oldest of the thread, and the block then drops its ordinary "the newest messages are what woke you" framing for one that says it stops short and tells the seat to read the rest with its chat tools: on that path the newest message is exactly what is missing, so the ordinary sentence would be guaranteed false. Everything either end dropped is in the count. The page size is 100 rather than the 200 Slack recommends because the client reads at most 1 MiB of a response before decoding it, and 200 messages carrying blocks, attachments or unfurls exceed that — which fails the read outright rather than shortening it. Mattermost has no such bound: `GET /api/v4/posts/{root}/thread` answers the whole thread in one response.
+
+**It says which waiting messages it showed.** A message in the thread that was still waiting for this seat — somebody else's, after the seat's own last reply, before the message that woke the turn — is one the turn answers whether it was woken for it or not, because it answers the thread as the block shows it. That matters when the earlier message's own turn failed: a failed delivery comes back *behind* its conversation's newer mail, so the newer message's turn runs first. The block reports those messages (by the chat backend's own ids — never one a bound dropped, and none at all when the read stopped short or did not reach the trigger), and when the turn completes they are recorded in the [completion ledger](seat-ownership.md#the-completion-ledger) as worked through, so the earlier message is dropped when it comes round instead of being answered a second time, out of order.
 
 **It is best effort, always.** A thread that could not be read — a node in maintenance mode runs no chat transport, a chat instance unreachable at boot leaves the company running without its chat surface, a seat whose token was refused has no client, a channel the bot is not in — renders a *different* sentence from a thread that was read and had nothing in it. "There is nothing earlier" says answer the trigger as it stands; "it could not be read from this node" tells the seat to go and read the thread itself, which is the one case where the old instruction was right. Neither ever fails a turn.
 
@@ -263,7 +278,7 @@ The engine runs **genuinely parallel** work within a single process:
 
 **A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
 
-**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the metered registry so that counter sees it.
+**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)) — a pass the model **refused** included: a refusal returns no answer, but the response the vendor billed travels with it and is recorded like any other (`llm.Billed` is the one reading every meter uses).
 
 **Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
 
@@ -296,18 +311,27 @@ stateDiagram-v2
 ```
 
 - **Asked.** The node reads the seat's counters and the company's, in the
-  current windows. A window is refusing when the gate has refused a charge in it
-  (its refusal stamp, cleared only by an admitted charge or the window turning
-  over) or when it has no room left for a single token. A counter that cannot be
-  read parks nothing: the turn runs and its own meter, which fails closed, is
-  the gate.
+  current windows. A window is refusing when it has no room left for a single
+  token — and a window that refused a round always has none, because the
+  refused round is counted past its ceiling. The refusal stamp is not asked:
+  after a ceiling is raised it stays until an admitted charge clears it, and a
+  park taken on it would hold the seat back from the very charge that could. A
+  counter that cannot be read parks nothing: the turn runs and its own meter,
+  which fails closed, is the gate.
 - **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
   delivery is **deferred** — handed back unacked, for one of its deliveries,
   with a reason naming the window: `budget: day window 2026-09-23 resets
   2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
   window, the one that ends **last** where several refuse, since nothing can run
   before it. `seat_budget_parked` is logged with the scope, the window, its
-  figures and the reset.
+  figures and the reset. And the park is **recorded as the gate's refusal**:
+  the delivery it defers is the turn whose first charge would have been
+  refused, so the window's `refused_at` — "last refused" on every screen and
+  in `crewlet budgets show` — is stamped on the scope a charge would be refused
+  by, the company's before the seat's, exactly as that charge would have
+  stamped it. A window a coding run or a background pass filled used to park
+  every delivery its seat was sent while reading as one that had refused
+  nothing.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
@@ -315,7 +339,12 @@ stateDiagram-v2
   delivered again in order and asked again. A change that lowers a ceiling
   parks it again at the cost of one delivery.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
-  can run out during the turn. That turn stops with `budget_exhausted`, and the
+  can run out during the turn. That turn stops with `budget_exhausted` and makes
+  no model call after the refusal — its meter holds it, so the next phase, the
+  round-cap judge and the turn's other workers are refused before they are sent,
+  and the first call it holds in a window is recorded on the counter as the
+  gate's refusal, the stamp a refused charge would have written
+  ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
   the engine (an MCP write, a colleague ask, a coding run), in which case the
   trigger is recorded and acked, because running it again after the reset would
@@ -399,6 +428,9 @@ stateDiagram-v2
   by design — but the turn that resumes it is, and ends there with the run.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
   is held behind the pause like the seat's other mail: resuming a run is work.
+  A chat reply already recorded as a run's answer before the pause waits the
+  same way — the coordinator does not retry its resume while the seat is
+  paused, and charges the wait to none of the answer's attempts.
 - **Scheduled runs are skipped, not queued.** A fire that comes due on a paused
   seat is recorded `skipped_paused` in the dispatch ledger and not sent — a
   standup held behind a week's pause would otherwise run once for every day of
@@ -436,7 +468,7 @@ flowchart TD
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
     S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
-    S9["9. Reap shared MCP servers; close stream + store"]
+    S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
@@ -475,9 +507,9 @@ flowchart TD
    fleet's coordination store rather than in this node, so whichever node
    holds the seat next picks it up rather than it being lost with this
    process.
-6. **Release every seat**, each lease given back with its mailbox intact and
-   on a bounded budget of one heartbeat interval, so peers can claim them at
-   once rather than waiting out the lease TTL. The drain then logs
+6. **Release every seat**, each lease given back with its mailbox intact, so
+   peers can claim them at once rather than waiting out the lease TTL, and
+   each seat's last lifecycle event published. The drain then logs
    `drain_complete`.
 7. **Close the HTTP listener**, and not before: until now the probes are what
    the orchestrator reads, and they read the stream and the coordination
@@ -489,8 +521,19 @@ flowchart TD
    notification transports, the maintenance duties, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
    credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped, then the stream
-   connection and the store file are closed (`engine_stopped`).
+9. **Close the backends**: the shared MCP servers are reaped; the
+   auxiliary-spend ledger publishes its last records — what the seats'
+   auxiliary model spent since its last 15-second flush — on a budget of five
+   seconds, once every producer of them has stopped and before a node without
+   `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+   batches, which carry those records too; then the custody flush, and the
+   stream connection and the store file are closed (`engine_stopped`).
+
+**The stop's coordination shares one allowance.** Every lease the stop gives back — the presence and seat leases of steps 2 and 6, and in step 8 its fleet duties and the integration lease a reconcile pass still in flight gives back as its loop is stopped — draws on ONE allowance of one heartbeat interval: the lease TTL over three, 15 s at the shipped 45 s. A third of it, 5 s there, is reserved for withdrawing the node's admission to a [ceiling change](../guides/retention.md#changing-a-logs-ceiling) in step 8, and no step before it can spend that share: every lease falls back to lapsing on its TTL, but an admission has no TTL, so one that is not withdrawn stays until the node restarts under the same id or an operator excludes it (`admission_not_withdrawn` says which). The leases' two thirds are charged only while one of their round trips is in flight, so the wait of step 5 spends none of it, and seats released together are charged once for the time they overlap. On a healthy fleet each step takes milliseconds and the allowance never binds. On a member that has lost its coordination store — every step failing, each lease falling back to lapsing on its TTL — the stop's give-back costs that one allowance in total, after which every remaining step fails at once with its own `…_unavailable` / `…_not_released` warning. The integration lease is charged only from step 8, where its loop is stopped and the stop waits for the pass in flight — from that moment on, a give-back that began before it included. The loop runs through the drain, so a pass that ends on its own while step 5 waits is an ordinary pass, and its give-back ends on its own client's request timeout rather than spending what the seats are owed when the wait is over. Each step used to wait out a bound of its own, so a member whose coordination store had gone spent the sum of them on deadlines that could not succeed; one that has lost that store alone now stops in about one allowance, 15 s at the shipped TTL.
+
+**The stop's events are not on the allowance.** The `org_stopped` announcement of step 1 and each seat's last `agent_terminated` in step 6 travel on the event stream rather than through the coordination store, and the two are separately replicated streams, so one can lose its quorum alone. Each event is therefore bounded on its own, by the five seconds the stream's client gives a request with no deadline (past it, `lifecycle_event_not_published` or `seat_lifecycle_not_published`, and a live screen ages the seat out), and published beside the give-backs rather than in front of them: the announcement while the drain runs, each seat's event while that seat is torn down — and finished before its lease is given back, so a peer that takes the seat over announces it only after this node has let it go. A stream that will not acknowledge costs the stop those bounds where nothing else is running, and never the time the leases and the admission are owed. The auxiliary-spend and custody flushes of step 9 are not on the allowance either: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there.
+
+**A member that has lost both stores stops in about 25 s.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every one of those bounds besides: the leases' share of the allowance (10 s at the shipped TTL, spent by the presence give-back while the announcement waits out its own five seconds inside it), each seat's last event beside its last memory publish (5 s), the admission's share (5 s) and the auxiliary-spend flush (5 s). That is about 25 s at the shipped TTL, as such a stop was measured before the allowance existed, and it fits Kubernetes' 30 s default grace by five seconds rather than by the fifteen a member that lost only its coordination store has to spare.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
@@ -524,7 +567,7 @@ you opted into by sending the second signal.
 
 **Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it. A node that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too) because its broker connection is gone takes the same drain with no signal behind it: `engine_fatal` comes first, naming the cause, then the same lines in the same order, and it exits with status 1. One thing differs when the connection it lost is the **queue's own**: no turn still running can be acknowledged over it, so a peer will run each of them again, and the drain does not wait for them — it cancels them and ends at once, logging `drain_cut` with the in-flight count it stopped waiting for before `drain_complete`. When only the coordination store's connection was lost, acknowledgements still land and the drain waits as above.
 
-A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
+A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles data,ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 
 The drain is available programmatically up to the moment the listener closes:
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -24,11 +25,8 @@ import (
 // applied and committed the way the framework's loop does it.
 func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{}

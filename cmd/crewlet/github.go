@@ -28,7 +28,7 @@ import (
 // webhooks, on the organization where the credential may and on each named
 // repository where it may not.
 
-func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
+func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("github provision", flag.ContinueOnError)
@@ -36,7 +36,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhooks; "+
-			"defaults to api.external_url")
+			"defaults to "+publicURLDefault)
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -113,7 +113,8 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		opts.WebhookBaseKey = webhookBaseKey(boot)
+		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
 		if openErr != nil {
 			return openErr
 		}

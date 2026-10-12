@@ -68,7 +68,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	opID := f.OpID()
 	actor := generationActor(f)
 	body, err := json.Marshal(Generation{
-		V:               DocumentVersion,
+		V:               GateRecordVersion,
 		Generation:      f.Generation,
 		By:              actor.Name(),
 		PrevHighest:     f.Inputs.Highest,

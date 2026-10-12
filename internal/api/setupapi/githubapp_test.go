@@ -32,8 +32,8 @@ import (
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
-		ExternalBase: fixtureExternalBase,
-		Company:      companySource(t, &config.Company{}),
+		WebhookBase: fixtureWebhookBase,
+		Company:     companySource(t, &config.Company{}),
 	})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
@@ -60,7 +60,7 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := newService(t, setupapi.Options{ExternalBase: fixtureExternalBase}).AppFlow()
+	flow := newService(t, setupapi.Options{WebhookBase: fixtureWebhookBase}).AppFlow()
 	state, err := flow.MintState("sre-lead", beganBy)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -86,7 +86,7 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
 	flow := newService(t, setupapi.Options{
-		ExternalBase: fixtureExternalBase, StateClaims: blindClaims{},
+		WebhookBase: fixtureWebhookBase, StateClaims: blindClaims{},
 	}).AppFlow()
 	state, err := flow.MintState("sre-lead", beganBy)
 	if err != nil {
@@ -107,7 +107,7 @@ var beganBy = iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
 // blindClaims is a registry that cannot answer.
 type blindClaims struct{}
 
-func (blindClaims) ClaimSetup(context.Context, string, time.Time) (bool, error) {
+func (blindClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
 	return false, errors.New("the coordination store could not be reached")
 }
 

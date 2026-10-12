@@ -3,7 +3,7 @@
 The knowledge system (`internal/knowledge`) is the read path agents use to find context they don't already have in their system prompt. It is two purpose-specific reads composed into the agent runtime:
 
 - **Shared knowledge** — the team knowledge base. **Exactly one backend per company**, chosen by `knowledge.backend`, behind a `knowledge.Searcher` seam that every consumer reads through. A `Searcher` takes plain text — never a backend fragment, never a space key — and answers ranked hits; the turn-start prefetch translates the trigger into that plain text once per turn with the auxiliary LLM, and the executor can re-run the same search itself with `search_knowledge`.
-- **`agent_diary`** (vector-indexed) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id (the two halves are 50 each, so the union is the bound), then handed to an aux-LLM relevance filter.
+- **`agent_diary`** (a vector column, scanned per agent — there is no vector index) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write, and the node holding the seat fills any note left without a vector of the current model; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id (the two halves are 50 each, so the union is the bound), then handed to an aux-LLM relevance filter.
 
 **A diary is read where it is kept current.** An agent's diary is written to
 the store of the node running the agent and follows the agent when placement
@@ -28,7 +28,7 @@ knowledge:
 | | `native` | `confluence` |
 |---|---|---|
 | Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
-| How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval with an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
+| How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval — an index over the codes, then an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
 | What it costs to set up | nothing | a site, a space, and a per-seat account |
@@ -36,7 +36,7 @@ knowledge:
 ### Native: an index, and what that means
 
 There is a local copy, and being honest about it is the whole design. Every
-page change is one record on an ordered log, every node applies it into its own
+page change is one record on an ordered log, every data node applies it into its own
 database, and a lexical index is built behind those rows asynchronously —
 tokenising a large wiki takes minutes, and doing it inline would put the whole
 index build inside the apply transaction that holds the node's only writer.
@@ -54,7 +54,7 @@ actually the answer. There is no phrase query, no proximity and no query
 language, because the seam deliberately does not have one: an agent writes a
 keyword line and a person types into a box.
 
-### Semantic search: two stages, no index, no new dependency
+### Semantic search: two stages, the first one indexed, no new dependency
 
 Keyword search finds what shares words. Semantic search finds what shares
 *meaning* — the question "how do we handle rate limits" against the page
@@ -64,14 +64,14 @@ because it is also the class that is hardest to keep: a document only the
 semantic half found leaves the fused answer entirely if the semantic half
 drops it, where a document both halves found merely slides down.
 
-There is **no approximate-nearest-neighbour index**, because the driver this
-engine ships has none — `internal/store/caps.go` probes for one on every open
-and reports what it found. The alternatives were a full exact scan of every
-vector on every query, or embedding a search library with its own index
-format, file and backup story on every node. Instead the search is **two
-stages**, which is the shape every production vector engine uses anyway:
+The driver this engine ships has **no approximate-nearest-neighbour index** —
+`internal/store/caps.go` measures for one once per process and reports what it
+found on every open — and the alternatives to building one were a full exact
+scan of every vector on every query, or embedding a search library with its
+own index format, file and backup story on every node. Instead the search is
+**two stages**, which is the shape every production vector engine uses anyway:
 
-1. **Stage one** scans a narrow table of **1-bit sign codes** — one bit per
+1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
    keeps the nearest 1 200 by Hamming distance.
 2. **Stage two** reranks exactly those candidates against their full vectors,
@@ -106,6 +106,105 @@ time — a hybrid search serves its keyword half and says `served_mode:
 keyword`; a semantic search serves **nothing** and says why, because a keyword
 ranking is exactly the one that cannot find a page sharing no word with the
 question. The full table of reasons is in the [search guide](../guides/search.md#three-modes-and-what-an-answer-says-it-served).
+#### The first stage is an index over the codes
+
+Stage one used to read *every* sign code on every search, which is what capped
+the corpus one node could search inside the one-second budget. It is now an
+**inverted file** built in-tree over the same codes
+([ADR-0028](https://github.com/crewlet/crewlet/blob/main/adr/0028-the-semantic-first-stage-is-an-index.md)):
+the codes are filed in *lists* by k-means in Hamming space, and a search ranks
+the lists by its own code and reads only the nearest ones. The rerank above it
+is unchanged.
+
+```mermaid
+flowchart LR
+    Q["query code"] --> R["rank the lists<br/>by Hamming distance<br/>to each centroid"]
+    R --> P["read the nearest lists<br/>(and, mid-rollout,<br/>every row not yet re-filed)"]
+    P --> C["nearest 1 200<br/>by Hamming distance"]
+    C --> X["exact rerank<br/>against the full vectors"]
+    X --> A["150 hits"]
+```
+
+- **It is replicated state, like the vectors.** The embedding duty trains it
+  from the corpus's own codes, publishes it as a record on the vector log,
+  and every data node applies that record — so every data node holds the same centroids
+  and files every document in the same list, and a node that adopts a
+  snapshot adopts the index inside it. The arithmetic is integer Hamming
+  distance with a fixed tie break, so two CPUs never disagree about a list.
+- **How many lists a search reads is measured, never configured.** Every
+  training measures recall against the exact scan on 25 documents sampled
+  from the corpus — the evaluation's own method, with the sampled
+  documents kept out of the training and never counted as their own answer —
+  in **every shape a search is issued in**: unfiltered, narrowed to each
+  source, and narrowed to one container. It installs the smallest number of
+  lists at which every shape meets the recall floor with no document missing
+  from the top ten. An index that would have to read more than **half** its
+  lists to do that is **not installed**: the full scan stays the first stage,
+  because an index reading most of the table costs the scan's time for the
+  scan's answer.
+- **A narrowed search reads more lists, or scans.** A search narrowed to one
+  source or to some containers keeps only the rows its filter matches, so its
+  answer is spread over lists an unfiltered search never reads: on the test
+  corpus, reading the unfiltered count of lists recalled 0.949 with three
+  top-ten misses for a search narrowed to the tenth of the corpus that is
+  pages, and under 0.75 for one narrowed to a single container. So a narrowed
+  search reads lists, nearest first, until it has seen as many of **its own**
+  rows as an unfiltered search reads rows — and runs the full scan instead
+  when that would take more than half the lists, which is what a filter
+  matching few rows near the query needs anyway.
+- **It follows the corpus.** It is retrained when the corpus has doubled or
+  halved since training, and when its fullest list has grown past four times
+  the mean **and** doubled its share since the training filed it (a corpus
+  full of identical documents piles them into one list whatever the training,
+  and retraining it would change nothing). The duty **re-measures** it every
+  day against the corpus as it is then, adjusts how many lists a search reads,
+  and retrains it on the spot if no count within half the lists meets the
+  floor any more. A corpus below **1 024** sources has no index at all.
+- **A new index never hides a document.** It is installed by one record and
+  its rows are re-filed by batches of a thousand whose ranges its training
+  fixed, published on the duty's next tick; until the last batch has applied,
+  a search reads the rows not yet re-filed in full beside the lists it
+  probes.
+- **It is decided only from a node that has applied the whole log.** A node
+  still catching up would see the index the log has already replaced, or
+  none, and train over a healthy one, so the duty takes no step there and logs
+  `search_index_behind`.
+- **It costs a second copy of the narrow table** — a covering index, ≈ 450
+  bytes a source, about 3 % of what the vectors themselves hold — which is
+  what makes a list one sequential read.
+
+What it buys depends on your corpus, and the benchmark says so rather than
+promising a factor. Measured at 3 072 dimensions on four cores, p95, on the
+test fixture's *topical* corpus (documents clustered by subject, which is what
+an index can find):
+
+| 40 000 sources | Full scan | Index |
+|---|---|---|
+| 1 search in flight | 116 ms | 73 ms (half the lists) |
+| 8 in flight | 294 ms | 219 ms |
+| Recall against the exact scan | 0.994 | 0.992 |
+
+Half its lists is the most an installed index may read, so this table is the
+*least* an index buys. How many a training needs is a property of the corpus
+rather than of the index, and the fixtures disagree at every size:
+
+| Sources | Topical corpus | Corpus with no topics |
+|---|---|---|
+| 20 000 | half the lists | every list — no index installed |
+| 120 000 | an eighth (recall 0.985) | half (0.966) |
+| 500 000 | half (0.993) | every list — no index installed |
+
+Where the training installs nothing the scan answers, exactly as before. The
+rule that holds the count highest at scale is *no document missing from the
+top ten*: at 500 000 topical sources the recall floor alone is met by 8 of
+2 048 lists, and one top-ten miss among 25 held-out queries keeps the count
+at half. That rule is the evaluation's own definition of passing, so an index
+never installs a first stage `crewlet search eval` would report as failing.
+
+These figures are for a search that is not narrowed — or narrowed to a source
+that is all of its corpus. A search narrowed to a small share of the
+corpus reads proportionally more lists, and past half of them it is on the
+full scan's figures.
 
 #### What the quality of this can and cannot be promised
 
@@ -114,40 +213,91 @@ about cosine rank is a property of *your corpus's* distribution and of nothing
 else. Over a family of embedding-shaped generators at one corpus size, recall
 at the shipped over-fetch spans **0.29 to 0.98**. So the engine's own gate
 measures the *arithmetic* — that an exact rerank over a 1-bit candidate pool
-recovers the exact ranking at sufficient depth — and deliberately makes no
-claim about recall on your documents.
+recovers the exact ranking at sufficient depth, and that an index trained by
+the engine meets the floor on queries its training never saw — and
+deliberately makes no claim about recall on your documents.
 
 `crewlet search eval` is what answers that, against your own vectors. The
-ground truth is the exact scan's own top-K, so nobody authors a judgement:
+ground truth is the exact scan's own top-K, so nobody authors a judgement.
+When the corpus has an index the search is measured **through it** — what
+searches actually run — and again with the full scan as its first stage, so
+the report says what the index costs. Each query document is measured
+unfiltered, narrowed to each source and narrowed to its own container, each
+against its own floor, and never counted as its own answer:
 
 ```console
 $ crewlet search eval -store /var/lib/crewlet/crewlet-replicated.db
 corpus       118432 sources, text-embedding-3-large at 3072 dimensions
 measured     25 queries at depth 150 from 1200 candidates
+first stage  the semantic index: 128 of 1024 lists probed (generation 1099511744562)
+index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its worst shape (container:task), 0 head miss(es)
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-verdict      the two-stage search recovers the exact ranking at the shipped depth
+scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
+window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
+past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
+past window  page  9874 of 14224 sources (69.4%), 402.1 MiB of 518.6 MiB of text (77.5%)
 ```
 
-It exits non-zero when the recall is below the floor for that corpus size, so
-it can go in a schedule. Run it **monthly, and after any change to
-`providers.embeddings.model` or `.dimensions`** — those are the two inputs
-that move the answer. It reads a *file* rather than a running node: point it
-at the copy inside a backup, which needs nothing stopped and measures the same
-rows.
+It exits non-zero when any shape's recall is below its floor, or any drops a
+top-ten document, so it can go in a schedule. Run it **monthly, and after any
+change to `providers.embeddings.model` or `.dimensions`** — those are the two
+inputs that move the answer. It reads a *file* rather than a running node:
+point it at the copy inside a backup, which needs nothing stopped and measures
+the same rows. `-probes N` measures what reading *N* lists would recall
+instead of the count the index reads now (a narrowed search still reads more
+from there).
+
+**The last lines say what a search by meaning cannot see.** A source is
+embedded as its opening ([below](#where-the-vectors-come-from)), so for each
+corpus the report counts the sources whose text runs past that window and how
+much of the corpus's text lies past it: each source's title and whole body
+with the whitespace collapsed, against the opening the duty really sends —
+formed, as the duty forms it, from the first 16 384 characters of the body, so
+a body that opens on a long run of whitespace (deeply indented code, a padded
+table) counts what follows that run as past the window, because the duty never
+read it. That text is still
+found by the words it uses; it is never found by its meaning, so a `semantic`
+search cannot reach it and a `hybrid` one reaches it only through its keyword
+half. It is the number that decides whether a source needs more than one
+vector: a tracker of short items loses almost nothing, a wiki of long runbooks
+may lose most of each page. The window is the corpus's 8 KiB, cut to the
+model's own per-input bound where this build knows a smaller one; the store
+does not carry the company's configuration, so where
+`providers.embeddings.max_input_tokens` or `max_batch_tokens` lowers the bound
+(one input must fit one request, so a request total below the window lowers
+the per-input bound too), pass the bound the duty runs at as `-window BYTES`. This part of the report reads every source's
+whole body, which is why it is a command an operator runs and not a gauge the
+engine evaluates.
 
 The floor is a **curve** rather than a number, because recall from a sign code
 decreases as the corpus grows — 0.98 at twenty thousand sources, 0.93 at a
 hundred and twenty thousand, 0.88 at half a million. A single threshold would
-certify the smallest deployment and say nothing about the largest.
+certify the smallest deployment and say nothing about the largest. A narrowed
+shape is judged at the size of the corpus **it** searches. The index's own
+training and its daily re-measurement are judged against the same curve, and
+the [`ivf_recall_below_floor`](../reference/alarms.md) alarm fires when the
+latest one found recall below it even reading every list — which is the full
+scan's own candidate pool, so it means the codes are failing this corpus rather
+than the index.
 
 If a run comes back below the floor, the remedy is decided in advance:
 
-1. Raise the quantization over-fetch. It measured **free** in latency, because
-   stage one is a full scan whose cost does not depend on how many candidates
-   it keeps.
-2. Failing that, an 8-bit first stage, which is a code change shipped in the
+1. **If only the index is below it** and the scan recall beside it is not, the
+   corpus has moved since the index was last measured. The duty re-measures
+   it every day and, when no count of lists within half of them meets the
+   floor, retrains it in the same tick; `-probes` shows what reading more
+   lists recovers in the meantime.
+2. **If the scan is below it too**, raise the quantization over-fetch. It
+   measured **free** in latency, because the rerank's cost does not depend on
+   how many candidates stage one keeps.
+3. Failing that, an 8-bit first stage, which is a code change shipped in the
    same release that moves the model default.
 
 #### Where the vectors come from
@@ -156,36 +306,158 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every node applies it. The company pays the
+source once and publishes a record; every data node applies it. The company pays the
 bill once and holds the answer everywhere.
 
-The duty ticks **every minute** and spends at most **8 batched provider calls**
-per tick, 128 sources apiece — so a tick on a caught-up company is one indexed
-anti-join that returns nothing and stops, and a tick on one that is behind
-cannot monopolise either the provider budget or the singleton lease it holds.
+The duty ticks **every minute** and embeds at most **1 024 sources in at most
+32 provider requests** per tick, 128 sources a request at most — so a tick on a
+caught-up company reads the semantic index's head and its per-list counts,
+counts the embedding space and runs one indexed anti-join that returns nothing,
+and stops; a tick on one that is behind cannot monopolise the provider budget.
+The one long tick is a
+**training** of the semantic index: about 120 µs a source to read every code
+and make one exact pass, plus a k-means and a filing of every code that run on
+**half the node's cores, and never fewer than two** — so the seats and the
+searches on a node of four cores or more keep the other half — which comes to
+a little over three minutes at the largest corpus an index serves. Two is
+the floor because on a two- or three-core node one worker bought the searches
+nothing measurable and nearly doubled the training. A node with a **single
+core** trains on it, as it always did, and with searches always in flight on
+that core the same training is about three and a half minutes of reading and
+seven and a half of arithmetic. The training renews the duty's lease as it
+runs, and stops publishing — handing its cores back within a fraction of a
+second — the moment it cannot. And a tick is cut off once it has gone **five
+minutes without progress**, never after five minutes of running: every request
+answered, every vector published or withdrawn, every 1 024 rows a training reads
+and the end of its k-means and filing are progress, so a wedged tick never holds
+the duty while a slow node still finishes its training once rather than starting
+it again every tick.
+
+**What is embedded is a source's opening.** The title, one space, then the
+body, every run of whitespace collapsed — and of that, the first **8 KiB**, or
+less where the model's own per-input bound is smaller. Collapsed first and cut
+second, so indentation and blank lines spend none of the 8 KiB. The figure is a
+representation rather than a limit somebody hit: one vector stands for one
+source, and 8 KiB of prose is about 2 000 tokens — what a page or a task is
+about — while a vector over the whole of a long page about several things
+matches none of them well. It is also the most that is provably inside
+OpenAI's 8 192-token window without counting tokens, since no tokenizer emits
+more than one token a byte. The **keyword half indexes the whole body**, so a
+`hybrid` search still finds a passage deep in a long runbook by the words it
+uses; a `semantic` search cannot see past the window at all. A selection reads
+only what the opening can need — the first 16 384 characters of a body — rather
+than the whole of every page it considers, and the digest each vector carries
+is of exactly the bytes the provider received.
+
+**A change that leaves the text alone costs no provider call.** Every change to
+a work item moves its version — a status, an assignee, a label, a move to
+another project — and the duty selects it; but where the vector it already has
+was computed from exactly the text it would send now, at the same model and
+width, it republishes that vector under the item's new version and container
+rather than asking the provider again. A status change costs one replicated
+record, and a project move takes the container a scoped search filters on with
+it. Only a changed title or body is embedded again.
+
 Both source kinds are covered: the tracker's work items and the knowledge
-base's published pages. A **rename does not re-embed a page** — the vector is
-stored against the page's own edit number rather than the log version a rename
-also stamps.
+base's published pages. **A page is selected again exactly when what its vector
+was computed from moved**: its body (the page's own edit number, which a save
+moves), its title (which a rename or a retitle moves, and which is the first
+thing the vector embeds), or its container (which a rename across containers
+moves, and which every scoped semantic search filters on). A renamed or
+retitled page is embedded again; a page moved to another container under the
+same title keeps its text, so its vector is restamped under the new container
+with no provider call — and a scoped search finds it where it now lives, as
+the keyword half already did. A comment, a watcher change or a re-parent moves
+none of the three and costs nothing, which is why the selection does not key
+on the page's log version, which all of them stamp.
 
-Those 8 calls are the **whole company's**, not each corpus's, and they are
-handed out **round robin** between the two. With both behind, each gets four a
-tick; with one caught up, the other takes all eight. So a tracker being
-cold-filled — or written to faster than 1 024 items a minute — **cannot stop
-the wiki being embedded**, which is the failure the division exists to prevent:
-a corpus that is never reached is not slow, it is permanently unsearchable by
-meaning, and the coverage figure below sums both corpora and would report it as
-merely behind. Equal shares rather than shares weighted by backlog, so how
-stale a corpus gets depends on *its own* size rather than on the size of the
-biggest corpus in the company.
+Those requests are the **whole company's**, not each corpus's, and they are
+handed out **round robin** between the two, one request at a time. With both
+behind, each gets half a tick's requests and holds half its sources in reserve
+while it has work; with one caught up, the other takes them all. So a tracker being cold-filled — or written to
+faster than 1 024 items a minute — **cannot stop the wiki being embedded**,
+which is the failure the division exists to prevent: a corpus that is never
+reached is not slow, it is permanently unsearchable by meaning, and the
+coverage figure below sums both corpora and would report it as merely behind.
+Equal shares rather than shares weighted by backlog, so how stale a corpus gets
+depends on *its own* size rather than on the size of the biggest corpus in the
+company.
 
-A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
-requests** — again across every corpus together — and those numbers do not move
-with the configured width: providers bill per input *token*, and `dimensions`
-is a truncation parameter the request already carries.
+A cold fill of 110 000 sources is roughly **108 minutes and 860 requests** —
+again across every corpus together, and more requests but the same minutes
+where sources run long — and those numbers do not move with the configured
+width: providers bill per input *token*, and `dimensions` is a truncation
+parameter the request already carries wherever the endpoint takes one.
 
-**A batch response has to say which input each vector answers.** The duty sends
-128 texts in one request, and the API allows the results back in any order — so
+**Every request is one the model accepts for its size.** The duty forms each
+request itself, through the provider's own packing rule: at most 128 sources,
+and no more than the model's own limits admit — inputs a request and tokens a
+request, counted in bytes so no tokenizer is needed (see
+[Configuration](../getting-started/configuration.md#providers)). On OpenAI,
+whose request total is 300 000 tokens, 128 sources of the full 8 KiB are four
+requests; sent as one, a corpus of code, markup or a script that is not Latin
+ran past the total and was refused on every tick. Every request is held to a
+one-minute ceiling of its own — a single embedding is held to fifteen seconds,
+and a search's query vector to its own two-second budget.
+
+**A source the provider refuses costs only itself.** A refusal (HTTP 400, 413
+or 422) says the request is unacceptable and not which input, so a refused
+request is split in halves, sent ahead of everything else, until the input it
+refuses is alone — at most fifteen requests for one input among 128 — and every
+half it accepts on the way is embedded as it goes. With the two corpora, each
+is guaranteed sixteen of a tick's requests and half of its sources, so a
+neighbour embedding a backlog of short items cannot spend the tick out from
+under the isolation and it finishes inside the tick it is met in. Where it
+cannot — more corpora, a model that takes few inputs a request, or a rate limit
+that ends the tick's requests partway — the halves a tick did not reach are
+kept, the one the failure met in flight among them, and the next tick resumes
+the isolation where it stopped rather than starting again from the whole
+request. The input refused alone is logged as
+`search_embed_input_refused`, naming the source, the model, the bytes it was
+sent and the per-input bound the model's limits assume (a refusal inside that
+bound means `max_input_tokens` is declared wider than the endpoint enforces, or
+the endpoint refuses the text for what it says — and the error says which,
+because it carries the endpoint's own message and codes, such as
+`code context_length_exceeded`, redacted). It is then **held back for an
+hour**: the selection passes over it, so it costs no request and takes no
+place in the tick's 1 024 — a thousand refused sources at the front of the
+oldest-first order do not stop anything written after them being embedded.
+What a held source still costs is the coverage figure, which counts it as
+behind for as long as the provider refuses it. When its hour is up it is
+offered again **alone**, one request and one warning, at most two of a
+corpus's a tick, the longest refused first, so refusals that fall due
+together cannot take a corpus's requests either; a corpus holding more than
+the 120 an hour that reaches offers each of them less often than hourly. A
+rewritten source is a new text and is offered at once, with its neighbours; a
+change that leaves its text alone (a status, a move) keeps it held. The
+memory follows the provider's **configuration** — the model, the width, the
+limits and the endpoint — so changing any of those (a lowered
+`max_input_tokens`, another gateway) forgets every refusal and the fix is tried
+at once, while an apply that changes something else, or rotates the key, keeps
+it; a duty that moves to another node isolates each one again once. A source
+the provider **accepts** but answers with a vector the duty will not publish —
+a component that is not finite, which every search would score a perfect
+match, or every component zero, which no search would ever find — costs only
+itself too: its neighbours are embedded, `search_embed_vector_refused` names
+it with its bytes, and it is held back for the hour and offered again alone
+exactly as a refused one is, where it was left to the next selection and so
+sent, and discarded, on every tick. Any other failure — a rate limit, a timeout, a server down, a
+credential refused — is about the provider rather than an input, so it ends the
+tick's requests and the next tick asks again; nothing is lost, because the
+selection is derived from the rows. When the provider has accepted **no**
+request since the node began embedding with it as configured, and a tick sees
+it refuse at least two different inputs sent alone for the first time with
+nothing else failing, the duty says so once that tick
+(`search_embed_every_request_refused`): that is the configuration being refused
+— a parameter the endpoint does not take, a model it does not serve at that
+width — not any document. One refused document, the hourly retry of one already
+held, and refusals beside requests the provider accepted are each a document's
+refusal and never blame the configuration. A node that restarts, or takes the
+duty over, with two refused documents and nothing else to embed cannot tell
+those apart from a refused configuration, and says so as well.
+
+**A batch response has to say which input each vector answers.** A request
+carries many texts, and the API allows the results back in any order — so
 each one is filed by the `index` it carries rather than by where it arrived.
 The engine accepts only a response that maps onto the batch exactly once: as
 many results as inputs, every index inside the batch, no index twice, and
@@ -273,7 +545,7 @@ There is no shared vector index and no scope ladder for shared docs on this back
 ```mermaid
 flowchart TD
     RP["reflect_and_persist<br/>PersistDecider<br/>(post-turn, embeds on write)"]
-    DIARY["agent_diary<br/>vector index + agent_id + kind/ttl"]
+    DIARY["agent_diary<br/>vector column + agent_id + kind/ttl"]
     SEL["hybrid candidate selection:<br/>vector top-50 ∪ recency top-50,<br/>deduped by row id,<br/>then aux-LLM relevance filter"]
     PROMPT["Turn-start prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
     KS["KnowledgeSearcher<br/>aux-LLM → one plain-text query,<br/>once per turn"]
@@ -321,17 +593,25 @@ type Searcher interface {
     // Search returns up to Query.Limit ranked hits, and what the search
     // did: the mode it served, the modes this backend can serve, what part
     // of the fleet it covered, and why it served less than was asked. It
-    // never reports an error: every failure path is an empty result.
+    // never reports an error: every failure path is an answer with no hits.
     Search(ctx context.Context, q Query) Result
 }
 ```
+
+**A search that did not run says so.** The native knowledge base is searched on
+a data node — this one when it has the `data` role, another data node
+otherwise — and a search no data node could run is answered with no hits, **no
+mode served** and none of the corpus covered, never as a plain empty list:
+"nothing matched" and "the knowledge base could not be searched" send a seat to
+different places. The turn-start block and `search_knowledge` say the second in
+words.
 
 Contract semantics every backend honors:
 
 - **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
-- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty. What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}` and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
+- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits, and a search that did not run serves no mode — so the turn-start block (`UnsearchedKnowledgeHint`) and `search_knowledge` both say the knowledge base "could not be searched" rather than rendering an empty block or "nothing surfaced". What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}` and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
 - **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 
@@ -345,7 +625,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 `internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
-A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-no-index-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
+A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
 Two properties differ from the vendor path and both are visible:
 
@@ -363,9 +643,11 @@ Two properties differ from the vendor path and both are visible:
   activated earlier never overwrites one activated later — so a node
   restarting on a revision the fleet has since replaced leaves the newer names
   alone, exactly as the tracker's projects do (see
-  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A node with
-  no activation instant — one booting on a revision it has never seen
-  activated — stamps nothing.
+  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A later
+  activation over unchanged settings is still written — a **re-stamp** —
+  because a row left at the older stamp is open to any activation between the
+  two. A node with no activation instant — one booting on a revision it has
+  never seen activated — stamps nothing.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
@@ -393,9 +675,9 @@ Two properties differ from the vendor path and both are visible:
   `save_page` tell a seat so on their `body` parameter, with an example a test
   holds against `pages.Links`: `[its title](#/knowledge/pages/<page id>)`. A
   `[[CONTAINER/Title]]` wiki link is not a grammar the engine reads; it is
-  drawn as the brackets it is and counts for nothing in "Linked from". An index built
-  before a node knew how to extract links is re-derived once, on its own
-  (`search.IndexDerivation`), with no rebuild command to remember.
+  drawn as the brackets it is and counts for nothing in "Linked from". A build
+  that changes what the index derives re-derives every older row once, on its
+  own (`search.IndexDerivation`), with no rebuild command to remember.
 - **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
   through `/operator/act` as the principal the person signed in as — a person
   writes as the seat they hold, as does a token or service account the
@@ -427,6 +709,20 @@ Two properties differ from the vendor path and both are visible:
   page's history and tells its watchers. Only a rename to the title the page
   already displays does nothing — and it reports success, because it has
   already happened.
+- **A container is a TREE, and a parent has to keep it one.** A page's
+  `parent` must be a page that exists, in the **same container**, not in the
+  trash, and neither the page itself nor one beneath it. Anything else is
+  refused when it is written, naming `parent_id` and what to do instead —
+  because the tree is read from the top down, and a page filed under a page
+  that is not there, or two pages filed under each other, are pages no walk of
+  the container ever reaches. An empty parent is the container's top.
+  Two moves that are each sound can still race — A under B on one node, B
+  under A on another — and so can a move and its parent's purge. Every node
+  then files the page where it can, identically: a move whose parent it can no
+  longer hold leaves the page where it was, a create lands at the top, and a
+  `pages_parent_salvaged` warning names the page. **Purging a page re-files
+  its children** under its own parent (or the top) rather than leaving them
+  pointing at nothing.
 - **A save's note is the one its writer gave.** The one line `save_page`
   takes as `message` is what the page's activity and each watcher's wake show
   under the saver's name; a save without one shows none. It never falls back
@@ -434,7 +730,7 @@ Two properties differ from the vendor path and both are visible:
   edit anywhere below it, and shown there it reads as a note nobody wrote.
   What changed is the revision's to say, and History shows it by line.
 
-The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
+The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction. The exclusion costs a result that page and never a place: the search walks its fused ranking past every page it does not return, so a company whose skills lead a ranking still gets a full answer.
 
 #### Who may write where
 
@@ -520,7 +816,9 @@ sequenceDiagram
     A->>C: any company window with no room?
     C-->>A: refuse budget_exhausted (nothing spent)
     A->>S: hybrid: 5 pages + 3 work items
-    S-->>A: sources (bodies read whole, 4 KiB each)
+    S-->>A: sources (bodies read whole)
+    A->>M: any source past 4 KiB, condensed for the question
+    M-->>A: rewrite (marked), or the source is dropped
     A->>M: numbered sources + the question
     M-->>A: answer citing [n]
     A->>C: record the tokens it spent (company only)
@@ -546,7 +844,9 @@ sequenceDiagram
 - **Charged to the company.** It runs on the auxiliary model of the asker's
   seat and is judged against the company's day, week and month — a person has
   no seat budget. A company window with no room refuses it before the call; after the
-  call, exactly what the reply spent is recorded on the company's counter.
+  call, exactly what the reply spent is recorded on the company's counter — a
+  reply the model **refused** included, since its prompt was billed even though
+  the answer is refused rather than shown.
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the
@@ -663,8 +963,8 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. The native one fuses the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) whenever `knowledge.vectors` is on, embedding each query through `providers.embeddings` — a model that produces vectors, not an LLM. Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
-- **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. The native one fuses the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) whenever `knowledge.vectors` is on, embedding each query through `providers.embeddings` — a model that produces vectors, not an LLM. Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
+- **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured, and the node holding a seat fills the notes written without a vector or under another model; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.
 
@@ -715,6 +1015,6 @@ A dedicated table, because `learning.Onboarding.Onboarded` answers with one inde
 The knowledge system has a block of its own — `knowledge.backend`, `knowledge.scope`, `knowledge.skills_container`, `knowledge.root_space` and `knowledge.vectors`, field by field in [Configuration](../getting-started/configuration.md#knowledge). Two upstream configs determine the rest:
 
 - **`integrations.confluence`** — required by `backend: confluence`, and refused beside `backend: native` because pages would then live in two places with nothing keeping them in step. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`); a `confluence` company missing it has no searcher at all, so the `## Relevant knowledge` block stays empty and only the agent's diary contributes. The native backend needs none of it — it searches as the engine, over this node's own applied rows.
-- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that fuses that half into the query, and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. An explicit `vectors: false` turns off everything that embeds the corpus at once: the embedding duty stops (no provider bill for documents), the coverage gauge measures nothing, and every search is keyword and says so — the diary and episode recall keep using the provider regardless. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
+- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that fuses that half into the query, and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. An explicit `vectors: false` turns off everything that embeds the corpus at once: the embedding duty stops (no provider bill for documents), the coverage gauge measures nothing, and every search is keyword and says so — the diary and episode recall keep using the provider regardless. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
 
 See [Configuration](../getting-started/configuration.md) for the full YAML shape, [Confluence integration](../integrations/confluence.md) for setup, and [Agent Learning](agent-learning.md) for diary mechanics.

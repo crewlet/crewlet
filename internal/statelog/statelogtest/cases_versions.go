@@ -33,7 +33,16 @@ func Stamping(c Candidate) []error {
 }
 
 // stampsBaseRecords: a record carrying no versioned field is readable by every
-// build there is.
+// build there is — and a record whose KIND a row introduced carries that row
+// and nothing more, so it is stamped at the kind's version.
+//
+// THE KIND'S OWN ROW IS THE ONE EXCEPTION, and the table says so rather than
+// the suite: a kind added after the base format is a value of a field every
+// record has carried since it ([statelog.VersionedField.Equals]), so the
+// suite's ordinary record of that kind carries that one versioned field
+// whatever it is. Expecting version one there would demand that the kind be
+// readable by the builds that have no applier for it, which is the fault the
+// row exists to prevent.
 func stampsBaseRecords(c Candidate) []error {
 	name := c.Domain.Name()
 	var out []error
@@ -49,11 +58,23 @@ func stampsBaseRecords(c Candidate) []error {
 			out = append(out, fmt.Errorf("%s: envelope a %s record: %w", name, kind, err))
 			continue
 		}
-		if env.V != 1 || !env.ReadableBy(1) {
+		want, err := c.Fields.Minimum(env.Op, body)
+		if err != nil {
+			out = append(out, fmt.Errorf("%s: read a %s record against its own "+
+				"field table: %w", name, kind, err))
+			continue
+		}
+		switch {
+		case want == 1 && (env.V != 1 || !env.ReadableBy(1)):
 			out = append(out, fmt.Errorf("%s stamped a %s record carrying no "+
 				"versioned field at version %d, want 1 — every build older than "+
 				"this one would retain it, and everything its scope meets, for "+
 				"the length of a rolling upgrade", name, kind, env.V))
+		case want > 1 && env.V != want:
+			out = append(out, fmt.Errorf("%s stamped a %s record at version %d, "+
+				"and the only versioned field it carries is its kind's own (%v), "+
+				"introduced at %d", name, kind, env.V,
+				c.Fields.Carried(env.Op, body), want))
 		}
 	}
 	return out

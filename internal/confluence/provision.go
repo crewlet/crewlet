@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Reconcile brings a Confluence instance's inbound hooks in line with the
@@ -48,13 +49,19 @@ type Options struct {
 	// minted, which is why it is not checked up front.
 	Sink provision.TokenSink
 
-	// WebhookBase is this deployment's public base URL, or empty to skip
-	// registration.
+	// WebhookBase is where the instance reaches this deployment
+	// ([config.API.WebhookBase]: the public listener's address where
+	// `api.public` is set), or empty to skip registration.
 	//
 	// SKIPPED RATHER THAN GUESSED: a hook pointing at the wrong host is
 	// worse than no hook, because the instance then reports a healthy
 	// integration that delivers into the void.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a run with no address names as
+	// the setting to fill in. Empty is [setup.BaseKey]'s.
+	WebhookBaseKey string
 
 	// Recreate deletes and remakes every hook to mint a fresh token.
 	// Destructive: it invalidates the token every other deployment of
@@ -165,9 +172,10 @@ func converge(ctx context.Context, opts Options, res *Result) error {
 	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
 	if base == "" {
 		res.Notes = append(res.Notes,
-			"no webhook was registered: set api.external_url or pass "+
-				"-public-url to register one. Without it the instance delivers "+
-				"nothing and the integration looks idle rather than unconfigured")
+			"no webhook was registered: set "+setup.BaseKey(opts.WebhookBaseKey)+
+				" or pass -public-url to register one. Without it the instance "+
+				"delivers nothing and the integration looks idle rather than "+
+				"unconfigured")
 		return nil
 	}
 	switch res.Deployment {

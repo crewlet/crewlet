@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A TITLE IS AN ADDRESS, and the claim is what makes it one.
@@ -400,7 +401,7 @@ func TestEnsuringAContainerIsIdempotent(t *testing.T) {
 		r.drain()
 	}
 	var records int
-	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+	if err := storetest.ReplicatedDB(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_containers`).Scan(&records); err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +545,7 @@ func TestAPurgeIsPermanentAndFreesTheAddress(t *testing.T) {
 	}
 	r.drain()
 	var markers int
-	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+	if err := storetest.ReplicatedDB(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_deletions`).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}
@@ -615,6 +616,8 @@ func TestANoOpSaveStillAnswersWithThePage(t *testing.T) {
 // is what the applier stamps into the row, so the write's answer and the
 // reader's are the same integer by construction — and the sequence alone is
 // NOT that integer, because a row's version composes the generation with it.
+// This harness runs in generation zero, where the two coincide, so that half
+// is [TestAWrittenRevisionIsTheRecordsPackedPosition]'s, over values.
 func TestAWriteReportsTheRevisionTheReaderAnswersWith(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -638,6 +641,73 @@ func TestAWriteReportsTheRevisionTheReaderAnswersWith(t *testing.T) {
 	if got := r.get(page.Page.ID); got.Revision != saved.Revision {
 		t.Errorf("the save reports revision %d and the reader answers %d",
 			saved.Revision, got.Revision)
+	}
+}
+
+// A WRITE THIS NODE HAS NOT APPLIED REPORTS ITS OWN RECORD.
+//
+// The harness's applier runs while a write waits, so every write above
+// resolves `applied` and takes its position from the operation ledger. A node
+// whose applier is behind takes the other arm: the record is durable on the
+// log, nothing here has applied it, and the outcome is `pending` — so the
+// position is the append's own, and the revision and the operation the write
+// reports must come from that record rather than from a ledger row that does
+// not exist yet. Both a create and a save, because each states its revision
+// from its own fallback.
+func TestAPendingWriteReportsItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.holdApplier()
+
+	created, err := r.store.Create(t.Context(), author("jane"),
+		pages.NewPage{Container: "ENG", Title: "Runbook", Body: "v1"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r.drain()
+	saved, err := r.store.SavePage(t.Context(), author("jane"), created.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("v2")})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	end := r.logEnd()
+	if before := r.get(created.Page.ID).Page.Body; before != "v1" {
+		t.Fatalf("the page reads %q before this node applied the save, want "+
+			"the body from before it — the applier was not held", before)
+	}
+	r.drain()
+
+	for name, c := range map[string]struct {
+		written pages.Written
+		seq     uint64
+	}{
+		"the create": {created, end - 1},
+		"the save":   {saved, end},
+	} {
+		got := c.written
+		if got.Outcome.Outcome != statelog.OutcomePending {
+			t.Errorf("%s resolved %q on a node holding its applier, want %q",
+				name, got.Outcome.Outcome, statelog.OutcomePending)
+			continue
+		}
+		if got.Outcome.Position.Seq != c.seq {
+			t.Errorf("%s reports position %s, want its own record at %d",
+				name, got.Outcome.Position, c.seq)
+		}
+		if got.Revision != uint64(got.Outcome.Position.Packed()) {
+			t.Errorf("%s reports revision %d, want %d — its own record's "+
+				"position, which is what the applier stamps into the row",
+				name, got.Revision, got.Outcome.Position.Packed())
+		}
+		if got.ChangeID == "" || got.ChangeID != got.Outcome.OpID {
+			t.Errorf("%s reports change %q under operation %q — a retry "+
+				"resolves under the operation, so they are one id",
+				name, got.ChangeID, got.Outcome.OpID)
+		}
+	}
+	if head := r.get(created.Page.ID); head.Revision != saved.Revision {
+		t.Errorf("once applied the reader answers revision %d, and the "+
+			"pending save reported %d", head.Revision, saved.Revision)
 	}
 }
 
@@ -1205,7 +1275,6 @@ func TestAGestureRetriedUnderOneKeyIsOneOperation(t *testing.T) {
 func TestAKeyedRetryIsAnsweredWithWhatTheOperationWrote(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	r.applyWhileWriting()
 
 	create := pages.NewPage{Container: "ENG", Title: "Runbook", Body: "prose"}
 	creator := keyedAuthor("ana")
@@ -1270,7 +1339,6 @@ func TestAKeyedRetryIsAnsweredWithWhatTheOperationWrote(t *testing.T) {
 func TestARenameRetriedAfterItsMoveLandedIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	r.applyWhileWriting()
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 
 	mover := keyedAuthor("jane")

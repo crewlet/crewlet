@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // AuthMode is how a call authenticates. It mirrors config.CLIAgentAuthMode,
@@ -27,11 +28,28 @@ type Auth struct {
 	// Token is a resolved long-lived subscription token, or empty when
 	// the login lives in the credential files instead.
 	Token string
+	// TokenConfigured reports that the entry NAMED a token (cli.auth.token),
+	// whatever it resolved to. Only the doctor reads it: an empty Token is
+	// either "this entry signs in some other way" or "the reference it
+	// wrote resolved to nothing", and only the second is worth telling the
+	// operator about by name.
+	TokenConfigured bool
 	// APIKey is a resolved metered key, used only under AuthAPIKey.
 	APIKey string
 }
 
 // buildEnv is the complete environment for one call, as KEY=VALUE.
+//
+// Rendered by [hostbox.Environ], the one renderer every child the engine
+// starts goes through: sorted, so a failing invocation is reproducible from a
+// log line and tests compare an environment rather than a map iteration
+// order, and NEVER nil, because os/exec reads a nil Cmd.Env as the engine's
+// own environment.
+func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+	return hostbox.Environ(childEnv(p, c, extra, auth))
+}
+
+// childEnv is the environment a child is given, by name.
 //
 // Layered lowest-precedence first, so the reason each layer can override the
 // one below is visible in the order: the host allowlist every child gets
@@ -39,7 +57,13 @@ type Auth struct {
 // override — they ARE the isolation), then the profile's own fixed
 // environment, then the profile's passthrough, then the operator's cli.env,
 // then auth.
-func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []string {
+//
+// A map of its own, apart from [buildEnv]'s rendering, because it is also
+// what decides whether an entry is signed in ([Provider.signIn]): whether a
+// key reaches the CLI is a fact about this map after [applyAuth] has run,
+// and a second reading of the configuration beside it is what the doctor
+// had, and what drifted from it in both directions.
+func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
 	// THE HOST ALLOWLIST IS [hostbox]'s, the one every child the engine
 	// starts is handed, and not a copy kept here. An allowlist rather than
 	// os.Environ() because the engine's environment holds its keyring, its
@@ -71,7 +95,8 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 
 	// Forwarded BEFORE auth is consulted, which is exactly why a profile
-	// may not name a credential here — see Profile.validate.
+	// may not name a credential here — see
+	// cliprofile.Profile.ValidateCredentials.
 	for _, name := range p.PassthroughEnv {
 		if value, ok := os.LookupEnv(name); ok {
 			env[name] = value
@@ -83,8 +108,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 
 	applyAuth(env, p, auth)
-
-	return hostbox.Environ(env)
+	return env
 }
 
 // applyAuth puts the credential the mode asks for into the child environment,
@@ -95,7 +119,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 // by an operator into cli.env — would bill the metered account silently while
 // the plan sat unused, which is the failure the default mode exists to
 // prevent.
-func applyAuth(env map[string]string, p Profile, auth Auth) {
+func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 	switch auth.Mode {
 	case AuthAPIKey:
 		if p.APIKeyEnv != "" && auth.APIKey != "" {
@@ -133,9 +157,10 @@ func applyAuth(env map[string]string, p Profile, auth Auth) {
 // it is given to exec.Cmd.Env, and a nil there does not mean "no environment":
 // os/exec then hands the child the ENGINE's own, which is the company's chat
 // token, its collector credential and every provider key — precisely what the
-// allowlist in [buildEnv] exists to keep out of a vendor's CLI. The probe was
-// the one call in this package that skipped it, so `--version` ran with more
-// access than any real completion ever gets.
+// allowlist [childEnv] starts from exists to keep out of a vendor's CLI. The
+// probe was the one call in this package that skipped it, so `--version` ran
+// with more access than any real completion ever gets — and [run] now refuses
+// a nil environment outright, so the next caller that forgets cannot either.
 //
 // It also makes the profile's own env apply, which the muse-code profile
 // depends on: its binary is a LAUNCHER that checks for an update every hour
@@ -158,7 +183,7 @@ func (p *Provider) probeEnv() []string {
 
 // TokenVarName is the environment variable a profile's headless token lives
 // in, for the messages `crewlet llm login` and `doctor` print.
-func TokenVarName(p Profile) (string, error) {
+func TokenVarName(p cliprofile.Profile) (string, error) {
 	if p.TokenEnv == "" {
 		return "", fmt.Errorf("this CLI mints no headless token")
 	}

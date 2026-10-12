@@ -2,10 +2,9 @@
  * The three states a reader can be in, and the sentences that depend on them.
  *
  * A screen that folds two of these together is a screen that tells somebody to
- * sign in when they are signed in, or calls an unbound reader a fault without
- * asking whose login it is: a service account or a Tier A token's session
- * acting as itself is ordinary, and only a person recorded before every person
- * held a seat is one an administrator mends.
+ * sign in when they are signed in, or calls an unbound reader a fault: a
+ * service account or a Tier A token's session acting as itself is ordinary,
+ * and a person is never unbound — every person holds a human seat.
  */
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";

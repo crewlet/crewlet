@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // panicking is a scripted Phases whose chosen phase panics. It wraps the
@@ -151,6 +152,9 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 	t.Parallel()
 	provider := errors.New("provider did not answer")
 	panicked := fmt.Errorf("turn: execute round 1: %w", turn.Recovered("boom"))
+	refused := fmt.Errorf("turn: review round 1: %w",
+		llm.Refused("anthropic", "m", &llm.Refusal{Category: "cyber"}))
+	fatal := fmt.Errorf("turn: execute round 1: %w", &llm.Error{Kind: llm.KindFatal, Err: errors.New("400")})
 	cases := []struct {
 		name       string
 		res        turn.Result
@@ -163,6 +167,9 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 		{"a broken turn that wrote outside", turn.Result{Acted: true}, provider, true, turn.AbandonedActed},
 		{"a panic that proved nothing", turn.Result{}, panicked, true, turn.AbandonedPanicked},
 		{"a panic after a write names the panic", turn.Result{Acted: true}, panicked, true, turn.AbandonedPanicked},
+		{"a refusal is not asked again", turn.Result{}, refused, true, turn.AbandonedRefused},
+		{"a refusal after a write names the refusal", turn.Result{Acted: true}, refused, true, turn.AbandonedRefused},
+		{"a fatal that is not a refusal keeps its retry", turn.Result{}, fatal, false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

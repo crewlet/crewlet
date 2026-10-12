@@ -31,12 +31,12 @@ func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	someone := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, someone)
 	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
+		iamdomain.Domain{}, rig.db, rig.waiter)
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: rig.db, Log: log,
+		DB: rig.db.Reader(), Log: log,
 		Lag: func() time.Duration { return 90 * time.Second },
 	})
 	if err != nil {

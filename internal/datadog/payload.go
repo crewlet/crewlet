@@ -45,9 +45,10 @@ type Alert struct {
 	// different keys and landed in two threads, which is the exact
 	// opposite of what this package promises.
 	//
-	// Empty for an alert delivered by a definition written before the
-	// template carried it, which is why [Prompt.PartitionKey] still
-	// falls back to the title.
+	// Empty for an alert delivered by a webhook definition that does not
+	// carry it — one an operator wrote by hand, or this engine's own after
+	// somebody edited its payload — which is why [Prompt.PartitionKey]
+	// still falls back to the title.
 	MonitorID string
 
 	// Body is the monitor message with Datadog's own notification targets

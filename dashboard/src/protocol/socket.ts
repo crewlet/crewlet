@@ -47,6 +47,7 @@
 import { CLOSE_FORBIDDEN, CLOSE_UNAUTHENTICATED } from "../contract/closecodes.ts";
 import type { QueryErrorCode } from "../contract/errors.ts";
 import { UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
+import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 import { api } from "./api.ts";
 import { auth } from "./auth.ts";
 import { RestError, retryHintOf, whenRequestsSettle } from "./rest.ts";
@@ -73,16 +74,6 @@ const PING_MS = 25_000;
  * (see `fallbackFetch`).
  */
 const FALLBACK_MS = 5_000;
-
-/**
- * How long a query waits for its answer ONCE SENT.
- *
- * The clock starts when the frame goes out, not when the query is made, so time
- * spent waiting for a socket is not counted against the server. Ten seconds is
- * far beyond the slowest query's normal latency and still short enough that a
- * screen shows an error rather than an eternal skeleton.
- */
-const QUERY_TIMEOUT_MS = 10_000;
 
 /**
  * What a watch refusal's error frame names in `what` — the engine's
@@ -291,6 +282,10 @@ export class LiveSocket {
    */
   private watched = "";
   private watchRetry: ReturnType<typeof setTimeout> | 0 = 0;
+  /** Seats, by AGENT ID, whose live call is being fetched whole, each with
+   *  whether a push found the call behind again while the fetch was out — see
+   *  `fetchCalls`. */
+  private fetchingCalls = new Map<string, boolean>();
 
   constructor(store: Store, options: LiveSocketOptions = {}) {
     this.store = store;
@@ -768,7 +763,7 @@ export class LiveSocket {
         this.store.applyEvent(msg.data as never);
         break;
       case "agents":
-        this.store.applyAgents(msg.data as never);
+        this.fetchCalls(this.store.applyAgents(msg.data));
         break;
       case "seats":
         this.store.applySeats(msg.data);
@@ -827,6 +822,40 @@ export class LiveSocket {
         // like — and the e2e replay asserts that count is zero.
         this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
+    }
+  }
+
+  /**
+   * Fetch, whole, each seat's live call this tab holds behind what a push
+   * described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
+   * server's queue (`mergeLiveCall`).
+   *
+   * ONE ASK PER SEAT IN FLIGHT, but a push that finds the call behind while it
+   * is out is NOT the same thing said twice: the answer may have been read
+   * before that push's change, and the store then drops it or takes only the
+   * fields it has newer (`Store.applyLiveCall`). So such a push is remembered,
+   * and once the answer lands BEHIND the pushes applied since — or the ask
+   * fails — the call is asked for again, once, rather than left behind until
+   * the seat's next push, which a frozen failed call or a long round never
+   * sends. An answer at or past them holds everything they named, and ends it.
+   */
+  private fetchCalls(ids: string[]): void {
+    for (const id of ids) {
+      if (this.fetchingCalls.has(id)) {
+        this.fetchingCalls.set(id, true);
+        continue;
+      }
+      this.fetchingCalls.set(id, false);
+      this.query("live_call", { agent_id: id })
+        .then(
+          (answer) => this.store.applyLiveCall(answer),
+          () => false,
+        )
+        .then((current) => {
+          const again = this.fetchingCalls.get(id) ?? false;
+          this.fetchingCalls.delete(id);
+          if (again && !current) this.fetchCalls([id]);
+        });
     }
   }
 

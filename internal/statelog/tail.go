@@ -40,8 +40,10 @@ import (
 // record, and the broker's instant is the record's own rather than a node's.
 //
 // Every answer that is not "yes" is "no", and "no" is not always conclusive.
-// The ledger can LOSE rows — to its own sweep ([OpsRetention]) — and it says
-// how far back it may have ([Rows.LostBefore]): for an operation minted before
+// The ledger can LOSE rows — to its own sweeps, the table's ([OpsRetention])
+// and any subject kind's shorter one, or to its donor's, whose watermark
+// travelled with it — and it says how far back it may have
+// ([Rows.LostBefore]), for the record's own kind: for an operation minted before
 // that watermark, absence says nothing, and the record is named with the
 // watermark ([TailRecord.LedgerLostBefore]) so the refusal can say its rows
 // may hold it after all. The other false "no" is a record a gate dropped,
@@ -89,10 +91,10 @@ func (r TailRecord) String() string {
 //
 // log is the domain's log as a [VerifiedLog]: what the broker holds is the
 // signed frame, and a reader handed the frame decodes nothing.
-func UnheldTail(ctx context.Context, d Domain, db Estate, log VerifiedReader, gen uint32,
-	first, last uint64) (*TailRecord, error) {
+func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, log VerifiedReader,
+	gen uint32, first, last uint64) (*TailRecord, error) {
 
-	t, err := newTables(d)
+	t, err := newTables(d, spec)
 	if err != nil {
 		return nil, err
 	}

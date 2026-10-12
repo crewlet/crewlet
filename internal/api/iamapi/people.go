@@ -145,7 +145,7 @@ func (s *Service) GetPerson(w http.ResponseWriter, r *http.Request) {
 // # The seat, and the login
 //
 // `seat` is REQUIRED for a person: a person holds a human seat for as long as
-// they are here (ADR-0026), so they are created onto one — a human seat
+// they are here (ADR-0032), so they are created onto one — a human seat
 // nobody holds and no open invitation holds. A service account's is optional.
 //
 // `login` is OPTIONAL for a person, whose address finds them: left out, it is
@@ -487,7 +487,7 @@ func (b patchBody) refusal() string {
 //
 // `seat` names the human seat to MOVE somebody to — trimmed, as a create's is,
 // and so is `login` ([patchBody.trim]).
-// A PERSON holds one for as long as they are here (ADR-0026), so `seat: ""`
+// A PERSON holds one for as long as they are here (ADR-0032), so `seat: ""`
 // about a person is the identity record's refusal, `400 seat_required` with
 // nothing landed, since that record goes first; a SERVICE ACCOUNT may be
 // unbound with it. A seat somebody holds, or an open invitation holds, is

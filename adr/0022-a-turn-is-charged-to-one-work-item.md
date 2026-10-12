@@ -48,6 +48,49 @@ instead.
 scan of the event log behind every board sort by spend, and every node's event
 log holds only what that node ran.
 
+## Amendment — a segment pays for its auxiliary calls
+
+A segment's tokens also include the **auxiliary calls made inside it**: its
+turn-start context (the memory filter, the knowledge query, the episode
+summary), every rewrite its ledgers, its judge's evidence, its tools and its
+delegated workers' answers needed, and its card's own rewrite. They are the
+turn's work, spent on its behalf mid-turn, and the history files them as the
+`turn` stage of `auxiliary_spend` under the turn's run, so a task that left them
+out would cost less than the turn that worked on it.
+
+They reach the charge through an **explicit per-segment tally**
+(`auxspend.Tally`, carried on the turn context and stated with every call's
+attribution), never by reading the records back: the charge is decided in the
+process that ran the segment, at its end, before the ledger has flushed the
+segment's last calls, and the records are the fleet's, read at query time. The
+card is rewritten after that decision, so its call is tallied on its own and
+added as the charge is written.
+
+One kind of auxiliary call is deliberately NOT on the item: the
+**reflection** stage — the learning workers after the turn and the conversation
+ledger's account of it — is what the seat remembers, not what the work cost, so
+a task's cost does not depend on how much its seat had to remember. It is in
+the seat's day and the company's history.
+
+Two kinds of the turn's own spend happen while **no segment is running**, and
+the segment that resumes from the coding run pays them, as it pays the run's
+own tokens: an agent-mode executor's calls through the tool bridge, which go on
+after the segment that launched the run has suspended and charged — the
+auxiliary rewrites its tools ask for and the workers it delegates to — and the
+condensation of a collected run's report, failure or question, which the
+coordinator makes between two segments on whichever node collects. Each is
+counted on a tally of its own rather than a segment's: the bridge session's
+meter, whose running total rides every bridged call onto the run's row (the
+job's own record, named to the session before its box exists, so a relaunch
+never hands one job's spend to the next), and the condensation's, carried on
+the collected result — or, for a run that parks on a question, written with the
+question for the resume its answer drives. A collection retried after a failed
+resume condenses again, and only the attempt the landing resume ran from
+reaches the item; a bridged call that finishes after its job was claimed for
+the resume stays on that job's record unpaid, and one that finishes after the
+next launch is not recorded at all. So the item can fall short of the turn's
+cost and never exceed it.
+
 ## What this does not decide
 
 It does not decide how a task's turns are listed or numbered on a screen, nor

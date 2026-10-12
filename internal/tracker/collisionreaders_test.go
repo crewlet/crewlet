@@ -61,12 +61,12 @@ func TestEveryNewReaderSaysWhenAKeyOpensAnotherTask(t *testing.T) {
 	}, &tracker.Notify{Kind: tracker.ChangeComment,
 		Snapshot: tracker.Snapshot{Key: "ENG-7"}}))
 
-	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db,
 		statelog.Position{Stream: tracker.Domain{}.Stream().Name})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(h.db, log)
+	reader, err := tracker.NewReader(h.db.Reader(), log)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}

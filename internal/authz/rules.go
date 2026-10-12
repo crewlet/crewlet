@@ -37,6 +37,11 @@ const (
 	ActionPageList      Action = "list_pages"
 	ActionKnowledgeRead Action = "search_knowledge"
 	ActionColleagueRead Action = "lookup_colleague"
+	// A PROJECT'S FILES are its work's output — reports, specs, notes —
+	// so reading one is reading the board, asked of the PROJECT the file
+	// is kept in (the object is that project, by its key).
+	ActionFileList Action = "list_project_files"
+	ActionFileRead Action = "read_project_file"
 
 	// --- the caller's own working state ----------------------------- //
 	ActionSkillUse      Action = "use_skill"
@@ -56,6 +61,9 @@ const (
 	ActionPageCreate   Action = "write_page"
 	ActionPageSave     Action = "save_page"
 	ActionPageComment  Action = "comment_on_page"
+	// Keeping a file in a project is a colleague's ordinary work, as
+	// filing an item in it is.
+	ActionFileWrite Action = "write_project_file"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -113,6 +121,10 @@ const (
 	ActionWorkMove    Action = "move_work_item"
 	ActionPageTrash   Action = "pages.trash"
 	ActionPageRestore Action = "pages.restore"
+	// REMOVING A FILE TAKES IT OUT OF ITS PROJECT, and is decided as
+	// removing an item is: by the project's lead, because a colleague may
+	// add a report to a project and may not take somebody else's away.
+	ActionFileRemove Action = "remove_project_file"
 
 	// --- beyond recovery -------------------------------------------- //
 	ActionWorkPurge Action = "work.purge"
@@ -385,6 +397,8 @@ var rules = map[Action]rule{
 	ActionPageList:      {class: ClassRead, recency: iam.RecencyAny},
 	ActionKnowledgeRead: {class: ClassRead, recency: iam.RecencyAny},
 	ActionColleagueRead: {class: ClassRead, recency: iam.RecencyAny},
+	ActionFileList:      {class: ClassRead, recency: iam.RecencyAny},
+	ActionFileRead:      {class: ClassRead, recency: iam.RecencyAny},
 	// THE READ GRANT, AND A PERSON: what an answer discloses is what the
 	// pages and the board already show a `state:read` holder, and what it
 	// costs is one auxiliary model call on the asker's own seat — which a
@@ -423,6 +437,12 @@ var rules = map[Action]rule{
 	ActionPageCreate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionPageSave:    {class: ClassColleagueWrite, recency: iam.RecencyAny},
 	ActionPageComment: {class: ClassColleagueWrite, recency: iam.RecencyAny},
+	// A FILE IS WRITTEN AS AN ITEM IS FILED: the colleague write, over the
+	// project it is kept in — so `work:write`, which [writeGrantFor] reads
+	// off the project kind, and never the page grant a body of prose might
+	// suggest. The bytes and the row are one gesture to the person making
+	// it.
+	ActionFileWrite: {class: ClassColleagueWrite, recency: iam.RecencyAny},
 
 	// READING SOMEBODY'S DAY IS THE LEAD RELATION, and MARKING it is not.
 	// A lead re-orders what their report works on and says what is
@@ -511,6 +531,9 @@ var rules = map[Action]rule{
 	ActionWorkMove:    {class: ClassDestructive, recency: iam.RecencyAny},
 	ActionPageTrash:   {class: ClassDestructive, recency: iam.RecencyAny},
 	ActionPageRestore: {class: ClassDestructive, recency: iam.RecencyAny},
+	// A FILE'S REMOVAL IS AN ITEM'S, on the project the file is kept in:
+	// its lead or the admin path, never every colleague who may add one.
+	ActionFileRemove: {class: ClassDestructive, recency: iam.RecencyAny},
 
 	ActionWorkPurge: {class: ClassOperator, grant: iam.GrantFleetOperate,
 		humanOnly: true, recency: iam.RecencyAny},

@@ -82,9 +82,9 @@ type AlreadyAnsweredError struct {
 	Comment string
 
 	// By is who answered — the author of the answering comment — or who
-	// resolved the question without an answer, as the seat answers to
-	// now ([openAsk.answerableBy] words it through the reading its call
-	// holds).
+	// resolved the question without an answer: a seat handle exactly as
+	// the rows hold it, which never changes (ADR-0013), so nothing
+	// re-reads it.
 	By string
 	At time.Time
 
@@ -127,10 +127,20 @@ type ErrAmbiguousAnswer struct {
 }
 
 // AskCandidate is one open ask, as a refusal names it.
+//
+// WHOLE, never an excerpt: the refusal exists so the caller can tell which
+// question it is answering, and two questions that share an opening are
+// exactly the two an excerpt cannot tell apart. The renderer decides how many
+// it can carry whole and names the rest by id — see the builtin's
+// ambiguousText.
 type AskCandidate struct {
 	Comment string
 	Author  string
-	Excerpt string
+	// Question is a structured ask's own question ([Decision.Question]),
+	// empty for an ask in prose.
+	Question string
+	// Body is the comment the ask was written as.
+	Body string
 }
 
 func (e *ErrAmbiguousAnswer) Error() string {
@@ -159,10 +169,13 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	// THE TASK'S OWN TERM, like every other point read here: a record
 	// this node cannot decode covering this task means the comment rows
 	// it is about to read may already be wrong, and routing a wake from
-	// them would wake the wrong people.
-	_, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: q.Task,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
+	// them would wake the wrong people. Resolved from the rows, because
+	// the task is filed under its project and the query names only the
+	// task.
+	_, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return taskReadScope(ctx, tx, q.Task)
+	}, false), func(tx *sql.Tx) error {
 		if q.ReplyTo != "" {
 			participants, err := threadParticipants(ctx, tx, q.Task, q.ReplyTo)
 			if err != nil {
@@ -255,7 +268,7 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	// without the literal term the index is skipped and this reads every
 	// comment on the task.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, author, substr(body, 1, 120)
+		SELECT id, author, body, document
 		FROM tracker_comments
 		WHERE task_id = ? AND ask = ? AND ask <> '' AND resolved = 0
 		  AND answered_by IS NULL AND removed = 0
@@ -269,8 +282,13 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	var found []AskCandidate
 	for rows.Next() {
 		var one AskCandidate
-		if err := rows.Scan(&one.Comment, &one.Author, &one.Excerpt); err != nil {
+		var document []byte
+		if err := rows.Scan(&one.Comment, &one.Author, &one.Body, &document); err != nil {
 			return "", err
+		}
+		var stored Comment
+		if len(document) > 0 && json.Unmarshal(document, &stored) == nil && stored.Decision != nil {
+			one.Question = stored.Decision.Question
 		}
 		found = append(found, one)
 	}

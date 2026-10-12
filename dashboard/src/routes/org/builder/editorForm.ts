@@ -29,6 +29,7 @@
  * seat a new id. So every text field first asks whether its box changed.
  */
 
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { readCeiling, tokenBudgetError } from "~/lib/budget.ts";
 import type {
@@ -67,9 +68,9 @@ export interface UnitForm {
   readonly goals: readonly string[];
   readonly channel: string;
   readonly knowledge: readonly string[];
-  /** The tracker project the unit owns (`project`). */
+  /** The tracker project the unit owns (`project`): a vendor-neutral key, on the unit. */
   readonly project: string;
-  /** The knowledge container the unit owns (`space`). */
+  /** The knowledge container the unit owns (`space`), on the unit. */
   readonly space: string;
   /** Schedule name to whether it runs. */
   readonly schedules: Readonly<Record<string, boolean>>;
@@ -89,6 +90,11 @@ export interface SeatForm {
   readonly contact: Readonly<Record<HumanContactKey, string>>;
   readonly availability: string;
   /**
+   * How an agent seat is drawn, each part as the document writes it or its
+   * default where it is absent; null for a person, who has no avatar.
+   */
+  readonly avatar: AgentAvatar | null;
+  /**
    * The model chain, provider keys in order; `null` when the seat's `llm` is
    * a per-phase mapping, which the editor shows but does not edit.
    */
@@ -102,9 +108,12 @@ export interface SeatForm {
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
   readonly accessLevel: string;
-  /** The tracker project a root seat owns (`project`). */
+  /**
+   * The tracker project the seat writes in (`project`): a vendor-neutral key,
+   * on the seat — and the one it owns when the seat sits at the root.
+   */
   readonly project: string;
-  /** The knowledge container a root seat owns (`space`). */
+  /** The knowledge container the seat writes in (`space`), owned likewise. */
   readonly space: string;
 }
 
@@ -172,9 +181,10 @@ export function llmChain(llm: PhaseLLM | undefined): string[] | null {
  * A `token_budget:` as the boxes show it: each window's ceiling as the digits
  * it holds, and empty where the document names none.
  *
- * WHATEVER NUMBER IS THERE, a 0 included. It is not "unlimited" any more, and
- * showing a box empty over a 0 the engine refuses would hide the one value the
- * form most needs the operator to see.
+ * WHATEVER NUMBER IS THERE, including one this form refuses (a ceiling above
+ * 2^53-1, which the engine's int64 accepts from YAML or another writer):
+ * showing a box empty over it would hide the value the operator has to see to
+ * correct it.
  */
 export function budgetForm(budget: unknown): BudgetForm {
   const windows = isRecord(budget) ? budget : {};
@@ -201,6 +211,7 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
       CONTACT_IDENTITIES.map(({ key }) => [key, text(contact[key])]),
     ) as Record<HumanContactKey, string>,
     availability: text(data.availability),
+    avatar: data.kind === "human" ? null : avatarOf(data.avatar),
     llm: llmChain(data.llm),
     tokenBudget: budgetForm(data.token_budget),
     schedules: scheduleToggles(data),
@@ -356,9 +367,10 @@ export function seatParts(
   // READ AS THE BUDGETS SCREEN READS IT (`lib/budget.ts`): `40M` is forty
   // million here too. A box the reader refuses is one of two things: a typed
   // value, which the form refuses before Apply so it never reaches here, or a
-  // STORED one the engine refuses (a 0 an older build wrote), which is taken
-  // as the number it is — read as "no value" it would equal an emptied box,
-  // and emptying the box could never remove it.
+  // STORED one this form refuses — a ceiling above 2^53-1 the engine's int64
+  // accepted from YAML or another writer — which is taken as the number it
+  // is: read as "no value" it would equal an emptied box, and emptying the
+  // box could never remove it.
   const ceiling = (period: BudgetWindow, typed: string) => {
     const read = readCeiling(period, typed);
     if (read.ok) return read.value ?? undefined;
@@ -384,6 +396,16 @@ export function seatParts(
       textPart(["contact", identity], initial.contact[identity], form.contact[identity], line),
     ),
     ...textPart(["availability"], initial.availability, form.availability, prose),
+    // ONE PART PER HALF, never the whole block: a colleague's new character
+    // survives an update that only changed this seat's colour, and a half
+    // nobody touched is never written, so a part the document leaves to its
+    // default stays left to it.
+    ...(initial.avatar !== null && form.avatar !== null
+      ? [
+          ...changed(["avatar", "character"], initial.avatar.character, form.avatar.character),
+          ...changed(["avatar", "color"], initial.avatar.color, form.avatar.color),
+        ]
+      : []),
     ...(form.llm !== null && initial.llm !== null
       ? changed(
           ["llm"],

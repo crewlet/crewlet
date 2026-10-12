@@ -101,6 +101,12 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 // store claims about itself.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata["thread_ts"] != "" }
 
+// SubjectIsLabel implements [Prompt]: always. A chat message has no subject
+// of its own — the parser names the surface ("Slack message", "Mattermost
+// message"), which is the same on every message and says nothing of what was
+// said, so the turn's ask is the message alone.
+func (ChatPrompt) SubjectIsLabel(Inbound) bool { return true }
+
 // Addressed implements [Prompt] through the same rule the working-status
 // indicator uses.
 //

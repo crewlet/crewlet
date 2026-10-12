@@ -181,7 +181,7 @@ func TestALagPastTheStallGraceIsVisibleAsOne(t *testing.T) {
 // heartbeat's sample reachable from the request path at all.
 func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 	t.Parallel()
-	var d runningDomain
+	var d runningLog
 	if got := d.Lag(); got != 0 {
 		t.Errorf("an unobserved domain reports %s, want 0", got)
 	}

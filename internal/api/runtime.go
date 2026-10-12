@@ -6,7 +6,9 @@
 // the engine's own process, over the engine's own store, broker and
 // coordination plane. What `node.roles` changes is what that engine does (an
 // ingress-only node claims no seats and runs no worker duties), never whether
-// it exists, and a node with `api.port: 0` builds no App at all. There is no
+// it exists, and a node with `api.port: 0` builds no App at all. A node
+// without the ingress role builds none either: it serves its two probes
+// alone, through [Probes], answered by the same engine runtime. There is no
 // API process without an engine.
 //
 // So every dependency the engine supplies is REQUIRED, and [New] refuses a
@@ -18,6 +20,17 @@
 // [NodeRuntime] is a seam for one reason: it declares, in the consumer, the
 // facts this package asks the engine for, so a route can be tested against
 // fixed answers without standing a node up.
+//
+// # One route table, behind one chain, on one or two listeners
+//
+// Every surface mounts on ONE table ([routeTable]), and every route there
+// states the authority it is decided by where it is mounted — a grant through
+// internal/authz, or its place on internal/api/auth's exemption list. With
+// Tier A's `api.public` set, the routes outside parties call ([auth.Public]:
+// the webhooks, the vendor app landings and the sandbox endpoints) are served
+// on a listener of their own ([App.Public]) and api.port serves the rest — the
+// same table and the same chain behind a partition, so a route is guarded,
+// cross-site checked and drained exactly once whichever socket answers it.
 package api
 
 import (
@@ -166,6 +179,18 @@ type NodeRuntime interface {
 	// every call. A write refused for draining must not first wait on a
 	// network read that has nothing to do with the answer.
 	ShuttingDown() bool
+
+	// Seats is the handles this node is serving: the same fact as
+	// Snapshot's Seats, read from the same place.
+	//
+	// A SECOND WAY TO READ IT for ShuttingDown's reason. The seat placement
+	// asks on every shared tick and every socket connect, and wants this
+	// node's seats and nothing else — while Snapshot reaches the
+	// coordination plane for the config posture on every call, which the
+	// placement read paid for and threw away: a second listing of the
+	// fleet's apply status on every tick, beside the health body's own,
+	// and one more per tab that connected.
+	Seats() []string
 
 	// Fleet is the envelope's fleet counts. It reads the coordination
 	// plane, and its caller BOUNDS it (engine.ProbeReadBudget): the

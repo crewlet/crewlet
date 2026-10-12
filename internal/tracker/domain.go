@@ -59,7 +59,7 @@ const TrackerMaxRecordBytes = statelog.MaxTransportRecordBytes
 // every message in the window costs memory on the server.
 const TrackerLogDuplicates = 2 * time.Minute
 
-// Stream is the mutation domain's log.
+// Stream is the mutation log, at the domain's whole budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
 		Name:           topics.TrackerLogStream,
@@ -69,7 +69,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: TrackerMaxRecordBytes,
 		Duplicates:     TrackerLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// ELEVEN OF THE THIRTEEN KINDS. A turn is additive and races
+		// EVERY KIND BUT TWO. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable
 		// read behind every other one and write an anchor row per read
@@ -78,9 +78,10 @@ func (Domain) Stream() statelog.StreamSpec {
 	}
 }
 
-// arbitratedKinds is the eleven, derived from the enum rather than typed
-// again — a list written twice is a kind that arbitrates in one place and not
-// the other, which wedges that subject the first time a gate drops a record.
+// arbitratedKinds is every kind but those two, derived from the enum rather
+// than typed again — a list written twice is a kind that arbitrates in one
+// place and not the other, which wedges that subject the first time a gate
+// drops a record.
 func arbitratedKinds() []string {
 	out := make([]string, 0, len(ObjectKinds))
 	for _, k := range ObjectKinds {

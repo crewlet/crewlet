@@ -351,6 +351,38 @@ func TestSeatTokensHonoursALiteralAndResolvesAReference(t *testing.T) {
 	}
 }
 
+// THE DOCTOR CHECKS THE TOKEN THE ENGINE SENDS, whatever shape the config
+// wrote it in. It expanded a reference wherever one sat while the transport
+// resolves only a whole one, so a token written as `tok-${VAR}` passed the
+// doctor as the resolved token and reached the server as the literal text.
+// Every shape is run through both readers here rather than each against an
+// expected value, so a reader that changes alone is what fails.
+func TestTheDoctorResolvesATokenAsTheTransportDoes(t *testing.T) {
+	t.Parallel()
+	vars := config.MapSource{"MM_TOKEN": "resolved-token", "MM_BLANK": ""}
+	env := config.NewResolver(vars)
+	for _, raw := range []string{
+		"written-out-by-hand",
+		"${MM_TOKEN}",
+		"  ${MM_TOKEN}  ",
+		"${MM_UNSET}",
+		"${MM_BLANK}",
+		"tok-${MM_TOKEN}",
+		"${MM_TOKEN}${MM_TOKEN}",
+	} {
+		o := &org.Organization{Name: "nimbus", Roles: []*org.Role{chatSeat("SWE", raw, "")}}
+		var engine string
+		if seats := mattermost.SeatsFrom(o, env.LookupOK); len(seats) == 1 {
+			engine = seats[0].Token
+		}
+		doctor, ok := mattermost.SeatTokens(env)(o.Roles[0])
+		if doctor != engine || ok != (engine != "") {
+			t.Errorf("bot_token %q: the doctor checks %q (ok=%v), the transport "+
+				"authenticates with %q", raw, doctor, ok, engine)
+		}
+	}
+}
+
 // AN UNREACHABLE SERVER IS ITS OWN ANSWER, and it comes first,
 // unauthenticated: a bad credential must not make a healthy server look
 // dead, because the two have completely different remedies.

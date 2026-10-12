@@ -28,16 +28,20 @@ import (
 // touch, and one applied to the live registry mutates a value a running turn
 // may be reading.
 //
-// # Every node, from its own applier
+// # Every data node, from its own applier
 //
-// Every node applies every identity record — the domain runs on every node,
-// whatever its roles — so each one rebuilds its OWN registry from its OWN rows
-// within its own apply. The change feed would be the wrong carrier: it relays a
-// record to one node, and the rest would go on attributing a suspended
-// person's messages to their seat. The
-// chart-only reading is left to an engine with no core runtime at all, which
-// is `crewlet validate` and a test — every engine [New] builds opens the
-// directory at boot, a node with no company included.
+// Every data node applies every identity record — the domain runs on every
+// node that holds the estate, whatever its other roles — so each one rebuilds
+// its OWN registry from its OWN rows within its own apply. The change feed
+// would be the wrong carrier: it relays a record to one node, and the rest
+// would go on attributing a suspended person's messages to their seat.
+//
+// A NODE WITHOUT `data` holds no rows and runs no applier, so nothing signals
+// it: it reads the directory through a data node ([routedIdentity]) on the
+// periodic net alone ([DirectoryRefresh]) — the same reading, a net's length
+// behind at worst. The chart-only reading is left to an engine with no
+// directory at all, which is `crewlet validate` and a test — every engine
+// [New] builds hands one over at boot, a node with no company included.
 //
 // # Serialised, because two triggers now rebuild one pointer
 //
@@ -68,21 +72,31 @@ func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) 
 	if err != nil {
 		return nil, err
 	}
+	return notifyHolders(holders), nil
+}
+
+// notifyHolders is the directory's seat bindings in notify's vocabulary — ONE
+// translation for both readings of the directory, this node's rows and a data
+// node's ([routedIdentity]), so the two cannot come to say different things
+// about one binding.
+func notifyHolders(holders []iamdomain.SeatHolder) []notify.Holder {
 	out := make([]notify.Holder, 0, len(holders))
 	for _, h := range holders {
 		out = append(out, notify.Holder{Seat: h.Seat, Stage: h.Stage, Removed: h.Removed})
 	}
-	return out, nil
+	return out
 }
 
 // useDirectory hands the party registry this node's identity directory, and
 // the position its readings are taken at — the identity applier's own, so the
 // periodic net reads the rows only when the applier has moved. A nil position
-// is a directory with no applier behind it, which the net reads on every tick;
-// only a test hands one over.
+// is a directory with no applier behind it — a data node's rows read through
+// the estate's router — which the net reads on every tick.
 //
-// Called once, by the core runtime at boot. An engine with no core runtime
-// never calls it and keeps the chart-only behaviour.
+// Called once, at boot: by the core runtime on a data node, over its own rows,
+// and by [Engine.startRoutedDirectory] on a node without `data`, over a data
+// node's with no position. An engine that calls neither keeps the chart-only
+// behaviour.
 func (e *Engine) useDirectory(dir notify.Directory, at func() statelog.Position) {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -271,15 +285,18 @@ func (e *Engine) nudgeDirectory() {
 // all. Thirty seconds, because that is what the alarm table already calls a
 // stall: a registry behind its own directory for longer than that is a fault
 // an operator is being told about, so a slower net would report what it was
-// not fixing. It costs nothing when idle — the identity applier's position is
-// compared first, and the directory is read only when it moved.
+// not fixing. On a data node it costs nothing when idle — the identity
+// applier's position is compared first, and the directory is read only when it
+// moved; a node without `data` has no position to compare, so it reads through
+// a data node on every tick, one request each thirty seconds.
 const DirectoryRefresh = 30 * time.Second
 
 // watchDirectory is the directory trigger's loop: the committed hook's signal,
 // and the periodic net behind it.
 //
-// NOT A DUTY: a node's registry is a derivation of its OWN rows, and tying it
-// to a fleet lease would mean a lease flap stopped a node withdrawing a
+// NOT A DUTY: a node's registry is a derivation of the directory IT reads —
+// its own rows on a data node, a data node's on one without `data` — and tying
+// it to a fleet lease would mean a lease flap stopped a node withdrawing a
 // suspended person's identities.
 func (e *Engine) watchDirectory(ctx context.Context) {
 	ticker := time.NewTicker(DirectoryRefresh)

@@ -14,9 +14,10 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Four, and the rule all follow is [statelog.Deriver]'s: maintained
-// INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] the first
-// time a build whose rules differ from the checkpoint's boots — in this Go,
+// Four today, and the rule all follow is [statelog.Deriver]'s: maintained
+// INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] whenever the
+// checkpoint's rule set differs from this build's — a cursor a reanchor created
+// (derivation 0), or rows adopted from a build whose rules differ — in this Go,
 // never a second copy in a migration's SQL.
 //
 //   - A task's `reopens`, maintained as each task history row is written, off
@@ -35,11 +36,9 @@ import (
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
-// 1 is every rule above: no build that derived anything differently was ever
-// released, so there is no row an earlier rule wrote. Bumped by ANY change to
-// what a derived column holds, the first one a column adds included — the bump
-// is what fills a new column on a node upgrading onto rows its predecessor
-// wrote without it.
+// Bumped by ANY change to what a derived column holds, the first one a column
+// adds included: the bump is what re-derives every node's rows in this Go, so
+// a node holding rows derived under another rule set converges on this one.
 const DerivationVersion = 1
 
 var _ statelog.Deriver = (*Applier)(nil)

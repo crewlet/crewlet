@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
@@ -77,13 +78,16 @@ roles:
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
+	// EVERY ACTIVATION CARRIES ITS ORIGIN: the store refuses one without.
+	origin := coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman,
+		Source: "api", CreatedAt: time.Now()}
 	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now(), Origin: origin})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now()})
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now(), Origin: origin})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}

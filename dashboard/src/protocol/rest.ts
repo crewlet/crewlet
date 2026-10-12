@@ -155,9 +155,9 @@ export class RestError extends Error {
    *
    * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
    * the engine wrote means nothing was done; this means nobody here knows. A
-   * reverse proxy's default read timeout is a minute, which is exactly what
-   * the engine allows a node gate past its judgement, so a slow eviction
-   * reached the browser as a 504 — and read as a refusal, its operation id
+   * reverse proxy whose read timeout is shorter than the fifty seconds the
+   * engine takes to answer a node gate (`engine.GateAnswerBudget`) hands a slow
+   * eviction to the browser as a 504 — and read as a refusal, its operation id
    * was dropped with it.
    */
   get unanswered(): boolean {
@@ -278,9 +278,10 @@ function offline(err: unknown): RestError {
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
  * Two do. A backup copies the whole store before it answers. And the node
- * gate is allowed longer than this from its first record to its last answer
- * (`contract/gate.ts`), so thirty seconds gave up on a gesture the node went
- * on to finish, holding nothing to finish it with.
+ * gate answers a gesture within `engine.GateAnswerBudget`, and a client waits
+ * the longer `GATE_REQUEST_TIMEOUT_MS` for it (`contract/gate.ts`), so thirty
+ * seconds gave up on a gesture the node went on to finish, holding nothing to
+ * finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -651,6 +652,90 @@ async function bodyOf(method: string, path: string, options?: RequestOptions): P
   return (await request(method, path, options)).body;
 }
 
+/**
+ * How long a download may take, from its request to its last byte.
+ *
+ * FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+ * gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+ * sized for a JSON answer would abandon every large download part way.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * A file's bytes, fetched as a blob over the session cookie.
+ *
+ * NOT A LINK. A plain `<a href>` would carry the cookie too, but its answer is
+ * the browser's to handle: a refusal would be saved to disk as the file — the
+ * engine's JSON envelope under the file's own name — and a lost session would
+ * download a 401 rather than sending the reader to sign in. Fetched here, a
+ * refusal is the engine's JSON read like every other ([RestError], with its
+ * `Retry-After`), and a `401` reaches [noteSession] exactly as a request's
+ * does.
+ *
+ * NOT COUNTED IN FLIGHT ([whenRequestsSettle]): a download may run for
+ * [DOWNLOAD_TIMEOUT_MS], and a socket closed 4401 waits for the requests that
+ * could be carrying a new cookie — a GET of a file sets none.
+ */
+async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
+  if (signal?.aborted) throw signal.reason;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DOWNLOAD_TIMEOUT_MS);
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+  // Why the download ended before its last byte: the caller's own abort, the
+  // deadline, or an engine it never fully heard from.
+  const unanswered = (err: unknown): unknown => {
+    if (signal?.aborted) return signal.reason;
+    return timedOut
+      ? new RestError(0, {
+          error: "unreachable",
+          detail: `the download did not finish within ${waitWords(DOWNLOAD_TIMEOUT_MS)}`,
+        })
+      : offline(err);
+  };
+  try {
+    let response: Response;
+    try {
+      response = await fetch(location.origin + path, {
+        method: "GET",
+        cache: "no-store",
+        // The whole of how this download is authenticated, as for [request].
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw unanswered(err);
+    }
+    answeredAt = Date.now();
+    if (!response.ok) {
+      let body: Record<string, unknown>;
+      try {
+        body = (await response.json()) as Record<string, unknown>;
+      } catch {
+        body = { error: "unreadable_body" };
+      }
+      const refusal = new RestError(response.status, body, retryAfterOf(response));
+      noteSession(refusal);
+      throw refusal;
+    }
+    try {
+      return await response.blob();
+    } catch (err) {
+      // CUT SHORT. The engine sends a file's length before its bytes and
+      // closes the connection when it cannot finish, so a body that fails
+      // to read is a download that did not complete — never a smaller file.
+      throw unanswered(err);
+    }
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forward);
+  }
+}
+
 export const rest = {
   /**
    * The whole answer: status, entity-tag and body. For a caller that sends a
@@ -685,4 +770,6 @@ export const rest = {
   // choice in a proxy log.
   del: (path: string, body?: unknown, headers?: Record<string, string>) =>
     bodyOf("DELETE", path, { body, headers }),
+  /** A file's bytes — see [blob]. */
+  blob,
 };

@@ -356,10 +356,10 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 		if !item.Skill {
 			continue
 		}
-		// STAMPED ON EVERY RUN, not only on create: a page this tool
-		// wrote before the label existed, or one an operator recreated
-		// by hand under the same title, is adopted by the next import
-		// rather than left permanently unprunable.
+		// STAMPED ON EVERY RUN, not only on create: a page an operator
+		// recreated by hand under the same title, or one whose label
+		// somebody removed, is adopted by the next import rather than
+		// left permanently unprunable.
 		if err := opts.Client.AddLabel(ctx, id, ImportedSkillLabel); err != nil {
 			// NOT a page failure: the page is published and correct.
 			// What is lost is the ability to prune it later, which is

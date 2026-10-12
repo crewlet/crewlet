@@ -45,8 +45,8 @@ var ReproducibleTables = []string{
 
 	// An address AND a human seat spoken for by somebody who has no
 	// person yet, and the record of its redemption. Its `seat_id` is written
-	// by the apply from the record and, on a row an older build applied, by
-	// the applier's Rederive (replicated migration 0032).
+	// by the apply from the record, and recomputed by the applier's Rederive
+	// when a checkpoint's rule set differs (replicated migration 0042).
 	"iam_invites",
 
 	// One row per live session lineage. Re-issues are NOT rows — the

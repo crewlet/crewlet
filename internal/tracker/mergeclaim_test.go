@@ -50,11 +50,11 @@ func TestTheDutyLeavesAMergeWhoseHolderIsAlive(t *testing.T) {
 	}
 	r.drain()
 	resource := coord.Class("merge").Resource("dup")
-	lease, err := r.claims.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+	lease, refused, err := r.claims.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 		Owner: "node-b", TTL: tracker.ClaimTTL,
 	})
 	if err != nil || lease == nil {
-		t.Fatalf("hold the walk's claim as node-b: %v, %v", lease, err)
+		t.Fatalf("hold the walk's claim as node-b: %v, %q, %v", lease, refused, err)
 	}
 
 	swept, err := trackerWorker(t, r).Tick(t.Context())

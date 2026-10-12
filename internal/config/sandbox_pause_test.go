@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -36,17 +37,23 @@ func TestAnExplicitZeroPauseIsNotTheSameAsSayingNothing(t *testing.T) {
 	}
 }
 
-// -1 is how the field's earlier form spelled "inherit". A document that says so
-// is asking for what leaving it out asks for, and failing a config over a
-// spelling helps nobody.
-func TestTheEarlierSpellingOfInheritPauseIsStillAccepted(t *testing.T) {
-	c := parseSandboxSeat(t, `
+// A negative pause is refused, naming the field: it cannot mean a duration,
+// "no expiry" is the snapshot leak the knob exists to prevent, and inherit is
+// said by leaving the field out.
+func TestANegativePauseIsRefused(t *testing.T) {
+	_, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: SWE
     sandbox:
       enabled: true
       pause_ttl_seconds: -1
-`)
-	if c.PauseTTLSeconds == nil || *c.PauseTTLSeconds != -1 {
-		t.Fatalf("pause_ttl_seconds = %v, want it accepted verbatim", c.PauseTTLSeconds)
+`))
+	if !errors.Is(err, config.ErrOutOfRange) {
+		t.Fatalf("a negative pause = %v, want %v", err, config.ErrOutOfRange)
+	}
+	if !strings.Contains(err.Error(), "roles[0].sandbox.pause_ttl_seconds") {
+		t.Fatalf("the error does not name the field: %v", err)
 	}
 }
 
@@ -104,9 +111,9 @@ func TestAnExplicitZeroRoundCapIsNotTheSameAsSayingNothing(t *testing.T) {
 	}
 }
 
-// A negative cap is refused rather than clamped: unlike pause_ttl_seconds it
-// has no earlier spelling to be compatible with, so a negative here is a
-// mistake and saying so is more use than silently reading it as uncapped.
+// A negative cap is refused rather than clamped, as a negative pause is: a
+// negative here is a mistake, and saying so is more use than silently reading
+// it as uncapped.
 func TestANegativeRoundCapIsRefused(t *testing.T) {
 	_, err := config.ParseCompany([]byte(`
 name: Acme

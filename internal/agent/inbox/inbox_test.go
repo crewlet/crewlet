@@ -59,10 +59,10 @@ func TestDedupeRunsBeforeEveryParkingBranch(t *testing.T) {
 	partition := []*events.Event{one, dup, ev(t, "notification")}
 
 	c := healthy()
-	c.SeatHeldBySandbox = true
+	c.TurnEngineReady = false
 	got := inbox.Screen(c, partition)
-	if got.Action != inbox.ActionPark {
-		t.Fatalf("action = %s, want park", got.Action)
+	if got.Action != inbox.ActionPauseAndPark {
+		t.Fatalf("action = %s, want pause-and-park", got.Action)
 	}
 	if len(got.Events) != 2 {
 		t.Errorf("parked %d events, want the 2 distinct ones — a park that "+
@@ -124,7 +124,7 @@ func TestTheGuardsFireInTheDocumentedOrder(t *testing.T) {
 		}, inbox.ActionPauseAndPark},
 		{"sandbox outranks posture", inbox.Conditions{
 			Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true,
-		}, inbox.ActionPark},
+		}, inbox.ActionHoldAndDefer},
 		{"posture is last", inbox.Conditions{
 			Owned: true, TurnEngineReady: true,
 		}, inbox.ActionDefer},
@@ -201,13 +201,14 @@ func TestSandboxOutranksPostureSoAClarificationBehavesTheSameEverywhere(t *testi
 	t.Parallel()
 	// Stated separately from the table because it is the one ordering with
 	// a user-visible consequence rather than an internal one: a seat
-	// mid-sandbox is already parked, so an answer to its clarification
-	// reaching a SHEDDING node must behave exactly as it does on a healthy
-	// one. Deferring it instead strands a box whose pending row is already
-	// flipped.
+	// mid-sandbox is already held, so its mail reaching a SHEDDING node must
+	// behave exactly as it does on a healthy one — the sandbox hold, which
+	// the run's own end lifts, rather than a posture deferral, which the
+	// seat host's renew lifts while the run is still going.
 	c := inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true, AdmitsTriggers: false}
-	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.Action != inbox.ActionPark {
-		t.Errorf("action = %s, want park", got.Action)
+	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.Action != inbox.ActionHoldAndDefer ||
+		got.Hold != inbox.HoldSandbox {
+		t.Errorf("action = %s hold = %q, want hold-and-defer under the sandbox hold", got.Action, got.Hold)
 	}
 }
 
@@ -238,17 +239,37 @@ func TestAnOpenQuestionOffersTheDeliveryOnTheOrdinaryPath(t *testing.T) {
 	}
 }
 
-// A HELD SEAT OFFERS ITS PARK WITHOUT BEING TOLD A QUESTION IS OPEN, because
-// one seat can drive a job while another of its runs waits for a person. Only
-// the store knows, and this delivery is about to be requeued.
-func TestAHeldSeatAlwaysOffersItsPark(t *testing.T) {
+// A HELD SEAT HOLDS AND DEFERS, AND REPUBLISHES NOTHING.
+//
+// It used to PARK: requeue the delivery onto the inbox it came from and ack
+// it. Nothing stopped the consumer, so the copy was the next thing it fetched,
+// and every message waiting on a seat a coding job held went round that loop
+// for the length of the job. What reaches here now raced the sandbox hold the
+// coordinator keeps on a busy seat, or found it refused: the hold is named so
+// the dispatcher asks for it again, the delivery is deferred so it keeps its
+// place at the head, and the deferral is noted so the seat host's next renew
+// lifts the quiesce — leaving the hold as the one thing that stops it.
+//
+// AND NOTHING IS OFFERED, even with another of the seat's runs waiting for a
+// person: the held seat receives nothing, and the answer is offered first
+// when the run stops holding it.
+func TestAHeldSeatHoldsAndDefersAndRepublishesNothing(t *testing.T) {
 	t.Parallel()
 	c := healthy()
 	c.SeatHeldBySandbox = true
+	c.SandboxAwaitsAnswer = true
 	got := inbox.Screen(c, []*events.Event{ev(t, "notification")})
-	if got.Action != inbox.ActionPark || !got.OfferAsSandboxAnswer {
-		t.Errorf("action = %s, offered = %v; want a park that is offered first",
-			got.Action, got.OfferAsSandboxAnswer)
+	if got.Action != inbox.ActionHoldAndDefer || got.Hold != inbox.HoldSandbox || !got.NoteDeferred {
+		t.Fatalf("screening = %+v, want a noted hold-and-defer under the sandbox hold", got)
+	}
+	if got.Result().Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral that keeps the delivery at the head", got.Result().Outcome)
+	}
+	if len(got.Events) != 0 {
+		t.Errorf("the screening handed back %d events to requeue", len(got.Events))
+	}
+	if got.OfferAsSandboxAnswer {
+		t.Error("a held seat offered its mail as an answer")
 	}
 }
 
@@ -263,9 +284,11 @@ func TestOnlyASeatWithADetachedRunOffersItsDelivery(t *testing.T) {
 		"not owned here":         {SandboxAwaitsAnswer: true},
 		"no turn engine":         {Owned: true, SandboxAwaitsAnswer: true},
 		// A DEFER CONSUMES NOTHING and stops the consumer, so the answer
-		// is still on the inbox to be offered when the posture clears —
-		// unlike the sandbox park above, which acks.
+		// is still on the inbox to be offered when the posture clears.
 		"shedding": shedding,
+		// AND A HELD SEAT, which defers too, under a hold its run lifts.
+		"held by another run": {Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
+			SeatHeldBySandbox: true, SandboxAwaitsAnswer: true},
 	} {
 		if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.OfferAsSandboxAnswer {
 			t.Errorf("%s: the delivery was offered as a clarification answer", name)
@@ -295,13 +318,20 @@ func TestEveryDeferRecordsThatTheConsumerStopped(t *testing.T) {
 			t.Errorf("%s: a defer carried no reason", name)
 		}
 	}
+	// AND THE HELD SEAT'S DEFERRAL, for the same reason: its hold, not the
+	// quiesce, is what keeps the delivery waiting, and a quiesce nobody
+	// noted would outlast the hold — a seat whose run settled and whose
+	// inbox never resumed.
+	held := healthy()
+	held.SeatHeldBySandbox = true
+	if got := inbox.Screen(held, []*events.Event{ev(t, "notification")}); !got.NoteDeferred {
+		t.Error("a held seat's deferral did not record that the consumer stopped")
+	}
 	// A park is not a defer and must NOT quiesce: it acks once its requeue
-	// has landed, and a quiesce would stop the consumer on a seat that is
-	// merely busy. The sandbox park takes no pause at all, and the no-model
-	// park's pause belongs to the engine, which lifts it when a model
-	// arrives; neither is the seat host's to resume.
+	// has landed, and the no-model park's pause belongs to the engine, which
+	// lifts it when a model arrives — not the seat host's to resume.
 	c := healthy()
-	c.SeatHeldBySandbox = true
+	c.TurnEngineReady = false
 	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.NoteDeferred {
 		t.Error("a park asked the host to quiesce the consumer")
 	}
@@ -317,7 +347,7 @@ func TestOnlyADeferReachesTheQueueAsADefer(t *testing.T) {
 		t.Errorf("a defer mapped to %v", deferred.Result().Outcome)
 	}
 	c := healthy()
-	c.SeatHeldBySandbox = true
+	c.TurnEngineReady = false
 	parked := inbox.Screen(c, []*events.Event{ev(t, "notification")})
 	if parked.Result().Outcome != queue.OutcomeAck {
 		t.Errorf("a park mapped to %v, want an ack", parked.Result().Outcome)

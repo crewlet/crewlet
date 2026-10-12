@@ -29,10 +29,16 @@ import (
 // # Why crewlet_base_url is injected rather than declared
 //
 // It is the fact a skill most reliably needs and an operator most reliably
-// cannot supply. Where this deployment answers is already written once, as
-// `api.external_url` — the same address the session cookie, the CSRF origin
-// check and every webhook URL are built on — so injecting it is the one way
-// a company's own prose and its wiring can never name different deployments.
+// cannot supply. Where a person reaches this deployment is already written
+// once, as `api.external_url` — the same address the session cookie, the
+// CSRF origin check and every link a person follows are built on — so
+// injecting it is the one way a company's own prose and its wiring can never
+// name different deployments ([Engine.publicBase]).
+//
+// NEVER `api.public.external_url`. That is where VENDORS reach the
+// deployment, and behind a public listener it is a socket that answers the
+// dashboard 404: every link a skill composed on it would land a person on
+// nothing.
 //
 // The name is RESERVED, and the loader refuses a company that declares it.
 // Two sources for one address is how a skill comes to link at the deployment
@@ -40,7 +46,7 @@ import (
 // updates their Tier A file, the stale declaration keeps winning, and every
 // link a person clicks lands nowhere with nothing anywhere saying why.
 //
-// UNSET WHEN THERE IS NO PUBLIC URL, rather than empty. A skill referencing
+// UNSET WHEN THERE IS NO EXTERNAL URL, rather than empty. A skill referencing
 // it then renders the literal ${crewlet_base_url} and warns, which is the
 // registry's own signal for a variable nobody defined — and is what an
 // operator needs to hear. Defining it as "" would compose every link as a
@@ -60,9 +66,14 @@ func skillVariables(env *config.Resolver, c *Company, publicBase string) map[str
 	return out
 }
 
-// publicBase is where this DEPLOYMENT answers from outside: the base a link a
-// person clicks is composed on, and the one every webhook registration points
-// at.
+// publicBase is where a PERSON reaches this deployment: the base every link
+// composed for somebody to click is built on — a skill's ${crewlet_base_url}
+// and a page change's `url` — which is `api.external_url`.
+//
+// NEVER WHERE A VENDOR REACHES IT ([config.API.WebhookBase]). Behind a public
+// listener (`api.public`) that is a socket serving only the webhook, OTLP and
+// tool-bridge routes, which answers the dashboard 404: every link composed on
+// it would land a person on nothing.
 //
 // IT TAKES THE COMPANY AND DOES NOT READ IT, and the unused parameter is the
 // point rather than an oversight: this used to be a Tier B pointer resolved

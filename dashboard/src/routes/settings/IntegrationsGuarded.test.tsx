@@ -63,11 +63,11 @@ function mount(viewer: unknown) {
     Promise.resolve(what === "viewer" ? viewer : []);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ViewerProvider>
+      <ViewerProvider>
+        <Router>
           <Integrations />
-        </ViewerProvider>
-      </Router>
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }

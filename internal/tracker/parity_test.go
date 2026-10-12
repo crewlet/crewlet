@@ -158,6 +158,7 @@ func TestTheParserCarriesNoUnwrittenState(t *testing.T) {
 // "fix": a record carrying a Notify that routes to nobody still writes
 // notified=1, and writes zero notification rows.
 func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("A task")
 
@@ -198,7 +199,7 @@ func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
 func (r *roundTrip) notificationRows(recordID string) int {
 	r.t.Helper()
 	var n int
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT COUNT(*) FROM tracker_notifications WHERE record_id = ?`,
 			recordID).Scan(&n)

@@ -14,11 +14,11 @@ import "github.com/crewlet/crewlet/internal/iamdomain"
 // engine arbitrates across a fleet in under a second would stop at the one
 // surface a browser keeps open. The identity applier says, after every
 // committed batch, whose credentials it moved ([iamdomain.Moved]), and this is
-// where the engine hands that on. EVERY NODE APPLIES EVERY RECORD of the
-// identity log, whatever its roles, so every node that serves sockets hears
-// every move from its own applier and closes its own sockets — nothing is
-// forwarded between nodes, and a node that serves none simply has nobody
-// registered here.
+// where the engine hands that on. EVERY DATA NODE APPLIES EVERY RECORD of the
+// identity log, whatever its company, and every node that serves sockets is a
+// data node (ingress requires `data`), so each hears every move from its own
+// applier and closes its own sockets — nothing is forwarded between nodes, and
+// a node that serves none simply has nobody registered here.
 //
 // A SETTER for [Engine.SetOnCompanyPublished]'s reason: the API half is built
 // after the engine. Safe to call while the engine is running, and safe to leave

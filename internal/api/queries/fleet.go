@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -22,13 +23,15 @@ import (
 
 // fleet answers the fleet question.
 func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
-	// The three listings through ONE error path. Written out, they were
+	// The listings through ONE error path. Written out, they were
 	// three identical checks of which a test could only ever exercise the
 	// first — and three copies of "the lease table IS the fleet, so an
 	// unreadable one must not answer an empty company" is three chances
 	// for one of them to stop saying it.
+	//
+	classes := []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker}
 	live := map[coord.Class][]coord.Lease{}
-	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker} {
+	for _, class := range classes {
 		leases, err := s.Coord.ListLive(ctx, class)
 		if err != nil {
 			return nil, err
@@ -50,15 +53,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		}
-		// SINCE WHEN this node has held it: the tenure's start, which a
-		// renewal does not move, so "node-2 since 08:02" means the seat
-		// has not moved since 08:02. ABSENT when the lease was written by
-		// a build older than the stamp — that tenure's start was never
-		// recorded, and an empty string or the zero instant would render
-		// as a time.
-		if !lease.AcquiredAt.IsZero() {
-			row["acquired_at"] = isoOrEmpty(lease.AcquiredAt)
+			// SINCE WHEN this node has held it: the tenure's start, which
+			// a renewal does not move, so "node-2 since 08:02" means the
+			// seat has not moved since 08:02.
+			"acquired_at": isoOrEmpty(lease.AcquiredAt),
 		}
 		seatRows = append(seatRows, row)
 	}
@@ -69,12 +67,19 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	applied := s.applyStatus(ctx)
 	target := s.activation(ctx)
 	nodeRows := make([]map[string]any, 0, len(nodes))
+	profiles := make([]placement.NodeProfile, 0, len(nodes))
 	for _, lease := range nodes {
 		id := nameIn(coord.ClassNode, lease.Resource)
 		profile := placement.FromMeta(id, lease.Meta)
+		profiles = append(profiles, profile)
 		row := map[string]any{
-			"id":         id,
-			"roles":      profile.Roles.Names(),
+			"id":    id,
+			"roles": profile.Roles.Names(),
+			// HOW ITS BROKER TAKES PART — member, leaf, client, or
+			// `unknown` for a kind this build does not know (a newer
+			// build's) — which the roles no longer imply: a node's broker
+			// is what its stream block makes it.
+			"broker":     profile.Broker.String(),
 			"labels":     profile.Labels,
 			"owner":      lease.Owner,
 			"protocol":   lease.Protocol,
@@ -101,9 +106,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// one an operator is looking for.
 		row["config_reported_at"] = isoOrEmpty(status.UpdatedAt)
 		// WHAT THAT NODE IS DOING, off its own presence heartbeat.
-		// Absent when the node published none (a peer running a build
-		// older than the field), and absent is NOT zero: a confident 0
-		// would draw an idle row for a process that is simply not saying.
+		// Absent when the node's heartbeat carried no status (a host
+		// built without a Status hook, or a status read that overran its
+		// share of the beat), and absent is NOT zero: a confident 0 would
+		// draw an idle row for a process that is simply not saying.
 		if live, ok := coord.StatusFromMeta(lease.Meta); ok {
 			row["in_flight"] = live.InFlight
 			row["draining"] = live.Draining
@@ -165,9 +171,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		return cmp.Compare(a["duty"].(string), b["duty"].(string))
 	})
 
-	return map[string]any{
+	out := map[string]any{
 		"nodes": nodeRows, "seats": seatRows, "duties": dutyRows,
-		"unplaceable":    s.unplaceable(nodeRows, seatRows),
+		"unplaceable":    s.unplaceable(profiles, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows),
 		"this_node":      s.NodeID,
 		// What the fleet is converging ON, so a lagging node reads as
@@ -186,7 +192,28 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// never existed.
 		"target_epoch": target.epoch,
 		"activation":   target.detail,
-	}, nil
+	}
+	if s.Objects != nil {
+		out["objects"] = s.objects(ctx)
+	}
+	return out, nil
+}
+
+// BrokerLister is the fleet broker's membership as the fleet_broker question
+// reads it — see [engine.FleetBroker.List]. Declared here, by the consumer.
+type BrokerLister interface {
+	List(ctx context.Context) (engine.BrokerView, error)
+}
+
+// fleetBroker answers the fleet_broker question.
+//
+// A PRESENCE LISTING THAT FAILED IS AN ERROR, never an empty answer: with no
+// presence rows there is nothing to hold the metadata group against, and an
+// answer with no nodes would read as a broker nobody is a member of. A lease
+// table that could not be reached is the coordination contract's own third
+// answer and reaches the caller as unavailable — a blip to ask again about.
+func (s Sources) fleetBroker(ctx context.Context, _ Params) (any, error) {
+	return s.FleetBroker.List(ctx)
 }
 
 // applyStatus is each node's last config outcome, keyed by node id.
@@ -302,7 +329,12 @@ func seatHandleOf(byID map[uuid.UUID]string, resource string) string {
 // cannot: a seat pinned to a label no node carries is not "unclaimed yet", it
 // is unclaimable, and it stays that way until somebody changes the config or
 // starts a node that matches.
-func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
+//
+// THE PROFILES AS PLACEMENT READS THEM ([placement.FromMeta]), so this view
+// and the seat hosts' seats_unplaceable judge a node by the same reading —
+// a node whose roles this build cannot read counts as running every role,
+// and a node that has withdrawn from placement counts as no home at all.
+func (s Sources) unplaceable(nodes []placement.NodeProfile, seats []map[string]any) []map[string]any {
 	if s.Company == nil {
 		return []map[string]any{}
 	}
@@ -320,23 +352,6 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 	for _, seat := range seats {
 		claimed[seat["handle"].(string)] = true
 	}
-	profiles := make([]placement.NodeProfile, 0, len(nodes))
-	for _, node := range nodes {
-		roles, err := placement.ParseRoles(node["roles"].([]string))
-		if err != nil {
-			// A role this build does not know, which is a peer running a
-			// newer one. Its own seats are its business; what this answer
-			// must not do is conclude that a seat is unplaceable because
-			// the node that can run it uses a word we have not learned.
-			log.Warn("fleet_unknown_node_role", "node", node["id"], "error", err)
-			roles = placement.DefaultRoles()
-		}
-		profiles = append(profiles, placement.NodeProfile{
-			ID: node["id"].(string), Roles: roles,
-			Labels: node["labels"].(map[string]string),
-		})
-	}
-
 	out := []map[string]any{}
 	for role := range roster.AllRoles() {
 		if !role.IsAgent() {
@@ -346,7 +361,7 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 		if claimed[handle] {
 			continue
 		}
-		if placementFits(role.Placement, profiles) {
+		if placementFits(role.Placement, nodes) {
 			// Unclaimed but placeable: a node could take it, so this is
 			// a moment rather than a fault.
 			continue
@@ -365,13 +380,14 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 // placementFits reports whether any live node may run a seat with this
 // placement.
 //
-// A node that does not run seats does not count, however well it matches: the
-// placement selector and the node's ROLE are different constraints, and a
+// A node that is not placing seats does not count, however well it matches:
+// the placement selector and the node's ROLE are different constraints, and a
 // company whose only label-matching node is an ingress-only node has a seat
-// nothing will ever claim.
+// nothing will ever claim — as does one whose only match has withdrawn,
+// because it cannot serve its seats at all, for as long as that lasts.
 func placementFits(p placement.SeatPlacement, nodes []placement.NodeProfile) bool {
 	for _, node := range nodes {
-		if node.RunsSeats() && p.Matches(node.ID, node.Labels) {
+		if node.PlacesSeats() && p.Matches(node.ID, node.Labels) {
 			return true
 		}
 	}

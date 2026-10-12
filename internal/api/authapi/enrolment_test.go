@@ -72,7 +72,10 @@ func (e *estate) Resolve(_ context.Context, lineage, person string) (
 // AwaitApplied is a node that has applied everything.
 func (e *estate) AwaitApplied(context.Context, uint64) error { return nil }
 
-// seatless is a chart asked about nobody: the rig's person holds no seat.
+// seatless is a chart asked about nobody. The rig's row binds no seat — a
+// fixture's shortcut, since these cases are about the session and never the
+// seat, and the seat table serves a row bound to none on its seatless arm
+// whatever its kind ([session.ResolveSeat]); a real person always holds one.
 type seatless struct{}
 
 func (seatless) Seat(context.Context, string) (session.Seat, bool, error) {

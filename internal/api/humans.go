@@ -16,13 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE SURFACES A PERSON REACHES, built over the engine running beside them:
@@ -49,7 +49,8 @@ import (
 // options by [HumanSurfaces.Mount].
 type HumanSurfaces struct {
 	// SignIn serves /auth — how a person BECOMES a principal. Every node
-	// serves it, one that has met no company included: there the
+	// serving the API serves it, one that has met no company included:
+	// there the
 	// deployment's Tier A token exchanges for a session (`POST
 	// /auth/token`), which is how a company is created, and the company's
 	// first person is invited or created onto a human seat it declares —
@@ -87,8 +88,10 @@ type HumanSurfaces struct {
 // NewHumanSurfaces builds a node's human surfaces over its engine and the Tier
 // A it runs under.
 //
-// EVERY NODE SERVES ALL OF THEM, with a company or without one. The identity
-// estate is the engine's CORE, running from boot on every node, so a node
+// EVERY NODE SERVING THE API SERVES ALL OF THEM, with a company or without
+// one. Such a node holds the estate — ingress requires the `data` role
+// (ADR-0025) — and the identity estate is the engine's CORE, running from boot
+// on every node that holds the estate, so a node
 // nobody has configured yet still exchanges the deployment's Tier A token for
 // a session — the session its company is created through — holds the
 // directory its first person is invited or created into once that company
@@ -155,13 +158,15 @@ func (h HumanSurfaces) Mount(o *Options) {
 
 // signInSurface builds /auth and the session arm beside it.
 //
-// ON EVERY NODE. The identity estate is the engine's core, so a node that has
+// ON EVERY NODE SERVING THE API. The identity estate is the engine's core, run
+// wherever the estate is held — which ingress requires — so a node that has
 // met no company holds its directory too — and is exactly where the
 // deployment's Tier A token signs a session in to create the company, after
 // which its first person is invited or created onto one of its human seats
 // and signs in there. An engine with no identity estate is
 // one [engine.New] did not build, which is a wiring mistake to refuse by
-// name rather than a posture to serve around.
+// name rather than a posture to serve around: a node holding no estate is one
+// whose roles leave out `data`, and config refuses `ingress` on such a node.
 //
 // A keyring that cannot sign for the fleet USED TO BE a narrower posture too,
 // and it is not any more: Tier A refuses a file without a usable keyring and
@@ -286,7 +291,8 @@ func (d signInDirectory) InvitationByID(ctx context.Context, id string) (
 	return d.engine.InvitationByID(ctx, id)
 }
 
-// directorySurface builds /iam, on every node for [signInSurface]'s reason.
+// directorySurface builds /iam, on every node serving the API for
+// [signInSurface]'s reason.
 func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter, error) {
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
@@ -336,6 +342,10 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		// function of that document, and this surface is built before the
 		// API's own guard exists.
 		TokenIDs: auth.New(boot).TokenIDs,
+		// AND WHICH OF THEM ALONE MAY CHANGE A MANAGED COMPANY DOCUMENT
+		// (ADR-0030), from the same Tier A the config surface enforces it
+		// from.
+		CompanyWriters: boot.API.Auth.CompanyWriters,
 		// What an administrator did — a token minted or revoked, a
 		// session ended, a person removed — on the node's audit feed.
 		Audit: e.AuthEvents(),
@@ -350,8 +360,9 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 // identity estate — one [engine.New] did not build, since every engine it
 // builds runs the estate from boot.
 var errNoIdentityEstate = errors.New("api: the engine runs no identity estate, " +
-	"so there is nobody to sign in or enrol — an engine built by engine.New " +
-	"always does, from boot, whether or not it has a company")
+	"so there is nobody to sign in or enrol — a node that serves the API holds " +
+	"the estate (its roles include `data`) and runs it from boot, whether or " +
+	"not it has a company")
 
 // operatorSurface builds the operator surface over this engine: ONE server per
 // node, whose catalogue is built for every call from the halves the node
@@ -392,11 +403,18 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		Pauses: builtin.SeatPauseDeps{
 			Pauses: e.Backends().Fleet, Announce: e.Backends().Queue, Org: chart,
 		},
-		Steer: builtin.SteerDeps{Asker: e.Backends().Queue},
+		// SIGNED WITH THE NODE'S OWN STEER CHANNEL, the one its desk
+		// answers with: the running node offers a note as the person it
+		// names on this node's decision, so neither half may be unsigned.
+		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire()},
 		Answer: builtin.AnswerDeps{
 			Models: engine.AnswerModels(e), Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,
 			Cache:  builtin.NewAnswerCache(builtin.AnswerCacheEntries),
+			// THE NODE'S REWRITE CACHE, the one every compaction this
+			// node makes is kept in, so the same question at the same
+			// corpus pays for each condensed source once.
+			Rewrites: e.Rewrites(),
 		},
 		// EVERY CALL THAT MAY WRITE is audited onto this node's own queue,
 		// so the event store here holds who did what through any of the
@@ -446,37 +464,47 @@ func workSurface(e *engine.Engine, operators *operator.Server,
 // [engine.Engine.NativeStarted] FIRST, and the halves after: it is monotonic,
 // so a half read as absent after it said "started" is one this company does
 // not run rather than one not published yet — see native.go.
+//
+// THROUGH THE NODE'S ESTATE ROUTER, every half, for [NativeToolDeps]' reason —
+// the two writers the tools never reach and the object store the file bytes
+// stream through included.
 func nativeHalves(e *engine.Engine) (workapi.Halves, bool) {
 	if !e.NativeStarted() {
 		return workapi.Halves{}, false
 	}
 	work, kb := NativeToolDeps(e)
 	halves := workapi.Halves{Work: work, Pages: kb}
-	if writer := e.TrackerWriter(); writer != nil {
+	if as, ok := engine.OperatorWorkWriter(e); ok {
 		halves.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
-			return personWriter(writer, actor)
+			return personWriter(as, actor)
 		}
 	}
-	// THE CONVERSION IS THE POINT: a typed nil *pages.Store inside the
-	// interface would pass the surface's own check and panic on the first
-	// press.
-	if store := e.PagesStore(); store != nil {
+	if store, ok := engine.OperatorPageWriter(e); ok {
 		halves.PageStore = store
+	}
+	// THE CONVERSION IS THE POINT: a typed nil *objstore.Store inside the
+	// interface would pass the surface's own check and panic on the first
+	// upload.
+	if objects := e.Objects(); objects != nil {
+		halves.Objects = objects
 	}
 	return halves, true
 }
 
-// personWriter is the node's tracker writer acting as one person-facing
-// actor: the author [builtin.PrincipalActor] made of the request's principal,
-// of its kind, with the credential it acted through.
+// personWriter is the tracker's writer, through this node's estate router,
+// acting as one person-facing actor: the author [builtin.PrincipalActor] made
+// of the request's principal, of its kind, with the credential it acted
+// through — the actor's own provenance, the one construction a seat's
+// writers are bound by too, so the two surfaces cannot carry different trails
+// for one actor.
 //
 // ONE HELPER FOR EVERY SEAM a person's surface writes the tracker through —
-// the nine tool seams below and the work surface's own writer — because
-// turning a tool-layer actor into a writer is a single rule, and ten
-// hand-copied spellings of it are ten chances for one seam to record an
-// identity the others do not.
-func personWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
-	return w.As(actor.Handle, actor.Kind, tracker.Provenance{OperatorID: actor.OperatorID})
+// the tool seams below and the work surface's own writer — because turning a
+// tool-layer actor into a writer is a single rule, and hand-copied spellings
+// of it are chances for one seam to record an identity the others do not.
+func personWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) estate.WorkWriter {
+	return as(estate.Actor{Handle: actor.Handle, Kind: actor.Kind,
+		Provenance: actor.Provenance()})
 }
 
 // NativeToolDeps are the deps the builtin tools are built from for a surface
@@ -495,10 +523,25 @@ func personWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
 // THE CHART SEAMS ARE READ PER CALL — leads, units, mentions, the default
 // project, the clock — because these deps are built for every request and an
 // apply can move any of them between two.
+//
+// THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, exactly as a
+// seat's tools are ([engine.OperatorWork], [engine.OperatorWorkWriter],
+// [engine.OperatorPages], [engine.OperatorPageWriter]) — never this node's own
+// copy read directly. Read directly, a data node whose copy was out of service
+// went on answering its operator from the copy it had stopped serving while
+// its own seats were answered by a peer's; through the router a person is
+// answered as the seats are, and a read after their own write waits for it
+// on the router's session floor ([engine.Engine.AwaitEstate]) — never this
+// node's own applier, which is not the one that answers once its copy is out
+// of service. A data node that hands out no writer — one in a maintenance
+// mode, which may publish nothing — hands out no tools either, rather than
+// tools whose every write is refused.
 func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	var work builtin.WorkDeps
 	var kb builtin.PageDeps
-	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
+	reader, readable := engine.OperatorWork(e)
+	writer, writable := engine.OperatorWorkWriter(e)
+	if readable && writable {
 		work = builtin.WorkDeps{
 			Reader: reader,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
@@ -582,6 +625,17 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
 				return personWriter(writer, actor)
 			},
+			// AND THE PROJECT'S FILES, as a seat holds them: the rows
+			// through the tracker and the bytes through this node's own
+			// object store — all three or no file tool, which the store's
+			// absence decides ([builtin.WorkDeps.Files]). Without them a
+			// person's assistant was offered no file tool at all while
+			// every seat beside it kept reports in its projects.
+			Files: reader,
+			FileWriter: func(actor builtin.Actor) builtin.FileWriter {
+				return personWriter(writer, actor)
+			},
+			Objects: e.ObjectStore(),
 			// WHOSE RECORD A LOGIN NAMES, which every person verb
 			// resolves its name through: a login is never a seat, and
 			// read literally a bound person's named a record nothing of
@@ -595,7 +649,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 				if c == nil {
 					return nil
 				}
-				return builtin.Corpus(c.Org, e.WithheldContacts())
+				// Contact ids resolve through the node's own chain, as
+				// every seat's roster resolves them.
+				return builtin.Corpus(c.Org, e.LookupSecret, e.WithheldContacts())
 			},
 			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
 			// ONE WENT WITHOUT. Their absence was invisible and not
@@ -633,20 +689,23 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// wrote resolved on UTC while a seat's own resolved on the
 			// company's zone, and an apply can move the clock between
 			// two requests.
-			Zone:  e.Zone,
-			Await: e.WaitCommitted,
+			Zone: e.Zone,
+			// THE ROUTER'S SESSION FLOOR, which every write above raises.
+			Await: e.AwaitEstate,
 		}
 	}
-	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
+	pageReader, pagesReadable := engine.OperatorPages(e)
+	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
+	if pagesReadable && pagesWritable {
 		kb = builtin.PageDeps{
-			Reader: reader, Writer: writer,
+			Reader: pageReader, Writer: pageWriter,
 			Mentions: engine.LiveMentions(e),
 			// THE SKILLS CONTAINER, so a person's write into it is asked
 			// for the grant a tool skill takes rather than admitted on
 			// knowledge:write alone — the store exempts every person,
 			// because capability is not its question.
 			SkillsContainer: engine.LiveSkillsContainer(e),
-			Await:           e.WaitCommitted,
+			Await:           e.AwaitEstate,
 		}
 	}
 	return work, kb

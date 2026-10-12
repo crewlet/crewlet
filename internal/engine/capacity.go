@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -82,9 +83,11 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	s, err := e.stateLogOf()
 	if e.backends == nil || e.backends.Fleet == nil || err != nil {
 		return coord.MaintenanceOperation{}, errors.New(
-			"engine: this engine runs no core runtime, so it has no stream to resize")
+			"engine: this node runs no state log, so it has no stream to resize: " +
+				"only a node with the `data` role holds the logs a capacity " +
+				"change applies to")
 	}
-	running := s.domains[s.domainOf(req.Stream)]
+	running := s.logOf(req.Stream)
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
@@ -176,8 +179,9 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 // THE FLOOR IS THE FIELD'S, read off the register entry that declares the
 // field ([domainCeiling.Floor]), and never one number for every log: the
 // verb refused every target under a gibibyte on every log, calling it the
-// floor Tier A enforces, while Tier A takes the org chart's and the identity
-// estate's down to 64 MiB — so the one way to give either log back a
+// floor Tier A enforces, while Tier A takes the identity estate's and the
+// usage log's down to 64 MiB ([config.IamLogMaxBytesFloor],
+// [config.UsageLogMaxBytesFloor]) — so the one way to give either log back a
 // reservation was refused, with a reason that was not true of it.
 func capacityBounds(stream string) (statelog.Reservation, domainCeiling, bool) {
 	for _, domain := range registeredDomains() {
@@ -388,7 +392,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 }
 
 // driveCapacity advances the operation as far as this mode's evidence allows.
-func (e *Engine) driveCapacity(ctx context.Context, running *runningDomain,
+func (e *Engine) driveCapacity(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	for range len(coord.MaintenancePhases) + 1 {
@@ -408,7 +412,7 @@ func (e *Engine) driveCapacity(ctx context.Context, running *runningDomain,
 
 // advanceCapacity takes one step: gather what this mode can establish, ask the
 // table, and persist whatever it answered.
-func (e *Engine) advanceCapacity(ctx context.Context, running *runningDomain,
+func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	switch op.Phase {
@@ -476,7 +480,7 @@ func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 // THE READ-BACK IS THE EVIDENCE, never the acknowledgement: what the phase
 // establishes is that the ceiling IS the target, which is a value the broker
 // reports rather than a request it accepted.
-func (e *Engine) apply(ctx context.Context, running *runningDomain,
+func (e *Engine) apply(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if err := running.log.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
@@ -612,7 +616,7 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 // barrier needs nothing from the journal, it runs, it retires what it covered,
 // and only then is the seal tested against a journal with no unresolved
 // entries left.
-func (e *Engine) seal(ctx context.Context, running *runningDomain,
+func (e *Engine) seal(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if e.mode != statelog.ModeSeal {
@@ -662,7 +666,7 @@ func (e *Engine) seal(ctx context.Context, running *runningDomain,
 // A MISMATCH IS A NUMBERED ATTEMPT rather than a re-apply: every node is in
 // seal mode, which refuses configuration writes, so there is nowhere legal for
 // a re-apply to run.
-func (e *Engine) verify(ctx context.Context, running *runningDomain,
+func (e *Engine) verify(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	stats, err := running.log.Stats(ctx)
@@ -889,11 +893,31 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 
 // capacityParticipants is who must acknowledge.
 //
-// EVERY NODE THE FLEET HAS A POSITION FOR, union everything currently holding
-// a presence lease — NOT the retention counted set, which is about whose
-// position pins the trim. This set is about whose process could hold an
-// outstanding request, and a node that was evicted from the first is still a
-// machine that can run one.
+// EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
+// could hold an outstanding request, union this node — NOT the retention
+// counted set, which is about whose position pins the trim. This set is about
+// whose process could hold a request the seal has to retire, and a node that
+// was evicted from the first is still a machine that can run one.
+//
+// # Two questions among the live nodes, asked apart
+//
+// The seal's proof is that every BROKER process restarted, because a request
+// the broker has already queued is retired by the process holding it going
+// away, and every PUBLISHER must be admitted. So a live node takes part if it
+// holds the estate — it publishes records ([capacityHolders]) — or if its
+// broker is a member, which holds queued
+// requests whatever its roles ([capacityMembers]). Counted over data nodes
+// alone, a member that holds no data was never waited for, and the seal could
+// pass while its broker still held a request that would resize the log after
+// it.
+//
+// A node whose presence does not say what its broker is counts as a member:
+// excluding it could pass a seal it should hold, where including one that is
+// not a member only waits for an acknowledgement an operator can exclude.
+//
+// A leaf that holds no data takes no part: its broker runs no JetStream and
+// queues nothing, and its seats publish through a data node, which is admitted
+// in its own right.
 func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
 	rows, err := e.backends.Fleet.Positions(ctx)
@@ -905,20 +929,71 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
-		leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
+		held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
 		}
-		for _, lease := range leases {
-			if id, ok := coord.NodeID(lease.Resource); ok {
-				seen[id] = true
-			}
+		for _, id := range capacityHolders(held) {
+			seen[id] = true
+		}
+		for _, id := range capacityMembers(held) {
+			seen[id] = true
 		}
 	}
-	// AND THIS NODE, which is in a maintenance mode and therefore holds
-	// no presence lease and may have published no position yet.
+	// AND THIS NODE AS IT IS, whether or not its presence lease has
+	// landed yet and whether or not it has published a position. It is in
+	// a maintenance mode, and a node there KEEPS its presence — which is
+	// how the members that hold no data are found above, since their
+	// presence is the only record they leave (see maintenance_mode.go).
 	seen[e.id] = true
 	return sortedKeys(seen), nil
+}
+
+// capacityHolders is every live node holding the replicated estate — the
+// publishers of its records — as its presence says: every data node holds the
+// one estate whole.
+//
+// PRESENCE AND THE POSITIONS REGISTER BETWEEN THEM, because neither alone sees
+// every publisher. A drain gives presence up at its first step while the
+// node's state log still runs, and a node that has not yet heartbeated its
+// first position is on presence alone; the register's rows
+// ([Engine.capacityParticipants]) cover the first and presence the second. A
+// presence whose roles this build cannot read is read as every role, so the
+// node is counted: a publisher that went uncounted is the one thing this set
+// exists to prevent.
+//
+// A DATA NODE IS A PUBLISHER WHATEVER ITS COMPANY KEEPS: the core runs every
+// registered log on every node holding the estate from boot — with no company,
+// in a maintenance mode, on a vendor's tracker and wiki ([Engine.startCore]) —
+// so a presence that holds data is exactly a node that publishes records, and
+// [placement.NodeProfile.HoldsData] is the whole test. A node without `data`
+// runs no log and is found only as a broker member ([capacityMembers]).
+func capacityHolders(held []coord.Lease) []string {
+	out := make([]string, 0, len(held))
+	for _, lease := range held {
+		if profile, ok := placement.FromLease(lease); ok && profile.HoldsData() {
+			out = append(out, profile.ID)
+		}
+	}
+	return out
+}
+
+// capacityMembers is every live node whose broker is a member of the fleet's,
+// or does not say — see [Engine.capacityParticipants] for why a node that does
+// not say is counted.
+func capacityMembers(held []coord.Lease) []string {
+	var out []string
+	for _, lease := range held {
+		profile, ok := placement.FromLease(lease)
+		if !ok {
+			continue
+		}
+		switch profile.Broker {
+		case placement.BrokerMember, placement.BrokerUnknown:
+			out = append(out, profile.ID)
+		}
+	}
+	return out
 }
 
 // capacityIncarnations is each participant's identity as of the baseline, read

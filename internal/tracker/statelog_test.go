@@ -41,11 +41,11 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
 			Kinds: suiteKinds(),
-			// THE PRODUCTION TABLE, which is empty: the base format is
-			// every field this build writes. A row added to it needs a
-			// Carrying here that builds a record carrying the field
-			// through the writer's own encoder, and the suite refuses
-			// a table without one.
+			// THE PRODUCTION TABLE. It is empty — every field the
+			// tracker writes is in the base format — so there is no
+			// record to carry; the field this build's successor adds
+			// brings a Carrying case built through the writer's own
+			// encoder, which the suite refuses to run without.
 			Fields:     tracker.VersionedFields(),
 			Rows:       tracker.NewRows,
 			Write:      suiteWrite,
@@ -59,7 +59,7 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "suite",
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: at, Readmitted: readmit,
 	})
 	if err != nil {
@@ -71,9 +71,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	}
 	return tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			// NO VERSION, as the production writer leaves it: the
-			// encoder stamps the base one every build reads.
-			OpID:    op,
+			// PINNED, as the production writer pins it: a gate is read
+			// by every build there will ever be ([tracker.GateRecordVersion]).
+			V: tracker.GateRecordVersion, OpID: op,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			CreatedAt: at, Writer: "suite-peer",
 			Scope: tracker.ScopeSet{Subject: true},
@@ -85,7 +85,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the tracker's own [tracker.Writer] — the
 // builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
 		Actor: "suite", ActorKind: tracker.AuthorSystem,
@@ -195,8 +195,9 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return tracker.NewGates(db) },
-			Kind:   string(tracker.KindTask),
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return tracker.NewGates(db) },
+			Kind:         string(tracker.KindTask),
+			SubjectKinds: kindNames(tracker.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpCreate,
 					writer, opID, newTask(id))
@@ -208,7 +209,7 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			Purge: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpPurge,
 					writer, opID, map[string]any{
-						"v": tracker.DocumentVersion, "reason": "the gate suite",
+						"v": tracker.GateRecordVersion, "reason": "the gate suite",
 					})
 			},
 			Evict: func(node, writer, opID string) ([]byte, error) {
@@ -221,6 +222,17 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			},
 		}
 	})
+}
+
+// kindNames is every kind the tracker writes, as the strings its envelope
+// carries — the build's own list rather than one kept beside it, so a kind
+// added to the domain is a kind the gate family asks about.
+func kindNames(kinds []tracker.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.
@@ -248,7 +260,7 @@ func gateSuiteRecord(subject tracker.Subject, op tracker.OpKind, writer, opID st
 // gateSuiteEviction is an eviction of node, or its readmission.
 func gateSuiteEviction(node string, readmitted bool) tracker.Eviction {
 	return tracker.Eviction{
-		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "suite",
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
 	}
 }

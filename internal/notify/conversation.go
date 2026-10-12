@@ -71,16 +71,33 @@ import (
 // PartitionField is the payload field a producer stamps the partition key
 // into.
 //
-// `partition_key`, NOT `conversation_key`: that spelling is the conversation
-// IDENTITY on every event that carries it (a turn's records, the sandbox
-// events, the event store's tag), and the partition is a different value
-// exactly where it matters — a direct message's identity is the bare channel
-// and its partition can be a thread inside it.
+// Spelled "partition_key", as the coalescing record's own field is, because
+// everywhere else in the engine "conversation_key" is the conversation
+// IDENTITY ([ConversationField]) — and a partition is a batch inside it.
 const PartitionField = "partition_key"
 
 // ConversationField is the payload field the durable conversation identity is
 // stamped into.
 const ConversationField = "conversation_identity"
+
+// TriggerField carries where on its log the record a first-party notification
+// was derived from was committed — the position token
+// ([types.RawWebhook.Trigger]) — stamped on the wake's envelope bag beside the
+// partition key, and on its metadata copy for a person reading it. The woken
+// turn hands it to its node's read-your-writes floors before its first read
+// ([TriggerOf]). Absent on every vendor's wake, whose turn raises no read
+// floor of its own.
+const TriggerField = "trigger_position"
+
+// TriggerOf is the trigger position an event carries ([TriggerField]), or
+// empty.
+func TriggerOf(ev *events.Event) string {
+	if ev == nil {
+		return ""
+	}
+	token, _ := ev.Payload[TriggerField].(string)
+	return token
+}
 
 // RecipientField carries the handle a notification was resolved to.
 //
@@ -195,10 +212,10 @@ func KeyOfAll(evs []*events.Event) string {
 // working indicator raises its spinner on ([ConversationOf] in status.go),
 // which answers a different question from different metadata.
 //
-// NO FALLBACK TO [PartitionField]: every producer stamps both through
-// [Stamp], and a source's partition key is its identity or a finer cut of it
-// ([Prompt.ConversationIdentity]), so an event naming a partition and no
-// identity is one no producer writes.
+// NEVER THE PARTITION. Every producer that stamps a partition stamps the
+// identity it refines beside it ([Prompt.ConversationIdentity]), so an event
+// naming no identity names no conversation at all — a schedule tick, an A2A
+// wake — and gets its own fallback.
 func ConversationIdentityOf(ev *events.Event) string {
 	if ev == nil {
 		return ""

@@ -96,9 +96,11 @@ const (
 	// time.
 	MaxRelationNote = 256
 	// MaxDependents is the OTHER end, and it is the cap that bounds a
-	// status write's declared scope: a group change on a blocker rewrites
-	// two columns on every dependent, so the record enumerates at most
-	// this many object terms and never needs a covering one.
+	// write's declared scope on a blocker: every apply of a blocker
+	// rewrites two columns on every dependent, so the record names each
+	// one — this many at most, beside the blocker's own term, which is one
+	// past [MaxScopeTerms] and so folds the largest project into its
+	// container ([ScopeSet.capped]).
 	MaxDependents = 64
 
 	// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal bound
@@ -115,11 +117,6 @@ const (
 	// longer than that is a task of its own.
 	MaxChecklistName     = 128
 	MaxChecklistItemName = 256
-
-	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
-	// every former key also has an alias row, and the applier never
-	// deletes one on a task apply.
-	MaxFormerKeys = 16
 
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
@@ -150,8 +147,8 @@ const (
 	BodyRevisionsKept = 100
 
 	// MaxReferencesPerBody bounds the key scan the applier runs on every
-	// body and comment, so a pathological body is 64 lookups on every node
-	// rather than five thousand.
+	// task's description, so a pathological body is 64 lookups on every
+	// node rather than five thousand.
 	MaxReferencesPerBody = 64
 )
 
@@ -166,13 +163,12 @@ const (
 // and phrased about the RECORD rather than the field, so a caller past a cap
 // got either silence or a number they could not act on.
 //
-// A comment is where that cost is visible, because the read side was built on
-// the promise: the thread page carries [CommentBodyShown] precisely because a
-// whole body may be large, and the single-comment read exists to return the
-// rest. Both are sized against [MaxCommentBody] — so a body stored past it is
-// elided in the page, and refused for weight on the one read that would have
-// returned it, leaving what somebody wrote reachable through no tool at all.
-// The cap is what makes the elision a pointer rather than a loss.
+// A comment is where that cost is visible, because the read side is built on
+// the promise: a thread page carries every comment WHOLE, as many as fit
+// [CommentPageBytes] and at least one, and that only holds while one comment
+// is within [MaxCommentBody] — a body stored past it would be a page heavier
+// than one tool answer may be, refused for weight, leaving what somebody wrote
+// reachable through no tool at all.
 //
 // BYTES rather than runes, because every ceiling downstream of this is a byte
 // budget: a record's own encoded size, and one tool answer's. And pure over
@@ -282,8 +278,9 @@ const (
 	// RelationDuplicates is authored on the duplicate and derives
 	// "duplicated_by" on the canonical.
 	RelationDuplicates RelationKind = "duplicates"
-	// RelationPage names a knowledge-base page, with no write to the
-	// pages family at all.
+	// RelationPage names a knowledge-base page. The edge rides the task's
+	// own record and the page is never touched: there is no write to the
+	// pages log at all.
 	RelationPage RelationKind = "page"
 )
 
@@ -617,11 +614,12 @@ type Placement struct {
 
 // Eviction is a node's eviction or its readmission.
 //
-// ITS VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER, because
-// this record INSTALLS A GATE: a build that cannot decode a gate must not
-// apply anything above it. The shape evolves additively — an old reader drops
-// an unknown key — and a semantic change takes a new record kind rather than a
-// version bump.
+// ITS SHAPE VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER,
+// because this record INSTALLS A GATE: a build that cannot decode a gate must
+// not apply anything above it. The shape evolves additively — an old reader
+// drops an unknown key — and a change to what its apply does is written at a
+// raised RECORD version, never under a new kind ([GateRecordVersion] says
+// why).
 type Eviction struct {
 	V          int       `json:"v"`
 	Version    uint64    `json:"version"`
@@ -709,8 +707,9 @@ type TaskPatch struct {
 	// walk whose holder died.
 	//
 	// MergeReparent rides the same append and says what that walk is for.
-	// The applier clears MergeReparent whenever the marker goes down, so
-	// the pair cannot drift into "not merging, but re-parenting".
+	// The two are set by one append, and the applier clears the intent
+	// whenever the marker goes down, so the pair cannot drift into "not
+	// merging, but re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
 
@@ -1132,7 +1131,7 @@ type Project struct {
 	Key string `json:"key"`
 
 	// Name, Purpose and Unit are CHART-OWNED: written and rewritten only
-	// by the chart apply, under the position guard below. A project
+	// by the chart apply, under the activation guard below. A project
 	// genuinely can move between units, so Unit is not immutable — but it
 	// is not a field a tool writes either.
 	//
@@ -1366,11 +1365,11 @@ type Person struct {
 // # The generation is stored, and omitted when it is zero
 //
 // The row keeps it PACKED into `seen_through`, as every durable position in
-// this domain is kept: stored as the bare sequence, the generation was dropped
-// on apply, so after a reanchor a person's position read back as generation
-// zero and every notice in the new generation compared above it — an inbox
-// that could never be read past again. A zero generation is omitted from the
-// JSON, which is what a log no reanchor has moved carries.
+// this domain is kept, so a reanchor compares correctly: a position kept as the
+// bare sequence would read back as generation zero after one, and every notice
+// in the new generation would compare above it — an inbox that could never be
+// read past again. A zero generation is omitted from the JSON, which keeps a
+// position in a stream's first generation to its two meaningful keys.
 type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation,omitempty"`

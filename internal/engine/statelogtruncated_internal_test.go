@@ -61,7 +61,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
 	eb.core.Load().log.publishPositions(t.Context())
 	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
@@ -106,7 +106,7 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
 	eb.core.Load().log.publishPositions(t.Context())
 	err := running.runner.Truncated()
@@ -269,6 +269,7 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -285,12 +286,12 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	js := jetStreamOn(t, back)
 
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
-	spec := running.domain.Stream()
+	spec := running.spec
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
@@ -367,6 +368,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -384,7 +386,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())

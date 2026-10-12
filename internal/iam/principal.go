@@ -27,8 +27,7 @@ const (
 	// act. NOTHING IN THIS BUILD CREATES ONE HERE: an administrator's
 	// create lands a person ACTIVE, handed a first password link, and an
 	// invitation creates nobody until its redemption, which lands them
-	// active too. It remains a stage an administrator may set, and one a
-	// row recorded by an earlier build may hold.
+	// active too. It remains a stage an administrator may set.
 	StageInvited Stage = "invited"
 
 	// StageEnrolling is a principal part-way through proving who they
@@ -105,7 +104,7 @@ type Principal struct {
 	// acts as itself. For [KindSeat] it is the seat. For [KindPerson] it
 	// is the binding the IDENTITY DIRECTORY holds for them, which is what
 	// lets somebody at the dashboard act AS THEMSELVES rather than as a
-	// credential. Every person holds a human seat (ADR-0026), so a person
+	// credential. Every person holds a human seat (ADR-0032), so a person
 	// with none is one recorded before that rule, which `iam check`
 	// reports; a MACHINE acting as itself is the ordinary unbound case,
 	// and it keeps [KindMachine] — a bound one is composed as the person

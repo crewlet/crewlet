@@ -13,10 +13,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -79,6 +82,9 @@ type stubWork struct {
 	taskFresh      statelog.Freshness
 	taskWants      tracker.DetailWants
 
+	// expandErr is what expanding a view's parameters fails with.
+	expandErr error
+
 	err error
 }
 
@@ -137,6 +143,9 @@ func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
 	// than a filter, so a handler that dropped it would still return rows.
 	s.expandViewer = viewer
 	s.expandNow, s.expandZone = now, loc
+	if s.expandErr != nil {
+		return tracker.Query{}, s.expandErr
+	}
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
@@ -588,7 +597,8 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		map[string]any{}); err == nil {
 		t.Error("a thread asked of no item was answered")
 	}
-	// AN EMPTY THREAD IS A LIST: an absent key reads like an older node.
+	// AN EMPTY THREAD IS A LIST: an absent key reads like an answer that
+	// failed to carry one.
 	w.detail = tracker.TaskDetail{Task: tracker.Task{ID: "t-2", Key: "ENG-2"}}
 	got, _ = askNative(t, queries.Sources{Work: w}, "work_comments",
 		map[string]any{"item": "ENG-2"})
@@ -952,8 +962,8 @@ func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 }
 
 // A REFUSAL ABOUT THE REQUEST STAYS ONE, even when what it wraps is a refusal
-// the registry would otherwise call transient. The caller has to change the
-// request; "come back" would send the identical one round a loop.
+// the registry would otherwise answer as unavailable. The caller has to change
+// the request; "come back" would send the identical one round a loop.
 func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
@@ -968,6 +978,57 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	}
 	if errors.Is(err, queries.ErrUnavailable) {
 		t.Errorf("a refusal about the request was also reported as %v", queries.ErrUnavailable)
+	}
+}
+
+// A READ NO COPY COULD ANSWER IS "COME BACK", NEVER "ASK SOMETHING ELSE".
+//
+// The tracker is read through the estate router, as a seat's tools read it, so
+// a copy out of service, a peer restarting or no data node live at all reaches
+// this surface as the router's own refusal. The answers that read what is left
+// of a failure as a refusal of the request — a view's expansion, the activity
+// gate — told a caller to change a question nothing was wrong with, with a
+// 400; and the registry answered a 500 where a screen should try again.
+//
+// AND SO IS EVERY OTHER CONDITION OF THIS NODE the tools' own rule names
+// (builtin.Condition): a router that could not even send the request because
+// this node's queue is not live, a store held closed while it adopts a peer's
+// snapshot, a read that ran out of time. This surface kept a second, shorter
+// list of its own, and a view's expansion that met any of those told a caller
+// its question was malformed.
+//
+// Mutation: put the old three-sentinel list back in unavailableHere and the
+// queue, store and deadline cases go red; drop the ErrUnserved arm from
+// builtin.Condition and the router's do.
+func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
+	t.Parallel()
+	unserved := &estate.ErrUnserved{Detail: "data-a: no answer"}
+	notLive := fmt.Errorf("estate: tracker.expanded_query: %w", queue.ErrNotLive)
+	closed := fmt.Errorf("tracker: read the board: %w", store.ErrNoEstate)
+	for _, tc := range []struct {
+		name   string
+		what   string
+		params map[string]any
+		work   *stubWork
+	}{
+		{"the board", "work_items", map[string]any{}, &stubWork{err: unserved}},
+		{"a view's expansion", "work_items", map[string]any{},
+			&stubWork{expandErr: fmt.Errorf("estate: tracker.expanded_query: %w", unserved)}},
+		{"the activity", "work_activity", map[string]any{"container": "workspace"},
+			&stubWork{err: unserved}},
+		{"a view's expansion this node could not send", "work_items", map[string]any{},
+			&stubWork{expandErr: notLive}},
+		{"a view's expansion that ran out of time", "work_items", map[string]any{},
+			&stubWork{expandErr: fmt.Errorf("estate: tracker.expanded_query: %w",
+				context.DeadlineExceeded)}},
+		{"the board on a store held closed", "work_items", map[string]any{},
+			&stubWork{err: closed}},
+	} {
+		_, err := askNative(t, queries.Sources{Work: tc.work}, tc.what, tc.params)
+		if !errors.Is(err, queries.ErrUnavailable) || errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("%s: a read no copy could answer = %v, want %v and never %v", tc.name,
+				err, queries.ErrUnavailable, queries.ErrBadParams)
+		}
 	}
 }
 

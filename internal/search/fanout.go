@@ -3,6 +3,8 @@ package search
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -124,6 +126,9 @@ type Slice struct {
 	// indistinguishable from a corpus that is quietly short" — and the
 	// hole was that the sentence was only ever true for a participant that
 	// did not reply.
+	//
+	// The zero value is "ready": a participant whose index has completed a
+	// lap over the named sources reports false.
 	Building bool
 }
 
@@ -150,9 +155,11 @@ type FanQuery struct {
 	// anything is scattered, so a participant never reads it.
 	Mode knowledge.Mode
 
-	// Methods are the rankers a participant runs. EMPTY IS BOTH, which is
-	// what the zero value means; the coordinator fuses only the ones it
-	// asked for.
+	// Methods are the rankers a participant runs, and a query names at
+	// least one: [FanOut.Search] fills them from the mode it resolved, and
+	// a participant refuses a query naming none ([ErrNoMethods]) rather
+	// than guess which half was meant — the coordinator counts that as a
+	// missing assignment, never as a range scanned and empty.
 	Methods []Method
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
@@ -160,9 +167,12 @@ type FanQuery struct {
 }
 
 // runs reports whether this query asks a participant to run method m.
-func (q FanQuery) runs(m Method) bool {
-	return len(q.Methods) == 0 || slices.Contains(q.Methods, m)
-}
+func (q FanQuery) runs(m Method) bool { return slices.Contains(q.Methods, m) }
+
+// ErrNoMethods is a scan of a query naming no ranker — a malformed request,
+// since a query that runs nothing answers a range with nothing in it and a
+// coordinator could not tell that from a range that matched nothing.
+var ErrNoMethods = errors.New("search: the query names no ranker to run")
 
 // Scanner answers one bucket range out of the corpus this process holds.
 //
@@ -187,13 +197,23 @@ type Peers interface {
 
 // FanOutFloor is the corpus size below which a search does not fan out.
 //
-// TEN THOUSAND DOCUMENTS, and the arithmetic is the anchor rather than the
-// round number. [SemanticScanBudget] is one second at the measured coefficient
-// of ≈ 740 000 embeddable sources, so a scan costs ≈ 1.35 µs per source; a
-// broker round trip on a LAN is ≈ 1 ms. Splitting pays only when the local
-// scan is worth several round trips, and 10 000 documents is ≈ 13.5 ms — an
-// order of magnitude above the trip it replaces, and the point below which a
-// fan-out spends more wall clock arranging the work than doing it.
+// TEN THOUSAND DOCUMENTS, and the measurement is the anchor rather than the
+// round number. A broker round trip on a LAN is ≈ 1 ms, and splitting pays
+// only when the local scan is worth several of them. At 10 000 sources the
+// semantic scan's p95 is MEASURED rather than projected — it is
+// BenchmarkSemanticScanUnderLoad's smallest cell — at 49 ms with one reader and
+// 125 ms with eight: fifty round trips and more.
+//
+// It is not lower, and the same benchmark says why. At 10 000 sources a scan
+// costs 4.96 µs per source against 2.58 at 40 000, because below that size the
+// statement's FIXED cost dominates — the plan, the sort, the rerank's 1 200
+// seeks — and a fan-out divides the rows, never the fixed cost: every
+// participant pays it again. The per-row figure behind the budget is the
+// large-corpus one, and projecting it downward (this used to read ≈ 13.5 ms,
+// from a stale 1.35 µs per source) is what makes a smaller floor look free.
+//
+// Below it a fan-out spends more wall clock arranging the work than the
+// division saves.
 //
 // It is a FLOOR rather than a switch because the alternative is worse in both
 // directions: a company that has written 200 pages would pay a network hop per
@@ -288,6 +308,13 @@ type Answer struct {
 	// SemanticSkipped says at least one answering participant ran without
 	// its semantic half.
 	SemanticSkipped bool
+
+	// Candidates are the two methods' global lists the fusion was computed
+	// from — each method merged by score across the answering slices, cut
+	// at [FuseN] — which a caller walks in their fused order
+	// ([Candidates.Fused]) past the documents it cannot show, rather than
+	// filtering Hits after the cut.
+	Candidates Candidates
 
 	// Nodes is every participant in the assignment table, sorted by id,
 	// and whether each covered its range — the per-node half of
@@ -392,7 +419,16 @@ func (f *FanOut) resolve(ctx context.Context, q FanQuery) (FanQuery, knowledge.M
 }
 
 // Search runs one query across the fleet and fuses what comes back.
+//
+// A QUERY PAST [knowledge.MaxQueryBytes] IS REFUSED before anything runs.
+// Every surface refuses one first, in its own words for its own reader; this
+// is where the rule meets the one path every native search of either kind
+// takes — whichever node, surface or peer it came from — so no text past it
+// is ranked, scattered to the peers or sent to the provider for its vector.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
+	if err := knowledge.CheckQuery(q.Text); err != nil {
+		return Answer{}, fmt.Errorf("search: %w", err)
+	}
 	started := time.Now()
 	if f.Enter != nil {
 		// BEFORE THE PLAN, because the plan is a coordination read and
@@ -602,8 +638,9 @@ func Divide(nodes []string) []Assigned {
 // merged against themselves and ranked above where they belong.
 //
 // ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
-// back: fusing a half nobody asked for would turn a keyword search into a
-// hybrid one on whichever buckets that peer happened to hold.
+// back: what goes into the answer is the coordinator's decision, on the same
+// untrusting terms as the coverage above, so a slice carrying a half nobody
+// asked for cannot turn a keyword search into a hybrid one.
 //
 // scatterErr is why the peers could not be asked at all, which becomes every
 // unanswered peer's own reason rather than a generic silence.
@@ -665,17 +702,12 @@ func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error)
 		return cmp.Compare(a.ID, b.ID)
 	})
 
-	keys := func(s []Scored) []string {
-		ids := make([]string, 0, len(s))
-		for _, one := range s {
-			ids = append(ids, one.Key)
-		}
-		return ids
+	out.Candidates = Candidates{
+		Lexical:         MergeByScore(lexical, FuseN),
+		Semantic:        MergeByScore(semantic, FuseN),
+		SemanticSkipped: out.SemanticSkipped,
 	}
-	fused := Fuse(
-		keys(MergeByScore(lexical, FuseN)),
-		keys(MergeByScore(semantic, FuseN)),
-	)
+	fused := out.Candidates.Fused()
 	if limit <= 0 {
 		limit = ReturnDepth
 	}

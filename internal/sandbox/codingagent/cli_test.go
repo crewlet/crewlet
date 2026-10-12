@@ -19,10 +19,13 @@ func opencode() codingagent.CLI { return codingagent.OpenCode{} }
 // ---------------------------------------------------------------------
 
 func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "fix the flake"}, codingagent.Paths{}, "")
 	for _, want := range []string{
-		"claude -p ",                          // headless
-		"--output-format json",                // parseable
+		"claude -p ", // headless
+		// A STREAM, so a run says what it is doing while it does it; and
+		// --verbose, without which print mode refuses stream-json.
+		"--output-format stream-json --verbose",
 		"--permission-mode bypassPermissions", // a prompt would hang a headless run
 		"'fix the flake'",                     // the brief, quoted
 	} {
@@ -34,6 +37,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 
 // A minimal call stays minimal: an unset cap must not become a flag.
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")
 	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config"} {
 		if strings.Contains(cmd, absent) {
@@ -43,6 +47,7 @@ func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 }
 
 func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{
 		Brief:  "x",
 		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
@@ -64,6 +69,7 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 // The brief is operator- and model-authored text; it must not be able to end
 // the quoting and append a command.
 func TestABriefCannotEscapeItsQuoting(t *testing.T) {
+	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{
 		Brief: `fix it'; rm -rf / #`,
 	}, codingagent.Paths{}, "")
@@ -77,7 +83,9 @@ func TestABriefCannotEscapeItsQuoting(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{
+		"type": "result",
 		"result": "Fixed it. Opened https://github.com/acme/api/pull/7",
 		"subtype": "success",
 		"is_error": false,
@@ -107,8 +115,9 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 // share is carried beside it as a breakdown, which is the convention every
 // engine provider reports in.
 func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse(`{
-		"result": "done", "subtype": "success",
+		"type": "result", "result": "done", "subtype": "success",
 		"usage": {"input_tokens": 40, "cache_read_input_tokens": 9000,
 			"cache_creation_input_tokens": 1500, "output_tokens": 300}
 	}`)
@@ -123,43 +132,45 @@ func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 	}
 }
 
-// A run that hit its turn cap sets no is_error but did not finish.
+// A run that hit its turn cap sets no is_error but did not finish — and an
+// error result carries no `result` text, so what it says is how it ended.
 func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
-	res := claude().Parse(`{"result":"ran out of turns","subtype":"error_max_turns","is_error":false}`)
+	t.Parallel()
+	res := claude().Parse(`{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30}`)
 	if res.Success {
 		t.Fatal("a run that exhausted its turns read as success")
 	}
-	if res.Error == "" {
-		t.Fatal("the failure says nothing")
+	if res.Error != "error_max_turns" {
+		t.Fatalf("the failure says %q; want how the run ended", res.Error)
 	}
 }
 
-// The CLI sometimes prints a banner before its JSON, and the object is always
-// last because it is what the CLI prints when it is done.
-func TestTheClaudeParserFindsTheEnvelopeAfterABanner(t *testing.T) {
-	res := claude().Parse("Welcome to Claude Code\nchecking for updates…\n" +
-		`{"result":"done","subtype":"success"}`)
-	if !res.Success || res.Text != "done" {
-		t.Fatalf("the envelope after a banner was missed: %+v", res)
+// A run whose model call failed is a SUCCESS subtype carrying is_error, and
+// its result text is the failure.
+func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
+	t.Parallel()
+	res := claude().Parse(`{"type":"result","subtype":"success","is_error":true,` +
+		`"result":"API Error: 529 overloaded"}`)
+	if res.Success || res.Error != "API Error: 529 overloaded" {
+		t.Fatalf("Parse = success %v, error %q; want the failure it reported", res.Success, res.Error)
 	}
 }
 
 // A coding agent that crashed should surface as "did not deliver" and let the
 // turn continue, not blow the turn up.
 func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
+	t.Parallel()
 	res := claude().Parse("Segmentation fault (core dumped)")
 	if res.Success {
 		t.Fatal("a crash read as success")
 	}
-	if !strings.Contains(res.Text, "Segmentation fault") {
-		t.Fatalf("the raw output was lost: %+v", res)
-	}
-	if res.Error == "" {
-		t.Fatal("the failure says nothing")
+	if !strings.Contains(res.Error, "Segmentation fault") {
+		t.Fatalf("the raw output was lost from the failure: %+v", res)
 	}
 }
 
 func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
+	t.Parallel()
 	if res := claude().Parse("   "); res.Success || res.Error == "" {
 		t.Fatalf("empty output = %+v", res)
 	}
@@ -167,7 +178,8 @@ func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
 
 // claude-code exits cleanly, so the done marker is the signal.
 func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
-	if claude().Finished(`{"result":"done","subtype":"success"}`) {
+	t.Parallel()
+	if claude().Finished(`{"type":"result","result":"done","subtype":"success"}`) {
 		t.Fatal("claude-code claimed a streamed terminal signal it does not emit")
 	}
 }
@@ -179,6 +191,7 @@ func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
 // --format json is load-bearing: `opencode run` finishes and hangs, and in
 // default mode the final summary is buffered and lost.
 func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
+	t.Parallel()
 	cmd := opencode().Command(sandbox.RunRequest{Brief: "fix it"}, codingagent.Paths{}, "")
 	if !strings.Contains(cmd, "--format json") {
 		t.Fatalf("the invocation does not stream JSON:\n%s", cmd)
@@ -188,19 +201,22 @@ func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
 	}
 }
 
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor family.
+// AN API ENTRY'S MODEL IS ADDRESSED IN OPENCODE'S GRAMMAR: a custom base URL
+// means the run's own declared provider, and otherwise the OpenCode provider
+// of the entry's wire, whose key variable the run environment carries.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		llm  sandbox.AgentLLM
 		want string
 	}{
 		{sandbox.AgentLLM{Model: "claude-opus-5", ProviderType: "anthropic"}, "anthropic/claude-opus-5"},
 		{sandbox.AgentLLM{Model: "gpt-5", ProviderType: "openai"}, "openai/gpt-5"},
-		{sandbox.AgentLLM{Model: "gemini-3", ProviderType: "google"}, "google/gemini-3"},
 		// A gateway: the catalogue cannot resolve it, so the run declares
 		// its own provider and addresses the model there.
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai", BaseURL: "https://example.com/v1"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai-compatible", BaseURL: "https://example.com/v1"},
+			codingagent.OpenCodeProviderID + "/house-model"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
 			codingagent.OpenCodeProviderID + "/house-model"},
 	}
 	for _, c := range cases {
@@ -211,15 +227,25 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}
 }
 
-// A subscription entry's provider type is the same for every vendor, so
-// reading it would address a Claude subscription's model as an OpenAI one —
-// which is why the family comes from the declared type, not from the entry.
-func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
-	cmd := opencode().Command(sandbox.RunRequest{
-		Brief: "x", LLM: &sandbox.AgentLLM{Model: "m", ProviderType: "something-new"},
-	}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--model 'openai/m'") {
-		t.Fatalf("cmd = %s", cmd)
+// AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
+//
+// It is the string every text call on the same entry passes to `opencode run
+// --model`, which OpenCode splits at its first slash into a provider and a
+// model. The runner used to put a family in front of it, so an entry naming
+// `openrouter/anthropic/claude-sonnet-5` ran its box on
+// `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
+// broke the agent run, and a bare one broke every text call.
+func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
+	t.Parallel()
+	for _, model := range []string{
+		"anthropic/claude-sonnet-5",
+		"openrouter/anthropic/claude-sonnet-5",
+	} {
+		llm := sandbox.AgentLLM{Model: model, CLI: codingagent.OpenCodeName}
+		cmd := opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &llm}, codingagent.Paths{}, "")
+		if !strings.Contains(cmd, "--model '"+model+"'") {
+			t.Errorf("%q gave:\n%s\nwant the model as written", model, cmd)
+		}
 	}
 }
 
@@ -230,11 +256,12 @@ func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
 // The secret is never written into a file inside the box where the agent
 // could read it back and echo it into its report.
 func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		LLM: &sandbox.AgentLLM{
 			Model: "house-model", ProviderType: "anthropic",
-			BaseURL: "https://example.com/v1",
+			BaseURL: "https://example.com",
 		},
 	}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -248,7 +275,7 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	if !strings.Contains(body, "{env:ANTHROPIC_API_KEY}") {
 		t.Fatalf("the key is not referenced through the environment:\n%s", body)
 	}
-	if !strings.Contains(body, "https://example.com/v1") {
+	if !strings.Contains(body, "https://example.com") {
 		t.Fatalf("the endpoint was not declared:\n%s", body)
 	}
 	if !strings.Contains(body, `"share": "disabled"`) {
@@ -256,7 +283,53 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	}
 }
 
+// THE DECLARED ENDPOINT IS WHERE EACH SDK EXPECTS IT.
+//
+// An `anthropic` entry's base_url is the host root, which the engine's own
+// provider and Claude Code's ANTHROPIC_BASE_URL both append /v1/messages to;
+// @ai-sdk/anthropic posts to `<baseURL>/messages`, so the root handed to it
+// as written sent every OpenCode request on an Anthropic gateway to a path
+// that does not exist. An OpenAI-wire base_url already ends in its version and
+// passes through untouched.
+func TestTheOpenCodeProviderEndpointIsWhereItsSDKExpectsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		providerType, baseURL, npm, want string
+	}{
+		{"anthropic", "https://gateway.example.com", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"anthropic", "https://gateway.example.com/", "@ai-sdk/anthropic", "https://gateway.example.com/v1"},
+		{"openai-compatible", "https://llm.example.com/v1", "@ai-sdk/openai-compatible", "https://llm.example.com/v1"},
+		{"openai", "https://llm.example.com/v1/", "@ai-sdk/openai-compatible", "https://llm.example.com/v1/"},
+	} {
+		b := sandbox.NewFakeSandbox("box-1")
+		path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{LLM: &sandbox.AgentLLM{
+			Model: "house-model", ProviderType: tc.providerType, BaseURL: tc.baseURL,
+		}}, codingagent.PathsFor(b))
+		if err != nil {
+			t.Fatalf("WriteConfig: %v", err)
+		}
+		blob, _ := b.ReadFile(t.Context(), path)
+		var cfg struct {
+			Provider map[string]struct {
+				NPM     string `json:"npm"`
+				Options struct {
+					BaseURL string `json:"baseURL"`
+				} `json:"options"`
+			} `json:"provider"`
+		}
+		if err := json.Unmarshal(blob, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, blob)
+		}
+		got := cfg.Provider[codingagent.OpenCodeProviderID]
+		if got.NPM != tc.npm || got.Options.BaseURL != tc.want {
+			t.Errorf("%s entry at %q declared %s at %q, want %s at %q",
+				tc.providerType, tc.baseURL, got.NPM, got.Options.BaseURL, tc.npm, tc.want)
+		}
+	}
+}
+
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -314,6 +387,7 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // The other runner's vocabulary, from the same typed input — which is the
 // point of RenderMCP answering in server shape rather than in one CLI's keys.
 func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := codingagent.ClaudeCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -372,6 +446,7 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // an agent that would not do the work. The box is the boundary instead, the
 // same stance claude-code takes with --permission-mode bypassPermissions.
 func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
@@ -421,6 +496,7 @@ func derefOr[T any](p *T, absent string) any {
 // whatever the previous run left on a reused box, MCP block and dead per-run
 // bridge URL included.
 func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
+	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -451,6 +527,7 @@ func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
 // The shape has moved across versions and a box runs whatever the operator's
 // image has, so all three terminal signals must be recognised.
 func TestOpenCodeRecognisesEveryTerminalSignal(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"step_finish stop":   `{"type":"step_finish","part":{"reason":"stop"}}`,
 		"session idle":       `{"type":"session.status","properties":{"status":{"type":"idle"}}}`,
@@ -465,6 +542,7 @@ func TestOpenCodeRecognisesEveryTerminalSignal(t *testing.T) {
 
 // An intermediate step carries "tool-calls" and must not end the run.
 func TestAnIntermediateStepIsNotATerminalSignal(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"step_finish","part":{"reason":"tool-calls"}}
 {"type":"text","part":{"text":"still working"}}`
 	if opencode().Finished(stream) {
@@ -474,6 +552,7 @@ func TestAnIntermediateStepIsNotATerminalSignal(t *testing.T) {
 
 // The stream is flushed live, so a poll routinely reads it mid-line.
 func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"text","part":{"text":"working"}}
 {"type":"step_fin`
 	if opencode().Finished(stream) {
@@ -486,6 +565,7 @@ func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
 }
 
 func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
+	t.Parallel()
 	stream := strings.Join([]string{
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest -q"},"status":"completed"}}}`,
 		`{"type":"text","part":{"text":"Fixed the flake."}}`,
@@ -510,6 +590,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 }
 
 func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
+	t.Parallel()
 	stream := `{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
 {"type":"text","part":{"text":"could not fix it"}}`
 	res := opencode().Parse(stream)
@@ -521,6 +602,7 @@ func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 // An invented token count in the spend rollup is worse than a missing one,
 // because a reader cannot tell it is invented.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
 	if res.InputTokens != 0 || res.OutputTokens != 0 || res.CostUSD != 0 {
 		t.Fatalf("tokens were invented: %+v", res)
@@ -528,6 +610,7 @@ func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 }
 
 func TestAnErrorEventIsAFailure(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"error","error":"model refused"}`)
 	if res.Success {
 		t.Fatal("an error event read as success")
@@ -539,6 +622,7 @@ func TestAnErrorEventIsAFailure(t *testing.T) {
 
 // An older CLI, or a run captured before the format flag.
 func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse("I fixed it and opened https://github.com/acme/api/pull/3")
 	if !res.Success || !strings.Contains(res.Text, "fixed it") {
 		t.Fatalf("plain output = %+v", res)
@@ -551,6 +635,7 @@ func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 // A tool-only run leaves no assistant text, which is exactly the case the
 // findings file exists for — but the parser must still report it honestly.
 func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
+	t.Parallel()
 	res := opencode().Parse(`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"ls"}}}}`)
 	if res.Success {
 		t.Fatal("a run that said nothing read as success")

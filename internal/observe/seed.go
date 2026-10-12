@@ -23,13 +23,14 @@ import (
 // node's store — which is what a restarted node's feed, rollup and seat rows
 // used to describe, a third of a three-node fleet — does not compile.
 //
-// The windowed reads take the instant they are measured from, which the seed
-// reads ONCE: a second reading per read would seed windows a few microseconds
-// apart, each longer than the projection's own.
+// The windowed reads are measured from the instant each query carries
+// ([store.PhaseTokenQuery.At], [store.TurnQuery.At]), which the seed reads
+// ONCE: a second reading per read would seed windows a few microseconds apart,
+// each longer than the projection's own.
 type FleetHistory interface {
 	List(ctx context.Context, q store.ListQuery) (eventfan.Listing, eventfan.Coverage, error)
-	PhaseTokens(ctx context.Context, q store.PhaseTokenQuery, at time.Time) ([]tokens.Record, eventfan.Coverage, error)
-	Turns(ctx context.Context, q store.TurnQuery, at time.Time) (eventfan.TurnPage, eventfan.Coverage, error)
+	PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error)
+	Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error)
 }
 
 // Seeded is the projection history is folded into. Satisfied by
@@ -69,14 +70,19 @@ const seedTurnReads = 16
 // THREE BOUNDED READS, each bound the projection's own, so a seed can never
 // hold more than the live stream could have built:
 //
-//   - the feed: the newest [livestate.EventFeedLimit] persisted events, inside
+//   - the feed: the newest [livestate.EventFeedLimit] persisted events the feed
+//     carries ([store.ListQuery.FeedOnly] — an accounting row is stored and
+//     never fed, see events.KeptOutOfFeed), inside
 //     the store's own read floor ([store.EventHistory]). Payload-free, because
 //     a feed row carries none;
-//   - the spend: the newest [livestate.SpendRecordLimit] phase records inside
+//   - the spend: the newest [livestate.SpendRecordLimit] spend records — phases
+//     and auxiliary records — inside
 //     [livestate.LiveSpendWindow], read from the promoted token columns rather
 //     than the payloads. The count is the projection's record cap, applied at
 //     the READ, on every node: a busy day past it was otherwise read in full
-//     inside the seed's time budget, only to be cut to the cap on arrival;
+//     inside the seed's time budget, only to be cut to the cap on arrival.
+//     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
+//     than one node's reply carries;
 //   - each agent seat's newest [SeedTurnsPerSeat] turns, for the seat's last
 //     turn and a turn it left parked on a coding run — asked by the seat's
 //     AGENT ID, read off the composed org (nil asks nobody: a node with no
@@ -134,7 +140,7 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 	// own and a turn page cut from another "now".
 	at := time.Now().UTC()
 	wg.Go(func() {
-		listing, c, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit})
+		listing, c, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit, FeedOnly: true})
 		if !report(c, err, "the activity feed's history") {
 			return
 		}
@@ -148,7 +154,8 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 		records, c, err := history.PhaseTokens(ctx, store.PhaseTokenQuery{
 			Since: at.Add(-livestate.LiveSpendWindow),
 			Limit: livestate.SpendRecordLimit,
-		}, at)
+			At:    at,
+		})
 		if report(c, err, "the live spend window's history") {
 			h.Spend = records
 		}
@@ -237,8 +244,8 @@ func seedTurns(ctx context.Context, history FleetHistory, seats []string, at tim
 			}
 			defer func() { <-slots }()
 			page, c, err := history.Turns(ctx, store.TurnQuery{
-				AgentID: seat, Sort: store.TurnSortStarted, Limit: SeedTurnsPerSeat,
-			}, at)
+				AgentID: seat, Sort: store.TurnSortStarted, Limit: SeedTurnsPerSeat, At: at,
+			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {

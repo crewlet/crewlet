@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -474,5 +475,24 @@ func TestAPassOnASpentContextIsAFault(t *testing.T) {
 	}
 	if pass.count() != 0 {
 		t.Fatalf("the pass ran %d times on a dead context", pass.count())
+	}
+}
+
+// A PASS NAMES THE KEY IT WAS HANDED, and an empty one is the key of a
+// deployment with no public listener — what the zero config.API answers, and
+// the only deployment a caller holding no Tier A file can describe. Held
+// against config.API itself in both directions, so the default cannot drift
+// from the accessor every caller holding a Tier A reads.
+func TestBaseKeyIsTheKeyHandedOrTheOneWithNoPublicListener(t *testing.T) {
+	t.Parallel()
+	var none config.API
+	if got := BaseKey(""); got != none.WebhookBaseKey() {
+		t.Errorf("BaseKey(\"\") = %q, want %q, the key of a deployment with no "+
+			"public listener", got, none.WebhookBaseKey())
+	}
+	public := config.API{Public: config.APIPublic{Port: 8443}}
+	if got := BaseKey(public.WebhookBaseKey()); got != "api.public.external_url" {
+		t.Errorf("BaseKey(%q) = %q: a key handed over was replaced",
+			public.WebhookBaseKey(), got)
 	}
 }

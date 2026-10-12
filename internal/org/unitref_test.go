@@ -50,10 +50,11 @@ func TestUnitByRefMatchesAnIDOrAName(t *testing.T) {
 }
 
 // AN ID WINS AN AMBIGUITY, whichever order the two units sit in. The pair is
-// refused on any document submitted since the duplicate-key rule existed, so
-// what this settles is what a STORED revision carrying one resolves to — and
-// it must not be walk order: an id is the spelling that cannot move, and the
-// unit answering by name is the one that can.
+// refused on any document submitted to this build, but an apply does not
+// enforce the admission rules, so what this settles is what an APPLIED
+// revision carrying one resolves to — and it must not be walk order: an id is
+// the spelling that cannot move, and the unit answering by name is the one
+// that can.
 func TestUnitByRefPrefersAnIDOverAnotherUnitsName(t *testing.T) {
 	t.Parallel()
 	// Rebuilt per case, because the order is the case and Normalize

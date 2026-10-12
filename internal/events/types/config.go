@@ -36,8 +36,11 @@ type ConfigRevisionActivated struct {
 	RevisionID      string `json:"revision_id"`
 	RevisionSummary string `json:"revision_summary"`
 	CreatedBy       string `json:"created_by"`
-	CreatedByKind   string `json:"created_by_kind,omitempty"`
-	OperatorID      string `json:"operator_id,omitempty"`
+	// CreatedByKind is what sort of author CreatedBy names, in
+	// iam.ActorKind's vocabulary, and every publisher sets it: a revision
+	// has an author, and the engine's own writes are `system`.
+	CreatedByKind string `json:"created_by_kind"`
+	OperatorID    string `json:"operator_id,omitempty"`
 }
 
 // EventType is the "config_revision_activated" wire type.

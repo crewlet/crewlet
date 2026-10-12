@@ -39,11 +39,11 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { useNow } from "~/lib/clock.ts";
-import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -149,7 +149,7 @@ export function Spend() {
               named={named}
               prior={prior}
               budget={budget}
-              raises={viewer.grants.includes(CONFIG_WRITE_GRANT)}
+              mayConfigure={mayChangeConfig(viewer)}
             />
             <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
           </div>

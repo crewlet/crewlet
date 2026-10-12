@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -38,8 +39,17 @@ const (
 	// auxTemperature keeps these passes reproducible without going
 	// greedy. Not zero: each is a judgement, and greedy decoding on a
 	// judgement makes a model commit hard to a first token it would
-	// otherwise reconsider.
+	// otherwise reconsider. Honoured only where the model takes a sampling
+	// parameter and the call is not thinking.
 	auxTemperature = 0.2
+
+	// auxEffort is the most thinking an auxiliary pass is worth: each one
+	// filters, summarises or rewrites what it is handed, which is
+	// extraction, and the prefetch is latency a person waits through. On a
+	// thinking model the thinking comes out of the same cap as the answer,
+	// so a pass at its entry's level is the empty answer the summary and
+	// the query rewrite already log.
+	auxEffort = llm.EffortLow
 
 	// knowledgeHits is how many pages are rendered.
 	//
@@ -49,8 +59,9 @@ const (
 	knowledgeHits = 6
 
 	// knowledgeQueryTokens is headroom for the query call. The visible
-	// answer is one short line; the cap covers a thinking model's
-	// reasoning, for the same reason the memory filter's does.
+	// answer is one short line, and this is room to spare for it on a call
+	// that does not think. A thinking call is sent the model's own ceiling
+	// instead (llm.Request.MaxTokens), and auxEffort keeps it short.
 	knowledgeQueryTokens = 1000
 )
 
@@ -78,6 +89,19 @@ const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
 	"this node yet — it is still indexing. Pages that exist will not be " +
 	"found by a search right now, so ask a colleague who would know rather " +
 	"than concluding nothing has been written down)"
+
+// UnsearchedKnowledgeHint is what the block says when the search did not run
+// at all — no copy of the knowledge base answered it, or its backend could not
+// be reached.
+//
+// A DIFFERENT SENTENCE from [EmptyKnowledgeHint], for [BuildingKnowledgeHint]'s
+// reason: "nothing surfaced" is a claim about what the company has written
+// down, and a search that never ran makes none. A seat told it concludes the
+// page does not exist and writes a duplicate of one that does — the same
+// answer the search_knowledge tool gives a search that served no mode.
+const UnsearchedKnowledgeHint = "(the knowledge base could not be searched at " +
+	"turn start, so this says nothing about whether a page exists — search it " +
+	"with a focused query once you know what the task needs)"
 
 // knowledgeQuerySystemPrompt turns a task into a search query.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
@@ -137,27 +161,47 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	}); ok && builder.Building(ctx) {
 		return knowledgeBlock{text: BuildingKnowledgeHint}
 	}
-	if r.RequiresRecon {
-		// The trigger is a pointer, so there is nothing worth searching
-		// on yet: a query built from "PR #42 got a comment" matches the
-		// wrong pages or none. The hint says to look again once the seat
-		// knows what the task needs, which is exactly what the executor's
-		// search_knowledge tool is for.
+	if !r.judgeable() {
+		// The trigger is a pointer, or asked nothing, so there is nothing
+		// worth searching on yet: a query built from "PR #42 got a
+		// comment" matches the wrong pages or none. The hint says to look
+		// again once the seat knows what the task needs, which is exactly
+		// what the executor's search_knowledge tool is for.
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	query := f.knowledgeQuery(ctx, r)
 	if query == "" {
 		return knowledgeBlock{}
 	}
-	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
+	if err := knowledge.CheckQuery(query); err != nil {
+		// A QUERY THE MODEL WROTE PAST THE SEARCH'S BOUND is not searched
+		// — the bound every surface holds a query to, so a model that
+		// ignored "2-8 keywords" and wrote a paragraph is not the one
+		// caller that slips one past it — and never cut to fit, which
+		// would search on wherever the cut fell. The block says the search
+		// did not run, because it did not; the seat searches with a
+		// focused query of its own once it knows what the task needs.
+		log.WarnContext(ctx, "prefetch_knowledge_query_refused", "error", err.Error(),
+			"detail", "the auxiliary model wrote a search query past the bound; "+
+				"the knowledge block says the search did not run")
+		return knowledgeBlock{text: UnsearchedKnowledgeHint}
+	}
+	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
 		// synthesis pass wrote; an executor cannot tell one from a
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
-	}).Hits
+	})
+	hits := answer.Hits
 	if len(hits) == 0 {
+		// NOTHING RAN, which is not "nothing matched": a search that
+		// served no mode searched nothing, so the block says so rather
+		// than telling the seat the company has written nothing down.
+		if answer.ServedMode == "" {
+			return knowledgeBlock{text: UnsearchedKnowledgeHint}
+		}
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	bullets := make([]string, 0, len(hits)+1)
@@ -179,9 +223,15 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.
+//
+// WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
+// executor is handed: the brief wraps a chat message in triage guidance with
+// worked examples of its own (a new hire welcomed, a ticket opened for an
+// engineer), and a query writer handed the brief is handed those as candidate
+// search terms beside the one sentence the turn is about.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
-	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
-		"Task the agent is about to work on:\n\""+r.Task+
+	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
+		"Task the agent is about to work on:\n\""+r.Ask+
 			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
 	if !ok {
 		return ""
@@ -229,6 +279,7 @@ func auxRequest(system, user string, maxTokens int) llm.Request {
 		// the surface invites a model to call it and answer nothing —
 		// there is no tool any of them could usefully use.
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   maxTokens,
 	}
 }

@@ -25,6 +25,12 @@
 // reconcile tick. That is what makes a write on one node reach the whole
 // fleet — the failure the control plane exists to remove was a config change
 // that only the process handling the request ever saw.
+//
+// A DEPLOYMENT MAY NAME WHO WRITES IT. When Tier A lists
+// `api.auth.company_writers`, the document is managed by the system holding
+// those tokens and every other credential is refused a change to it, here,
+// on every path onto it — ADR-0030, and managed.go for what counts as a
+// change.
 package configapi
 
 import (
@@ -88,6 +94,10 @@ type Service struct {
 	queue   queue.Publisher
 	cipher  secrets.Cipher
 	holders Holders
+	// writers is the deployment's managed-document policy: the one field
+	// of Tier A's `api.auth` this surface reads, through
+	// [config.APIAuth.MayWriteCompany], the one reading of it.
+	writers config.APIAuth
 	now     func() time.Time
 }
 
@@ -112,11 +122,21 @@ type Options struct {
 	// Holders reads what holds a human seat — whoever the identity
 	// directory binds to it, or an open invitation onto it — so a write
 	// that takes a human seat away while it is held is refused naming the
-	// holder (seatheld.go). Required: every node runs the identity domain
-	// from boot, and a surface that skipped the check would remove a
+	// holder (seatheld.go). Required: every node serving this surface holds
+	// the estate and runs the identity domain from boot, and a surface that
+	// skipped the check would remove a
 	// colleague's seat from under them, or an invitee's from under their
 	// link, with nothing said.
 	Holders Holders
+
+	// CompanyWriters is Tier A's `api.auth.company_writers`: the ids of the
+	// Tier A tokens that alone may change the company document (managed.go,
+	// ADR-0030). Empty leaves every write to the authority table.
+	//
+	// THE ONE FIELD, never the whole Tier A document: nothing else of the
+	// deployment's is this surface's to read, and a surface handed all of
+	// it has a way to start deciding on any of it.
+	CompanyWriters []string
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -166,6 +186,7 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
+		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
 	}, nil
 }
 
@@ -574,6 +595,9 @@ func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
 // With `dry_run=true` it is the same request, checked in the same order, that
 // stores and activates nothing: see [Service.prepare].
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -610,7 +634,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if found {
 		built = active.ID
 	}
-	d := replaceDraft(incoming, built)
+	d := replaceDraft(incoming, built, attributionOf(r))
 	if d.principal, ok = principalOf(w, r); !ok {
 		return
 	}
@@ -628,7 +652,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		"revision history is the record of who changed what and why") {
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -656,6 +680,9 @@ var errEmptyPatch = errors.New("the patch is empty")
 // nothing to merge onto, and building a company out of one section is not
 // what this route is for — `PUT /config` shows the whole thing.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -711,7 +738,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		"it was for matters most here") {
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -783,7 +810,13 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var held *SeatHeldError
 	var unknown *HoldersUnavailableError
 	var refused *AdmissionError
+	var managed *ManagedError
 	switch {
+	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
+	// managed document refuses whoever is asking before anything they sent
+	// is judged, so no other refusal can be answered in its place.
+	case errors.As(err, &managed):
+		RefuseManaged(w, managed)
 	case errors.As(err, &refused):
 		refuseAdmission(w, refused)
 	case errors.Is(err, ErrNoActiveRevision):
@@ -820,7 +853,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 				"still refused when the company it leaves is invalid", err)
 	case errors.As(err, &held):
 		// A REMEDY PER KIND OF HOLDER, because a person is never unbound —
-		// they hold a human seat for as long as they exist (ADR-0026) — so
+		// they hold a human seat for as long as they exist (ADR-0032) — so
 		// the one remedy this used to name, unbinding them, was refused by
 		// the very directory it sent an administrator to. Each `held` entry
 		// says which kind holds its seat.
@@ -885,6 +918,9 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 // can find later — and the epoch keeps advancing, which is what makes every
 // node reconcile onto it.
 func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	target, ok := s.lookup(w, r, r.PathValue("id"), httpjson.CodeNotFound)
 	if !ok {
 		return
@@ -905,15 +941,17 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prepared, err := s.prepare(r.Context(), draft{
+		by: attributionOf(r),
 		// VALIDATED SEPARATELY from the open, so each refusal says what is
 		// true. Opening holds a stored revision to no rule, and a revert is
 		// an apply: an old revision this build can no longer run is refused
 		// naming the field, where the open used to fold it into the keyring
 		// hint above.
 		//
-		// The RUNNABLE rules only, like every apply: an old revision that
-		// breaks an admission rule added since still runs, and reverting to
-		// a working company must not be refused over a rule it predates.
+		// The RUNNABLE rules only, like every apply: an admission rule is
+		// one an apply does not enforce, since a newer peer may have
+		// admitted the revision under rules this build does not share, and
+		// reverting to a company that runs must not be refused over one.
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
 		rules: (*config.Company).ValidateRunnable,
@@ -946,7 +984,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if summary == "" {
 		summary = "revert to " + target.ID
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary)
 	if err != nil {
 		s.refuseApply(w, err)
 		return

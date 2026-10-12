@@ -222,6 +222,13 @@ describe("one reading of a /config refusal", () => {
     [401, { error: "invalid_token" }, { kind: "guarded", code: "invalid_token" }],
     [403, {}, { kind: "guarded", code: "" }],
     [403, { error: "step_up_required" }, { kind: "guarded", code: "step_up_required" }],
+    // A MANAGED DOCUMENT ACCEPTED THE CREDENTIAL, so it is not `guarded`:
+    // the remedy is where the company is written, not a grant to ask for.
+    [
+      403,
+      { error: "config_managed", managed_by: ["gitops"], detail: "managed", hint: "there" },
+      { kind: "managed", managedBy: ["gitops"] },
+    ],
     [
       409,
       { error: "revision_advanced", current_revision_id: "r9" },

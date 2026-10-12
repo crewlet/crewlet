@@ -1,7 +1,5 @@
 package prompts
 
-import "strings"
-
 // ReviewHeader is the reviewer's contract: the decision enum plus the rules
 // that decide it.
 //
@@ -40,6 +38,13 @@ import "strings"
 // inside the loop where the model can still fix it, and overturns a `done`
 // that delivered nothing. Asking a model to re-derive a fact the engine holds
 // is how a real delivery got read as no delivery and posted twice.
+//
+// THE RECORD IS THE TURN'S, and the note says so because the evidence log
+// below it is only this round's: a reviewer looking at a round that re-read
+// an item after an earlier one answered sees no write here, and must not take
+// that for a turn that reached nobody. Whether this round still owed a
+// further delivery — a correction the first answer needs — is a question about
+// the work's merits, which is the reviewer's.
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below. Submit exactly one `submit_review` call with " +
 	"one decision:" +
@@ -55,10 +60,10 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"agent produced`, which is the agent's own account of itself. Calls " +
 	"marked `→ success` happened; `→ error` calls did not take effect." +
 	"\n**Whether anything was DELIVERED is already settled** — the engine " +
-	"checked the agent's delivery claims against that log before you saw " +
-	"either, and will overturn a `done` on a turn that answered in text " +
-	"and never called a tool. Judge the work on its merits instead: is it " +
-	"right, is it complete, is it what was asked for." +
+	"checked the agent's delivery claims against this turn's whole log, " +
+	"earlier rounds included, and will overturn a `done` when no round " +
+	"reached the person waiting. Judge the work on its merits instead: is " +
+	"it right, is it complete, is it what was asked for." +
 	"\n**Incomplete rule:** an outcome of `incomplete` was written by the " +
 	"engine, not by the agent — the pass ended without reporting at all. " +
 	"Nobody stands behind it. Judge the tool log and the produced text on " +
@@ -155,45 +160,52 @@ type ReviewInput struct {
 	// keyed on the role's MCP servers, even though Review has no domain
 	// tools — guidance an operator wants the reviewer to weigh stays
 	// available. Required skills render unmarked here; see
-	// injectSkillCatalogue.
+	// skillCatalogue.
 	Skills SkillCatalogue
 }
 
-// BuildReview renders the Review-phase system prompt.
+// BuildReview renders the Review-phase system prompt, and its outline.
 //
 // The reviewer sees the decision enum, what the agent said it set out to do,
 // the tool-call log, and the text it produced — so it judges against evidence
 // rather than self-narration. No domain tools, no catalogue, no policies /
 // roster / backstory: the reviewer's question is whether this round's work is
 // right, and everything it needs to answer that is in front of it.
-func BuildReview(seat Seat, in ReviewInput) string {
-	parts := []string{BuildIdentityLine(seat), ReviewHeader}
-	parts = injectSkillCatalogue(parts, in.Skills, PhaseReview, Surface{
+//
+// Each piece of evidence is ONE section of the outline however many headings
+// of its own it carries: the produced text is an agent's prose and routinely a
+// document with a "## Summary" in it, and the earlier rounds are a ledger of
+// "###" entries — both nest inside the section that quotes them.
+func BuildReview(seat Seat, in ReviewInput) Prompt {
+	b := NewBuilder("\n")
+	b.Lead("identity", "Identity", BuildIdentityLine(seat))
+	b.Heading("review_phase", ReviewHeader)
+	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseReview, Surface{
 		MCPServers: seat.mcpServers(),
-	})
+	})...)
 	// Evidence runs oldest-first so the reviewer reads the turn
 	// top-to-bottom as one timeline: earlier rounds, then this round's
 	// intent, then what it did, then what it produced.
 	if in.EarlierIterations != "" {
-		parts = append(parts, "\n## Earlier rounds (already delivered)", in.EarlierIterations)
+		b.Heading("earlier_rounds", "\n## Earlier rounds (already delivered)", in.EarlierIterations)
 	}
 	if in.Intent != "" {
-		parts = append(parts, "\n## What the agent set out to do (its own account)", in.Intent)
+		b.Heading("intent", "\n## What the agent set out to do (its own account)", in.Intent)
 	}
 	if in.Outcome != "" {
-		parts = append(parts, "\n## Reported outcome", outcomeLine(in.Outcome, in.Rescued))
+		b.Heading("outcome", "\n## Reported outcome", outcomeLine(in.Outcome, in.Rescued))
 	}
 	if in.Evidence != "" {
-		parts = append(parts, "\n## What blocked it (the agent's account)", in.Evidence)
+		b.Heading("blocked_by", "\n## What blocked it (the agent's account)", in.Evidence)
 	}
-	parts = append(parts, "\n## What the agent did", orNone(in.ToolLog))
+	b.Heading("tool_log", "\n## What the agent did", orNone(in.ToolLog))
 	if in.OpenQuestions != "" {
-		parts = append(parts, "\n## Open questions the agent raised", in.OpenQuestions)
+		b.Heading("open_questions", "\n## Open questions the agent raised", in.OpenQuestions)
 	}
 	if in.Produced != "" {
-		parts = append(parts, "\n## What the agent produced", in.Produced)
+		b.Heading("produced", "\n## What the agent produced", in.Produced)
 	}
-	return strings.Join(parts, "\n")
+	return b.Build()
 }
 
 // outcomeLine renders the outcome word with who wrote it.

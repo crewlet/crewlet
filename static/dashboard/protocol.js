@@ -1,3 +1,121 @@
+//#region src/contract/wire.ts
+/**
+* A live call's HEAVY fields, by the version that numbers each — the engine's
+* `livestate.CallDetail`, held there both ways by `internal/api/livestate`'s
+* `TestTheDashboardMergesEveryVersionedField`.
+*
+* An `agents` push carries these only when their version moved since the last
+* push for the same call — they move once a round or once a tool call, while
+* the row is pushed five times a second as a round streams — and names every
+* version always. The store keeps the copy it holds of a field the push left
+* out, and asks for the call whole (`live_call`) when a push names a version
+* newer than the one it holds: the push that moved it was dropped. A field
+* named here that the engine does not version is one a push never leaves out
+* and the merge waits on for ever; one the engine versions that is not named
+* here is a field the merge drops from the screen.
+*/
+var LIVE_CALL_DETAIL = {
+	prompt: ["prompt", "prompt_messages"],
+	response: ["response"],
+	narration: ["round_narration"],
+	executions: ["tool_executions"],
+	rounds: ["rounds"]
+};
+/**
+* How long a query waits for its answer ONCE SENT.
+*
+* The clock starts when the frame goes out, not when the query is made, so time
+* spent waiting for a socket is not counted against the server. Ten seconds is
+* far beyond the slowest query's normal latency and still short enough that a
+* screen shows an error rather than an eternal skeleton.
+*
+* AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
+* (`engine.BrokerReadWait`), held there by `internal/api`'s
+* `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
+* member for the metadata group and may spend that long on it, and a screen
+* that gave up first would report a slow answer as a failed one.
+*/
+var QUERY_TIMEOUT_MS = 1e4;
+/** What a heavy field reads as while nothing of it is held. */
+var NOTHING_HELD = {
+	prompt: "",
+	prompt_messages: null,
+	response: "",
+	round_narration: null,
+	tool_executions: null,
+	rounds: null
+};
+/**
+* One seat's live call as a push states it, merged onto the copy a tab holds —
+* and whether the push says the tab missed a change it no longer carries.
+*
+* THE PUSH LEAVES OUT WHAT DID NOT MOVE. A call's heavy fields
+* (`LIVE_CALL_DETAIL`) travel only on the push that moved their version, and
+* every push names every version. So a field the push carries is taken — unless
+* its version is older than the one held, a push overtaken by a snapshot or an
+* answer — and one it leaves out is the copy held, at the version held, for the
+* SAME call (`turn_id`, `phase`, `iteration`); a call of its own holds nothing
+* yet. A push naming a version newer than the one held, without the field, is
+* a tab that missed the push which carried it: `stale`, and the field stays
+* what is held until the call is fetched whole.
+*/
+function mergeLiveCall(held, next) {
+	if (!next) return {
+		call: null,
+		stale: false
+	};
+	const same = !!held && sameCall(held, next);
+	const merged = { ...next };
+	const versions = {};
+	let stale = false;
+	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		const pushed = next.versions[detail];
+		const have = same ? held.versions[detail] : 0;
+		const carried = fields.every((f) => f in next);
+		if (carried && pushed >= have) {
+			versions[detail] = pushed;
+			continue;
+		}
+		for (const f of fields) merged[f] = same ? held[f] : NOTHING_HELD[f];
+		versions[detail] = have;
+		if (!carried && pushed > have) stale = true;
+	}
+	merged.versions = versions;
+	return {
+		call: merged,
+		stale
+	};
+}
+/** Whether two copies are of one call: one turn, one phase, one iteration. */
+function sameCall(a, b) {
+	return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
+}
+/**
+* The heavy fields of `older` — a copy of the call `held` is, read BEFORE the
+* pushes that brought `held` — whose versions are newer than `held`'s, laid onto
+* `held`; or null when it brings none, or is not a copy of the same call.
+*
+* A version is never handed out twice and only grows, so a newer one is newer
+* content whenever it was read: the pushes after `older` left those fields out
+* because the tab was meant to hold them already, and their copy is what the
+* tab missed. Everything else — the light fields, and every heavy field the tab
+* holds at a version as new — stays `held`'s, which the later pushes wrote.
+*/
+function newerDetail(held, older) {
+	if (!sameCall(held, older)) return null;
+	let merged = null;
+	const versions = { ...held.versions };
+	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		const version = older.versions[detail];
+		if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
+		merged ??= { ...held };
+		for (const f of fields) merged[f] = older[f];
+		versions[detail] = version;
+	}
+	if (!merged) return null;
+	merged.versions = versions;
+	return merged;
+}
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -17,7 +135,7 @@ function emptyState() {
 		sandboxes: [],
 		org: null,
 		tools: [],
-		health: { status: "unknown" },
+		health: null,
 		tokens: null,
 		budget: null,
 		schedules: null,
@@ -94,7 +212,9 @@ var Store = class {
 		this.emit(...ALL_DATA_SLICES);
 	}
 	/**
-	* Changed seat overlays, merged onto the roster rows by AGENT ID.
+	* Changed seat overlays, merged onto the roster rows by AGENT ID — and the
+	* agent ids whose live call this tab now holds behind what the push
+	* describes, which the socket fetches whole (`mergeLiveCall`).
 	*
 	* By the id and nothing else. They were merged by ROLE NAME, which is prose:
 	* two seats sharing a name both took every overlay either of them moved, so
@@ -110,18 +230,90 @@ var Store = class {
 	* have removed.
 	*/
 	applyAgents(rows) {
-		if (!Array.isArray(rows) || rows.length === 0) return;
+		if (!Array.isArray(rows) || rows.length === 0) return [];
 		const byID = /* @__PURE__ */ new Map();
 		for (const row of rows) if (row && typeof row.agent_id === "string" && row.agent_id !== "") byID.set(row.agent_id, row);
-		if (byID.size === 0) return;
+		if (byID.size === 0) return [];
+		const stale = [];
+		const merge = (held, patch) => {
+			if (!("live_call" in patch)) return patch;
+			const heldSeq = held.live_call_seq ?? 0;
+			const patchSeq = patch.live_call_seq;
+			if (patchSeq !== void 0 && patchSeq < heldSeq) return {
+				...patch,
+				live_call: held.live_call ?? null,
+				live_call_seq: heldSeq
+			};
+			const { call, stale: behind } = mergeLiveCall(held.live_call, patch.live_call);
+			if (behind) stale.push(patch.agent_id);
+			return {
+				...patch,
+				live_call: call,
+				live_call_seq: patchSeq ?? heldSeq
+			};
+		};
 		this.state.agents = this.state.agents.map((a) => {
 			const patch = byID.get(a.agent_id);
 			return patch ? {
 				...a,
-				...patch
+				...merge(a, patch)
 			} : a;
 		});
 		this.emit("agents");
+		return stale;
+	}
+	/**
+	* One seat's live call, fetched WHOLE because a push said this tab had
+	* missed a change to it — and whether the answer was CURRENT: at or past the
+	* sequence the seat has applied, so that nothing a push has said since is
+	* missing from it.
+	*
+	* ORDERED BY `live_call_seq`, because this answer runs on its own goroutine
+	* and the socket can deliver it AFTER pushes the engine generated later. A
+	* current answer is merged like a push that carries everything. One BEHIND
+	* the applied sequence describes the slot as it was before those pushes, and
+	* the sequence decides only what it can order:
+	*
+	* - when they cleared the call or began another, the answer is DROPPED, so a
+	*   cleared seat or a newer call is never overwritten by a running call read
+	*   a moment before it — a per-field version cannot say this, since a cleared
+	*   null carries none and two calls' fields are never compared;
+	* - when they are the same call, the answer still brings every heavy field
+	*   whose version is newer than the copy held (`newerDetail`), because those
+	*   are exactly what the tab asked for — the pushes since left them out —
+	*   while the light fields stay the newer pushes'. Dropping it whole lost
+	*   that repair, and nothing asked again until the seat's next push.
+	*
+	* A behind answer is the caller's cue to ask again if a push said the call
+	* was behind while this answer was out (`LiveSocket.fetchCalls`).
+	*/
+	applyLiveCall(answer) {
+		if (!answer || typeof answer.agent_id !== "string" || answer.agent_id === "") return true;
+		let moved = false;
+		let current = true;
+		this.state.agents = this.state.agents.map((a) => {
+			if (a.agent_id !== answer.agent_id) return a;
+			const heldSeq = a.live_call_seq ?? 0;
+			const seq = answer.live_call_seq;
+			if (seq >= heldSeq) {
+				moved = true;
+				return {
+					...a,
+					live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+					live_call_seq: seq
+				};
+			}
+			current = false;
+			const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+			if (!fresher) return a;
+			moved = true;
+			return {
+				...a,
+				live_call: fresher
+			};
+		});
+		if (moved) this.emit("agents");
+		return current;
 	}
 	/**
 	* The complete seat list, replacing what is on screen.
@@ -169,13 +361,13 @@ var Store = class {
 		this.emit("tools");
 	}
 	applyHealth(health) {
-		this.state.health = health ?? { status: "unknown" };
-		this.state.connected = !!health && health.status !== "unknown";
+		this.state.health = health ?? null;
+		this.state.connected = !!health;
 		this.emit("health");
 	}
 	setConnected(value) {
 		this.state.connected = value;
-		if (!value) this.state.health = { status: "unknown" };
+		if (!value) this.state.health = null;
 		this.emit("health");
 	}
 	/**
@@ -541,9 +733,9 @@ var RestError = class extends Error {
 	*
 	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
 	* the engine wrote means nothing was done; this means nobody here knows. A
-	* reverse proxy's default read timeout is a minute, which is exactly what
-	* the engine allows a node gate past its judgement, so a slow eviction
-	* reached the browser as a 504 — and read as a refusal, its operation id
+	* reverse proxy whose read timeout is shorter than the fifty seconds the
+	* engine takes to answer a node gate (`engine.GateAnswerBudget`) hands a slow
+	* eviction to the browser as a 504 — and read as a refusal, its operation id
 	* was dropped with it.
 	*/
 	get unanswered() {
@@ -651,9 +843,10 @@ function offline(err) {
 * It is the DEFAULT, not the only deadline: a call whose path is genuinely
 * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
 * Two do. A backup copies the whole store before it answers. And the node
-* gate is allowed longer than this from its first record to its last answer
-* (`contract/gate.ts`), so thirty seconds gave up on a gesture the node went
-* on to finish, holding nothing to finish it with.
+* gate answers a gesture within `engine.GateAnswerBudget`, and a client waits
+* the longer `GATE_REQUEST_TIMEOUT_MS` for it (`contract/gate.ts`), so thirty
+* seconds gave up on a gesture the node went on to finish, holding nothing to
+* finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -868,6 +1061,80 @@ async function attempt(method, path, options) {
 async function bodyOf(method, path, options) {
 	return (await request(method, path, options)).body;
 }
+/**
+* How long a download may take, from its request to its last byte.
+*
+* FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+* gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+* sized for a JSON answer would abandon every large download part way.
+*/
+var DOWNLOAD_TIMEOUT_MS = 9e5;
+/**
+* A file's bytes, fetched as a blob over the session cookie.
+*
+* NOT A LINK. A plain `<a href>` would carry the cookie too, but its answer is
+* the browser's to handle: a refusal would be saved to disk as the file — the
+* engine's JSON envelope under the file's own name — and a lost session would
+* download a 401 rather than sending the reader to sign in. Fetched here, a
+* refusal is the engine's JSON read like every other ([RestError], with its
+* `Retry-After`), and a `401` reaches [noteSession] exactly as a request's
+* does.
+*
+* NOT COUNTED IN FLIGHT ([whenRequestsSettle]): a download may run for
+* [DOWNLOAD_TIMEOUT_MS], and a socket closed 4401 waits for the requests that
+* could be carrying a new cookie — a GET of a file sets none.
+*/
+async function blob(path, signal) {
+	if (signal?.aborted) throw signal.reason;
+	const controller = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, DOWNLOAD_TIMEOUT_MS);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	const unanswered = (err) => {
+		if (signal?.aborted) return signal.reason;
+		return timedOut ? new RestError(0, {
+			error: "unreachable",
+			detail: `the download did not finish within ${waitWords(DOWNLOAD_TIMEOUT_MS)}`
+		}) : offline(err);
+	};
+	try {
+		let response;
+		try {
+			response = await fetch(location.origin + path, {
+				method: "GET",
+				cache: "no-store",
+				credentials: "same-origin",
+				signal: controller.signal
+			});
+		} catch (err) {
+			throw unanswered(err);
+		}
+		answeredAt = Date.now();
+		if (!response.ok) {
+			let body;
+			try {
+				body = await response.json();
+			} catch {
+				body = { error: "unreadable_body" };
+			}
+			const refusal = new RestError(response.status, body, retryAfterOf(response));
+			noteSession(refusal);
+			throw refusal;
+		}
+		try {
+			return await response.blob();
+		} catch (err) {
+			throw unanswered(err);
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
+	}
+}
 var rest = {
 	/**
 	* The whole answer: status, entity-tag and body. For a caller that sends a
@@ -905,7 +1172,9 @@ var rest = {
 	del: (path, body, headers) => bodyOf("DELETE", path, {
 		body,
 		headers
-	})
+	}),
+	/** A file's bytes — see [blob]. */
+	blob
 };
 //#endregion
 //#region src/protocol/api.ts
@@ -1157,15 +1426,6 @@ var PING_MS = 25e3;
 */
 var FALLBACK_MS = 5e3;
 /**
-* How long a query waits for its answer ONCE SENT.
-*
-* The clock starts when the frame goes out, not when the query is made, so time
-* spent waiting for a socket is not counted against the server. Ten seconds is
-* far beyond the slowest query's normal latency and still short enough that a
-* screen shows an error rather than an eternal skeleton.
-*/
-var QUERY_TIMEOUT_MS = 1e4;
-/**
 * What a watch refusal's error frame names in `what` — the engine's
 * `watchWhat`. A watch carries no query id, so this is how an error frame about
 * one is told from a query's.
@@ -1330,6 +1590,10 @@ var LiveSocket = class {
 	*/
 	watched = "";
 	watchRetry = 0;
+	/** Seats, by AGENT ID, whose live call is being fetched whole, each with
+	*  whether a push found the call behind again while the fetch was out — see
+	*  `fetchCalls`. */
+	fetchingCalls = /* @__PURE__ */ new Map();
 	constructor(store, options = {}) {
 		this.store = store;
 		this.takeSession = options.takeSession ?? (() => true);
@@ -1732,7 +1996,7 @@ var LiveSocket = class {
 				this.store.applyEvent(msg.data);
 				break;
 			case "agents":
-				this.store.applyAgents(msg.data);
+				this.fetchCalls(this.store.applyAgents(msg.data));
 				break;
 			case "seats":
 				this.store.applySeats(msg.data);
@@ -1773,6 +2037,34 @@ var LiveSocket = class {
 				break;
 			case "pong": break;
 			default: this.store.noteUnknownPush(msg.kind);
+		}
+	}
+	/**
+	* Fetch, whole, each seat's live call this tab holds behind what a push
+	* described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
+	* server's queue (`mergeLiveCall`).
+	*
+	* ONE ASK PER SEAT IN FLIGHT, but a push that finds the call behind while it
+	* is out is NOT the same thing said twice: the answer may have been read
+	* before that push's change, and the store then drops it or takes only the
+	* fields it has newer (`Store.applyLiveCall`). So such a push is remembered,
+	* and once the answer lands BEHIND the pushes applied since — or the ask
+	* fails — the call is asked for again, once, rather than left behind until
+	* the seat's next push, which a frozen failed call or a long round never
+	* sends. An answer at or past them holds everything they named, and ends it.
+	*/
+	fetchCalls(ids) {
+		for (const id of ids) {
+			if (this.fetchingCalls.has(id)) {
+				this.fetchingCalls.set(id, true);
+				continue;
+			}
+			this.fetchingCalls.set(id, false);
+			this.query("live_call", { agent_id: id }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
+				const again = this.fetchingCalls.get(id) ?? false;
+				this.fetchingCalls.delete(id);
+				if (again && !current) this.fetchCalls([id]);
+			});
 		}
 	}
 	settle(id, error, data, refusal = null, detail = null) {
@@ -1941,6 +2233,56 @@ function layoutOpID(unixMs, tail, name) {
 function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.getRandomValues(bytes)) {
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
+//#endregion
+//#region src/contract/fleet.ts
+/**
+* The fleet's broker and object store, as the engine bounds them: the kinds
+* a node's broker can be and the disagreements named between the two records
+* of its membership, how long a removal may take, and the states of the object
+* store's report.
+*
+* Each is a COPY of something the engine owns, because this is a separate
+* build that cannot import a Go identifier — held to the engine's in both
+* directions by `internal/api`'s `broker_client_test.go` and
+* `objects_test.go`. What is done with them is behaviour, and lives in
+* `protocol/broker.ts` and the Settings screens.
+*/
+/**
+* How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
+* `String()` renders it.
+*
+* `unknown` IS A VALUE, not an absence: a presence advertising a kind this build
+* does not know (a newer build's) is rendered `unknown` so the cell is never
+* empty — an empty cell reads as nothing to look at, and this one is counted
+* as a member wherever that is the safe reading.
+*/
+var BROKER_KINDS = [
+	"member",
+	"leaf",
+	"client",
+	"unknown"
+];
+/**
+* The disagreements between the two records of the broker's membership —
+* `engine.BrokerFindingKinds`.
+*/
+var BROKER_FINDING_KINDS = [
+	"dead_member",
+	"not_in_group",
+	"unknown_kind"
+];
+/**
+* How long a removal's request may take before the dialog gives up on it.
+*
+* THREE MINUTES AND FIVE SECONDS, the command line's own wait and for its
+* reason: the node bounds the whole removal by one deadline
+* (`engine.BrokerRemoveWait`, two minutes and five seconds) — the carrying
+* member's own commit budget and one round trip for its answer — and a minute
+* more covers the node listing the fleet and reaching the member. A dialog
+* that gave up first would report a removal the group went on to commit as
+* failed.
+*/
+var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 //#endregion
 //#region src/protocol/keepalive.ts
 /**
@@ -2631,4 +2973,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

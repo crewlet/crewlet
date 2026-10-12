@@ -43,11 +43,22 @@ func (Domain) Name() string { return "iam" }
 //
 // A SESSION OPERATION RE-ASKED PAST THE HOUR IS NOT DECIDED AGAIN. The sweep
 // that takes these rows records that THIS KIND lost them, apart from the
-// table's month (replicated migration 0031), so the publisher answers an
+// table's month (replicated migration 0041), so the publisher answers an
 // operation minted before that instant whose row is gone `unknown` without
 // publishing it ([statelog.Result.Unvouched]) — never a second start of a
 // session, never a close decided on rows that may already hold the first —
 // while every other kind's retry is still vouched for across the month.
+//
+// SO NO SESSION OPERATION TAKES A DERIVED ID ([statelog.DeriveOpID]): an id
+// derived from a unit of work's start carries that instant for up to
+// [statelog.MintHorizon] — a month short of a day — which is long past this
+// kind's hour, so every retry under it would be answered `unknown` on every
+// node and never published. A sign-in's operation is stepped from the lineage
+// it mints ([statelog.StepOpID]), and a close's minted fresh or stepped from
+// the lineage that replaces it — each at the instant its gesture happens — and
+// re-asked, if at all, inside the publisher's own resolve budget
+// — the rule [statelog.MintHorizon] states for every kind swept sooner than the
+// retention.
 const SessionOpsRetention = time.Hour
 
 // IamLogMaxBytes is the ceiling this domain declares for its log, which is
@@ -254,7 +265,7 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 // subject's rows go after [SessionOpsRetention] and every other kind's after
 // the framework's month. The sweep of the hour is a range over the stored
 // SUBJECT, which already carries the kind, and it records that kind's loss
-// APART from the table's (replicated migration 0031 ships both), so the
+// APART from the table's (replicated migration 0041 ships both), so the
 // publisher holds a session operation to the hour and every other kind to the
 // month. One watermark moved hourly would have answered every identity
 // operation minted more than an hour earlier — a redemption, a create retried
@@ -269,23 +280,25 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 func (Domain) OpsTable() string { return "iam_ops" }
 
 // ReadinessInput reports that this domain's health does NOT gate seat
-// admission — and it is the FIRST strictly-ordered domain to say so, which is
-// why this is the longest answer in the file.
+// admission, and never judges this node's copy of the estate — and it is the
+// FIRST strictly-ordered domain to say so, which is why this is the longest
+// answer in the file.
 //
 // The tracker and the knowledge base both say true, and the argument is the
 // same each time: a node behind on them serves a turn from state that
-// is wrong, so admitting a seat there is confident wrong output. The vector
-// domain says false because it is COMPACTED and a gap is a coverage number.
-// This one says false for a third reason, and stating it is the point.
+// is wrong, so a fault there takes this node's copy out of service rather than
+// serve confident wrong output. The vector domain says false because it is
+// COMPACTED and a gap is a coverage number. This one says false for a third
+// reason, and stating it is the point.
 //
 // AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
 // its authority is decided by internal/authz from the ORG CHART, and its work
 // arrives on its mailbox. Nothing in a turn asks who the people are. So a node
 // whose iam applier has stalled runs every seat it holds exactly as correctly
-// as a node whose applier is current — and shedding a company's seats because
-// a human cannot sign in would be an outage caused by the wrong subsystem, at
-// the moment an operator most needs the company still working so they can go
-// and fix it.
+// as a node whose applier is current — and taking its copy of the work and the
+// pages out of service because a human cannot sign in would stop the company's
+// work for a fault in the wrong subsystem, at the moment an operator most
+// needs the company still working so they can go and fix it.
 //
 // WHAT THE STALL MUST GATE INSTEAD IS THE REQUEST PATH, and it does, one layer
 // up: a node that has not applied a revocation answers a session bearer with

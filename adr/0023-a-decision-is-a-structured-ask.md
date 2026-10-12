@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracker`
-- **Enforced-by:** `internal/tracker.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/tracker.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
+- **Enforced-by:** `internal/tracker.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/tracker.TestADecisionIsValidatedField`, `internal/tracker.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
 - **Cost-when-tried:** "no decision engine" was read as "no decision structure". A question that needed somebody to choose travelled as prose on an `ask` comment — the options somewhere in the body, the recommendation a sentence among others, the evidence links a reader went looking for — and the answer was prose the asker then had to map back onto the options it had in mind. The dashboard design dropped its "Also posts to Slack" line because nothing could keep it; when the line came back as `inform`, the tracker accepted it from an operator, for a surface the company did not run and for a channel nothing declared, and a second answer to one ask landed beside the first, claiming to close a question the first had already closed.
 - **Tag-status:** unreleased
 

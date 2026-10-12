@@ -135,8 +135,8 @@ func TestARestoredTraceIsContinuedNotRestarted(t *testing.T) {
 	}
 }
 
-// The wire feeds this. An event written by an older build carries no ids at
-// all, and a rolling upgrade guarantees some do — those must still run.
+// The wire feeds this. A wake published outside any span carries no ids at
+// all, and garbage or all-zero ids are no better — those must still run.
 func TestAnUnusableRemoteTraceIsNotFatal(t *testing.T) {
 	configure(t, nil)
 

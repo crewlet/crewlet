@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -35,17 +37,16 @@ import (
 // historical event.
 
 const (
-	// threadPosts is how many messages the block renders.
+	// threadMaxChars is the bound, in bytes, on the block as a whole:
+	// past it the root and the newest WHOLE messages fill three quarters
+	// and the messages between them are condensed into the last quarter —
+	// never a cut inside a message, and never a message simply left out
+	// while a rewrite can be had.
 	//
-	// Thirty is more than the span of a thread a decision is actually made
-	// in, and the root is always one of them however far back it is — so
-	// the bite is on a long-running thread, where the newest thirty are
-	// what the trigger is answering and the rest is history the seat's own
-	// conversation ledger already carries.
-	threadPosts = 30
-
-	// threadMaxChars is the second bound, in bytes, enforced by dropping
-	// WHOLE messages.
+	// THE ONLY BOUND. There was a second, thirty messages, which dropped
+	// everything older whatever its size; with the middle condensed rather
+	// than dropped, a count bounds nothing the bytes do not, and on a
+	// thread of short replies it threw away messages that would have fit.
 	//
 	// One third of [ledger.InjectedMaxChars] (24000), and anchored there
 	// on purpose: both blocks are frozen into the same system prompt and
@@ -60,6 +61,12 @@ const (
 	// were validated, defaulted and documented for a truncation that never
 	// happened, because neither was threaded to a caller.
 	threadMaxChars = 8000
+
+	// threadEarlierShare is the part of threadMaxChars the condensed
+	// account of the middle of a long thread is given — one quarter, the
+	// conversation ledger's own share ([ledger.EarlierShare]) for the same
+	// reason: the messages the trigger is answering keep the most room.
+	threadEarlierShare = ledger.EarlierShare
 
 	// ThreadTimeout bounds the read.
 	//
@@ -166,6 +173,9 @@ type threadBlock struct {
 	// stoppedShort says the answer stops short of the thread's newest
 	// message. See [notify.Transcript.StoppedShort].
 	stoppedShort bool
+	// answered are the messages the block showed that were waiting for this
+	// turn. See [Blocks.ThreadContextAnswered].
+	answered []string
 }
 
 // threadContext renders the block.
@@ -192,17 +202,19 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 	if !ok {
 		return threadBlock{text: UnreadableThreadHint}
 	}
-	return f.renderThread(transcript, r.Thread.Backend)
+	return f.renderThread(ctx, r, transcript, r.Thread.Backend)
 }
 
 // renderThread bounds and renders what came back.
 //
-// WHOLE MESSAGES, oldest dropped first, and the drop is REPORTED — never a
-// cut inside one, which would leave half of what somebody said reading as the
-// whole of it. Two survivors are exempt from every bound: the ROOT, because
-// it is what the thread is about and a thread rendered without it reads as a
-// conversation starting mid-sentence, and the NEWEST, because it is the
-// message that woke the turn.
+// WHOLE MESSAGES, never a cut inside one, which would leave half of what
+// somebody said reading as the whole of it. Past the bound the messages
+// between the root and the newest that fit are CONDENSED by the seat's
+// auxiliary model into one account marked as a rewrite, and only where no
+// rewrite can be had are they left out — and counted. Two survivors are exempt
+// from every bound: the ROOT, because it is what the thread is about and a
+// thread rendered without it reads as a conversation starting mid-sentence,
+// and the NEWEST, because it is the message that woke the turn.
 //
 // THE ROOT IS THE FIRST MESSAGE, never "the first line that rendered". Which
 // message is the root is [notify.ThreadReader]'s answer, not this renderer's —
@@ -214,13 +226,21 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // bot posted as attachments alone promoted the oldest surviving reply into
 // its place and described it to the model as what the thread was about.
 //
-// This is the rule [joinBullets] argues for and [ledger.RenderHistory]
-// implements, applied to the one block whose items are somebody else's prose:
-// the shared cuts are both wrong here, because [textcut] counts bytes and its
-// own doc says content a turn reasons over is passed whole, and ledger.Elide
-// says outright that it is not for content.
-func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlock {
+// This is the rule [ledger.RenderHistory] implements, applied to the one block
+// whose items are somebody else's prose.
+//
+// AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
+// — the ones after this seat's own last reply and before the message that
+// woke the turn — kept in step with the lines through every bound. Only a
+// message rendered VERBATIM counts: one left out was never seen, and one
+// condensed into the middle's account was seen as a model's paraphrase, and a
+// message recorded as answered is one a later delivery of it is dropped for.
+func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
+	// waiting runs beside lines: the id of the message a line rendered when
+	// that message was waiting for this turn, and "" for every other line.
+	waiting := make([]string, 0, len(read.Messages))
+	waitingFor := waitingMessages(read, r.Message)
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
 	// because the message count reports what was HANDED OVER, and a notice
@@ -231,6 +251,7 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 		if i == 0 {
 			if line == "" {
 				lines = append(lines, UnrenderableRootLine)
+				waiting = append(waiting, "")
 				continue
 			}
 			rootShown = true
@@ -238,6 +259,7 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 			continue
 		}
 		lines = append(lines, line)
+		waiting = append(waiting, waitingFor[i])
 	}
 	posts := len(lines)
 	if rootSlot && !rootShown {
@@ -266,23 +288,45 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 	// line standing in for it, and counting it here as well would tell the
 	// seat one message is missing twice.
 	dropped := read.Older
-	if len(lines) > threadPosts {
-		// The ROOT plus the newest threadPosts-1: the oldest reply is the
-		// first thing worth losing, and lines[0] is the root's own slot,
-		// so it is never in that range.
-		dropped += len(lines) - threadPosts
-		lines = append(lines[:1], lines[len(lines)-(threadPosts-1):]...)
-		posts = len(lines)
-		if !rootShown {
-			posts--
-		}
+	lines, middle := splitThread(lines)
+	// The same split, beside the lines: splitThread keeps the root's slot
+	// and the newest, so a middle is lines[1 : 1+len(middle)].
+	var waitingMiddle []string
+	if len(middle) > 0 {
+		waitingMiddle = waiting[1 : 1+len(middle)]
+		waiting = append(append([]string{}, waiting[0]), waiting[1+len(middle):]...)
 	}
-	// The byte ceiling then eats from the same end, and stops at two: the
-	// root's slot and the newest both survive however long they are.
-	for len(lines) > 2 && len(strings.Join(lines, "\n")) > threadMaxChars {
-		lines = append(lines[:1], lines[2:]...)
-		dropped++
+	posts = len(lines)
+	if rootSlot && !rootShown {
 		posts--
+	}
+	// THE MIDDLE IS CONDENSED, NOT DROPPED. The messages between the root
+	// and the newest that fit used to be left out, counted, and the seat
+	// sent to its chat tools for them — which on a long thread is exactly
+	// where the decision it is now being asked about was made. They are
+	// rewritten by the seat's auxiliary model into one account instead,
+	// and only left out, and counted, where no rewrite can be had.
+	condensed := ""
+	if len(middle) > 0 {
+		res, err := f.src.Compact.For(r.Seat, r.Aux).Fit(ctx, compact.KindThread,
+			strings.Join(middle, "\n"), threadMaxChars/threadEarlierShare)
+		switch {
+		case err == nil && !res.Compacted:
+			// THE MIDDLE FITS ITS SHARE AS IT IS — the newest message
+			// alone was what pushed the block over — so it renders
+			// verbatim, unlabelled. Calling it condensed would be a lie
+			// about text nobody rewrote.
+			lines = append(append(append([]string{}, lines[0]), middle...), lines[1:]...)
+			waiting = append(append(append([]string{}, waiting[0]), waitingMiddle...), waiting[1:]...)
+			posts += len(middle)
+			middle = nil
+		case err == nil:
+			condensed = res.Text
+		default:
+			log.DebugContext(ctx, "prefetch_thread_not_condensed", "seat", r.Seat.Handle(),
+				"messages", len(middle), "error", err.Error())
+			dropped += len(middle)
+		}
 	}
 
 	var b strings.Builder
@@ -297,6 +341,13 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 	if len(lines) > 0 {
 		b.WriteString("\n" + lines[0])
 	}
+	if condensed != "" {
+		// MARKED AS A REWRITE, and as standing for a stated number of
+		// messages: a seat that took it for what somebody wrote would
+		// quote a model's paraphrase back at them.
+		b.WriteString("\n_(" + strconv.Itoa(len(middle)) + " earlier message(s), condensed by " +
+			"a model — identifiers verbatim, wording not:)_\n" + condensed)
+	}
 	if dropped > 0 {
 		// SAID OUT LOUD. A silently shortened thread reads as the whole
 		// conversation, and a seat that believes it has seen everything
@@ -308,10 +359,73 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 	for _, line := range lines[1:] {
 		b.WriteString("\n" + line)
 	}
+	var answered []string
+	for _, id := range waiting {
+		if id != "" {
+			answered = append(answered, id)
+		}
+	}
 	return threadBlock{
 		text: b.String(), posts: posts,
 		read: true, stoppedShort: read.StoppedShort,
+		answered: answered,
 	}
+}
+
+// waitingMessages marks, by position in the read, the messages that were
+// waiting for the turn trigger woke: somebody else's, after this seat's own
+// last reply, before the trigger itself.
+//
+// NOTHING, unless the read reached the trigger: a read that stopped short is
+// missing the newest messages — the trigger among them — and a trigger the
+// read does not contain says nothing about which messages came before it.
+// Every message up to the seat's own last reply is excluded because that
+// reply is where the seat last answered the thread: what came before it is
+// not waiting for anybody.
+func waitingMessages(read notify.Transcript, trigger string) map[int]string {
+	if trigger == "" || read.StoppedShort {
+		return nil
+	}
+	at := -1
+	for i, m := range read.Messages {
+		if m.ID == trigger {
+			at = i
+		}
+	}
+	if at < 0 {
+		return nil
+	}
+	out := map[int]string{}
+	for i := at - 1; i >= 0; i-- {
+		m := read.Messages[i]
+		if m.Own {
+			break
+		}
+		if m.ID != "" && m.ID != trigger {
+			out[i] = m.ID
+		}
+	}
+	return out
+}
+
+// splitThread divides rendered lines into what renders verbatim — the root's
+// slot and the newest messages that fit — and the middle that does not.
+//
+// Everything renders verbatim when the thread is within [threadMaxChars].
+// Past it, the newest are kept while they fit the bytes left after the
+// condensed account's share; the root's slot and the newest message survive
+// however long they are.
+func splitThread(lines []string) (kept, middle []string) {
+	if len(lines) <= 2 || len(strings.Join(lines, "\n")) <= threadMaxChars {
+		return lines, nil
+	}
+	room := threadMaxChars - threadMaxChars/threadEarlierShare
+	from := len(lines) - 1
+	for from > 1 && len(lines[0])+len(strings.Join(lines[from-1:], "\n"))+1 <= room {
+		from--
+	}
+	kept = append(append([]string{}, lines[0]), lines[from:]...)
+	return kept, lines[1:from]
 }
 
 // renderPost renders one message as a bullet.

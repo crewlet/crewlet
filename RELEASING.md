@@ -93,6 +93,15 @@ checksummed.
    [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)
    carries the rule contributors work to.
 
+   The first tag that carries Go code is also the first point at which an
+   **upgrade in place** is owed. Until then no compatibility is kept with an
+   older unreleased build — nothing it wrote is read or migrated, and no
+   peer of one joins a fleet beside a newer one. From that tag on, the next
+   release must read what the tag wrote and run beside it in one fleet, so a
+   change that breaks either is a break in a shipped surface and is treated
+   as one above. What is owed is owed to a TAG: an unreleased build between
+   two tags is still owed nothing.
+
 2. **Skim the merged pull requests** since the previous tag — they *are* the
    release notes. GitHub builds the body from their titles, so a title that
    reads as a commit log rather than a release note is worth editing on the
@@ -167,6 +176,13 @@ CI runs the same thing for you: the snapshot job fires on demand
 workflow. That is what stops the release pipeline running for the first time
 on the tag that publishes.
 
+Neither release job saves a cache. Both restore the module cache `ci.yml`'s
+`build + vet` job saves on `main`, read-only, and neither restores a build
+cache: goreleaser builds with `-trimpath` and its own `-ldflags`, which share
+no build action with any `ci.yml` job, so a release compiles its four targets
+cold — a few minutes, once per tag — and a pull request touching the release
+surface never stores an entry only its own ref could read.
+
 ---
 
 ## What CI already guards
@@ -197,12 +213,12 @@ release pipeline does when it runs:
 
 ### What nothing guards — check these by hand
 
-`internal/version` used to assert each of these against the file that carries
+`internal/version` used to assert most of these against the file that carries
 it. Those tests were dropped, and nothing replaced them: there is no actionlint,
 no yamllint and no schema validation anywhere in the tree, and GitHub accepts
-every one of these mistakes as valid configuration. Each fails **silently** —
-the pipeline stays green and simply stops doing the thing — so read the file
-when you touch it:
+every one of these mistakes as valid configuration. Each fails **silently**
+unless its bullet says it does not — the pipeline stays green and simply stops
+doing the thing, or starts doing more — so read the file when you touch it:
 
 - **`.github/release.yml` keeps its catch-all `*` category.** Without it an
   unlabelled pull request is omitted from the release body with no warning, and
@@ -229,11 +245,49 @@ when you touch it:
   for the length of the rewrite. Ecosystem names must match whole: as a
   substring, `docker` is satisfied by the `docker-compose` entry.
 - **`.github/workflows/dependabot-merge.yml`'s guard and its merge flags.** The
-  job holds `contents: write` and `pull-requests: write` and runs `gh pr review
-  --approve`; its `if:` is the only thing stopping it approving a commit a
-  person pushed onto a Dependabot branch, and `--auto` is the only thing holding
-  the merge until the checks `main` requires have reported. Weakening either
-  makes the workflow run *more*, never fail.
+  job holds `contents: write` and `pull-requests: write` and approves a pull
+  request; its `if:` is the only thing stopping it approving a commit a person
+  pushed onto a Dependabot branch, and `--auto` queues the merge behind the checks
+  `main` requires (drop it and, while `main` requires them, the step goes red
+  instead; with no such rule it would merge before a check had reported). It
+  approves only while `reviewDecision` is neither `APPROVED` nor
+  `CHANGES_REQUESTED`, and an EMPTY decision must keep approving: GitHub has been
+  reported to leave it empty while a ruleset's requirement still blocks the merge,
+  so a skip on doubt would stall every bump with nothing red to show. Loosening
+  the `if:` makes the workflow run *more*; narrowing the approval silently stops
+  it approving.
+- **`.github/workflows/dependabot-recreate.yml`'s filter, its command and its
+  environment.** It comments `@dependabot recreate` on a bump in
+  conflict that Dependabot will not rebase by itself: one holding a commit that is
+  neither Dependabot's nor marked `[dependabot skip]`. Widen that and it races
+  Dependabot on bumps it rebases itself; narrow it and a stuck bump is never
+  asked. `recreate` overwrites every commit on the branch. Each request carries the head
+  it was made for in a hidden marker, which keeps it to one request per head and
+  three per bump. The comment must come from a user account, with
+  `DEPENDABOT_RECREATE_TOKEN`: fine-grained, this repository alone, Pull requests:
+  read and write, as a secret of the `dependabot-recreate` ENVIRONMENT limited to
+  the selected branch `main`, because that scope can also approve pull requests.
+  Create the environment first (a workflow that names a missing one creates it
+  open to every branch) and never reuse the bundle token, which can push. An empty
+  secret fails the run, and so does Dependabot answering "only users with push
+  access"; weakening the filter, the environment or the token's scope leaves it
+  green.
+- **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split and
+  the token's scope.** The `push` job holds a personal access token that can
+  write to a branch; its `if:` (author AND actor both Dependabot, repeated on the
+  job that holds the token and not only the one that builds) stops a run a person
+  triggered reaching it. The `build` job runs a dependency's install scripts, so
+  it must keep `contents: read`, no secrets and no persisted checkout credential.
+  The `push` job's allowlist of file names stays an allowlist:
+  `static/dashboard` is inside the Go module, so a `.go` file in it would run on
+  every contributor's machine. The token stays fine-grained, for this
+  repository alone, at Contents: read and write — Workflows would let it rewrite
+  workflows, a classic token reaches every repository its account can, Pull
+  requests would let it approve them — and `v*` needs a tag ruleset its account
+  cannot bypass. It expires, so the date wants a calendar entry. While `main`'s
+  ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
+  branch merges once CI is green, so the token's scope is the only limit on what
+  it can land. Weakening any of these makes the workflow reach *more*, never fail.
 
 ---
 

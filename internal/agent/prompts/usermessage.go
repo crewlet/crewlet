@@ -10,6 +10,12 @@ import "strings"
 // load-bearing part: a read's results are genuinely gone and must be
 // re-fetched, while anything else changed the world and a human reads the
 // second copy as a duplicate.
+//
+// AND AN EARLIER ROUND'S DELIVERY IS CITABLE, which the header says because a
+// model forbidden to repeat a write it cannot cite is caught between the two:
+// the engine reads the whole turn's record (turn.Record), and a round sent
+// back for a re-read that believed otherwise submitted with no citation, or
+// went looking for some other surface to deliver on.
 const PriorWorkHeader = "## Already done earlier in this turn" +
 	"\nAn earlier round of this same turn ran and was sent back for another" +
 	" pass. Every call below marked `→ success` ALREADY RAN. How to treat" +
@@ -19,7 +25,8 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" never invent data you no longer have." +
 	"\n- **everything else** — assume it changed something outside the" +
 	" engine (a post, a comment, a status change, a code run). Do NOT issue" +
-	" it again: a human sees the second one as a duplicate." +
+	" it again: a human sees the second one as a duplicate. If it was the" +
+	" delivery, it still counts: name it in `submit_work`'s `deliveries`." +
 	"\n- **`→ error`** — it did NOT take effect. Retry it, fixed." +
 	"\nPlan and deliver only what is still missing. If the gap is a follow-up" +
 	" to something already delivered, ADD to it — reply in the existing" +
@@ -96,20 +103,27 @@ const taskHeader = "## Task"
 // ask arrived) — so the most recent context sits nearest the model's answer.
 // All three are top-level headings: they are peers, and a reader that nests
 // them gets the ask wrong.
-func BuildPhaseUserMessage(m UserMessage) string {
+//
+// The TASK IS ONE SECTION of the outline, whatever it carries. It is a
+// trigger's whole body — a chat notification with the engine's own "## Triage"
+// and "## Thread context" written into it, a pull request whose description
+// opens on its own "# Title" — and every heading in it belongs to the ask, not
+// beside it. The ledgers are one section each for the same reason: their
+// entries are "###" lines, and a reply quoted in one can hold anything.
+func BuildPhaseUserMessage(m UserMessage) Prompt {
 	task := m.TaskDescription
 	if task == "" {
 		task = "(no description)"
 	}
-	var parts []string
+	b := NewBuilder("\n\n")
 	if m.ConversationHistory != "" {
-		parts = append(parts, ConversationHistoryHeader+"\n"+m.ConversationHistory)
+		b.Heading("conversation_history", ConversationHistoryHeader+"\n"+m.ConversationHistory)
 	}
-	parts = append(parts, taskHeader+"\n"+task)
+	b.Heading("task", taskHeader+"\n"+task)
 	if m.PriorWork != "" {
-		parts = append(parts, PriorWorkHeader+"\n"+m.PriorWork)
+		b.Heading("prior_work", PriorWorkHeader+"\n"+m.PriorWork)
 	}
-	return strings.Join(parts, "\n\n")
+	return b.Build()
 }
 
 // SteerMessage is a person's note to a running turn, as the model reads it.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/google/uuid"
@@ -19,15 +20,13 @@ import (
 // A pause is filed in the positions register under its own class, by the
 // seat's id — see [coord.SeatPauseKey] for why that bucket, which is the one
 // with no age, and the file doc of internal/coord/seatpause.go for why the id.
-// Every write goes through the register's [leaderBucket], so each one is
-// SETTLED there; every read asks the stream leader.
 
-// SeatPause reads one seat's pause, from the stream leader.
+// SeatPause reads one seat's pause, by the seat's id.
 func (f *FleetStore) SeatPause(ctx context.Context, seat uuid.UUID) (coord.SeatPause, bool, error) {
 	if seat == uuid.Nil {
 		return coord.SeatPause{}, false, errors.New("coord/kv: a seat pause needs a seat id")
 	}
-	entry, err := f.positions.Get(ctx, coord.SeatPauseKey(seat))
+	entry, err := f.get(ctx, f.positions, coord.SeatPauseKey(seat))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SeatPause{}, false, nil
@@ -66,17 +65,19 @@ func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, err
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(out, func(a, b coord.SeatPause) int { return cmp.Compare(a.Seat.String(), b.Seat.String()) })
+	slices.SortFunc(out, func(a, b coord.SeatPause) int {
+		return cmp.Compare(a.Seat.String(), b.Seat.String())
+	})
 	return out, nil
 }
 
 // CreateSeatPause writes a pause for a seat that has none.
 //
 // Create rather than Put, so the first writer wins and every other is told the
-// seat was already paused. A key a resume purged is created again, which
-// [leaderBucket.Create] does by conditioning on the purge marker's own
-// revision, read from the leader — and a racing creator that lost over that
-// marker is reported the same way, by [lostCreateRace].
+// seat was already paused. A key a resume purged is created again through
+// [createKey], which asks the stream leader what the key holds rather than
+// conditioning on a marker a sweep may already have removed, and reports a
+// racing creator that won as the one shape, [jetstream.ErrKeyExists].
 func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (coord.SeatPause, bool, error) {
 	if err := p.Validate(); err != nil {
 		return coord.SeatPause{}, false, err
@@ -85,9 +86,9 @@ func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (co
 	if err != nil {
 		return coord.SeatPause{}, false, err
 	}
-	revision, err := f.positions.Create(ctx, coord.SeatPauseKey(p.Seat), raw)
+	revision, err := f.create(ctx, f.positions, coord.SeatPauseKey(p.Seat), raw)
 	switch {
-	case err != nil && lostCreateRace(err):
+	case errors.Is(err, jetstream.ErrKeyExists):
 		return coord.SeatPause{}, false, nil
 	case err != nil:
 		return coord.SeatPause{}, false, unavailable("pause seat "+p.Seat.String(), err)
@@ -101,9 +102,9 @@ func (f *FleetStore) UpdateSeatPause(ctx context.Context, p coord.SeatPause) (co
 		return coord.SeatPause{}, false, err
 	}
 	if p.Version == 0 {
-		// NO VERSION IS A LOST RACE, never an unconditional write: an
-		// expected revision of 0 means "the key must not exist yet", which
-		// would CREATE a pause for a caller that never read one.
+		// NO VERSION IS A LOST RACE, never an unconditional write: the
+		// client reads an expected revision of 0 as "the key must not exist
+		// yet", which would CREATE a pause for a caller that never read one.
 		return coord.SeatPause{}, false, nil
 	}
 	raw, err := encodeSeatPause(p)
@@ -147,48 +148,74 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, seat uuid.UUID, versio
 
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
-// # The leader answers every update
+// A KV watcher over the class filter, so the broker sends this class and no
+// other of the eight sharing the register. Deletes are NOT ignored — a purge
+// is exactly what a resume looks like on the wire.
 //
-// The obvious shape — the client's KV watcher over the class, delivering its
-// initial values, its marker and its changes — is a REPLICA's read twice over
-// (see bucket.go): the ordered consumer behind it is placed on any member, so
-// its starting picture can miss a pause the quorum already holds, and a change
-// it delivers late can be a pause that has since been lifted. Handed to the
-// engine, the first is a paused seat it starts working and the second is a
-// resumed seat it holds again.
+// # The first answer is a certified listing, and the call waits for it
 //
-// So this is built from the two reads that are the leader's. The change HINT
-// ([leaderBucket.Watch]) is started first and the leader-closed listing
-// ([FleetStore.ListSeatPauses]) taken second, so a write landing between the
-// two is in the listing and hinted rather than in neither; the listing is
-// delivered, then the marker; and every hint after it is CONFIRMED by reading
-// that seat's pause from the leader, whose answer — a pause, or none — is the
-// update delivered. A hint for a write already replaced, or delivered twice,
-// costs one more leader read and changes nothing the consumer holds.
+// Everything before [coord.SeatPauseUpdate.Current] is the answer a node
+// REPLACES its copy with, so a pause missing from it is a hold the node lifts
+// and a seat it lets take work. The client's own end of the initial values
+// cannot be that answer: it ends them on a count guess, while a pause live
+// throughout can still be ahead of the cursor, and it never ends them at all
+// for a consumer whose pending messages were removed before it reached them —
+// a resume's purge marker swept from the register, say — so that answer never
+// came, and every node that met it deferred its deliveries until somebody
+// paused or resumed a seat. So the first answer is [watchUnder]'s, certified
+// against the register's key index exactly as [FleetStore.ListSeatPauses] is,
+// and the client's marker is ignored whenever it arrives.
 //
-// A read that fails ENDS THE WATCH rather than being skipped: skipped, the
-// change it was about would be one every node forgot. A closed channel is the
-// contract's word for "stopped hearing", which the consumer answers by
-// watching again — and the listing that starts the next watch delivers what
-// this one missed.
+// The call returns once that answer is in hand, and a failure to certify it
+// is the call's error rather than a closed channel: there is no answer for a
+// consumer to have stopped hearing. A record in it this build cannot read
+// fails the call the same way, naming the seat.
+//
+// # A change after the answer is the consumer's, and filtered by revision
+//
+// Every update after the answer comes off the same consumer, which is a
+// replica's copy (walk.go): a change it delivers can be LATE, never wrong in
+// order, because the consumer delivers a key's revisions in the order the
+// stream holds them. The revision filter below is what keeps a late one from
+// undoing a newer one the answer already holds, so the worst a lagging replica
+// costs a node is the lag itself — a pause or a resume taken up a moment
+// later, never one taken back. Confirming each change with a leader read would
+// close that lag too, at a read per change on every node; it is not done,
+// because a pause is a person's gesture and a moment's lag in honouring one
+// moves no work that a fence does not already stop.
 func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	hints, err := f.positions.Watch(ctx, coord.DocumentFilter(coord.SeatPauseClass))
+	current, w, err := watchUnder(ctx, f.js, f.positions,
+		coord.DocumentFilter(coord.SeatPauseClass), "the seat pauses")
 	if err != nil {
-		cancel()
-		return nil, unavailable("watch the seat pauses", err)
-	}
-	current, err := f.ListSeatPauses(ctx)
-	if err != nil {
-		cancel()
 		return nil, err
 	}
+	// held is the revision of each key the answer holds — a marker's too,
+	// since a resume the answer saw is a revision of its key like any other.
+	held := make(map[string]uint64, len(current))
+	answer := make([]coord.SeatPauseUpdate, 0, len(current)+1)
+	for _, key := range slices.Sorted(maps.Keys(current)) {
+		kve := current[key]
+		held[key] = kve.Revision()
+		seat, ok := coord.SeatPauseSeat(key)
+		if !ok || kve.Operation() != jetstream.KeyValuePut {
+			continue
+		}
+		p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
+		if err != nil {
+			// RAISED rather than skipped, as the listing raises it: a
+			// pause dropped from the answer is a seat every node reads
+			// as free to work. The consumer watches again and says why.
+			_ = w.Stop()
+			return nil, err
+		}
+		answer = append(answer, coord.SeatPauseUpdate{Seat: seat, Pause: &p})
+	}
+	answer = append(answer, coord.SeatPauseUpdate{Current: true})
+
 	out := make(chan coord.SeatPauseUpdate)
 	go func() {
-		// cancel stops the hint's own goroutine, whichever way this one
-		// ends.
-		defer cancel()
 		defer close(out)
+		defer func() { _ = w.Stop() }()
 		send := func(u coord.SeatPauseUpdate) bool {
 			select {
 			case out <- u:
@@ -197,39 +224,53 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 				return false
 			}
 		}
-		for _, p := range current {
-			if !send(coord.SeatPauseUpdate{Seat: p.Seat, Pause: &p}) {
+		for _, u := range answer {
+			if !send(u) {
 				return
 			}
-		}
-		if !send(coord.SeatPauseUpdate{Current: true}) {
-			return
 		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case key, ok := <-hints:
+			case kve, ok := <-w.Updates():
 				if !ok {
 					// The client ended the watch (a closed connection, a
-					// deleted consumer): stopped hearing, never a resume.
+					// deleted consumer). Closing is the contract's word for
+					// "stopped hearing", which the consumer answers by
+					// watching again — never by reading it as a resume.
 					return
 				}
-				seat, ok := coord.SeatPauseSeat(key)
+				if kve == nil {
+					// The client's end of the initial values, late or
+					// never: the certified answer has already ended them.
+					continue
+				}
+				seat, ok := coord.SeatPauseSeat(kve.Key())
 				if !ok {
 					continue
 				}
-				p, paused, err := f.SeatPause(ctx, seat)
-				if err != nil {
-					log.WarnContext(ctx, "seat_pause_unconfirmed", "seat", seat.String(),
-						"error", err.Error(),
-						"detail", "a change to this seat's pause could not be read from "+
-							"the leader; the watch ends and is opened again, and the "+
-							"listing that opens it delivers the change")
-					return
+				if r, seen := held[kve.Key()]; seen && kve.Revision() <= r {
+					// NOT A CHANGE: the revision the answer holds for this
+					// key, or an older one — the consumer reaching a key its
+					// pass was ended before, or one the leader's read was
+					// ahead of it on. Sent, an older revision would undo the
+					// newer one on every node until the consumer caught up.
+					continue
 				}
+				held[kve.Key()] = kve.Revision()
 				u := coord.SeatPauseUpdate{Seat: seat}
-				if paused {
+				if op := kve.Operation(); op != jetstream.KeyValueDelete && op != jetstream.KeyValuePurge {
+					p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
+					if err != nil {
+						// A record this build cannot read ends the watch
+						// rather than being skipped: skipped, it would
+						// be a pause every node forgot. The consumer
+						// watches again and logs the same failure.
+						log.WarnContext(ctx, "seat_pause_undecodable", "seat", seat.String(),
+							"error", err.Error())
+						return
+					}
 					u.Pause = &p
 				}
 				if !send(u) {

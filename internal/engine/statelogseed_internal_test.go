@@ -35,6 +35,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -50,7 +51,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	s := e.core.Load().log
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
 	// floor this case forges. `PutFloor` replaces a domain's floor

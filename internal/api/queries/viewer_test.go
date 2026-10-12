@@ -890,3 +890,59 @@ roles:
 		t.Errorf("an unbound viewer's project = %v, want \"\"", unbound["project"])
 	}
 }
+
+// WHO MAY CHANGE THE COMPANY DOCUMENT is on the viewer, so the dashboard
+// draws a managed document read-only rather than offering saves the config
+// surface refuses (ADR-0030) — judged on the CREDENTIAL the request came
+// through, by the one reading the config surface refuses a write with
+// ([config.APIAuth.MayWriteCompany]). So a person's session, a machine token
+// and a session exchanged from a listed Tier A token are each another
+// credential and may not, while the listed token's own bearer may; and the
+// writers are named to every caller, as the config surface's own refusal names
+// them to anybody whose write it turns away.
+//
+// Mutation: judge the login instead of the credential, and the exchanged
+// session passes; withhold the writers from a caller who may not write, and
+// the screen locks an edit with no reason.
+func TestTheViewerSaysWhetherItMayChangeTheCompany(t *testing.T) {
+	t.Parallel()
+	token := func(id, via string) iam.Principal {
+		return iam.Principal{
+			ID: uuid.New(), Login: iam.TokenLogin(id), Via: via, Kind: iam.KindMachine,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+		}
+	}
+	person := iam.Principal{
+		ID: uuid.New(), Login: "ana.diaz", Via: "session:lineage-1", Kind: iam.KindPerson,
+		Seat: "ana", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead, iam.GrantConfigWrite},
+	}
+	for name, tc := range map[string]struct {
+		writers   []string
+		caller    iam.Principal
+		writer    bool
+		managedBy []string
+	}{
+		"an unmanaged document is anybody's":      {nil, person, true, []string{}},
+		"a listed token's own bearer may":         {[]string{"ops-1"}, token("ops-1", ""), true, []string{"ops-1"}},
+		"another token may not, and is told":      {[]string{"gitops"}, token("ops-1", ""), false, []string{"gitops"}},
+		"a session exchanged from a listed token": {[]string{"ops-1"}, token("ops-1", "session:lineage-2"), false, []string{"ops-1"}},
+		"a person's session may not, and is told": {[]string{"gitops"}, person, false, []string{"gitops"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := viewerSources(t, &stubWork{})
+			s.CompanyWriters = tc.writers
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			answered, err := r.Answer(iam.WithPrincipal(t.Context(), tc.caller), "viewer", nil)
+			got := answerMap(t, answered, err)
+			if got["config_writer"] != tc.writer {
+				t.Errorf("config_writer = %v, want %v", got["config_writer"], tc.writer)
+			}
+			managedBy, ok := got["config_managed_by"].([]string)
+			if !ok || !slices.Equal(managedBy, tc.managedBy) {
+				t.Errorf("config_managed_by = %#v, want %v", got["config_managed_by"], tc.managedBy)
+			}
+		})
+	}
+}

@@ -80,7 +80,7 @@ p {
    So the frame's own hover vocabulary carries it instead. The sidebar's rows,
    `.section-tab` and `.crumb-link` already answer a pointer by moving to
    `--color-text-primary`, and a link does the same: in dark the accent ink
-   (#b3a1ff) brightens toward near-white, in light the violet (#5a33de) darkens
+   (#a9b0ff) brightens toward near-white, in light the violet (#4f51bd) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
    rather than merely different. Both ends are measured text rungs, which is
    what rules this out: the accent family publishes exactly one text step, and

@@ -10,10 +10,8 @@
 ## The decision
 
 One driver: `turso.tech/database/tursogo`. There is no dialect intersection to
-write inside, so the engine uses what Turso has. Both the `store.driver` field
-and the `CREWLET_STORE_DRIVER` variable are retired, and a Tier A file that
-still sets the field is refused with a message naming the change rather than
-reported as a misspelling.
+write inside, so the engine uses what Turso has, and there is no
+`store.driver` field or `CREWLET_STORE_DRIVER` variable to choose another.
 
 The consequences reach past `internal/store`, which is why this is a record
 rather than a package doc:

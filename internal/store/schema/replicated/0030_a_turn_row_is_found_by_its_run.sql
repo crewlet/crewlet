@@ -14,4 +14,4 @@
 -- PARTIAL over the rows that name a run: '' is a turn row written before a
 -- run had an identity of its own (ADR-0017), which no read can name, and the
 -- reader keys those rows on their own id instead.
-CREATE INDEX tracker_turns_turn_idx ON tracker_turns (turn_id) WHERE turn_id <> '';
+CREATE INDEX tracker_turns_turn_idx ON tracker_turns (turn_id) WHERE turn_id <> '';  -- TurnPlaces: a page read's run named back to its task and place

@@ -1,8 +1,7 @@
 // @vitest-environment node
 
 /**
- * EVERY WRITE GOES THROUGH THE ONE TRANSPORT
- * (`TestEveryWriteGoesThroughTheOneTransport`).
+ * EVERY WRITE GOES THROUGH THE ONE TRANSPORT.
  *
  * The dashboard reaches the engine from `src/protocol/` and from nowhere else:
  * `rest.ts` for every REST route, `socket.ts` for the live socket and its

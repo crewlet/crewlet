@@ -37,6 +37,15 @@ import (
 // misconfiguration is a boot that says which setting, the value the server
 // announced and the value this build needs.
 //
+// EVENTS ARE NOT ALL THAT REACHES THE NUMBER. The answers nodes give each other
+// on the ephemeral verbs do too: the estate router's gather batches
+// (internal/estate), the fleet turn-detail scatter (internal/eventfan) and the
+// memory read (internal/learning/memread) each fill an answer up to
+// [queue.MaxPayloadBytes], so below the contract those fail as well, and
+// lowering it is never a matter of events alone. A company's files cross the
+// same broker in messages of 128 KiB (internal/objstore/natsobj), which any
+// server's default carries, so they ask nothing of it.
+//
 // # Why the embedded broker is checked as well
 //
 // It cannot be too small. [embeddedOptions] configures it at exactly the

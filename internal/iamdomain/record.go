@@ -32,8 +32,48 @@ const RecordVersion = 1
 // BaseRecordVersion is version 1, the base format: what every build there will
 // ever be reads, and what a record carrying no versioned field is stamped at.
 // A gate, the read index's barrier and a reanchor's generation stay at it
-// ([MutationRecord.readByEveryBuild]).
+// ([MutationRecord.readByEveryBuild]) — save a gate whose APPLY changed, which
+// rides a version an older build halts at.
 const BaseRecordVersion = 1
+
+// GateRecordVersion is the SHAPE version every gate's payload — a removal's,
+// an invalidation's, an eviction's — and a reanchor's generation carries, FOR
+// EVER.
+//
+// # Why this one number never moves
+//
+// A record whose version this build does not know is normally RETAINED and
+// applied later by a build that does. That is exactly wrong for a gate: a node
+// that deferred a removal goes on signing in somebody the company off-boarded,
+// one that deferred an invalidation goes on honouring every bearer the company
+// ended, and one that deferred an eviction goes on applying every record the
+// evicted node appends — and there is no later record that repairs any of
+// them. So an undecodable gate STOPS that build's applier instead, and a stop
+// takes a node out of the fleet until it is upgraded, so no mere change of
+// SHAPE may cost one. That is what pinning this at one buys: a gate's payload
+// can only ever grow by addition, never by reshaping, for the life of the
+// deployment, and an older build reads every one of them. A generation is
+// pinned beside them for the barrier's reason: an older node RETAINS one it
+// cannot read, and a retained generation is a transition it never makes.
+//
+// # What does move, and why a stop is then the right answer
+//
+// A change to what a gate's APPLY does is not a change of shape, and no older
+// build can honour it: applied the old way it leaves rows every newer node
+// does not hold, and deferred it is the licence described above. So such a
+// record is written at a RECORD version above every build that predates the
+// change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
+// — and the framework halts that build at it, while every record written
+// before it keeps the rule it was applied by. The halt needs the older build
+// to know the record for a gate, and it does, because [Domain.InstallsGate] is
+// answered from the envelope's op. That is also why a changed gate is NOT
+// given a new op: one an older build does not know is not a gate to it, so at
+// a raised version it would be deferred — the licence above.
+//
+// The rule is the framework's ([statelog.VersionedField.Gate]) and every
+// strict domain's — internal/tracker's GateRecordVersion states it at length —
+// and this domain's three gates take the same pin.
+const GateRecordVersion = 1
 
 // versionedFields is every field an identity record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it —
@@ -530,7 +570,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 // would be applied, lossily, by exactly the builds the stamp exists to hold it
 // back from. A record every build must read
 // ([MutationRecord.readByEveryBuild]) is refused whenever it carries a
-// versioned field at all.
+// versioned field at all, stamped or set — save a gate's own changed apply
+// ([statelog.VersionedField.Gate]), at which an older build halts.
 //
 // LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
 // node that read a record it only half understood and republished it — the
@@ -568,16 +609,24 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 	if err != nil {
 		return nil, fmt.Errorf("iamdomain: stamp the record on %s: %w", rec.Subject, err)
 	}
+	refused := fields.Carried(string(rec.Op), known)
+	if rec.InstallsGate() {
+		refused = fields.Ungated(string(rec.Op), known)
+	}
 	switch {
-	case rec.readByEveryBuild() && minimum > BaseRecordVersion:
+	case rec.readByEveryBuild() && minimum > BaseRecordVersion && len(refused) > 0:
 		// A GATE, A BARRIER OR A GENERATION NEVER CARRIES A VERSIONED
-		// FIELD: a gate an older node cannot read is one it defers, and a
-		// deferred removal is a person off-boarded still signing in on that
-		// node; a barrier or a generation it cannot read is one it retains.
+		// FIELD, stamped or set — save the one kind a gate may: a change to
+		// what the gate's own apply does ([statelog.VersionedField.Gate]),
+		// at which an older node HALTS. Anything else a gate needs a newer
+		// reader for would take every older node out of service for a
+		// field rather than for a rule it cannot honour; a barrier or a
+		// generation an older node cannot read is one it retains.
 		return nil, fmt.Errorf("iamdomain: the %s record on %s must be readable "+
-			"by every build for ever, and it carries %s — a field it needs "+
-			"belongs on a record that is not a gate", rec.Op, rec.Subject,
-			strings.Join(fields.Carried(string(rec.Op), known), ", "))
+			"by every build for ever — an older node halts at a gate, and retains "+
+			"a barrier or a generation, that it cannot read — and it carries %s, "+
+			"so a field it needs belongs on a record that is not one of those",
+			rec.Op, rec.Subject, strings.Join(refused, ", "))
 	case rec.V >= minimum:
 	case stamp:
 		rec.V = minimum
@@ -601,10 +650,16 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 // deferral — a deferred removal is somebody off-boarded still signing in on
 // that node, a deferred invalidation every bearer the company ended still
 // honoured there, a deferred eviction every record the evicted node appends
-// still applied — and its shape may therefore only ever grow by addition; and
-// the read index's barrier and a reanchor's generation, because an older node
-// RETAINS a record it cannot read — a barrier is then a linearizable read on
-// that node that waits for ever, and a generation a transition it never makes.
+// still applied — and its shape may therefore only ever grow by addition
+// ([GateRecordVersion]); and the read index's barrier and a reanchor's
+// generation, because an older node RETAINS a record it cannot read — a
+// barrier is then a linearizable read on that node that waits for ever, and a
+// generation a transition it never makes.
+//
+// THE ONE EXCEPTION is a gate's own APPLY changing
+// ([statelog.VersionedField.Gate]): no older build can honour that rule, so
+// the record rides the version it arrived at and every older node halts there
+// — the only answer that is not a divergence.
 func (rec MutationRecord) readByEveryBuild() bool {
 	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpGeneration
 }

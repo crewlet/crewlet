@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -41,7 +42,10 @@ import (
 // trim does to a node that has been away. A donor is stood up on the same
 // broker holding a snapshot of the node's own rows at the purged position,
 // which is what a peer that applied those two barriers would hold, since a
-// barrier writes no rows. Then the heartbeat is left to notice.
+// barrier writes no rows. Then one heartbeat's publish is run, which is what
+// notices: the heartbeat running it again on every tick is
+// [TestTheHeartbeatPublishesOnEveryTickAndNudge]'s, and waiting here for its
+// next ten-second tick certified nothing that case does not.
 func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -52,25 +56,21 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	donorDir := t.TempDir()
 	replicated := filepath.Join(donorDir, "crewlet-replicated.db")
 	copyAdvancedTo(t, back, running, at, last, replicated)
-	donorNode, err := store.Open(t.Context(), filepath.Join(donorDir, "node.db"),
-		store.Options{ReplicatedPath: replicated})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorNode, _ := storetest.OpenEstate(t, filepath.Join(donorDir, "node.db"), store.Options{ReplicatedPath: replicated}, 1)
 	t.Cleanup(func() { _ = donorNode.Close() })
 	lag := uint64(0)
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain,
+			Domain: domain, Spec: domain.Stream(),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, DB: donorNode, Dir: snapDir, NodeID: "donor",
+		Domains: registered, File: donorNode.Replicated(), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 2, nil },
+		Recipients:    func(context.Context) (int, error) { return 1, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -94,12 +94,15 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
+	// A LIVE DATA NODE, as every donor is: the join waits for those.
+	presentAsDataNode(t, e, "donor")
 	donorCtx, stopDonor := context.WithCancel(t.Context())
 	t.Cleanup(stopDonor)
 	go func() { _ = donor.Serve(donorCtx) }()
 
 	// THE HEARTBEAT NOTICES, the node adopts, and its appliers come back
 	// over the artefact — with no restart and no operator.
+	e.core.Load().log.publishPositions(t.Context())
 	waitUntil(t, 90*time.Second, "the node to adopt the donor's snapshot", func() bool {
 		return running.runner.Committed().Seq == last
 	})
@@ -123,10 +126,11 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		t.Fatalf("the newest adoption row names artefact %s, want the donor's %s",
 			recorded, manifest.SHA256)
 	}
-	// AND THE LEDGER LOST NOTHING: the adopter holds its donor's rows and inherits its donor's watermark —
+	// AND THE LEDGER LOST NOTHING: the ledger travels with the snapshot, so
+	// the adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
-	rows, err := tracker.NewRows(back.Store)
+	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
@@ -135,7 +139,17 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.StateLogHydrated)
+	// AND ITS APPLIERS CAME BACK OVER THE ARTEFACT: a write this node makes
+	// is applied. Only a relaunched loop that got past its start check can
+	// apply it, and that check is the one a wrong artefact fails — so this is
+	// what holds the adoption to its promise. Its committed position says
+	// nothing of the kind: Rejoined moves it before anything is relaunched.
+	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != at.Generation {
+		t.Fatalf("a write after the adoption: %+v, %v (tracker applier stopped: %v) — "+
+			"want it applied in generation %d", res, err, running.runner.Stopped(), at.Generation)
+	}
+	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
@@ -167,12 +181,16 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 //
 // A SILENT listener on the offer subject tells the case the moment the rejoin
 // has asked, so the Stop lands inside the window rather than before the ask or
-// after it. Silent is also what a fleet whose donors hold nothing looks like —
-// this node's own donor, holding no snapshot, is one — so the window is spent
-// exactly as it would be in production.
+// after it. A join collects until every donor it names has answered — every
+// live data node among them — so the window stays open only while one has
+// not: a live data node is named here whose donor never answers — one not up
+// yet, or gone — which is the window spent exactly as it would be in
+// production. The heartbeat's publish is run once rather than waited for, as
+// in [TestANodeBelowTheFloorAdoptsWhileRunning].
 func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
+	presentAsDataNode(t, e, "a-silent-peer")
 	listener, err := q.DialOwned()
 	if err != nil {
 		t.Fatalf("dial the listener: %v", err)
@@ -193,6 +211,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 		t.Fatalf("flush the listener: %v", err)
 	}
 	pushBelowTheFloor(t, e, q)
+	e.core.Load().log.publishPositions(t.Context())
 
 	select {
 	case <-asked:
@@ -235,6 +254,7 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -249,6 +269,10 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
+	// PRESENT, as a running data node is from its seat host's start: a join
+	// waits for the live data nodes' donors and no others, and this node's
+	// own is one of them.
+	presentAsDataNode(t, e, e.id)
 
 	q, ok := back.Queue.(*jetstream.Queue)
 	if !ok {
@@ -260,11 +284,12 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 // pushBelowTheFloor leaves a running node below its tracker log's floor, which
 // is exactly what the fleet's trim does to a node that has been away: its
 // appliers stop, two barriers land on the log that it never applies, and the
-// log is purged past them. It returns the tracker's running domain, the
-// position the node had applied, and the last sequence purged — which is the
-// position a peer that applied those barriers would hold.
+// log is purged up to the second of them. It returns the tracker's running
+// domain, the position the node had applied, and the last sequence appended —
+// the position a peer that applied those barriers would hold, and, since a
+// purge at N leaves N itself, the log's first record.
 func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
-	running *runningDomain, at statelog.Position, last uint64) {
+	running *runningLog, at statelog.Position, last uint64) {
 
 	t.Helper()
 	running, at, log, last := appendPastTheNode(t, e, q)
@@ -280,7 +305,7 @@ func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
 // the position the node had applied, the log, and the last sequence appended:
 // the position a peer that applied those barriers would hold.
 func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
-	running *runningDomain, at statelog.Position, log *jetstream.DomainLog, last uint64) {
+	running *runningLog, at statelog.Position, log *jetstream.DomainLog, last uint64) {
 
 	t.Helper()
 	spec := tracker.Domain{}.Stream()
@@ -294,6 +319,17 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatal("the tracker domain is not running")
 	}
 
+	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: each pass pins
+	// the tracker's estate with a barrier of its own, and its first runs as
+	// the node boots — so left running, a pin lands between the two staged
+	// below and moves where they land. Stopping it mid-pass is not enough:
+	// a barrier's publish outlives the read that asked for it.
+	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
+		_, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
+		return err == nil && found
+	})
+	e.stopObjectCollector()
+
 	// Settle: whatever the boot wrote to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
 		_, end, err := log.Bounds(t.Context())
@@ -302,6 +338,21 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	at = running.runner.Committed()
 
 	s.haltAppliers()
+	// AND NOTHING OF IT IS STILL WAITING ON THE LOG. The halted loop's
+	// last fetch leaves its request standing on the broker for the rest of
+	// its wait, and a record appended into it is DELIVERED — to the
+	// consumer's standing buffer, where the next loop on this handle takes
+	// it, which is the whole point of that buffer. A node that has been away
+	// long enough to fall below a floor has nothing standing, so the
+	// barriers below wait until nothing is.
+	waitUntil(t, 20*time.Second, "the halted loop's last request to end", func() bool {
+		cons, err := q.JetStream().Consumer(t.Context(), spec.Name, running.consumer.Name())
+		if err != nil {
+			return false
+		}
+		info, err := cons.Info(t.Context())
+		return err == nil && info.NumWaiting == 0
+	})
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
@@ -326,35 +377,65 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 // tracker checkpoint advanced to last — what a peer holds that applied the
 // barriers past at, since a barrier writes no rows — and quiesces it, so the
 // file is self-contained for whatever opens or installs it.
-func copyAdvancedTo(t *testing.T, back *Backends, running *runningDomain,
+func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
 	t.Helper()
-	if _, err := back.Store.Replicated().Backup(t.Context(), path); err != nil {
+	if _, err := storetest.ReplicatedDB(t, back.Store.Replicated()).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
 	copyDB, err := store.OpenEstate(t.Context(), store.EstateReplicated, path, store.Options{})
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (stream) DO UPDATE SET
-				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
-			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("advance the copy's checkpoint: %v", err)
-	}
+	moveCheckpoint(t, running.log, copyDB, statelog.Position{
+		Stream: tracker.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
+	}, running.runner.StreamCreatedAt())
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}
 	if err := store.QuiesceCopy(t.Context(), path); err != nil {
 		t.Fatalf("quiesce the copy: %v", err)
+	}
+}
+
+// moveCheckpoint moves db's checkpoint on at's stream to at, keyed to created,
+// NAMING THE RECORD log holds at that sequence by its broker instant, as every
+// checkpoint an applier commits does (statelog's setCursor): a checkpoint is a
+// record, not only a sequence. Moved by its sequence alone, a checkpoint goes
+// on naming the record it stood on before; the applier that loads it finds
+// another record there and stops, rightly, as diverged, and the staged rows
+// are ones no peer could hold. A case passed on them only while its waits beat
+// that stop. A checkpoint at sequence zero, or at one the log does not hold —
+// below a rebuilt log's first record, where a reanchor puts it — names no
+// record, as a reanchor's own checkpoint does.
+func moveCheckpoint(t *testing.T, log *jetstream.DomainLog, db *store.DB,
+	at statelog.Position, created time.Time) {
+
+	t.Helper()
+	var stored int64
+	if at.Seq > 0 {
+		_, _, storedAt, held, err := log.At(t.Context(), at.Seq)
+		if err != nil {
+			t.Fatalf("read the log's record at the checkpoint %s: %v", at, err)
+		}
+		if held {
+			stored = store.EncodeTime(storedAt)
+		}
+	}
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, stored_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, ?, 0)
+			ON CONFLICT (stream) DO UPDATE SET
+				generation = excluded.generation, seq = excluded.seq,
+				stream_created_at = excluded.stream_created_at, stored_at = excluded.stored_at`,
+			at.Stream, int64(at.Generation), int64(at.Seq), store.EncodeTime(created), stored,
+			store.EncodeTime(time.Now().UTC()))
+		return err
+	}); err != nil {
+		t.Fatalf("move the copy's checkpoint to %s: %v", at, err)
 	}
 }
 
@@ -415,11 +496,20 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			}
 			heard := &heardMoves{}
 			e.SetOnIdentityMoved(heard.hear)
+			// WHILE IT IS SHUT THE COPY IS NOT SERVED: every read of it
+			// fails, and with the appliers halted on a log nobody writes
+			// nothing else would ever call it wrong — so this node's own
+			// seats would be answered that failure rather than asked of
+			// a peer.
+			if v := s.judgeCopy(t.Context()); v.fault != shutEstate || v.answers {
+				t.Fatalf("a copy whose file is shut is judged %+v, want wrong, naming %q",
+					v, shutEstate)
+			}
 
 			if err := s.restoreEstate(s.run); err != nil {
 				t.Fatalf("restore: %v", err)
 			}
-			if back.Store.Replicated() == nil {
+			if !replicatedOpen(back.Store) {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
 			}
@@ -427,6 +517,9 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 				func(m iamdomain.Moved) bool { return m.Everyone }) {
 				t.Errorf("a reopened estate told the credential listener %+v, "+
 					"want everyone: its rows may be a donor's", got)
+			}
+			if v := s.judgeCopy(t.Context()); v.fault == shutEstate {
+				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
 			}
 			if !c.below {
 				return
@@ -443,6 +536,36 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 					"listener %+v: it changed no row", got)
 			}
 		})
+	}
+}
+
+// A JOIN NOBODY CAN DONATE TO ENDS ON THE FLEET'S ANSWERS, NOT ON THE WINDOW.
+//
+// A node below the floor refuses every read and write while it asks, and it
+// asked for the whole offer window whatever the fleet said: a donor holding
+// nothing stayed silent, and every data node runs a donor — the asking node's
+// own among them. So a lone node below the floor spent five seconds refusing
+// everything to hear itself say nothing. Its donor now declines, and the join
+// waits for the live data nodes it lists and no longer.
+func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
+	t.Parallel()
+	e, _, q := bootRejoinNode(t)
+	s := e.core.Load().log
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	quietHeartbeat(s)
+	pushBelowTheFloor(t, e, q)
+	started := time.Now()
+	if err := e.rejoin(s.run, s); !errors.Is(err, errNoDonor) {
+		t.Fatalf("a lone node's rejoin = %v, want %v", err, errNoDonor)
+	}
+	// HALF THE WINDOW, which separates the two outcomes with room on both
+	// sides: a join that waited for the window takes all of it, and one
+	// that stopped on its own donor's decline takes a round trip and the
+	// reads around it.
+	if took := time.Since(started); took >= statelog.OfferWindow/2 {
+		t.Fatalf("a lone node's join took %v — it waited out the %v offer "+
+			"window rather than stopping on its own donor's answer",
+			took, statelog.OfferWindow)
 	}
 }
 
@@ -479,7 +602,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			return s.restoreEstate(s.run)
 		}},
 		{"a rejoin that finds it current", func(t *testing.T, e *Engine, back *Backends, s *stateLog) error {
-			if err := back.Store.ReopenReplicated(t.Context()); err != nil {
+			if _, err := back.Store.OpenReplicated(t.Context(), estateLogs()); err != nil {
 				t.Fatalf("open the installed artefact: %v", err)
 			}
 			return e.rejoin(s.run, s)
@@ -498,7 +621,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			if err := back.Store.CloseReplicated(); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
-			if err := store.AdoptFile(t.Context(), back.Store.ReplicatedPath(), artefact); err != nil {
+			if err := store.AdoptFile(t.Context(), back.Store.ReplicatedFile(), artefact); err != nil {
 				t.Fatalf("install the artefact: %v", err)
 			}
 
@@ -558,17 +681,18 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	boot := func(t *testing.T, ask func(h *harness) error) *harness {
 		t.Helper()
-		db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-		if err != nil {
-			t.Fatalf("open the store: %v", err)
-		}
+		db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+			store.Options{}, estateLogs())
 		t.Cleanup(func() { _ = db.Close() })
 		ctx, cancel := context.WithCancel(t.Context())
-		h := &harness{s: &stateLog{nodeID: "node-0", db: db, run: ctx, stop: cancel}}
+		// THE NODE'S STORE IS WHAT A HEARTBEAT ASKS whether the replicated
+		// estate is open, so the harness's state log runs over this one.
+		h := &harness{s: &stateLog{nodeID: "node-0", db: db,
+			run: ctx, stop: cancel}}
 		t.Cleanup(h.s.Stop)
 		h.s.rejoin = func(context.Context) error {
 			h.asks.Add(1)
-			if h.s.db.Replicated() == nil {
+			if !replicatedOpen(h.s.db) {
 				h.closedAtAsk.Add(1)
 			}
 			return ask(h)
@@ -597,9 +721,9 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	widened := func(t *testing.T, h *harness, why string) {
 		t.Helper()
-		if p, after := pause(h); p != PositionHeartbeat || !after.After(time.Now()) {
+		if p, after := pause(h); p != statelog.PositionHeartbeat || !after.After(time.Now()) {
 			t.Fatalf("%s left a pause of %s until %s, want %s from now — the next "+
-				"heartbeat asks the fleet again", why, p, after, PositionHeartbeat)
+				"heartbeat asks the fleet again", why, p, after, statelog.PositionHeartbeat)
 		}
 	}
 
@@ -625,7 +749,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		})
 		request(t, h)
 		widened(t, h, "an ask that fetched and then lost the estate")
-		if h.s.db.Replicated() != nil {
+		if replicatedOpen(h.s.db) {
 			t.Fatal("the staging did not leave the estate closed")
 		}
 
@@ -639,7 +763,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 				"(%d asks) — a whole transfer again, inside the interval that "+
 				"bounds exactly that", n)
 		}
-		if h.s.db.Replicated() == nil {
+		if !replicatedOpen(h.s.db) {
 			t.Fatal("the next heartbeat left the replicated estate closed")
 		}
 		widened(t, h, "the reopen")
@@ -651,7 +775,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		// A DIRECTORY WHERE THE FILE WAS: the store cannot open it, for a
 		// reason an operator fixes, and it is fixed below by putting the
 		// file back.
-		path := h.s.db.ReplicatedPath()
+		path := h.s.db.ReplicatedFile()
 		if err := h.s.db.CloseReplicated(); err != nil {
 			t.Fatalf("close the replicated estate: %v", err)
 		}
@@ -663,7 +787,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		}
 
 		request(t, h)
-		if h.s.db.Replicated() != nil {
+		if replicatedOpen(h.s.db) {
 			t.Fatal("the staging did not make the reopen fail")
 		}
 		if n := h.asks.Load(); n != 0 {
@@ -682,7 +806,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 			t.Fatalf("put the file back: %v", err)
 		}
 		request(t, h)
-		if h.s.db.Replicated() == nil {
+		if !replicatedOpen(h.s.db) {
 			t.Fatal("the heartbeat after the cause was gone left the estate closed")
 		}
 		if h.asks.Load() != 1 || h.closedAtAsk.Load() != 0 {
@@ -710,7 +834,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
@@ -726,7 +850,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 
 	s.haltApplier(name)
 	at, keyed, _, err := statelog.CursorFor(t.Context(), s.db.Replicated(),
-		running.domain.Stream().Name)
+		running.spec.Name)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -769,24 +893,34 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 
+	// A RECOVERY IN PROGRESS holds the restore off, since the file the
+	// restore reopens holds every log's rows.
 	s.recovering.Lock()
+	unlock := s.recovering.Unlock
 	done := make(chan error, 1)
 	go func() { done <- s.restoreEstate(s.run) }()
 	select {
 	case err := <-done:
-		s.recovering.Unlock()
+		unlock()
 		t.Fatalf("the restore ran to its end (%v) while a recovery held the node", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if back.Store.Replicated() != nil {
-		s.recovering.Unlock()
+	if replicatedOpen(back.Store) {
+		unlock()
 		t.Fatal("the restore reopened the estate while a recovery held the node")
 	}
-	s.recovering.Unlock()
+	unlock()
 	if err := <-done; err != nil {
 		t.Fatalf("the restore, once the recovery ended: %v", err)
 	}
-	if back.Store.Replicated() == nil {
+	if !replicatedOpen(back.Store) {
 		t.Fatal("the restore left the estate closed")
 	}
+}
+
+// hydrated is [Engine.StateLogHydrated] as the condition a wait polls, under
+// the test's own context.
+func hydrated(t *testing.T, e *Engine) func() bool {
+	t.Helper()
+	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

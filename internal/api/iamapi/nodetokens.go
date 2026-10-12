@@ -36,6 +36,20 @@ import (
 // A token's value is a credential and this is a read; the label is how the
 // value is named everywhere else, and it is all the join needs.
 //
+// # And which of them alone may change the company document
+//
+// A managed company document (ADR-0030) names the Tier A token ids that alone
+// may change it (`api.auth.company_writers`), and every other credential — a
+// person's session, a machine token, this node's other tokens — is refused
+// `config_managed`. Which ids those are is the same kind of fact as the labels
+// beside it: one node's Tier A, unreachable from any directory read. So the
+// answer carries the list as this node states it (`company_writers`, empty
+// where the document is not managed) and marks each of this node's own tokens
+// it names (`company_writer`) — the very list the config surface enforces
+// (internal/config's APIAuth.MayWriteCompany reads it), handed in whole rather
+// than restated. It used to be its own question, `access`, beside the
+// directory's reads, which answered it to a grant the directory never asked.
+//
 // # The same grant as the directory's own reads
 //
 // Who can reach this company, and as whom, is the audit question as much as
@@ -63,6 +77,12 @@ type NodeToken struct {
 	Person string    `json:"person,omitempty"`
 	Stage  iam.Stage `json:"stage,omitempty"`
 	Seat   string    `json:"seat,omitempty"`
+
+	// CompanyWriter marks a token the managed company document names as
+	// one of its writers — the one credential, with the others listed in
+	// `company_writers`, that may change it. Absent for every other token,
+	// and for every token where the document is not managed.
+	CompanyWriter bool `json:"company_writer,omitempty"`
 }
 
 // TokenRow is what the directory holds under a Tier A token's login.
@@ -89,9 +109,12 @@ func (s *Service) GetNodeTokens(w http.ResponseWriter, r *http.Request) {
 			token.Row, token.Person, token.Stage, token.Seat =
 				TokenRowHeld, held.ID, held.Stage, held.Seat
 		}
+		token.CompanyWriter = slices.Contains(s.writers, id)
 		tokens = append(tokens, token)
 	}
-	httpjson.Write(w, http.StatusOK, map[string]any{"tokens": tokens})
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"tokens": tokens, "company_writers": s.writers,
+	})
 }
 
 // tokenIDs is this node's Tier A labels, sorted.

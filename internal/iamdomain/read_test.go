@@ -37,7 +37,7 @@ func TestAReaderRefusesAMissingHalfByName(t *testing.T) {
 	rig := newWriteRig(t)
 	for name, opts := range map[string]iamdomain.ReaderOptions{
 		"no estate at all":  {},
-		"no read authority": {DB: rig.db},
+		"no read authority": {DB: rig.db.Reader()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -403,14 +403,14 @@ func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
+		iamdomain.Domain{}, rig.db, rig.waiter)
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	stream := iamdomain.Domain{}.Stream().Name
 	var asked []statelog.Position
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: rig.db, Log: log,
+		DB: rig.db.Reader(), Log: log,
 		Committed: func() statelog.Position { return statelog.Position{} },
 		Await: func(_ context.Context, p statelog.Position) error {
 			asked = append(asked, p)
@@ -428,7 +428,7 @@ func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 		t.Errorf("the applier was asked to wait for %v, want %v", asked, want)
 	}
 
-	bare, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: rig.db, Log: log})
+	bare, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: rig.db.Reader(), Log: log})
 	if err != nil {
 		t.Fatalf("build a reader with no runner: %v", err)
 	}

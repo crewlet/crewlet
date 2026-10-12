@@ -17,17 +17,17 @@
  * fourth kind of list.
  *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * it has eight of its own and cross-links to the reader's Account and to
- * Budgets, in four groups, and a tab strip of ten is a row nobody reads to the
- * end of.
+ * its own row in WORKSPACES holds more sections, and cross-links to the
+ * reader's Account and to Budgets, in its groups, than a tab strip can — a row
+ * nobody reads to the end of.
  *
  * # A section is a path
  *
  * Every tab is a link to its own address, never a `tab=` on this one: a
  * section is a place, and a place has a URL a reader can paste. What travels
  * between sections is the workspace's own query (`WorkspaceRow.keep` — whose
- * day My work is reading), and nothing else: a filter on the Turns list is not
- * a filter on the Event log.
+ * day My work is reading, the window Spend is reading over), and nothing
+ * else: a filter on the Turns list is not a filter on the Event log.
  *
  * # A figure on a tab is the screen's
  *
@@ -84,6 +84,7 @@ import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useReader } from "~/lib/reader.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
@@ -171,7 +172,8 @@ export function PageHeader({
 /**
  * Who is working right now: their faces, and how many — the company's pulse,
  * one click from what they are running. Drawn on Home only (`useWorkingNow`):
- * everywhere else the sidebar's Agents badge carries the same count.
+ * everywhere else the sidebar's Live row carries the same count, and its
+ * Running group names each turn.
  *
  * THE ENGINE'S WORD, off the agents push. Nothing is drawn while nobody is
  * working: a header reading "0 agents working" is a line a reader learns to
@@ -179,6 +181,7 @@ export function PageHeader({
  */
 export function WorkingNow() {
   const agents = useAgents();
+  const badgeOf = useSeatBadgeOf();
   const working = agents.filter((a) => a.activity === "working");
   if (working.length === 0) return null;
   return (
@@ -192,7 +195,7 @@ export function WorkingNow() {
         // here beside `SW` everywhere else the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
-          ...seatBadge(a.role, "agent"),
+          ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
           ring: "info" as const,
         }))}
       />
@@ -616,6 +619,7 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
               <SeatAvatar
                 name={crumb.seat.name}
                 kind={crumb.seat.kind}
+                avatar={crumb.seat.avatar}
                 size="xs"
                 decorative
                 className="crumb-seat"

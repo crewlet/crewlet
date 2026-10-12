@@ -161,7 +161,7 @@ func TestADirectoryWriteRefusesWhileThisNodeRetainsARecord(t *testing.T) {
 	}
 	somebody := "018f3a9c-0000-7000-8000-0000000006ff"
 	at := statelog.Position{Stream: iamdomain.Domain{}.Stream().Name, Seq: 1 << 40}
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO iam_log_deferred
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)
@@ -331,7 +331,7 @@ func TestAContentRecordNeverCreatesAPerson(t *testing.T) {
 		Position: statelog.Position{Stream: iamdomain.Domain{}.Stream().Name, Seq: 1 << 30},
 		Payload:  payload, StoredAt: brokerAt,
 	}
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := rig.applier.Apply(t.Context(), tx, record,
 			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
 		return err
@@ -361,7 +361,7 @@ func TestAContentRecordNeverCreatesAPerson(t *testing.T) {
 func TestTwoRowsHoldingOneLoginAreTheUnknownArm(t *testing.T) {
 	t.Parallel()
 	rig := newIdentityRig(t)
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE iam_people SET login = 'sarah.chen' WHERE id = ?`, rig.dana)
 		return err

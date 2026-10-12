@@ -41,13 +41,17 @@ import {
   CompassGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
+import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
+import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
+import { textBudget } from "~/lib/format.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -508,7 +512,12 @@ function SaveViewDialog({
 }) {
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
-  const blocked = name.trim() ? undefined : "Give the view a name first.";
+  const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
+  const blocked = !name.trim()
+    ? "Give the view a name first."
+    : budget.over
+      ? `Shorten the name: it is ${budget.bytes} bytes and a view's name holds at most ${budget.limit}.`
+      : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form its one field
     // submits on Enter: a second Enter saved a second view.
@@ -553,12 +562,17 @@ function SaveViewDialog({
         <FormField
           label="Name"
           htmlFor="save-view-name"
-          helper="The tab's label, in the strip above the work."
+          helper={
+            budget.over
+              ? undefined
+              : (budget.line ?? "The tab's label, in the strip above the work.")
+          }
+          error={budget.over ? budget.line : undefined}
         >
           <Input
             id="save-view-name"
             value={name}
-            maxLength={80}
+            error={budget.over}
             onChange={(event) => setName(event.target.value)}
             autoFocus
           />
@@ -1048,7 +1062,9 @@ function AssignToSeatDialog({
   } | null>(null);
   const [reason, setReason] = useState("");
   const q = term.trim();
-  const search = useQuery(
+  // THE BOUND IS THE HOOK'S: a pasted description past it is not sent, and
+  // the list says why rather than "No task matches" (`useSearchQuery`).
+  const search = useSearchQuery(
     "work_search",
     { q, mode: "hybrid", limit: ASSIGN_SEARCH },
     { enabled: q.length >= ASSIGN_MIN_TERM },
@@ -1057,7 +1073,9 @@ function AssignToSeatDialog({
   const read = useQuery("work_item", chosen ? { id: chosen.address } : undefined, {
     enabled: chosen !== null,
   });
-  const hits = q.length >= ASSIGN_MIN_TERM ? (search.data?.hits ?? []) : [];
+  // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across
+  // a failure, which here is the hits of a term the box no longer holds.
+  const hits = q.length >= ASSIGN_MIN_TERM && !search.error ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
   const task = read.data && read.data.task.id === chosen?.id ? read.data.task : null;
   const version = task ? task.version : null;
@@ -1155,11 +1173,21 @@ function AssignToSeatDialog({
                 onOpenChange={setListOpen}
                 options={options}
                 emptyMessage={
-                  search.loading
-                    ? "Searching…"
-                    : search.data && !search.data.available
-                      ? "This node is still indexing the tracker — try again in a moment"
-                      : "No task matches"
+                  search.tooLong ??
+                  (search.error ? (
+                    <QueryState
+                      error={search.error}
+                      refusal={search.refusal}
+                      detail={search.detail}
+                      loading={false}
+                    />
+                  ) : search.loading ? (
+                    "Searching…"
+                  ) : search.data && !search.data.available ? (
+                    "This node is still indexing the tracker — try again in a moment"
+                  ) : (
+                    "No task matches"
+                  ))
                 }
                 onCommit={(option) => {
                   const hit = hits.find((h) => h.id === option.value);

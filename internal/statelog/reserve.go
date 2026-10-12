@@ -55,7 +55,7 @@ import (
 //
 // # Where it applies
 //
-// Only on a log that claims identity ([KeepsGateReserve]), because only such a
+// Only on a log that claims identity ([ReservationOf]), because only such a
 // log carries gate records. The vector changelog claims none: a reserve there
 // would refuse its ordinary writes early to keep room nothing is ever written
 // into.
@@ -104,10 +104,6 @@ import (
 // filling log long before either line is reached. Past the reserve a gate
 // record is refused like any other, and the refusal says to raise the ceiling
 // (`crewlet retention set-capacity`), not to run the gesture again.
-//
-// A NODE ON AN OLDER BUILD ADMITS NOTHING, so while a rolling upgrade runs
-// its appends fill the log to the broker's ceiling as they always did; the
-// reserve holds once every node counts its own.
 const GateReserveDivisor = 16
 
 // GateReserveFleet is how many nodes' appends in flight the fleet term
@@ -161,10 +157,6 @@ const MaxTransportRecordBytes = queue.MaxPayloadBytes - appendOverhead
 // are about the same record.
 func (s StreamSpec) MaxAppendBytes() int64 { return s.MaxRecordBytes + appendOverhead }
 
-// KeepsGateReserve reports whether d's log holds a gate reserve under its
-// ceiling: whether it claims identity, which is what carries gate records.
-func KeepsGateReserve(d Domain) bool { return d.ClaimsIdentity() }
-
 // Reservation is how one log's byte ceiling divides between its ordinary
 // appends and the records that install or lift a gate.
 //
@@ -173,7 +165,8 @@ func KeepsGateReserve(d Domain) bool { return d.ClaimsIdentity() }
 // carries no gate record, and a reserve there would refuse its ordinary writes
 // early to keep room nothing is ever written into.
 type Reservation struct {
-	// Kept reports that the log keeps a reserve ([KeepsGateReserve]).
+	// Kept reports that the log keeps a reserve: that it claims identity,
+	// which is what carries gate records ([ReservationOf]).
 	Kept bool
 
 	// MaxAppend is the log's [StreamSpec.MaxAppendBytes]: the most one
@@ -182,9 +175,15 @@ type Reservation struct {
 	MaxAppend int64
 }
 
-// ReservationOf is d's reservation, read off its declaration.
+// ReservationOf is d's reservation, read off its declaration: a reserve on a
+// log that claims identity, which is what carries gate records, and none on
+// one that does not.
+//
+// THE ONE ANSWER to whether a log keeps one, which the publisher's admission,
+// a ceiling's validation and the headroom alarm all ask — a predicate beside
+// it would be a second.
 func ReservationOf(d Domain) Reservation {
-	if !KeepsGateReserve(d) {
+	if !d.ClaimsIdentity() {
 		return Reservation{}
 	}
 	return Reservation{Kept: true, MaxAppend: d.Stream().MaxAppendBytes()}

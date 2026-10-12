@@ -57,11 +57,16 @@ const (
 	// one question addressed to MANY incarnations — every holder named in
 	// the request's `seats` answers for its own.
 	QuestionOverview Question = "overview"
+	// QuestionEpisode is one of a seat's episodes whole: [EpisodeDetail].
+	QuestionEpisode Question = "episode"
 )
 
-// Valid reports whether this build can answer q.
+// Valid reports whether this build can answer q. A question it cannot — one
+// a successor added — is answered that it cannot, which the asker reports as
+// unavailable naming the reason.
 func (q Question) Valid() bool {
-	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview
+	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview ||
+		q == QuestionEpisode
 }
 
 // Seat is one seat a read is about, resolved by the asker from the company it
@@ -154,6 +159,24 @@ func (r *Reader) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 	return out, nil
 }
 
+// Episode is one of a seat's episodes whole, answered by its holder: what a
+// listed row carries the openings of ([EpisodeRow]).
+func (r *Reader) Episode(ctx context.Context, seat Seat, id string) (EpisodeDetail, error) {
+	req := request{Version: WireVersion, Question: QuestionEpisode, Seat: seat, Episode: id}
+	var out EpisodeDetail
+	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
+		return r.Local.Episode(ctx, seat, id)
+	})
+	if err != nil {
+		return EpisodeDetail{}, err
+	}
+	if holder == "" {
+		return EpisodeDetail{Handle: seat.Handle, HeldBy: HolderNone}, nil
+	}
+	out.HeldBy = holder
+	return out, nil
+}
+
 // Threads is one seat's conversation ledger, answered by its holder.
 func (r *Reader) Threads(ctx context.Context, seat Seat, conversation string, limit int) (Threads, error) {
 	req := request{
@@ -219,8 +242,11 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 	return r.ask(ctx, req, lease.Owner, out)
 }
 
-// ask puts one read to the incarnation holding the seat, BY OWNER: the request
-// goes to the incarnation this lease read named, and only that one answers.
+// ask puts one read to the incarnation holding the seat.
+//
+// ADDRESSED BY OWNER: the request goes to the incarnation this lease read
+// named, and only that process answers, so a holder that restarted since is
+// silent rather than answered for by its successor.
 func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (string, error) {
 	node := NodeOf(owner)
 	req.Owner = owner
@@ -269,13 +295,15 @@ func NodeOf(owner string) string {
 // its store by the seat's id and handle and never re-resolves a handle against
 // a chart of its own, which may be a different reading from the asker's.
 type request struct {
-	Version      int               `json:"v"`
-	Question     Question          `json:"q"`
-	Seat         Seat              `json:"seat,omitzero"`
-	Owner        string            `json:"owner,omitempty"`
-	Limit        int               `json:"limit,omitempty"`
-	Conversation string            `json:"conversation,omitempty"`
-	Seats        map[string][]Seat `json:"seats,omitempty"`
+	Version      int      `json:"v"`
+	Question     Question `json:"q"`
+	Seat         Seat     `json:"seat,omitzero"`
+	Owner        string   `json:"owner,omitempty"`
+	Limit        int      `json:"limit,omitempty"`
+	Conversation string   `json:"conversation,omitempty"`
+	// Episode names the one episode a [QuestionEpisode] read is about.
+	Episode string            `json:"episode,omitempty"`
+	Seats   map[string][]Seat `json:"seats,omitempty"`
 }
 
 // reply is the addressed incarnation's answer, or why it could not give one.
@@ -333,6 +361,8 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 			answer, err = local.Memory(ctx, req.Seat, req.Limit)
 		case QuestionThreads:
 			answer, err = local.Threads(ctx, req.Seat, req.Conversation, req.Limit)
+		case QuestionEpisode:
+			answer, err = local.Episode(ctx, req.Seat, req.Episode)
 		}
 		if err != nil {
 			log.WarnContext(ctx, "held_read_failed", "question", string(req.Question),
@@ -382,10 +412,17 @@ func answerWith(owner string, answer any, refuse func(string) ([]byte, error)) (
 		return nil, fmt.Errorf("memread: encode an answer: %w", err)
 	}
 	// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the asker
-	// would read the broker's refusal as a holder that never answered. Every
-	// collection is paged and an overview row is three counts and one
-	// bounded note, so this is a guard against a bug rather than a size a
-	// seat reaches — and it says so.
+	// would read the broker's refusal as a holder that never answered — so
+	// this refuses it, saying how large it was. Every collection of a memory
+	// answer is paged, a diary note is bounded where it is written
+	// (learning.MaxContentChars), and the two texts nothing bounds — an
+	// episode's ask and its account — are listed as their openings
+	// ([ListedTextBytes]); an overview row is three counts and one bounded
+	// note. So neither answer comes near the ceiling. ONE EPISODE READ WHOLE
+	// carries the two texts one completed turn's event carried, which this
+	// same ceiling held, so it is bounded by that event and not by anything
+	// here — and should one ever not fit, it is refused, by its size, rather
+	// than cut.
 	out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
 	if err != nil {
 		return nil, fmt.Errorf("memread: encode a reply: %w", err)

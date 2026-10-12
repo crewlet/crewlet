@@ -106,29 +106,36 @@ resolves, so the raw `${VAR}` text is never emitted. The count of unresolved ide
 validation, because substituting part of it would register a wrong
 identity that matches nobody.
 
-Where a reference is resolved depends on the consumer. Sender attribution
-resolves it the way every other `${VAR}` in the company is resolved: the
-[secret store](secret-store.md) first, then the process environment. The
-lead's roster and `lookup_colleague` read the process environment only, so
-an identity whose value exists only in the secret store attributes inbound
-activity correctly but does not appear in those two places.
+Every consumer resolves a reference the way every other `${VAR}` in the
+company is resolved: the [secret store](secret-store.md) first, then the
+environment the node runs with. Sender attribution, the lead's roster,
+`lookup_colleague` and `a2a_ask`, and the dashboard's colleague search all
+read that one chain, so an identity whose value exists only in the secret store
+resolves in every one of them or in none — never attributing a person's
+activity while leaving them out of the roster an agent addresses them from.
 
 Human seats keep the descriptive identity fields (`goal`, `backstory`,
 `responsibilities`). They are the **routing context** rendered into an
 agent lead's roster, so work goes to the person who owns it. They also keep
 the hierarchy fields (`manages`, unit `lead`). Every runtime-only field is
 **rejected at validation time**, and the refusal names each one as it is
-written: `llm` and every per-phase `llm_*` chain, `sandbox`, `token_budget`,
-`workers`, `learning_enabled`, `schedules`, `integrations.slack` and
-`integrations.mattermost` (a seat's own chat app), `project` and `space`
-(the tracker project and knowledge space a seat owns), `mcp_env` and
-`behavioral_guidelines`. A seat's own GitHub App (`integrations.github`) is
-refused on a human seat as well, because a person acts on GitHub as their
-own `contact.github_login`. That refusal is an [admission
-rule](configuration.md#what-a-stored-revision-is-held-to): a stored company
-that already carries the block still runs, and the next write that keeps it
-is refused. The reverse holds too: `contact` or `availability` on an agent
-seat is refused with a hint to set `kind: human`.
+written — a refusal of one field is placed at that key, where the dashboard
+marks it: `llm` and every per-phase `llm_*` chain, `sandbox`,
+`token_budget`, `workers`, `learning_enabled`, `schedules`, `placement` (a
+human seat is never claimed, so there is no claim to constrain),
+`integrations.slack` and `integrations.mattermost` (a seat's own chat app),
+`project` and `space` (the tracker project and knowledge container a seat
+owns, written at the top of the seat rather than under `integrations:`),
+`mcp_env` and `behavioral_guidelines`. A seat's own GitHub App
+(`integrations.github`) is refused on a human seat as well, because a person
+acts on GitHub as their own `contact.github_login`. That refusal is an
+[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
+revision being applied that carries the block still runs, and the next write
+that keeps it is refused. So is an `avatar` (an agent's Crewlet character
+and colour): a person is drawn as themself, the circle and their initials,
+and the block would read as a setting and change nothing. The reverse holds
+too: `contact` or `availability` on an agent seat is refused with a hint to
+set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
@@ -156,7 +163,7 @@ instead of to the seat.
 
 A human seat is where a person comes from. **Every person who signs in holds
 exactly one human seat**, from the moment they exist until they are removed
-([ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-every-person-holds-a-human-seat.md)),
+([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-every-person-holds-a-human-seat.md)),
 so the seat is declared first — in the company document, as above — and the
 person is then put in it. A human seat is in one of three states, and **Agents
 › Org chart** draws each on the seat's card for anybody who holds
@@ -275,11 +282,9 @@ makes is attributed to and the name every personal read answers for — so what
 its assistant arranges is what its screens show. What it lacks is the work the
 chart addresses to a seat, and the screens say so, naming `crewlet iam bind`:
 a service account or a token's row is bound to a human seat nobody holds. A
-**person** is never in this state by design. One recorded before every person
-held a seat is, acting under their bare login in no unit and led by nobody,
-until they are moved onto a seat or removed — the screens tell them to ask
-whoever manages people for one, and `crewlet iam check` names them as
-`person_without_seat`.
+**person** is never in this state: they hold a human seat for as long as they
+are here, and the directory refuses every write that would leave one without
+it.
 
 Read and snooze marks are the `mark_inbox` tool wherever they are made — the
 dashboard's buttons through `/operator/act`, a script through
@@ -427,7 +432,7 @@ The third is a **push**, not a poll:
 sequenceDiagram
     participant W as Writer (a seat, a person)
     participant L as Tracker log
-    participant N as Every node's tracker applier
+    participant N as Every data node's tracker applier
     participant S as That node's sockets
     participant D as Sarah's dashboard
     D->>S: watch sarah-chen (on every socket open)
@@ -440,10 +445,21 @@ sequenceDiagram
     D->>S: work_inbox (within half a second)
 ```
 
-- **Every node applies every tracker record**, so every node that serves
-  sockets hears every movement from its own applier, after the batch commits,
-  and tells the sockets it holds. Nothing is forwarded between nodes, and a
-  person's browser can be connected to any of them.
+- **Every data node applies every tracker record**, and every node that
+  serves sockets is a data node (`ingress` requires `data`), so each hears
+  every movement from its own applier, after the batch commits,
+  and tells the sockets it holds. A person's browser can be connected to any
+  of them.
+- **A node whose own copy is out of service keeps telling its sockets.** A
+  copy that is wrong — an applier halted on a record it cannot read, rows
+  below the log — goes out of service while the node stays in rotation, its
+  dashboards reading through a sound data node. Its own applier is then the
+  one thing on it nobody vouches for, so for as long as the copy is out the
+  node follows a sound data node's movements instead, relayed over the
+  broker, and withholds its own. Each switch — onto a peer, from one peer to
+  another, back to its own applier — sends every watched inbox one frame that
+  counts nothing, because what moved during the switch is not replayed: the
+  dashboard reads the inbox again, as it does on any frame.
 - **The dashboard watches your own seat** as soon as its socket opens, and
   again on every reconnect: the rail's inbox badge, the Inbox screen and My
   work re-ask within half a second of the frame. The frame carries identifiers
@@ -459,8 +475,8 @@ sequenceDiagram
   screens — and it is the fallback, not the mechanism: a frame dropped under
   backpressure or lost to a reconnect is never re-sent.
 
-A token or service account bound to no seat — or a person recorded before
-every person held one — watches the record kept under its login: what it
+A token or service account bound to no seat watches the record kept under its
+login: what it
 follows, and what names it. See [Acting as your
 seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 
@@ -612,7 +628,7 @@ the founder seat there carries a single `contact` identity
 
 | Subsystem | Behavior |
 |-----------|----------|
-| Seat placement | Never claimed: only agent seats enter the placement sweep, so a human seat has no lease, no mailbox and no per-role MCP children |
+| Seat placement | Never claimed: only agent seats enter the placement sweep, so a human seat has no lease, no mailbox and no per-role MCP children, and a `placement` block on one is refused |
 | Inbox | None. A notification resolved to a human seat is skipped (`notification_skipped`, reason `human seat`) |
 | Engine notifications | None. The engine never sends as itself; agents reach humans with their own tools |
 | Scheduler | `target: each` fans out to agent members only; an enabled `target: lead` schedule under a (possibly inherited) human lead is a **config error**; human seats cannot define role schedules |
@@ -720,7 +736,7 @@ reinstatement, a bind or a move, a service account's unbind, a removal). The nod
 directory once and, if the answer moved, builds a new registry for the same
 company and swaps it in — never a diff against the live one, so a reader
 always sees one reading of each source. That is **within one apply** of the
-record on every node, and a thirty-second re-read is the safety net behind the
+record on every data node, and a thirty-second re-read is the safety net behind the
 signal. The log line `parties_indexed`
 reports `withheld_seats` and whether a `directory` was consulted.
 
@@ -733,11 +749,16 @@ every human seat is withheld (`directory_unread`) until the net's first
 successful read — people are briefly unreachable through the engine rather
 than a suspended person's accounts being routed to their seat.
 
-**Every node reads its own directory, a satellite included.** A seats-only
+**Every node reads the directory, a satellite included.** A seats-only
 satellite consumes inbound deliveries and runs seats like every other node, so
-it may not route by the org chart alone — and it runs the identity domain like
-every other node, whatever its roles, so a suspension reaches it within one
-apply of its own. See
+it may not route by the org chart alone. A satellite that holds data runs the
+identity domain like every other data node, so a suspension reaches it within
+one apply of its own. One that holds no data applies no log, so its registry
+asks a data node for the directory's seat bindings through the estate router,
+floored on the identity log so the answer is never older than a reading the
+node already had: the thirty-second re-read stands in for the applier's
+signal there, and until its first successful read it withholds every human
+seat exactly as above. See
 [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).
 
 **What agents are shown follows the same reading.** Every turn pins the

@@ -132,7 +132,9 @@ type Options struct {
 
 	// Identity is the identity estate's half of a rotation. NIL-ABLE for a
 	// suite about the store alone — `crewlet run` always hands one over,
-	// since every node holds the identity estate from boot — and every
+	// since every node serving the API holds the estate (ingress requires
+	// the `data` role, ADR-0025) and runs the identity estate from boot —
+	// and every
 	// answer made without one SAYS so (`identity: null`) rather than
 	// reading as an estate with nothing under an old key.
 	Identity Identity
@@ -211,7 +213,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 // reach it, so `engine_keys` says how many there are under each keyring key and
 // nothing else. `identity_values` is the same count for the identity estate's
 // sealed values, by key — null where this surface was given no identity
-// estate, which `crewlet run` never does: every node holds one from boot.
+// estate, which `crewlet run` never does: every node serving the API holds the
+// estate (ingress requires `data`) and runs the identity estate from boot.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -328,10 +331,10 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	// BEFORE THE BODY, so a name the grammar cannot reference is refused
 	// without moving 64 KiB of credential through the process first. Only
-	// the write checks: an out-of-grammar row that already exists must
-	// stay readable and, above all, removable, so get and delete take the
-	// name as given — every name but the engine's own, which no route here
-	// addresses at all.
+	// the write checks: a name outside the grammar names no row, so a read
+	// of one answers not_found and a delete answers removed:false — and
+	// the engine's own names are refused reserved_name before either,
+	// since no route here addresses them at all.
 	if err := secrets.CheckName(name); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName, map[string]string{
 			"detail": err.Error(),

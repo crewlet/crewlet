@@ -16,7 +16,7 @@ import (
 // restarted with, a record that fails its signature, a recreated stream — or
 // frozen behind a broker it cannot reach commits no batch, so the credential
 // listener ([Engine.identityMoved]) never hears the record meant to end an
-// open socket. What does move is the identity log's lag ([runningDomain.Lag],
+// open socket. What does move is the identity log's lag ([runningLog.Lag],
 // which a halted applier cannot hold down: [progress.frozenFor]), and past
 // [statelog.StallGrace] every identity read on the node answers unknown, so a
 // REST request is 503 and a handshake is refused before any snapshot.
@@ -30,7 +30,7 @@ import (
 // contact routing is rebuilt from rows, and a stall wrote none.
 type vouching struct {
 	// lag is the identity log's lag as of an instant — the figure every
-	// identity read on this node carries, [runningDomain.lagAt].
+	// identity read on this node carries, [runningLog.lagAt].
 	lag func(time.Time) time.Duration
 
 	// moved is the credential listener's hand-off,
@@ -82,10 +82,10 @@ func (v *vouching) run(ctx context.Context) {
 // identityVouching is the watch over this node's identity log, handing what it
 // sees to e's credential listener.
 //
-// THE LAG IS THE RUNNING DOMAIN'S OWN, the function the identity reader is
+// THE LAG IS THE RUNNING LOG'S OWN, the function the identity reader is
 // built with ([core.openIAM]), so the crossing this sees is the one every
 // identity read on this node answers by — never a second reading of a stall
 // that could cross at another instant.
-func identityVouching(e *Engine, running *runningDomain) *vouching {
+func identityVouching(e *Engine, running *runningLog) *vouching {
 	return &vouching{lag: running.lagAt, moved: e.identityMoved}
 }

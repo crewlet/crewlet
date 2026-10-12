@@ -43,34 +43,33 @@ import (
 // What ages out is the mailbox entry, which is what the config doc promises:
 // "the history it points at is untouched".
 
-// InboxJobs is the sweep for a person's inbox rows, at the horizon retention
-// answers WHEN IT RUNS.
+// InboxJobs is the sweep for a person's inbox rows, over the replicated estate
+// db: the zero handle is a node with no tracker to sweep, which contributes no
+// job rather than one that fails every tick.
 //
-// # A source, read per tick, and never a value
+// # retention is ASKED AT EVERY SWEEP, and never held as a value
 //
 // The applier declines to write an inbox row for a record older than the
 // horizon, reading it off the epoch at every batch, and [purgeInbox] deletes
 // exactly the rows a replay would decline to write — the two must hold ONE
 // horizon, or an inbox grows back on every reanchor by the width of their
-// disagreement. The applier follows an activation from its next batch, so the
-// sweep follows it from its next tick: handed a value, it kept the horizon the
+// disagreement. The horizon is the company's
+// `tracker.native.inbox_retention_days` and an apply moves it under a running
+// node; the applier follows an activation from its next batch, so the sweep
+// follows it from its next tick — handed a value, it kept the horizon the
 // node's first company stated for the life of the process while the applier
-// moved on. So the job declares no [maintenance.Job.Horizon] of its own and
-// derives its cutoff from the tick's instant, as the event log's job does. A
-// non-positive answer sweeps nothing: a horizon of zero is "none stated",
-// never "retain nothing", which would empty every inbox.
-func InboxJobs(db *store.DB, retention func() time.Duration) []maintenance.Job {
-	if db == nil || retention == nil {
+// moved on. So it is the job's [maintenance.Job.Horizon], which the worker
+// asks afresh on every sweep and derives the cutoff from — and a horizon of
+// zero or less is refused there rather than read as "retain nothing", which
+// would empty every inbox. See [maintenance.Horizon].
+func InboxJobs(db store.ReplicatedHandle, retention maintenance.Horizon) []maintenance.Job {
+	if db.IsZero() {
 		return nil
 	}
 	return []maintenance.Job{{
-		Name: "tracker_notifications", Scope: maintenance.NodeLocal,
-		Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
-			horizon := retention()
-			if horizon <= 0 {
-				return 0, nil
-			}
-			return purgeInbox(ctx, db, now.Add(-horizon))
+		Name: "tracker_notifications", Scope: maintenance.NodeLocal, Horizon: retention,
+		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
+			return purgeInbox(ctx, db, cutoff)
 		},
 	}}
 }
@@ -91,9 +90,9 @@ func InboxJobs(db *store.DB, retention func() time.Duration) []maintenance.Job {
 // running node. A pooled write transaction takes the same write lock through
 // the same queue (see internal/store's writequeue.go), which is all this
 // needs.
-func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+func purgeInbox(ctx context.Context, db store.ReplicatedHandle, cutoff time.Time) (int64, error) {
 	var swept int64
-	err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,

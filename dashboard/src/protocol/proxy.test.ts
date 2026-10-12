@@ -65,7 +65,7 @@ import {
 } from "../test/source.ts";
 
 /** The `rest` methods that take the path first. */
-const REST_PATH_FIRST = new Set(["get", "post", "put", "patch", "del", "putText"]);
+const REST_PATH_FIRST = new Set(["get", "post", "put", "patch", "del", "putText", "blob"]);
 /** Constructors whose first argument is the URL they dial. */
 const DIALS = new Set(["WebSocket", "EventSource"]);
 /** The objects `fetch` can be called off as a property. */

@@ -42,6 +42,8 @@ var namedRoutes = []struct {
 	path map[string]string
 }{
 	{method: "GET", pattern: "/agents/{id}/memory", what: "agent_memory", path: map[string]string{"id": "id"}},
+	// One episode WHOLE, under the memory that lists its opening.
+	{method: "GET", pattern: "/agents/{id}/memory/episodes/{episode}", what: "agent_episode", path: map[string]string{"id": "id", "episode": "episode"}},
 	// One seat's external threads. Under /agents/{id}/ beside its memory,
 	// because it is the same kind of fact — what this seat has said and
 	// remembered — rather than a company-wide listing.
@@ -78,6 +80,10 @@ var namedRoutes = []struct {
 	// histories into one list.
 	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
+	// THE BROKER'S MEMBERSHIP, beside the fleet view rather than inside it:
+	// it asks a member for the metadata group, which the lease table the
+	// fleet view is read from cannot say.
+	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
@@ -126,6 +132,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/search", what: "work_search"},
 	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
+	// A PROJECT'S FILES. The listing is a question like every other here;
+	// one file's BYTES are not, and stream from the human write surface's
+	// own route beside it (internal/api/workapi's files.go), which the
+	// literal segment keeps apart from /work/{id}.
+	{method: "GET", pattern: "/work/files", what: "work_files"},
 	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
 	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
@@ -150,7 +161,7 @@ var namedRoutes = []struct {
 }
 
 // mountReads registers the named read routes.
-func (a *App) mountReads(mux *http.ServeMux) {
+func (a *App) mountReads(mux httpjson.Router) {
 	for _, route := range namedRoutes {
 		mux.Handle(route.method+" "+route.pattern, a.serveNamed(route.what, route.path))
 	}

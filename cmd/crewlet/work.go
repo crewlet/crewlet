@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,11 +40,11 @@ import (
 // single database.
 
 // runWork dispatches `crewlet work`.
-func runWork(args []string, stdout, stderr io.Writer) error {
+func runWork(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "purge":
-		return workPurge(rest, stdout, stderr)
+		return workPurge(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, workPurgeUsage)
 		return flag.ErrHelp
@@ -79,10 +80,10 @@ const workPurgeUsage = "usage: crewlet work purge <item> -reason TEXT " +
 // It is the only thing that survives. The rows are destroyed; what remains is
 // the deletion marker, and its reason is the entire account of what used to be
 // at that key for whoever reads it a year later.
-func workPurge(args []string, stdout, stderr io.Writer) error {
+func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	item, rest := splitSubject(args)
 	var reason, confirm, opID *string
-	client, err := nodeClientFor(rest, "work purge", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "work purge", stderr, func(fs *flag.FlagSet) {
 		reason = fs.String("reason", "", "why; recorded on the deletion marker")
 		confirm = fs.String("confirm", "",
 			"the item's KEY — this destroys the item and every row it produced")

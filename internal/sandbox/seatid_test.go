@@ -16,5 +16,13 @@ import (
 // looking like the ordinary one.
 const sweID = "0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"
 
+// sweSeat is that seat's id as a seat id, which is what a mailbox retirement
+// ends its runs by.
+func sweSeat() uuid.UUID { return uuid.MustParse(sweID) }
+
 // sweControl is that seat's sandbox-control subject.
 func sweControl() string { return topics.AgentControl(uuid.MustParse(sweID)) }
+
+// sweInbox is that seat's inbox: where an answer by turn is delivered and a
+// reply the run did not take is handed back.
+func sweInbox() string { return topics.AgentInbox(uuid.MustParse(sweID)) }

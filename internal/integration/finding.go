@@ -404,9 +404,7 @@ type Finding struct {
 	//
 	// EMPTY IS THE ORDINARY CASE. A finding about one thing names it in
 	// Subject and leaves this nil; a reader with nothing to render finds
-	// nothing to render. It is additive on a struct written to the
-	// coordination store, so a peer on an older build reads the Detail it
-	// always read.
+	// nothing to render.
 	Subjects []string `json:"subjects,omitempty"`
 
 	// ExpiresAt is when the credential a [FindingCredentialExpiring] is
@@ -414,9 +412,7 @@ type Finding struct {
 	//
 	// A FIELD RATHER THAN A PHRASE IN [Detail], because a reader needs to
 	// do arithmetic on it — "in 9 days", sorted against another tool's —
-	// and a date inside prose can only be re-parsed. Additive on a struct
-	// written to the coordination store: a peer on an older build ignores
-	// it and reads the Detail it always read.
+	// and a date inside prose can only be re-parsed.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 

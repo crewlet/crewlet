@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -155,31 +158,56 @@ type ManifestOptions struct {
 // the second time any two companies both have an `sre-lead`, and the failure
 // arrives as a manifest rejection an operator cannot do anything about.
 //
-// So the company's own name leads, the seat follows, and the whole is cut to
-// fit. Cut on a RUNE boundary through textcut, because a name sliced through
-// a multi-byte character is rejected by GitHub as malformed rather than as
-// too long.
+// So the company's own name leads and the seat follows. A name past the limit
+// is shortened WITHOUT LOSING WHAT TELLS TWO APPS APART: it used to be cut at
+// 34, so in a company whose name alone ran to 34 every seat's app had the same
+// name — the seat, the one part that differs, was what the cut removed. Now
+// the company is shortened first and the seat kept, and a short digest of the
+// whole name rides at the end, so two names that shorten alike still differ.
+// Shortened on a RUNE boundary, because a name sliced through a multi-byte
+// character is rejected by GitHub as malformed rather than as too long.
 func AppName(company, seat string) string {
+	company, seat = strings.TrimSpace(company), strings.TrimSpace(seat)
 	parts := make([]string, 0, 2)
 	for _, part := range []string{company, seat} {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			parts = append(parts, trimmed)
+		if part != "" {
+			parts = append(parts, part)
 		}
 	}
 	name := strings.Join(parts, " ")
 	if name == "" {
 		name = "Crewlet agent"
 	}
-	return cut(name, 34)
+	if utf8.RuneCountInString(name) <= appNameMax {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	tag := hex.EncodeToString(sum[:3])
+	room := appNameMax - len(tag) - 1
+	// The seat whole where the company keeps at least a few runes of its
+	// own; otherwise the seat is what is shortened, and the digest still
+	// separates it from every other.
+	if keep := room - utf8.RuneCountInString(seat) - 1; seat != "" && keep >= appNameMinCompany {
+		return runePrefix(company, keep) + " " + seat + " " + tag
+	}
+	return runePrefix(name, room) + " " + tag
 }
 
-// cut shortens to n runes without splitting one.
-func cut(s string, n int) string {
+// appNameMax is GitHub's limit on an app's name, in characters.
+const appNameMax = 34
+
+// appNameMinCompany is the least of a company's name worth keeping beside a
+// whole seat name: under it the prefix identifies nothing, and the seat is
+// the better thing to shorten.
+const appNameMinCompany = 4
+
+// runePrefix is the first n runes of s, without a space left at the end.
+func runePrefix(s string, n int) string {
 	runes := []rune(s)
-	if len(runes) <= n {
-		return s
+	if len(runes) > n {
+		runes = runes[:n]
 	}
-	return strings.TrimSpace(string(runes[:n]))
+	return strings.TrimSpace(string(runes))
 }
 
 // BuildManifest describes the app one seat needs.
@@ -648,10 +676,12 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		detail, _ := io.ReadAll(io.LimitReader(res.Body, errorBodyBytes))
+		// THROUGH [httpx.ReadRefusal] like the client's own arm: a raw
+		// body here put a proxy's HTML page into the error, cut at 2 KiB
+		// with nothing to say so.
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.ReadRefusal(res),
 		}
 	}
 	if out == nil {

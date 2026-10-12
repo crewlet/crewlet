@@ -20,9 +20,16 @@ import (
 // rows through the node's own publisher, on the company's clock, with the
 // seat's handle taken from the chart rather than from a record that may carry
 // none.
+//
+// THE PHASE IS RECORDED AFTER BOOT, which is what makes this a case about a
+// LIVE loop: the boot flush runs before it exists, so an engine that flushed
+// once and let the publisher die — a loop bound to the start's context, a
+// single Flush where Run belongs — publishes nothing here. The cadence is
+// shortened so a later tick comes in milliseconds rather than fifteen
+// seconds; what it is in production is the usage package's to pin.
 func TestARunningNodePublishesItsOwnDay(t *testing.T) {
 	t.Parallel()
-	e := newEngine(t, engine.Options{})
+	e := newEngine(t, engine.WithUsageFlushEvery(engine.Options{}, 50*time.Millisecond))
 	db := e.Backends().Store
 
 	var seatID, handle string
@@ -55,9 +62,10 @@ func TestARunningNodePublishesItsOwnDay(t *testing.T) {
 	}
 
 	day := period.At(period.Day, now, e.Zone()).Label
-	// A FLUSH AND A HALF: the publisher's first tick ran at boot, before the
-	// phase existed, so the one that finds it is the next.
-	deadline := time.Now().Add(usage.FlushInterval*3/2 + 10*time.Second)
+	// TEN SECONDS, two hundred of the shortened ticks: a bound only a loop
+	// that never ticks again reaches.
+	const patience = 10 * time.Second
+	deadline := time.Now().Add(patience)
 	for {
 		rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: day, To: day})
 		if err != nil {
@@ -73,7 +81,7 @@ func TestARunningNodePublishesItsOwnDay(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("after %s the replicated rows hold %+v for %s — nothing "+
-				"publishes this node's day", usage.FlushInterval*3/2, rows, day)
+				"publishes this node's day", patience, rows, day)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

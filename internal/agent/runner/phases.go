@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -47,15 +49,14 @@ type Caps struct {
 }
 
 // reviewRounds is the reviewer's whole budget: one submission, the tool loop's
-// two corrective re-prompts when a model answers without calling it, and one
+// two finishing correctives when a model answers without calling it, and one
 // spare.
 //
-// That arithmetic is real now. The correctives are gated on the caller asking
-// for a forced tool call and no caller did, so three of these four rounds were
-// headroom for a mechanism that never armed — and a reviewer that thought and
-// stopped went straight to the rescue, sending the whole turn back for another
-// executor round over the one failure a model fixes when it is simply asked
-// again.
+// The correctives are armed by the submission the reviewer names as its
+// terminator, as they are for every phase that finishes by a call, and they
+// are what a reviewer that thought and stopped gets INSTEAD of the rescue —
+// which sends the whole turn back for another executor round over the one
+// failure a model fixes when it is simply asked again.
 const reviewRounds = 4
 
 // Config is everything a runner needs that does not change between rounds.
@@ -68,6 +69,14 @@ type Config struct {
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Compact rewrites a payload past its budget with the seat's own
+	// auxiliary model: a prior round's argument values, failed calls'
+	// errors and produced text, as the prior-work ledger renders them. The
+	// zero value rewrites nothing, and the ledger then renders a draft
+	// whole and omits a payload by its size — never a cut. See
+	// internal/agent/ledger/ledgerfit for which is which.
+	Compact compact.Bound
 
 	// Subagent is what this turn needs to spawn sub-agents: the company's
 	// caps and a way to read the seat's remaining allowance. Nil leaves
@@ -241,6 +250,10 @@ type RunRecord struct {
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
 
+	// RefsElided is how many more the run reported than DeliveredRefs lists,
+	// which the coordinator bounds — said on the record rather than dropped.
+	RefsElided int
+
 	// LaunchID is the job this resume collected — the pending-run row's
 	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
 	// more than once, so it is what tells one collected run's record from
@@ -347,6 +360,17 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// agentrun.go for what that does and does not change. The branch
 		// is here, at the top of the phase, because everything below it
 		// is the native loop's own assembly.
+		//
+		// A REFUSAL ALREADY CERTAIN launches nothing. A native pass is
+		// stopped by its own loop before its first call; this one makes
+		// its calls in a box, post-charged when the run is collected, so
+		// it is asked here — or a run would be paid for whole on a window
+		// already past its ceiling — and again once its brief is built,
+		// since building it can be what fills the window
+		// ([Runner.executeAsAgentRun]).
+		if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
+			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
 	}
 	snapshot := r.cfg.Registry.Snapshot()
@@ -355,14 +379,16 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	// the tool cannot exist before the surface and the surface cannot
 	// resolve the tool before it exists. The closure breaks that the same
 	// way the discovery pair's does, and is read only at call time — by
-	// which point both exist.
+	// which point both exist. The record is the TURN's: the closed rounds'
+	// calls first, so a delivery one of them made is citable here.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return calls(surface) },
+			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit, r.executorActive(snapshot))
+	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, round, snapshot, submit,
+		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -422,7 +448,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // matched a second time against a live registry rather than the one sent.
 func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	history []ledger.Iteration, snapshot tools.Snapshot,
-) (system, user string) {
+) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
@@ -445,10 +471,23 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
-		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
 	})
 	return system, user
+}
+
+// priorWork renders the turn's earlier rounds, every payload past its budget
+// rewritten by the seat's auxiliary model first.
+//
+// Rewritten here, at render, and not when the round closed: the record keeps
+// every payload whole, so the bound is a property of what this prompt can
+// carry rather than of what happened. The compactor caches by content, so the
+// block re-rendered for the executor and again for the reviewer pays for each
+// payload once.
+func (r *Runner) priorWork(ctx context.Context, history []ledger.Iteration) string {
+	fitted := ledgerfit.Fit(ctx, r.cfg.Compact, ledger.IterationPieces(history, r.cfg.SkipNames))
+	return ledger.RenderIterations(history, r.cfg.SkipNames, fitted)
 }
 
 // work is one executor pass, assembled for reporting.
@@ -457,8 +496,8 @@ type work struct {
 	res      phaseResult
 	surface  *tools.Surface
 	snapshot tools.Snapshot
-	system   string
-	user     string
+	system   prompts.Prompt
+	user     prompts.Prompt
 
 	// run names the box this pass ran in, where it was not this process.
 	run RunRecord
@@ -473,8 +512,9 @@ type work struct {
 func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.Work, turn.Surface, error) {
 	payload, submitted := w.submit.Value()
 	if !submitted {
-		// THE RESCUE PATH. An executor that ran out of rounds, or simply
-		// stopped, has produced text and no account of itself. Discarding
+		// THE RESCUE PATH. An executor that ran out of rounds, or stopped
+		// and kept answering in prose through the tool loop's finishing
+		// correctives, has produced text and no account of itself. Discarding
 		// the turn wastes everything it did; calling it delivered puts
 		// words in its mouth on the one question that matters.
 		//
@@ -533,7 +573,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
-	surface, err := r.surfaceWith(ctx, phase.Review, round, snapshot, submit, nil)
+	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Review, round, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -550,24 +590,27 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
 		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
-		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+		EarlierIterations: r.priorWork(ctx, history),
 		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
 		// parser and the docs all supported and nothing ever passed: a
 		// skill authored with `phases: [review]` reached no reviewer.
 		Skills: offer.Catalogue(),
 	})
 	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
+	user := reviewTask(r.cfg.Task)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
-		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
+		phase: phase.Review, surface: surface, system: system, user: user,
 		rounds: reviewRounds, iteration: round,
+		// NEVER FORCED, like every phase — a request has no way to force
+		// a call. The reviewer's only tool is its submission, so a forced
+		// choice once looked free here — but several current models
+		// answer one with a 400, which is fatal to the whole turn rather
+		// than one round, and the
+		// submission named here is what makes a round of prose get asked
+		// again (toolloop.Config.TerminateAfter).
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
 		steerable: true,
-		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
-		// no catalogue at all, so "call a tool" and "submit the review" are
-		// the same instruction here — which is what makes forcing it safe
-		// as well as right.
-		toolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
 		// Nothing to salvage here, and nothing lost: a reviewer's surface
@@ -592,11 +635,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 				"executor set out to do against what the tool log says it did, " +
 				"and call " + SubmitReviewTool + ".",
 		}
-		r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, user, res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, user, res,
 		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      payload.Decision,
@@ -625,10 +668,17 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 // The label is CONSTANT, unlike [Runner.taskFor]'s correction: the review
 // phase re-sends this every round, and a per-round frame would move bytes the
 // provider's prefix cache is keyed on.
-func reviewTask(task string) string {
-	return "The trigger this turn is answering, for reference. It is the message " +
-		"the agent was ALREADY working on when the rounds below ran — not a new " +
-		"one that arrived during the turn, and not a repeat of it:\n\n" + task
+//
+// Two sections in its outline: the label, and the trigger whole — whatever
+// headings a vendor's body carries are the trigger's, not the reviewer's.
+func reviewTask(task string) prompts.Prompt {
+	b := prompts.NewBuilder("")
+	b.Lead("reference", "For reference", "The trigger this turn is answering, for "+
+		"reference. It is the message the agent was ALREADY working on when the "+
+		"rounds below ran — not a new one that arrived during the turn, and not a "+
+		"repeat of it:\n\n")
+	b.Lead("task", "Task", task)
+	return b.Build()
 }
 
 // reviewRecord builds Review's completed record.
@@ -636,7 +686,7 @@ func reviewTask(task string) string {
 // A function because Review reports from TWO places — its decoded payload and
 // its rescue — and the two must describe the same phase. Written out twice,
 // the rescue path is the one that quietly loses a field.
-func reviewRecord(round int, system, user string, res phaseResult,
+func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 	decision, notes string, rescued bool, surface *tools.Surface,
 ) phaseRecord {
 	return phaseRecord{
@@ -680,28 +730,27 @@ type phaseRun struct {
 
 	// system and user open the conversation. Both are ignored when Seed is
 	// set: a resumed loop already has its opening in the saved messages.
-	system string
-	user   string
+	system prompts.Prompt
+	user   prompts.Prompt
 
 	rounds    int
 	ceiling   int
 	iteration int
 
-	// terminateAfter names tools that end the loop once they have run.
-	terminateAfter []string
-
-	// toolChoice forces the round to end in a tool call, for a phase whose
-	// whole contract is one submission. Empty is the tool loop's `auto`,
-	// which is right for a phase that legitimately spends rounds on calls
-	// that are not its submission — the executor.
+	// terminateAfter names tools that end the loop once they have run
+	// SUCCESSFULLY — and, by naming them, declares that the phase finishes
+	// by one: a round that ends in prose is re-prompted with a corrective
+	// naming them rather than accepted as the phase's end.
 	//
-	// It arms the loop's corrective re-prompt, which is gated on exactly
-	// this and which nothing set: `maxForcedToolRetries` and
-	// `forcedToolCorrective` were unreachable code, and the one failure a
-	// model reliably fixes when asked — thinking and then stopping without
-	// calling — fell straight through to the rescue path instead, at the
-	// cost of a whole extra turn rather than one cheap round.
-	toolChoice llm.ToolChoice
+	// THAT is what makes a phase end in its submission, and there is
+	// nothing beside it: a request has no way to force a call
+	// ([llm.Request.Tools]), so the model decides on every round. A forced
+	// choice was a request some endpoints ignore and several current
+	// models refuse with a 400 (Claude Opus 5.5, Sonnet 5.5, Fable 5.1,
+	// Mythos 5.1) — and a 400 is not retried down the chain, so on those
+	// models it failed every review and every onboarding pass before the
+	// corrective that actually enforces the call could run.
+	terminateAfter []string
 
 	// seed is the conversation a RESUMED loop starts from: the suspended
 	// messages plus the answer to their dangling call. Nil for an ordinary
@@ -897,8 +946,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	messages := in.seed
 	if messages == nil {
 		messages = []llm.Message{
-			{Role: llm.RoleSystem, Content: system},
-			{Role: llm.RoleUser, Content: user},
+			{Role: llm.RoleSystem, Content: system.Text},
+			{Role: llm.RoleUser, Content: user.Text},
 		}
 		// EVERY NOTE THE TURN HAS ALREADY READ, after the opening and in
 		// the order it was read, so a new phase starts from the turn as
@@ -909,6 +958,16 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		}
 	}
 	budget := in.rounds
+	// The finishing correctives the run of declines being CONTINUED has
+	// already had — nonzero only for an invocation that picks up a
+	// corrective the last one withheld. See toolloop.Config.CorrectivesSpent.
+	correctivesSpent := 0
+	// Rounds this phase has run past an invocation's budget WITHOUT the
+	// judge, to read a withheld corrective. A phase's own allowance of
+	// finishing correctives, and never more: past it, a phase that keeps
+	// working and declining by turns would be extending itself round by
+	// round on nobody's decision.
+	unjudged := 0
 	for {
 		// What the phase holds BEFORE this invocation, captured by value:
 		// the loop calls OnProgress from inside Run, and `out` is written
@@ -942,9 +1001,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// member that actually served — see toolloop.Config.
 			ProviderKey: members[0].Key,
 			MaxRounds:   budget, Budget: r.cfg.Budget,
-			Fence:        r.cfg.Fence,
-			ToolChoice:   in.toolChoice,
-			AllowSuspend: in.allowSuspend,
+			Fence:            r.cfg.Fence,
+			AllowSuspend:     in.allowSuspend,
+			CorrectivesSpent: correctivesSpent,
 			// A phase that has SUBMITTED is finished. Without this the
 			// loop asks again, the model submits again, and the phase
 			// spends its whole round budget re-deciding — measured at
@@ -978,6 +1037,36 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		out.Rounds = prior.Rounds + res.RoundsUsed
 		messages = res.Messages
 
+		// A CORRECTIVE THE LOOP WITHHELD IS SENT HERE, when the phase may
+		// run past this invocation's budget. Its last round ended without
+		// the submission and had no round after it to be asked in — the
+		// round a phase most naturally submits on, and the one the
+		// extension nudge tells it to submit on — so without this the
+		// outcome turned on WHICH round a decline landed on: the same
+		// fenced JSON on the round before the cap was re-asked and
+		// submitted, on the cap it was rescued as incomplete with the
+		// ceiling's rounds unspent.
+		//
+		// No judge. Its question is whether a phase still working deserves
+		// more rounds, and this one has finished its work and is missing
+		// only the call that reports it. What bounds it instead is the
+		// allowance the loop would have spent had the rounds been inside
+		// the budget, shared with it rather than reset (CorrectivesSpent),
+		// and the phase's ceiling, which an operator who turned extensions
+		// off has set to the budget itself.
+		if !res.Suspended && res.Withheld != "" && policy.Enabled {
+			room := min(toolloop.MaxFinishingCorrectives-res.CorrectivesSpent,
+				toolloop.MaxFinishingCorrectives-unjudged, policy.Headroom(out.Rounds))
+			if room > 0 {
+				log.InfoContext(ctx, "phase_asked_for_submission_past_budget", "phase", ph,
+					"iteration", iteration, "rounds_used", out.Rounds, "granted", room)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: res.Withheld})
+				budget, unjudged = room, unjudged+room
+				correctivesSpent = res.CorrectivesSpent + 1
+				continue
+			}
+		}
+
 		if res.Suspended || !res.ExhaustedRounds {
 			// Read off the phase TOTALS, never off `res`: an extended
 			// phase ran the loop more than once and the last invocation
@@ -1002,7 +1091,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			Role:    llm.RoleUser,
 			Content: extension.Nudge(ph, granted, decision.Reason),
 		})
-		budget = granted
+		// An exhausted phase was still calling tools, so no run of
+		// declines is being continued.
+		budget, correctivesSpent = granted, 0
 	}
 }
 
@@ -1081,10 +1172,22 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 // rather than inside [extension.Consider], which is policy plus a model and
 // has no business knowing about spans, meters or the event vocabulary.
 //
-// A CHARGE THAT REFUSES DOES NOT FAIL THE TURN. The extension is a generosity
+// A CHARGE THAT REFUSES DOES NOT FAIL THE PHASE. The extension is a generosity
 // on a phase that has already run out of rounds, and a seat at its cap should
-// stop extending, not die: an over-budget judgement is recorded and treated as
-// "no extension", which is the same outcome as the judge saying no.
+// stop extending rather than have the phase break under it: an over-budget
+// judgement is logged, published and treated as "no extension", which is the
+// same outcome as the judge saying no. Its tokens are on the counter either
+// way: the judge has answered by the time it is charged, and a meter records a
+// call it refuses as it records one it admits ([toolloop.BudgetMeter]). What
+// the refusal does stop is every model call after it: the meter now holds it,
+// so the next phase's first round — the reviewer's, or the executor's after a
+// correction — is refused before it is made, and the turn ends on the budget
+// without paying for a call certain to be thrown away.
+//
+// AND A JUDGE IS NOT CALLED AT ALL ON A REFUSAL ALREADY CERTAIN: it is a model
+// call like any other, billed and then refused. That happens when a refusal
+// lands inside the phase's last round without being the round's own — a
+// worker it delegated to, refused by the seat or the company.
 func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
@@ -1098,6 +1201,20 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 		attribute.Int("crewlet.iteration", iteration),
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
+
+	// A REFUSAL ALREADY CERTAIN calls no judge — see above. Only where the
+	// judge WOULD be called: a policy that declines to ask, or a seat with
+	// no judge, costs nothing, and its own reason is the truer account of
+	// why the phase was not extended.
+	if asks, _ := policy.ShouldAsk(req.RoundsUsed); asks && r.cfg.Judge != nil {
+		if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
+			log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
+				"iteration", iteration, "tokens", 0, "error", refused.Error(),
+				"detail", "the budget had already refused this turn, so the judge was not called")
+			span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
+			return 0, extension.Rescue(extension.ReasonBudgetExhausted)
+		}
+	}
 
 	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
 	// [extension.Consider] for the same reason the span is: that function is
@@ -1131,7 +1248,8 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 	return granted, decision
 }
 
-// charge meters a model call the tool loop did not make.
+// charge meters a model call the tool loop did not make, once it has been
+// made: the meter records it whether or not it fits.
 //
 // An unreachable counter is NOT a refusal — the same three-valued rule the
 // loop's own charge follows — but here both answers end the same way, because
@@ -1255,7 +1373,10 @@ type phaseResult struct {
 // a resumed Execute as well as a fresh one. Injected here because this is the
 // single funnel every phase surface goes through, so a phase that lost the
 // tool mid-turn is not representable.
-func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
+//
+// m is where the surface's own calls are charged — the runner's own segment
+// for every surface but an agent-mode executor's ([meter]).
+func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (*tools.Surface, error) {
 	if submit != nil {
@@ -1293,7 +1414,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// funnel every phase surface goes through, so a fresh Execute and a
 	// RESUMED one get it from one place — and a resumed turn that lost the
 	// tool mid-run is not representable.
-	if entry := r.spawnEntry(ctx, ph, round, snapshot,
+	if entry := r.spawnEntry(ctx, m, ph, round, snapshot,
 		func() *tools.Surface { return surface }); entry.Tool != nil {
 		next, err := snapshot.With(entry)
 		if err != nil {
@@ -1316,7 +1437,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
-		ForTurn(r.cfg.Turn.Context.InPhase(types.Phase(ph)))
+		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"
@@ -1525,6 +1646,10 @@ func describe(s *tools.Surface) turn.Surface {
 		Deliveries:     u.Deliveries(),
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
+		// Every MCP-served tool, which a phase reaches only by discovering
+		// it — so a refusal can tell the tools a seat already holds from
+		// the ones it has to go and find. See [turn.Surface.Discoverable].
+		Discoverable: u.MCPNames(),
 	}
 }
 
@@ -1558,8 +1683,9 @@ func missingTools(s *tools.Surface) []string {
 // reviewArtifact is what the executor produced, handed to the reviewer.
 //
 // WHOLE, and that is a bug fix rather than a preference. [turn.Work.Text] is
-// every assistant message of the executor's tool loop concatenated, thinking
-// blocks included — so the draft is at its END. The 2000-rune cut this used to
+// the assistant messages of the executor's tool loop concatenated, thinking
+// blocks included (a corrective's repeats excepted — see toolloop's
+// assistantText) — so the draft is at its END. The 2000-rune cut this used to
 // carry kept the HEAD, which on any multi-round execution is the opening of
 // round one's reasoning and not the draft at all. The reviewer's verdict
 // decides whether the turn ships or loops, and it was being asked for that

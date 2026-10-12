@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // runBackup is `crewlet backup`.
@@ -35,10 +37,10 @@ import (
 // So the copy is taken by the one process that can reach both, and this
 // command asks it to. The destination is a path on the ENGINE'S host, which
 // is the surprise worth stating plainly: this does not download anything.
-func runBackup(args []string, stdout, stderr io.Writer) error {
+func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var dir *string
 	var wait *time.Duration
-	client, err := nodeClientFor(args, "backup", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "backup", stderr, func(fs *flag.FlagSet) {
 		dir = fs.String("dir", "",
 			"absolute directory ON THE ENGINE'S HOST to write the backup into; required")
 		wait = fs.Duration("wait", backupWait,
@@ -87,6 +89,16 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			Migrations []string `json:"migrations"`
 		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
+		Objects *struct {
+			Dir     string `json:"dir"`
+			Stream  string `json:"stream"`
+			Objects int    `json:"objects"`
+			Bytes   int64  `json:"bytes"`
+			Lost    []struct {
+				Object  string `json:"object"`
+				NamedBy string `json:"named_by"`
+			} `json:"lost"`
+		} `json:"objects"`
 	}
 	if err := client.patiently(*wait).post(context.Background(),
 		"/backup?dir="+url.QueryEscape(*dir), &manifest); err != nil {
@@ -107,6 +119,18 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	for _, st := range manifest.Stores {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
+	}
+	// THE OBJECTS ARE THE COMPANY'S: absent only where the copy names no
+	// file at all. On the broker's own bucket they ride that stream's
+	// snapshot, which is what the row names rather than a directory —
+	// and their bytes are that snapshot's, so they are not counted twice.
+	if o := manifest.Objects; o != nil {
+		switch {
+		case o.Stream != "":
+			fmt.Fprintf(w, "objects\tin %s\t—\t%d objects\n", o.Stream, o.Objects)
+		default:
+			fmt.Fprintf(w, "objects\t%s/\t%s\t%d objects\n", o.Dir, humanBytes(o.Bytes), o.Objects)
+		}
 	}
 	streams := manifest.Streams
 	slices.SortFunc(streams, func(a, b streamRow) int { return cmp.Compare(a.Name, b.Name) })
@@ -141,6 +165,18 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			"its stream estate lives on the external NATS cluster it dialled. "+
 			"Back that up there, from the same moment as this copy "+
 			"(`nats account backup`).")
+	}
+	// LOST FILES ARE SAID, not left in the manifest: the backup completed
+	// and restores everything else, and the one thing an operator can do
+	// about these — restore them from an earlier backup, or upload them
+	// again — needs to know which.
+	if o := manifest.Objects; o != nil && len(o.Lost) > 0 {
+		fmt.Fprintf(stdout, "\n%d file(s) could not be carried: the object store does not hold "+
+			"their content, or holds other bytes than they record. Restore them from an "+
+			"earlier backup or upload them again:\n", len(o.Lost))
+		for _, l := range o.Lost {
+			fmt.Fprintf(stdout, "  %s (object %s)\n", l.NamedBy, l.Object)
+		}
 	}
 	return nil
 }

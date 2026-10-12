@@ -27,7 +27,7 @@ func (h *fleetHarness) pauseOf(handle string) (coord.SeatPause, bool) {
 
 // pause pauses a seat as the person holding the seat by does through their own
 // session — attributed as [iam.ActorFor] attributes a signed-in person: a
-// person holds a human seat for as long as they are here (ADR-0026), so they
+// person holds a human seat for as long as they are here (ADR-0032), so they
 // write under that seat's HANDLE, kind human, with the session they acted
 // through beside it as its lineage ([sessionOf]). It was a login with no seat
 // written as kind human, which no principal ever is — a person bound to no

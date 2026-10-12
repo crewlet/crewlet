@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -54,7 +55,7 @@ func (r *Result) Findings() []integration.Finding {
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "api.external_url",
+			Subject: setup.BaseKey(r.NoIngressKey),
 			Detail:  r.NoIngress,
 		})
 	}

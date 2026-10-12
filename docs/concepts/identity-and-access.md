@@ -48,7 +48,7 @@ crewlet iam bind <person-id> backend-lead
 
 A suspended or retired person keeps their seat. To free it for somebody else,
 move them or remove them — the removal's tombstone keeps who held it. That is
-[ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-every-person-holds-a-human-seat.md).
+[ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md).
 
 The binding is a directory row, not a line of the company document — see [The
 binding has two ends](#the-binding-has-two-ends-and-only-one-of-them-arbitrates).
@@ -62,10 +62,8 @@ later with `crewlet iam bind`.
 **A token or a service account bound to no seat acts as the credential**, under
 its own login, with author kind `operator`. That is ordinary — a pipeline, an
 automation, the deployment's own break-glass token each act as themselves and
-are never refused for it. The one *person* who acts that way is one recorded
-before every person held a seat: they act under their bare login, in no unit and
-led by nobody, and `crewlet iam check` reports them as `person_without_seat`
-until they are moved onto a seat or removed. What you cannot do, in either
+are never refused for it. A *person* never acts that way: they hold a human
+seat for as long as they are here. What you cannot do, in either
 direction, is *choose* a seat to act as: a tracker whose author field is picked
 by the writer is not an audit trail.
 
@@ -366,17 +364,21 @@ suspended by anything but the org chart and the process.
 ### What a suspension reaches, and how fast
 
 A suspension is ONE record on the identity log — `crewlet iam suspend`, or a
-`PATCH /iam/people/{id}` naming the stage — and no configuration change. Every node
-applies it, whatever its roles, and what follows is decided on each of them
-from that node's own rows:
+`PATCH /iam/people/{id}` naming the stage — and no configuration change. Every
+data node applies it, whatever its other roles, and what follows is decided on
+each of them from that node's own rows. A seats node that holds no data applies
+no log and serves no request — only a data node serves the API — so what it
+decides is the routing and what its agents are shown, and it learns of the
+suspension on its next thirty-second read of the directory through a data
+node:
 
 | What | When | How |
 |---|---|---|
 | Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
 | Every session and machine token they hold | ended, and refused at the next request, `401 session_revoked` | the record moves their revocation epoch as a `crewlet iam revoke` does, so reactivating them revives none: they sign in again and mint new tokens. Refused only while the stage stood, a reactivation brought back every session — whose browser had been told `401` and dropped its cookie, so the one copy revived was a copy somebody else kept |
 | An open dashboard tab | closed `4401` as the record applies — or `1013` on a node that cannot read the record yet, whose reconnect answers that person `503` until it can | each node's identity applier says whose credentials a committed batch moved — the person, the login they hold, the session it ended — and the node decides again exactly the sockets opened with one; a move that can name nobody (the company's session generation, a record the node retains instead of applying, its identity log passing the stall grace) closes every open tab `1013` without reading anything, and each reconnect's handshake decides |
-| Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
-| What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
+| Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply on a data node, with a 30-second re-read behind it; within that 30-second re-read on a node holding no data | on a data node the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory; a node without `data` has no applier to signal it, so it re-reads the directory through a data node every thirty seconds and rebuilds from that |
+| What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn once the node's registry has moved | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
 | Their `inbox_changed` watch | gone with the socket | a watch needs a resolved caller |
 
 So a message the person sends from Slack stops being attributed to their
@@ -528,8 +530,8 @@ arbitrated between two people redeeming two codes at once, and a superuser
 claim sitting on disk until somebody enrolled. The token is already the root
 of trust, and putting somebody on their seat — an invitation or a create — is
 already the path everybody else takes.
-`api.auth.bootstrap`, which configured it, is refused by name and points
-here.
+`api.auth.bootstrap`, which configured it, is gone, and a file still carrying
+it is refused as any unknown key is.
 
 ## A person arrives on their seat: invited, or created
 
@@ -537,7 +539,7 @@ A person comes to exist in one of two ways, and **both start from a vacant
 human seat** — one no person holds and no open invitation names. The seat is
 part of the gesture rather than a step after it: every person holds one from
 the moment they exist
-([ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-every-person-holds-a-human-seat.md)),
+([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)),
 so neither way can be taken without naming it, and a person's seat is
 afterwards moved, never cleared.
 
@@ -633,10 +635,7 @@ import`, leaves that — is refused as the link's own refusal: `410`, ask
 whoever sent it for a new one. One somebody
 holds since — only a retained record or a restore leaves that, since the
 invitation held it — is `409`, saying the seat is taken and naming nobody.
-Either way nothing is written. An invitation issued **before every invitation
-named a seat** binds none and redeems nothing: its link is the same `410`,
-answered by the view itself so the screen shows the dead link rather than a
-form, and the remedy is a new invitation onto a seat. The invitation screen
+Either way nothing is written. The invitation screen
 says which seat the link is for — `seat` on `GET /auth/invite/{id}`, which
 carries no handle where the company no longer holds it as a human seat — so
 the person is told before they type a password, not after.
@@ -818,10 +817,7 @@ the seat — and **one report says so**: `crewlet iam check` and
 `binding_dangling`, with the seat and which form it is in. A binding a node
 that runs no company yet **cannot judge** is counted as `bindings_unchecked`
 rather than reported either way, so a report printed before the node's first
-apply never reads as a clean directory. The same report names the other
-residue a person can be in — **no seat at all**, `person_without_seat`, which
-only a person recorded before every person held a seat is — with the same two
-remedies: move them onto a vacant human seat, or remove them.
+apply never reads as a clean directory.
 
 It is a finding and never an [alarm](../reference/alarms.md). An alarm says a
 node is not doing its job; a person bound to a seat the company no longer
@@ -870,8 +866,8 @@ outlives the company.
 
 Everything the engine stores for a credential is a **verifier** — something a
 presented secret is checked against, and which cannot be presented to
-anything. The identity estate is replicated to every node, snapshotted, backed
-up and donated to joining peers, so a value that could be replayed out of it
+anything. The identity estate is replicated to every data node, snapshotted,
+backed up and donated to joining peers, so a value that could be replayed out of it
 would be a credential every operator with a backup holds.
 
 | Credential | What is stored | Why that and not something else |
@@ -1538,9 +1534,10 @@ token is no good answers `401`. A node that cannot tell answers `503` and a
 pipeline retries: one that has not yet applied the mint the token names (the
 position in the value is what tells "not yet" from "gone"), one whose identity
 applier is past the sixty-second stall grace, and one holding a record it
-cannot decode about the owner. Every node applies the directory from boot,
-company or none, so a token minted on a peer is one this node can answer for
-once it has applied the mint. A `401` there would teach a pipeline that a
+cannot decode about the owner. Every data node applies the directory from boot,
+company or none, and only a data node serves the API, so a token minted on a
+peer is one the node a request reaches can answer for once it has applied the
+mint. A `401` there would teach a pipeline that a
 credential that is fine is broken.
 
 ---
@@ -1721,9 +1718,7 @@ sees it read-only. What each gesture ends is the route's:
 | **Remove** | Typed back by login. Deletes the person, frees their seat, which stands vacant in the org chart, and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting or creating them on a seat again |
 
 Its **Human seats** list shows every human seat with its holder or its open
-invitation, its tile counts the seats nothing holds, and a person the directory
-holds on no seat — only one recorded before every person held a seat — carries
-a **No seat** warning until they are given one. Every write among these asks
+invitation, and its tile counts the seats nothing holds. Every write among these asks
 for a recent proof, so a stale one opens the step-up dialog first and the
 gesture then goes through.
 
@@ -1768,7 +1763,7 @@ applies within seconds of the activation pointer moving.
 
 | What the company this node runs says about the seat | Answer |
 |---|---|
-| The row holds no binding — a token's or a service account's bound to none, or a person recorded before every person held a seat | The seatless arm: the login is the handle, and the org chart is never consulted |
+| The row holds no binding — a token's or a service account's bound to none (a person always holds one) | The seatless arm: the login is the handle, and the org chart is never consulted |
 | The company holds the seat, `kind: human` | The seat's handle is the actor |
 | The company does not hold the seat, or holds it as an agent's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
 | This node runs no company yet, or the lookup failed | 503 |
@@ -2343,7 +2338,7 @@ the path and redirects before it matches at all.
 Identity has **two trails**, and they answer different questions.
 
 - **`iam_history`** is the *record*. The identity applier writes a row for
-  every identity write on every node, from the log, so it is the same on all of
+  every identity write on every data node, from the log, so it is the same on all of
   them and survives any node — see [Two retention horizons](#two-retention-horizons-and-one).
   Each row names its **actor** and, beside it, the **credential** the actor
   acted through (`operator_id`): a machine token's `pat:<id>`, a browser
@@ -2480,14 +2475,8 @@ The vocabulary above is what the engine *names*. Where it is **stored** is a
 replicated state machine of its own — the state log's fourth domain, beside the
 work tracker, the vectors and the knowledge base. Every change is one record on one ordered stream
 (`CREWLET_IAM_LOG`), applied by a deterministic applier into an identical set
-of SQL tables on every node, with the checkpoint committed in the same
+of SQL tables on every data node, with the checkpoint committed in the same
 transaction as the rows.
-
-> **What is in place today** is the estate itself: the tables, the subject
-> grammar, the scope and the Tier A ceiling below. The applier, the sign-in
-> routes and the directory arrive with it; until they do, what an operator
-> configures is still the token list under [§ What is configured
-> today](#what-is-configured-today).
 
 ### Uniqueness is arbitrated, not indexed
 
@@ -2496,7 +2485,7 @@ opposite of what an identity database normally does.
 
 The replicated estate **forbids a `UNIQUE` index outside a primary key**. A
 constraint violation inside an apply transaction aborts it *deterministically
-on every node at once* — so a rare, cosmetic anomaly becomes a fleet-wide
+on every data node at once* — so a rare, cosmetic anomaly becomes a fleet-wide
 stalled log, and in this domain a stalled log is every login in the company.
 
 So nothing here is unique, and the uniqueness an identity estate obviously
@@ -2567,8 +2556,8 @@ node's database, in every snapshot and in every backup, and a value moved to
 another person's row, or to another column of the same row, does not open.
 
 Sealing happens at the **writer** rather than on each node, which is what keeps
-the fleet's byte-for-byte identity claim meaningful: every node writes the same
-ciphertext, and the applier never opens anything.
+the fleet's byte-for-byte identity claim meaningful: every data node writes the
+same ciphertext, and the applier never opens anything.
 
 An authenticator app's **seed** is sealed the same way. It is the one
 credential this estate keeps as a secret rather than a verifier — TOTP is
@@ -2604,7 +2593,7 @@ your own audit trail for nothing.
 re-seals the secret store's rows in place; these rows are derived from the log,
 so a node that rewrote its own would disagree with its peers — the rekey
 therefore publishes one record per person holding a value under an old key,
-which every node applies, and reports how many it moved. It counts the
+which every data node applies, and reports how many it moved. It counts the
 addresses of **outstanding invitations** under an old key as well and leaves
 them: only a re-issue could carry one again, so the old key stays on the ring
 until each is redeemed or lapses — at most a week. See [the secret store's
@@ -2633,7 +2622,7 @@ Rotating it is a migration, not a setting.
 |---|---|
 | `iam_people` | One person or machine, with the login, address blind and seat the directory decided for them |
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, the recovery codes' digests, and an app code's sealed seed. Never a secret that could be presented to anything |
-| `iam_invites` | An address and a human seat spoken for by somebody who has no person yet, and the grants redeeming it confers. The seat is a column of its own (`seat_id`, from replicated migration 0032), filled by the apply and back-filled from the record for an invitation written before the column existed, so a seat an open invitation holds is one indexed read |
+| `iam_invites` | An address and a human seat spoken for by somebody who has no person yet, and the grants redeeming it confers. The seat is a column of its own (`seat_id`, from replicated migration 0042), written by the apply and recomputed from the row's own document whenever a node's rows were derived under other rules — a reanchored checkpoint, or a snapshot from a peer on another build — so a seat an open invitation holds is one indexed read |
 | `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
@@ -2650,8 +2639,8 @@ the deferred records and their scope index — all excluded from the identity
 claim. They do not all travel. The deferred records and their scope are this
 node's own verdict about bytes its build could not decode, and are scrubbed
 out of any snapshot a node donates to a joining peer. The operation ledger
-**travels** with the snapshot: its rows are what every node writes from the
-same records, only the instant each node applied them differs, and a joiner
+**travels** with the snapshot: its rows are what every data node writes from
+the same records, only the instant each node applied them differs, and a joiner
 that arrived without them could not tell a retry of something the donor
 applied from a first attempt — in this estate, a second enrolment, a second
 grant change or a second bump of somebody's revocation epoch.
@@ -2772,7 +2761,7 @@ invitation itself.
 
 After the removal applies, **no row on any node holds a value of theirs that
 opens** under any keyring, and every snapshot a node donates from then on is a
-copy of those rows. Every node erases the same bytes, so the fleet's
+copy of those rows. Every data node erases the same bytes, so the fleet's
 byte-for-byte identity claim holds across it — including a node that held back
 an invitation to that address (one signed under a keyring key it was not
 restarted with, or a newer build's): an invitation is filed under its address's
@@ -2821,9 +2810,8 @@ login is printed beside everything its holder does, so it is deliberately a
 plain value rather than a sealed one, and the erasure leaves it where it is:
 on the removal record in the identity log — and so in every backup and donated
 snapshot for as long as retention keeps the log — in the tombstone's
-`iam_removed.claims_json`, in the trail's reasons (`suspended by jane.doe`),
-and in any rows a person recorded before every person held a seat wrote under
-it. The login an invitation's form or a create **proposes** is derived from the
+`iam_removed.claims_json`, and in the trail's reasons (`suspended by jane.doe`).
+The login an invitation's form or a create **proposes** is derived from the
 address (`jane.doe@example.com` proposes `jane.doe`, and
 `jane@example.com` proposes `jane.example`), so a removed person's address is,
 more often than not, still partly readable from their login. If an erasure
@@ -2856,16 +2844,30 @@ that has not yet applied a revocation is designed to answer a session with
 **503**, never 401. A 401 tells a browser to sign in again, and one stalled
 applier would sign everybody on that node out at once.
 
-**Every node runs this domain, a seats-only satellite included.** It once
-narrowed — a satellite that serves no request and runs no duty skipped it —
-and the narrowing cost more than the disk it saved: a satellite still routes
-inbound deliveries by who holds each seat, so it had to ask the fleet for the
-directory over a signed request-and-reply of its own, adoption had to strip the
-estate out of every snapshot it installed, and the trim had to know which
-peers declined which log. None of that protected anything, because a
-satellite's host holds the fleet keyring — which it needs to verify every
-record on every log — and the keyring opens the company's secret store and
-every person's sealed values alike. See
+**Every data node runs this domain, whatever its other roles; a node without
+`data` runs none.** A data node applies every state log, the identity directory
+included, from boot, company or none — so it answers sign-ins, sessions and
+tokens from its own rows, which is why the `ingress` role requires `data`. A
+seats node that holds no data holds no copy and runs no applier, but it still
+routes inbound deliveries by who holds each human seat. So it asks a data node,
+through the [estate router](scaling.md#how-a-request-reaches-the-estate),
+for a login's binding row and for who holds each seat, floored on the identity
+log so an answer is never older than a reading it already had; the request and
+its reply are signed under the fleet keyring in a key domain of their own
+([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)), and the chart
+and that node's own Tier A tokens are applied on the asking side. Its party
+registry reads the directory again every thirty seconds, and until its first
+read it withholds every human seat rather than route by the org chart alone,
+because the chart alone would attribute a suspended person's word to their
+seat.
+
+Keeping the rows off a node is not a confidentiality boundary, and nothing
+here pretends it is: every node's host holds the fleet keyring — a data node
+verifies every record on every log under it, and every node signs and checks
+the estate requests that pass between them — and the keyring opens the
+company's secret store and every person's sealed values alike. A node goes without `data` because it should keep no estate of its own
+([ADR-0025](../../adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)),
+not because it is trusted less. See
 [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).
 
 ### Sizing `stream.iam_log_max_bytes`
@@ -2902,8 +2904,9 @@ today is smaller, and lives in two places:
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and
   `min_password_length`; and the `session` and `audit` blocks under it.
   Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,
-  `disabled` and `oidc` are all retired and refused by name — see
-  [Configuration § Auth](configuration.md#auth) for what replaced each.
+  `disabled` and `oidc` are all retired, and a file still carrying one is
+  refused as any unknown key is (Tier A decodes with unknown keys refused) —
+  see [Configuration § Auth](configuration.md#auth) for what replaced each.
 - **The identity directory** — who is a *person*, who is a machine, and which
   seat each is bound to: the human seat every person holds, and the one a
   service account or a token's row may be bound to. It is written from the seat

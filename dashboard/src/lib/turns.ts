@@ -1,6 +1,7 @@
 /**
  * What every list of turns shares: how far back the engine will look for one,
- * and how the work item a turn was on is named on a row.
+ * how the work item a turn was on is named on a row, and where a link that
+ * WATCHES a running turn lands.
  *
  * TWO LISTS READ THEM — the company's turns (`routes/live/Turns.tsx`) and one
  * seat's (`routes/agents/seat/Turns.tsx`) — and each used to spell both for
@@ -9,7 +10,9 @@
  * full `native:<uuid>` that no row had room for.
  */
 
-import { doingWords } from "./seats.ts";
+import { pathOf } from "~/app/frame/objects.ts";
+import { href } from "~/app/router.tsx";
+import { doingWords, RUNNING_ROWS, workingLongestFirst } from "./seats.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
 /**
@@ -26,10 +29,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * The work item a turn was on, as a row names it — and, for its `title`, the
  * whole identity.
  *
- * THE KEY WHEN THE TURN RECORDED ONE, which is every turn now: a create's wake
- * carries the key the write minted. A turn that recorded none — written by a
- * build from before that, or woken by a trigger that named the item by its
- * identity alone — is still ABOUT an item, so it is named by the item's kind
+ * THE KEY WHEN THE TURN RECORDED ONE, which is nearly every turn: a create's
+ * wake carries the key the write minted. A turn that recorded none — woken by
+ * a trigger that named the item by its identity alone — is still ABOUT an
+ * item, so it is named by the item's kind
  * and the head of its id rather than dropped; the full `<backend>:<id>` a
  * search or the event log's `work_item=` takes is on the title, never in the
  * row, where 43 unbreakable characters took the whole cell on a phone and
@@ -72,6 +75,105 @@ export function runningNow(
     words: `${parked ? "parked" : "running"} — ${doingWords(seat)}`,
     item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
   };
+}
+
+/**
+ * The turn a seat's live overlay says it is on — its turn record first, then
+ * its call in flight, the order [seatOnTurn] reads them in — or "" while it
+ * names none: a seat the engine calls working can be a frame or two ahead of
+ * the turn id, and a link to `#/live/turns/` with no id is a link to nothing.
+ */
+export function turnIdOf(row: AgentRow | null | undefined): string {
+  return row?.turn?.turn_id || row?.live_call?.turn_id || "";
+}
+
+/**
+ * The tab a watch link opens a running turn on: the TRANSCRIPT, where the
+ * phase it is on is drawn open with its rounds arriving (`routes/live/Turn.tsx`
+ * opens a live phase's card as it mounts). Every other link to a turn lands on
+ * the Timeline, the page's default, because a reader following a turn from a
+ * list or a record is asking what it did and how long each part took. A
+ * reader who pressed "Watch live" is asking what it is doing NOW, and on the
+ * Timeline that is one drifting bar, with its words a tab and a press away.
+ *
+ * A PARKED TURN IS WATCHED HERE TOO. Its executor launched a detached coding
+ * run and suspended, so no phase is in flight — yet the engine still calls the
+ * seat working, because the run is the work. The Transcript draws that run's
+ * live output above the phases, links the run's own page, and opens the
+ * executor's card it parked in. Sending a parked turn's watch link to the
+ * run's page instead would have left the other half dead: a turn that parks
+ * while a reader is already watching this tab is the same page with nothing
+ * live on it, and no link is followed to fix that.
+ *
+ * `routes/live/TurnScreen.test.tsx` holds this to a tab the page has.
+ */
+export const WATCH_TAB = "transcript";
+
+/**
+ * Where a link whose job is to WATCH a running turn goes: the turn's own page
+ * (`pathOf`, the one map of an object to its route), on [WATCH_TAB]. For a
+ * caller that navigates (`nav.to(path, query)`) or draws a row the kit links
+ * itself; [watchHref] is the same address as an `href`.
+ *
+ * NOT THE ROWS OF A MONITOR. Home's Live now and Live › Now running list
+ * running turns as rows whose link is the turn's TRACE — the default tab —
+ * because a monitor's row is a way into the record of the turn, the same
+ * address a settled turn's row has. A watch link is a control that says what
+ * it is for: "Watch live", the sidebar's Running group, `g r`, ⌘K's
+ * Running now.
+ */
+export function watchLink(turnId: string): { path: string[]; query: Record<string, string> } {
+  return { path: pathOf({ kind: "turn", id: turnId }), query: { tab: WATCH_TAB } };
+}
+
+/** [watchLink] as an `href`. */
+export function watchHref(turnId: string): string {
+  const { path, query } = watchLink(turnId);
+  return href(path, query);
+}
+
+/**
+ * The SHORT list of running turns — Home's Live now card and the sidebar's
+ * Running group — and how many working seats it leaves to Live › Now running.
+ *
+ * ONE DERIVATION FOR BOTH, because each spelled its own and they named
+ * different seats: the sidebar dropped a working seat whose turn has no id
+ * before it took [RUNNING_ROWS], Home took the first four as they came, and a
+ * seat working only through a coding run no turn record names yet led Home's
+ * card while the sidebar beside it listed the four after it.
+ *
+ * THE FILTER COMES BEFORE THE CAP. Every row in either list is a way into its
+ * turn, and a seat whose turn has published no id yet has nowhere to go — a
+ * link to `#/live/turns/` with no id is a link to nothing — so it is not a
+ * row, and it does not take one of the four places either. It is still
+ * COUNTED: `working` is every working seat, for a list's figure, and `more`
+ * is what the short list leaves out, id-less seats included, which Live ›
+ * Now running lists one row each.
+ */
+export function runningShortList(agents: readonly AgentRow[]): {
+  working: AgentRow[];
+  shown: AgentRow[];
+  more: number;
+} {
+  const working = workingLongestFirst(agents);
+  const shown = working.filter((row) => turnIdOf(row) !== "").slice(0, RUNNING_ROWS);
+  return { working, shown, more: working.length - shown.length };
+}
+
+/**
+ * Where "go to the running turn" goes (`g r`): the one running turn's watch
+ * link when exactly one seat is working and its turn has an id, and Live ›
+ * Now running — every running turn, one row each — otherwise. With two
+ * running there is no "the" turn to pick for the reader, and with none the
+ * screen that says so is the one that would list it.
+ */
+export function runningTarget(agents: readonly AgentRow[]): {
+  path: string[];
+  query: Record<string, string>;
+} {
+  const working = workingLongestFirst(agents);
+  const only = working.length === 1 ? turnIdOf(working[0]) : "";
+  return only ? watchLink(only) : { path: ["live"], query: {} };
 }
 
 /**

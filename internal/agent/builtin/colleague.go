@@ -86,7 +86,9 @@ const LookupColleagueTool = "lookup_colleague"
 // than one that asked which — the wrong person gets pulled into work that is
 // not theirs, and the right one never hears about it. So an ambiguous query
 // returns the candidates and says they are candidates.
-type lookupColleague struct{}
+//
+// env resolves the chart's `${VAR}` contacts ([Deps.Env]).
+type lookupColleague struct{ env org.EnvLookup }
 
 var _ tools.SeatCallable = (*lookupColleague)(nil)
 
@@ -137,7 +139,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
-	seats := Corpus(turn.Org, turn.WithholdsContacts)
+	seats := Corpus(turn.Org, t.env, turn.WithholdsContacts)
 	found := colleague.Resolve(query, seats)
 	safe := clip(query)
 
@@ -182,12 +184,18 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 // humans out would make the tool silently unable to find the people an agent
 // most often needs.
 //
+// lookup resolves a person's `${VAR}` contact ids
+// ([org.HumanContact.ResolvedIdentities]); a node passes its own chain, the
+// secret store and then the environment it was handed, which is what the
+// notification routing that mentions these same people reads. Nil reads the
+// process environment.
+//
 // withheld is the identity directory's reading, the one the party registry was
 // built from: a human seat it withholds keeps its place and loses every
 // external id, so an id copied from that person's accounts matches nobody —
 // exactly as an inbound message from them resolves to nobody — and the seat is
 // marked [colleague.Seat.Withheld]. Nil withholds nothing.
-func Corpus(o *org.Organization, withheld func(handle string) bool) []colleague.Seat {
+func Corpus(o *org.Organization, lookup org.EnvLookup, withheld func(handle string) bool) []colleague.Seat {
 	if o == nil {
 		return nil
 	}
@@ -205,7 +213,7 @@ func Corpus(o *org.Organization, withheld func(handle string) bool) []colleague.
 			out = append(out, seat)
 			continue
 		}
-		for _, id := range role.Contact.ResolvedIdentities(nil) {
+		for _, id := range role.Contact.ResolvedIdentities(lookup) {
 			// EVERY TRANSPORT HERE IS A PLACE A MESSAGE CAN BE SENT.
 			// It was not always: a `crewlet` transport carried the
 			// operator id a Tier A token bound a seat with, and it had

@@ -21,9 +21,8 @@
  * The two feeds narrow on `actor_kinds` rather than on a set of handles, and
  * that is the whole design. Every record names its author the one way
  * `iam.ActorFor` does: a person the identity directory binds to a seat writes
- * AS that seat, kind `human`; a credential bound to none — a machine, a Tier
- * A token, or a person recorded before every person held a seat — writes
- * under its WHOLE login, kind `operator`; a seat in its own turn is kind
+ * AS that seat, kind `human`; a credential bound to none — a machine or a
+ * Tier A token — writes under its WHOLE login, kind `operator`; a seat in its own turn is kind
  * `agent`; and the engine is
  * `system`. A login always carries a separator a seat handle cannot, so the
  * name spaces are disjoint — and the set of people is the roster, which
@@ -51,8 +50,7 @@
  * boot seed and the reconcile loop's reload after sealing a credential as a
  * person's write. The configuration is the one source read WHOLE rather than
  * narrowed to people: a revision the engine made is a change to the company as
- * much as one a person made, and the row's kind says which it was. A revision
- * whose writer nobody recorded says exactly that.
+ * much as one a person made, and the row's kind says which it was.
  *
  * # The fifth source: what a person did at runtime
  *
@@ -109,6 +107,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
@@ -255,12 +254,6 @@ export interface AuditEntry {
   /** The seat handle or login recorded on the write. */
   actor: string;
   /**
-   * The record SAYS NOTHING about who wrote this, which is different from
-   * "the engine wrote it" — the reading an empty actor gets everywhere else.
-   * A config revision is the one row that can carry it.
-   */
-  unrecorded?: true;
-  /**
    * The kind the record names its author with — `agent`, `human`,
    * `operator`, `system`, or on the identity trail the principal's own
    * `person`, `machine`, `seat`, `engine` — empty where none was recorded.
@@ -325,6 +318,17 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       return { subject: id, path: ["agents", "seats", id] };
     case "project":
       return { subject: id, path: ["work", id] };
+    case "file": {
+      // A FILE'S ID IS ITS ADDRESS'S TOKEN, never its path — the path is in
+      // the change's own fields, whichever side of it is not empty — and
+      // the page that holds it is its project's.
+      const project = id.split(".")[0] ?? id;
+      const path = record.fields?.path?.to || record.fields?.path?.from;
+      return {
+        subject: path ? `${project}/${path}` : `file in ${project}`,
+        path: ["work", project],
+      };
+    }
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
       // tag set, an alias. Named by its kind rather than linked,
@@ -408,8 +412,8 @@ function held<T>(read: QueryResult<T>): T | null {
  * Who a row's writer IS, as the Who column draws them.
  *
  * A LOGIN IS NOT A SEAT. An `operator` write carries a credential's whole
- * login as its actor — a machine, `token:<id>`, or a person recorded before
- * every person held a seat — and the chart has no seat by that name, so a
+ * login as its actor — a machine, or `token:<id>` — and the chart has no seat
+ * by that name, so a
  * cell that looked it up drew the chart's default, the agent's squircle, and
  * linked it to a seat page that does not exist. So:
  *
@@ -427,20 +431,17 @@ function held<T>(read: QueryResult<T>): T | null {
  * where the chart holds one by that handle and their login where it does not.
  */
 export type Writer =
-  | { as: "seat"; handle: string; name: string; kind?: SeatKind }
+  | { as: "seat"; handle: string; name: string; kind?: SeatKind; avatar?: AgentAvatar | null }
   | { as: "login"; name: string }
   | { as: "system"; name: string }
-  | { as: "engine" }
-  | { as: "unrecorded" };
+  | { as: "engine" };
 
 /** A seat by its handle, as the Who cell draws it — or null where the chart holds none. */
-export type SeatOf = (handle: string) => { name: string; kind?: SeatKind } | null;
+export type SeatOf = (
+  handle: string,
+) => { name: string; kind?: SeatKind; avatar?: AgentAvatar | null } | null;
 
-export function writerOf(
-  row: Pick<AuditEntry, "actor" | "actorKind" | "unrecorded">,
-  seatOf: SeatOf,
-): Writer {
-  if (row.unrecorded) return { as: "unrecorded" };
+export function writerOf(row: Pick<AuditEntry, "actor" | "actorKind">, seatOf: SeatOf): Writer {
   if (!row.actor) return { as: "engine" };
   switch (row.actorKind) {
     case "operator":
@@ -460,6 +461,7 @@ export function writerOf(
     handle: row.actor,
     name: seat?.name ?? row.actor,
     kind: seat?.kind ?? kindOfAuthor(row.actorKind === "seat" ? "agent" : row.actorKind),
+    avatar: seat?.avatar ?? null,
   };
 }
 
@@ -475,7 +477,7 @@ export function useSeatOf(): SeatOf {
     const index = indexOrg(org);
     return (handle) => {
       const seat = index.byHandle.get(handle);
-      return seat ? { name: seat.name, kind: seat.kind } : null;
+      return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : null;
     };
   }, [org]);
 }
@@ -484,7 +486,14 @@ export function useSeatOf(): SeatOf {
 export function WriterCell({ writer }: { writer: Writer }) {
   switch (writer.as) {
     case "seat":
-      return <SeatCell handle={writer.handle} name={writer.name} kind={writer.kind} />;
+      return (
+        <SeatCell
+          handle={writer.handle}
+          name={writer.name}
+          kind={writer.kind}
+          avatar={writer.avatar}
+        />
+      );
     case "login":
       return <SeatLabel name={writer.name} kind="human" />;
     case "system":
@@ -495,10 +504,6 @@ export function WriterCell({ writer }: { writer: Writer }) {
       // writers with no tool invisible on the one screen that exists to name
       // every writer.
       return <span className="muted">the engine</span>;
-    case "unrecorded":
-      // NOT THE ENGINE, AND NOT ANYBODY: the record does not say, and the
-      // cell says that rather than guessing.
-      return <EmptyValue label="Not recorded" />;
   }
 }
 
@@ -637,7 +642,6 @@ export function Audit() {
         // "operator", so a node's seed and the reconcile loop's reloads were
         // drawn as a person's writes.
         actorKind: revision.created_by_kind ?? "",
-        ...(!revision.created_by_kind && !revision.created_by ? { unrecorded: true as const } : {}),
         through: throughOf(revision.created_by ?? "", revision.operator_id),
         subject: revision.revision_id.slice(0, 8),
         path: ["settings", "config", "revisions", revision.revision_id],

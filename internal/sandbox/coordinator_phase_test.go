@@ -41,6 +41,7 @@ func (r *coordRig) phases() []types.AgentPhaseCompleted {
 // claim is handed back and the completion comes round again, and a second copy
 // of the record would be a second charge on every surface that shows spend.
 func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	launched := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -117,6 +118,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 // and it came out of a box whose environment holds the seat's credentials, so
 // the publish is a boundary that redacts again rather than trusting the runner.
 func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -149,6 +151,7 @@ func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
 // record of the first must not tell the second it was already published, and
 // the second's clock starts at its own launch rather than the row's creation.
 func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	first := rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -160,7 +163,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
 		req.LLM = &AgentLLM{Model: "claude-opus-5"}
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -210,6 +213,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 // run that parked. A run that genuinely did not succeed is marked failed with
 // its reason.
 func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -254,6 +258,7 @@ func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
 // and a record that did not go out is not marked as having gone, so a retry of
 // the tail, if one comes, offers it again.
 func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -276,5 +281,44 @@ func TestARefusedPhasePublishIsNotRecorded(t *testing.T) {
 	}
 	if got := len(rig.phases()); got != 1 {
 		t.Fatalf("published %d phase records, want the retry's one", got)
+	}
+}
+
+// WHAT A RUN SAYS IT SPENT IS NEVER A REFUND.
+//
+// A run's usage is parsed out of its coding CLI's last line, printed in a box
+// its own agent can run any command in. Taken as given, a negative count was
+// subtracted from the seat's budget counter by the charge and from every
+// rollup by the phase record — headroom a run could print for itself. It is
+// read as nothing spent; the counts beside it stand.
+func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		Success: true, Text: "done",
+		InputTokens: -50_000, OutputTokens: 700, CacheReadTokens: -1, CacheWriteTokens: 300,
+		CostUSD: -4.2,
+	})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.accountant.total(); got != 700 {
+		t.Errorf("the budget counter moved by %d, want the run's 700 output tokens "+
+			"and nothing taken off for the negative input", got)
+	}
+	recs := rig.phases()
+	if len(recs) != 1 {
+		t.Fatalf("published %d phase records, want 1", len(recs))
+	}
+	rec := recs[0]
+	if rec.InputTokens != 0 || rec.OutputTokens != 700 || rec.TotalTokens != 700 ||
+		rec.CacheReadTokens != 0 || rec.CacheWriteTokens != 300 || rec.CostUSD != 0 {
+		t.Errorf("the record reads %d in / %d out / %d total, cache %d/%d, $%v; want "+
+			"0/700/700, 0/300, $0", rec.InputTokens, rec.OutputTokens, rec.TotalTokens,
+			rec.CacheReadTokens, rec.CacheWriteTokens, rec.CostUSD)
 	}
 }

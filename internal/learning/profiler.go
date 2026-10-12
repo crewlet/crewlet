@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -242,7 +241,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 	existing Profile,
 ) (map[string]any, error) {
-	member, err := p.models.Head(t.Role, phase.Auxiliary)
+	member, err := p.models.Auxiliary(t.Role, t.Reflecting(types.AuxCounterpartyProfiler))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model: %w", err)
 	}
@@ -254,6 +253,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 			{Role: llm.RoleUser, Content: p.prompt(s, existing)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   p.maxTokens,
 	})
 	if err != nil {
@@ -274,7 +274,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 		// told us nothing new, and failing the observation would stop the
 		// interaction counter as well.
 		log.WarnContext(ctx, "counterparty_patch_unparseable", "turn_id", t.Event.TurnID,
-			"subject", s.subject.ExternalID, "response", preview(text, 200))
+			"subject", s.subject.ExternalID, "response", text)
 		return nil, nil
 	}
 	return scalarTraits(obj), nil
@@ -332,12 +332,7 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 		index = map[Subject]int{}
 	)
 	for _, in := range t.Event.Interactions {
-		s := Subject{
-			Handle:     strings.TrimSpace(in.Sender.Handle),
-			ExternalID: strings.TrimSpace(in.Sender.ExternalID),
-			Platform:   strings.TrimSpace(in.Sender.Platform),
-			Name:       strings.TrimSpace(in.Sender.DisplayName),
-		}
+		s := SubjectOf(in.Sender)
 		if !s.Valid() {
 			// Nothing to key a profile on. An engine-authored
 			// notification has no sender, and observing "" would file

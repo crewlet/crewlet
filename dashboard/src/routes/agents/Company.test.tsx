@@ -15,12 +15,13 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { LEAD_NOT_REPORTED, Teams, UnitBlock } from "./Company.tsx";
+import { Teams, UnitBlock, UnitPeek, UnitScreen } from "./Company.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 /** A socket that never connects: these cases render, they do not fetch. */
 class InertWebSocket {
@@ -118,7 +119,7 @@ test("a leaf unit says one number, not the same number twice", () => {
 /** Teams over `org`, with the tracker filing Backend's work under BE. */
 async function teams(org: OrgProjection) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg(org);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
@@ -144,19 +145,9 @@ async function teams(org: OrgProjection) {
   });
 }
 
-// NOT REPORTED IS NOT NOBODY, AND NOT A COUNT OF ZERO. Without the engine's
-// derived block an inherited lead is unknowable here, so a unit declaring none
-// says the engine did not report one — never a blank that reads as a team
-// nobody leads — while the headcounts, which the document does state, stay.
-test("no derived block is not a count of zero or a unit without a lead", async () => {
-  const { derived: _drop, ...flat } = ORG as OrgProjection & { derived: unknown };
-  await teams(flat as OrgProjection);
-  expect(screen.getAllByText(LEAD_NOT_REPORTED).length).toBe(2);
-  expect(screen.getByText("3 seats, 1 directly")).toBeTruthy();
-  expect(screen.getByText("2 seats")).toBeTruthy();
-});
-
-test("with the derived block a unit's lead is the engine's, and nothing says unreported", async () => {
+// A LEAD IS THE ENGINE'S, and an inherited one says so: hiding the difference
+// is how somebody concludes a team is unmanaged.
+test("a unit's lead is the engine's, and an inherited one is marked", async () => {
   await teams({
     ...ORG,
     derived: {
@@ -174,8 +165,8 @@ test("with the derived block a unit's lead is the engine's, and nothing says unr
       ],
     },
   } as unknown as OrgProjection);
-  expect(screen.queryByText(LEAD_NOT_REPORTED)).toBeNull();
   expect(screen.getAllByText("VP Engineering").length).toBeGreaterThan(0);
+  expect(screen.getByText("(inherited)")).toBeTruthy();
 });
 
 // A TEAM CARRIES WHERE ITS WORK IS FILED, and the goals it was given.
@@ -187,4 +178,51 @@ test("a unit shows its project key and its goals", async () => {
   await teams(withGoals);
   expect(screen.getByRole("link", { name: "BE" }).getAttribute("href")).toBe("#/work/BE");
   expect(screen.getByText("Ship the scheduler")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// A unit's own page and peek
+// ---------------------------------------------------------------------------
+
+/** One unit's page or peek, addressed by `id`, over a connected socket. */
+async function unitAt(Unit: typeof UnitScreen | typeof UnitPeek, id: string) {
+  const store = new Store();
+  store.applyHealth(healthFrame());
+  store.setConnected(true);
+  store.applyOrg(ORG);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(
+      what === "work_projects" ? { projects: [], total: 0 } : { login: "", owner: "", acts: [] },
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <Unit id={id} />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+}
+
+// A UNIT IS FOUND BY ITS KEY, which is what every link to it writes
+// (`unitRoute`) — the page and the peek alike — and never by its name, which
+// two units may share. Found by name, every link Teams and the chart drew to a
+// unit whose key is not its name opened "no unit". Mutation: look the unit up
+// by name and both halves of each case go red.
+test("a unit's page and peek are found by its key, never by its name", async () => {
+  for (const Unit of [UnitScreen, UnitPeek]) {
+    await unitAt(Unit, "backend");
+    expect(screen.queryByText(/No unit has the key/)).toBeNull();
+    expect(screen.getAllByText("Backend").length).toBeGreaterThan(0);
+    cleanup();
+
+    await unitAt(Unit, "Backend");
+    expect(screen.getByText("No unit has the key “Backend”")).toBeTruthy();
+    cleanup();
+  }
 });

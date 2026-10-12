@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/coord`
 - **Enforced-by:** nothing
-- **Cost-when-tried:** every bump so far was silent corruption in a mixed fleet, which is the bar for spending one. v2 = holding a seat means consulting the completion ledger; v3 = claiming a seat means this node satisfies the role's placement; v4 = running a seat means charging the windowed token counters (ADR-0019) — a v3 node beside it would have charged the lifetime counter its build kept, each build seeing only its own share of the spend, and every cap would have bound late by what the other had spent; v5 = a seat's lease and its mailbox are named by its agent id rather than its handle — a v4 node beside it would have claimed the handle-named lease and mailbox for the same seat, and the two would each have run it. In each case a node on either version was individually correct and the pair was jointly wrong. None of those builds was released, so the version restarted at 1 and the next release that changes what holding a lease means is the first bump.
+- **Cost-when-tried:** every bump so far was silent corruption in a mixed fleet, which is the bar for spending one. v2 = holding a seat means consulting the completion ledger; v3 = claiming a seat means this node satisfies the role's placement; v4 = running a seat means charging the windowed token counters (ADR-0019), where two builds charging different counters would each bind every cap late by what the other spent; v5 = a seat's lease and its mailbox are named by its agent id rather than its handle — a v4 node beside it would have claimed the handle-named lease and mailbox for the same seat, and the two would each have run it. In each case a node on either version was individually correct and the pair was jointly wrong. None of those builds was released, so the version restarted at 1 and the next release that changes what holding a lease means is the first bump.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -19,9 +19,11 @@ through an older node untouched.
 
 **On a lease, an unknown thing REFUSES.** `coord.ProtocolVersion` is the
 seat-host protocol a build speaks, and a node will not claim anything while a
-live lease is held at a LOWER protocol. The rule is asymmetric on purpose:
-older nodes keep working, because they cannot know about a check that postdates
-them; newer ones wait, visibly, until the last old lease lapses.
+live presence or seat lease is held at a LOWER protocol — the leases that say a
+node of that build is alive or still running seats, and never a duty, which
+outlives a crashed holder by hours. The rule is asymmetric on purpose: the
+check only ever looks down, so lower-protocol nodes keep working; higher ones
+wait, visibly, until the last lower lease lapses.
 
 The difference is what the two things carry. An event is DATA, and data a build
 does not understand is still data it can pass on. A lease is an AGREEMENT about
@@ -31,10 +33,10 @@ completion ledger was consulted while the other believes it was not, and both
 are right about their own half.
 
 Two consequences travel with it. Schema evolution on the lease payload is
-additive-only: a field the older build ignores is invisible to it, and one it
-REQUIRES is a crash. And a downgrade across a bump needs a full drain, because
-an older build has no protocol check at all and will happily take over a newer
-node's expired leases.
+additive-only: a field the lower build does not know is invisible to it, and
+one it REQUIRES is a crash. And a downgrade across a bump needs a full drain,
+because the gate only ever refuses a HIGHER-protocol claim beside a lower lease,
+so a lower-protocol build takes over a higher node's expired leases unchecked.
 
 The version is bumped when the MEANING of holding a lease changes, never when
 something merely gains a field.

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -29,6 +31,18 @@ type Subject struct {
 	// Name is display only and is not part of the identity: a person
 	// renaming themselves on a chat surface must not orphan their profile.
 	Name string
+}
+
+// SubjectOf is the subject an inbound sender's identity names — the one
+// conversion, so a profile written from a turn's interactions and a filter
+// told who the turn's senders are agree about who somebody is.
+func SubjectOf(id types.CanonicalIdentity) Subject {
+	return Subject{
+		Handle:     strings.TrimSpace(id.Handle),
+		ExternalID: strings.TrimSpace(id.ExternalID),
+		Platform:   strings.TrimSpace(id.Platform),
+		Name:       strings.TrimSpace(id.DisplayName),
+	}
 }
 
 // Resolved reports whether the subject is a known seat.

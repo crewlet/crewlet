@@ -176,7 +176,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// company's midnight and UTC's a board's "today" was a different
 		// day from the one a seat's own `list_work_items` resolved.
 	}, now, s.zone())
-	if err != nil {
+	switch {
+	case unavailableHere(err):
+		// NOT A REFUSAL OF THE REQUEST: the expansion is read through
+		// the estate router, and no copy could answer it yet.
+		return nil, err
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
@@ -352,8 +357,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	comments := detail.Comments
 	if comments == nil {
 		// AN EMPTY THREAD IS A LIST, never an absent key: a screen
-		// drawing "no comments yet" from a missing field cannot tell it
-		// from an older node that does not answer the question.
+		// drawing "no comments yet" from a missing field cannot tell an
+		// empty thread from an answer that failed to carry one.
 		comments = []tracker.Comment{}
 	}
 	out := map[string]any{
@@ -975,7 +980,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	// because a position is unambiguous and a timestamp is not.
 	if since := strings.TrimSpace(p.String("since")); since != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		if at, err := tracker.ParseLogPosition(since); err == nil {
+		if at, err := statelog.ParsePosition(since); err == nil {
 			q.Since = at
 		} else {
 			when, err := time.Parse(time.RFC3339, since)

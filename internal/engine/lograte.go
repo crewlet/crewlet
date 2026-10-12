@@ -166,14 +166,14 @@ func (r *retention) measureRates(ctx context.Context, now time.Time) {
 	if r.state == nil {
 		return
 	}
-	logs := make([]measuredLog, 0, len(r.state.order))
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	held := r.state.running()
+	logs := make([]measuredLog, 0, len(held))
+	for _, running := range held {
 		if running == nil || running.log == nil {
 			continue
 		}
 		logs = append(logs, measuredLog{
-			domain: name, log: running.log, replay: running.domain.Stream().Replay,
+			domain: running.domain.Name(), log: running.log, replay: running.spec.Replay,
 		})
 	}
 	r.recordRates(ctx, now, logs)

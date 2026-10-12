@@ -1207,6 +1207,42 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 	}
 }
 
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY, and
+// so does its sentence: `api.external_url` there is the person's address, set,
+// and answering 404 for the webhook route a Jira hook would be pointed at.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projects["ENG"] = "Engineering"
+	inst.projects["QA"] = "Quality"
+
+	const key = "api.public.external_url"
+	res, err := run(t, inst, func(o *jira.Options) { o.WebhookBaseKey = key })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Kind != integration.FindingIngressBlocked {
+			continue
+		}
+		found = true
+		if f.Subject != key {
+			t.Errorf("the finding names %q, want %q", f.Subject, key)
+		}
+		if !strings.HasPrefix(f.Detail, key+" is unset") {
+			t.Errorf("the sentence names another setting: %q", f.Detail)
+		}
+	}
+	if !found {
+		t.Fatalf("no ingress finding: %+v", res.Findings())
+	}
+}
+
 // AND A CLOUD COMPANY IS STILL SILENT, which is the half that has to survive
 // the rule above. A Cloud webhook belongs to an app rather than to an API
 // token, and those events arrive through the Forge relay at an address this

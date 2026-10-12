@@ -122,9 +122,12 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 // person a question.
 //
 // The sandbox never posts anything itself: it signals through its ask tool, the
-// runner surfaces the question and audience, and the engine posts it on the
-// audited per-role surface. This event records that routing; the agent goes
-// free while it waits, so nothing else marks the pause.
+// runner surfaces the question and audience, and the engine announces it with
+// this event and resolves the audience into the people it is put to, on the
+// run's record. That is how it reaches them — a row in each one's decisions
+// on the dashboard and on the sandbox-runs board — and NOTHING POSTS IT TO A
+// CHAT SURFACE. The agent goes free while it waits, so nothing else marks the
+// pause.
 //
 // Audience is "requester", "team", "manager" or a handle — an open set, since a
 // named colleague is a legitimate audience.
@@ -153,8 +156,8 @@ func (SandboxClarificationRequested) EventType() string {
 	return "sandbox_clarification_requested"
 }
 
-// Role is the seat the question is posted as — the sandbox never speaks in its
-// own name.
+// Role is the seat whose run asked, and whom the question is attributed to —
+// the sandbox never speaks in its own name.
 func (e SandboxClarificationRequested) Role() string { return e.RoleName }
 
 // AgentID is the instance whose run asked.
@@ -250,6 +253,16 @@ const (
 	// seat's mailbox is retired, because no resume, answer or completion can
 	// reach a seat that is gone.
 	SandboxFailureSeatRemoved = "seat_removed"
+
+	// SandboxFailureResumeBroken is a run whose resume broke BEFORE the turn
+	// it would continue began — a panic re-entering the suspended
+	// conversation. It is not retried, because the conversation is the same
+	// bytes on every attempt and a retry reaches the same defect; nothing of
+	// the turn ran, so no completion of its own says what became of it, and
+	// a person's reply that drove the resume goes back to the seat. A resume
+	// that broke after its turn began is not announced under this or any
+	// reason: that turn published its own failed completion.
+	SandboxFailureResumeBroken = "resume_broken"
 )
 
 // EventType is the "sandbox_run_failed" wire type.
@@ -291,7 +304,12 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 // holder, and only the holder, consumes. So an answer accepted on one node is
 // carried out on another, it survives a restart in between, and it WAITS
 // BEHIND A PAUSE exactly as a person's chat reply would: a paused seat takes
-// nothing off its inbox, this included.
+// nothing off its inbox, this included — and behind another of the seat's
+// coding runs, which the seat finishes or parks before it takes the answer.
+//
+// AND IT NAMES THE QUESTION, not only the run, because any of those waits can
+// outlast the question: see [SandboxAnswerGiven.LaunchID]. It resumes the run
+// only while the run still waits on the question it was given against.
 //
 // NEVER A TURN. The dispatcher routes it to the coding run it names before
 // the inbox screening runs, and whatever that answers — resumed, not
@@ -331,6 +349,25 @@ type SandboxAnswerGiven struct {
 	AnsweredBy     string `json:"answered_by"`
 	AnsweredByKind string `json:"answered_by_kind"`
 	OperatorID     string `json:"operator_id,omitempty"`
+
+	// LaunchID is the QUESTION this answers: the job the run held when it
+	// asked, off the row the answer was accepted against. Every new question
+	// comes with a new job — nothing but a launch opens one — so the job
+	// identifies it. An answer reaches the seat some time after it was given —
+	// behind a pause, behind another of the seat's coding runs, after a
+	// NAK's backoff, as a retried copy — and by then the run can have been
+	// resumed by somebody else's answer and parked on a NEW question. Named
+	// only by its turn, the late answer then resumed the run a second time,
+	// as the answer to a question its giver never saw. Carrying the
+	// question, it resumes the run only while the run still waits on that
+	// one, and is spent as `not_awaiting` otherwise.
+	//
+	// REQUIRED. An answer naming no question cannot be told from one given
+	// against a question the run has since moved past, so the node holding
+	// the seat spends it without resuming the run (internal/sandbox's
+	// Coordinator.AnswerByTurn); `answer_run` stamps it off the row it
+	// checked, and the answer desk will not deliver one without it.
+	LaunchID string `json:"launch_id"`
 }
 
 // EventType is the "sandbox_answer_given" wire type.
@@ -379,12 +416,19 @@ const (
 	// AnswerGone — the run is over: its record is gone, or it could not be
 	// resumed at all and was ended.
 	AnswerGone AnswerOutcome = "gone"
+
+	// AnswerDeclined — an answer by turn the run was recorded with and could
+	// not be resumed with, in every attempt the node holding its seat made:
+	// the answer was let go of, the run waits on its question again, and the
+	// person has to answer it again. A chat reply let go of the same way goes
+	// on to its seat as the ordinary message it is, and announces nothing.
+	AnswerDeclined AnswerOutcome = "declined"
 )
 
-// Valid reports whether o is one of the three outcomes.
+// Valid reports whether o is one of the four outcomes.
 func (o AnswerOutcome) Valid() bool {
 	switch o {
-	case AnswerResumed, AnswerNotAwaiting, AnswerGone:
+	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined:
 		return true
 	}
 	return false
@@ -446,6 +490,8 @@ func (e SandboxRunAnswered) SummaryFor(actor string) string {
 		return lead(actor, "was answered, but its sandbox run was not waiting")
 	case AnswerGone:
 		return lead(actor, "was answered after its sandbox run had ended")
+	case AnswerDeclined:
+		return lead(actor, "was answered, but its sandbox run could not be resumed with the answer")
 	}
 	return lead(actor, "was answered")
 }

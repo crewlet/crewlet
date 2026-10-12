@@ -18,7 +18,7 @@ import (
 
 // peopleDoc is [companyDoc] with a human seat for each person these cases
 // create, beside the founder's: every person holds a human seat for as long as
-// they are here (ADR-0026), so a create names one nobody holds — and each
+// they are here (ADR-0032), so a create names one nobody holds — and each
 // person gets their own, so a case expecting the blind-key refusal is not
 // answered by the seat instead.
 const peopleDoc = companyDoc + `

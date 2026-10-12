@@ -30,7 +30,7 @@ import (
 func TestAWriteThatNeverGotTheLockIsBusy(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	node, err := store.Open(ctx, filepath.Join(t.TempDir(), "busy.db"), store.Options{
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "busy.db"), store.Options{
 		// SHORT, so the two waits the give-up costs are a fifth of a
 		// second rather than the default ten.
 		BusyTimeout: 100 * time.Millisecond,
@@ -38,8 +38,7 @@ func TestAWriteThatNeverGotTheLockIsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = node.Close() }()
-	db := node.Replicated()
+	defer func() { _ = db.Close() }()
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE busy_probe (id INTEGER PRIMARY KEY)`)
 		return err
@@ -110,7 +109,7 @@ func TestAWriteThatNeverGotTheLockIsBusy(t *testing.T) {
 func TestACancelledLockWaitIsNotBusy(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	node, err := store.Open(ctx, filepath.Join(t.TempDir(), "cancelled.db"), store.Options{
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "cancelled.db"), store.Options{
 		// LONG, so the cancellation and never the timeout is what ends
 		// the wait.
 		BusyTimeout: time.Minute,
@@ -118,8 +117,7 @@ func TestACancelledLockWaitIsNotBusy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = node.Close() }()
-	db := node.Replicated()
+	defer func() { _ = db.Close() }()
 
 	holding, release := make(chan struct{}), make(chan struct{})
 	held := make(chan error, 1)

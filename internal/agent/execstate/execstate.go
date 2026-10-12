@@ -23,13 +23,14 @@
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
-// version plus a permanent reader for the old one. Permanent, not a migration
-// window: nothing rewrites a parked row, and the layer that holds the blob
-// cannot decode it, so the only thing that can ever read an old row is a build
-// that still knows how.
+// version, and the build that introduces it must carry a reader for the
+// version it replaces for as long as rows of it can be parked: nothing
+// rewrites a parked row, and the layer that holds the blob cannot decode it,
+// so the only thing that can read an old row is a build that still knows how.
 package execstate
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,9 +44,12 @@ import (
 //
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
-// is. Version 1 is every shape there has been: no build that parked a run in
-// another was ever released.
-const Version = 1
+// is.
+//
+// It is 2 rather than 1 because 1 named an earlier shape and a number is never
+// reused: a blob carrying 1 is refused as a version this build does not read,
+// never decoded as this one.
+const Version = 2
 
 // State is a suspended Execute loop, whole.
 //
@@ -56,6 +60,18 @@ type State struct {
 
 	// Messages is the conversation as it stood, ending with the assistant
 	// turn whose run_sandbox tool call is still unanswered.
+	//
+	// An assistant turn carries the vendor's own content blocks and the
+	// backend that wrote them ([llm.Message.Raw], [llm.Message.Origin]),
+	// which the resumed loop replays unchanged: a model that preserves its
+	// thinking refuses a conversation whose earlier turns come back
+	// different. A turn with none — one another backend wrote — is rebuilt
+	// from the neutral view without its thinking.
+	//
+	// Each such turn also carries what its request's thinking was bound to
+	// ([llm.Message.Binding]), because a resume renders the tools again
+	// from the registry it wakes up against and the backend sheds the
+	// reasoning written under any other set.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the
@@ -103,6 +119,7 @@ type State struct {
 	// event store. So the resumed phase's record is the only durable account
 	// this phase will ever have, and without these it began at round 1 with
 	// the pre-suspend half, the `run_sandbox` call included, gone for good.
+	// Zero and empty when nothing ran or was narrated before the suspend.
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
@@ -125,7 +142,8 @@ type State struct {
 	// another segment, often in another process. Without this the resumed
 	// segment would judge "exactly one" over only what it wrote itself: a
 	// turn that filed its task before launching a coding run would end
-	// having written nothing, and be charged to nothing.
+	// having written nothing, and be charged to nothing. Empty when the
+	// first half wrote nothing.
 	Written     []types.WorkItem `json:"written,omitempty"`
 	WrittenMany bool             `json:"written_many,omitempty"`
 
@@ -141,6 +159,9 @@ type State struct {
 	// counted as a turn at all, since only the first segment counts one.
 	// When the finishing segment is charged, it pays this as well; when it
 	// is not, nothing ever is, which is what an unattributed turn is.
+	//
+	// Nil when nothing is owed: the half before the park was charged to the
+	// item its dispatch named.
 	Uncharged *Uncharged `json:"uncharged,omitempty"`
 
 	// ElapsedMS is how long this phase had already been running when it
@@ -158,6 +179,9 @@ type State struct {
 	// Milliseconds because that is the resolution the event carries, and it
 	// is a wire field: a time.Duration would serialize as a nanosecond count
 	// nothing else here speaks.
+	//
+	// Zero (and omitted) when the half before the suspend took under a
+	// millisecond; the resume adds it to the resumed half's clock.
 	ElapsedMS int `json:"elapsed_ms,omitempty"`
 
 	// Iterations is the closed-round ledger of the suspended TURN. The
@@ -169,6 +193,27 @@ type State struct {
 	// re-enters with the same brief rather than one rebuilt from a trigger
 	// that may no longer be readable.
 	Task string `json:"task_description"`
+
+	// Ask is what the turn was ASKED — the trigger's own words, without
+	// the wrapping Task carries — for the segment that finishes the turn to
+	// record ([types.TurnCompleted.Ask]): it is woken by the run's
+	// completion or a person's reply, not by the trigger, so without this
+	// the episode of every coding turn knew it only by its collection's
+	// label. Empty for a turn that was told nothing, whose episode is then
+	// embedded as its label and what it did.
+	Ask string `json:"ask,omitempty"`
+
+	// Senders is who ASKED — every distinct identifiable sender of the
+	// turn's interactions, in the order they first spoke — parked beside
+	// the ask for the reason the ask is: the resumed segment re-reads no
+	// trigger, so it has no interactions to read them off, and a
+	// refresh_memory call it makes re-runs the turn-start memory filter,
+	// whose per-subject rule ("a note about a person applies to a turn that
+	// person is party to") is judged against exactly this list. Without it
+	// every resumed segment told the filter nobody was asking, and a note
+	// about one person could be applied to a turn somebody else started.
+	// Empty for a turn no identifiable sender woke.
+	Senders []types.CanonicalIdentity `json:"senders,omitempty"`
 
 	// AgentRun marks a suspension whose executor IS the detached run: a
 	// coding CLI in agent mode drove its own loop, so there is no engine
@@ -182,6 +227,9 @@ type State struct {
 	// the seat's provider at resume — resumes an agent run into a native
 	// tool loop with no messages, which rescues a turn that in fact
 	// delivered.
+	//
+	// False is a native suspension, which carries a conversation to
+	// re-enter.
 	AgentRun bool `json:"agent_run,omitempty"`
 
 	// Steered is every person's note the turn had read when it suspended,
@@ -193,7 +241,8 @@ type State struct {
 	// the notes this phase read — the resumed executor re-enters it — but
 	// the reviewer and any later executor iteration open fresh
 	// conversations, and without this they would be handed the task the
-	// person had corrected. See internal/agent/steer.
+	// person had corrected. See internal/agent/steer. Empty when no note
+	// was read before the suspend.
 	Steered []string           `json:"steered,omitempty"`
 	Steers  []types.PhaseSteer `json:"steers,omitempty"`
 }
@@ -291,7 +340,14 @@ func (s State) dangling() []string {
 // A refusal here is better than a row that cannot be resumed: the suspending
 // turn still holds the box and can fail loudly, where a resume finding a
 // corrupt row has already lost the conversation.
-func Encode(s State) (map[string]any, error) {
+//
+// The result is the row's bytes and nothing else. It used to be decoded back
+// into a map[string]any for the row to hold, and that decode read every number
+// in the conversation as a float64 — so a nineteen-digit id a model passed as
+// a tool argument came back from a suspension rounded to the nearest
+// representable double, and the resumed loop replayed (and could act on) an
+// argument the model never wrote. Bytes have no such step to get wrong.
+func Encode(s State) (json.RawMessage, error) {
 	s.Version = Version
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -300,48 +356,67 @@ func Encode(s State) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("execstate: encode: %w", err)
 	}
-	var out map[string]any
-	if err := json.Unmarshal(blob, &out); err != nil {
-		return nil, fmt.Errorf("execstate: encode: %w", err)
-	}
-	return out, nil
+	return blob, nil
 }
 
 // Decode reads a state back out of a pending-run row.
 //
-// An empty blob is (State{}, false, nil): a run with no suspended conversation
-// is an ordinary condition — a crash between launching the job and persisting
-// the suspend — and the caller settles it rather than treating it as a broken
-// store.
-func Decode(blob map[string]any) (State, bool, error) {
+// An empty blob — no bytes, a JSON null or an object with no keys — is
+// (State{}, false, nil): a run with no suspended conversation is an ordinary
+// condition — a crash between launching the job and persisting the suspend —
+// and the caller settles it rather than treating it as a broken store.
+func Decode(blob json.RawMessage) (State, bool, error) {
 	if len(blob) == 0 {
 		return State{}, false, nil
-	}
-	raw, err := json.Marshal(blob)
-	if err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
 	}
 	// The version FIRST, off the raw blob, because which shape to decode
 	// into is exactly what it answers. Decoding into the current State and
 	// checking afterwards would silently zero every field another format
-	// spells differently.
-	//
-	// AN UNKNOWN ONE IS LOUD, and the row is left alone. A resume that
-	// guessed at a format it does not know would act on a half-understood
-	// conversation; refusing leaves the run for a node that understands
-	// it, which in a rolling upgrade is a node that exists.
-	if version, _ := blob["version"].(float64); int(version) != Version {
+	// spells differently before the version was ever looked at.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	}
+	if len(fields) == 0 {
+		return State{}, false, nil
+	}
+	var version float64
+	if raw, ok := fields["version"]; ok {
+		// A version that is not a number leaves zero, which no build has
+		// ever written and which therefore takes the refusal below.
+		_ = json.Unmarshal(raw, &version)
+	}
+	switch int(version) {
+	case Version:
+		var s State
+		if err := unmarshalExact(blob, &s); err != nil {
+			return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+		}
+		if err := s.Validate(); err != nil {
+			return State{}, false, err
+		}
+		return s, true, nil
+	default:
+		// LOUD, and the row is left alone. A resume that guessed at a
+		// format it does not know would act on a half-understood
+		// conversation; refusing leaves the run for a node that
+		// understands it, which in a rolling upgrade is a node that
+		// exists.
 		return State{}, false, fmt.Errorf("%w: %d (this build reads %d)",
 			ErrUnknownVersion, int(version), Version)
 	}
-	var s State
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
-	}
-	if err := s.Validate(); err != nil {
-		return State{}, false, err
-	}
-	return s, true, nil
+}
+
+// unmarshalExact decodes with every number kept as the digits it was written
+// in. The conversation's tool arguments are map[string]any, and a plain
+// Unmarshal reads a number there as a float64 — exact only to 2^53, so an id
+// with more digits than that changes value across the suspension. The
+// provider that decoded the call kept it as a json.Number, and this is the
+// same choice on the way back in.
+func unmarshalExact(raw []byte, into any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	return dec.Decode(into)
 }
 
 // Answer appends the tool result that answers the pending call, returning the

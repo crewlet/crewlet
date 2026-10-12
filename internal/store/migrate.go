@@ -8,7 +8,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 )
 
 // schemaFS carries the consolidated schema into the binary, so a deployment is
@@ -18,6 +17,13 @@ import (
 // a directory whose sequence is still empty: an estate's directory must be in
 // the binary before its first migration is, so a name that does not resolve is
 // a read error at Open rather than a sequence that silently applies nothing.
+//
+// A NODE MIGRATION NEVER DROPS A COLUMN IN PLACE. The driver's
+// `ALTER TABLE … DROP COLUMN` re-parses every trigger in the file, and node
+// 0041's memory change-sequence triggers name `NEW.rowid`, which that re-parse
+// refuses ("no such column: rowid") whatever table the column is dropped
+// from. So a column leaves the node estate the way node 0045 takes one: copy
+// the table without it, drop the old one, rename the copy.
 //
 //go:embed all:schema
 var schemaFS embed.FS
@@ -57,19 +63,12 @@ const (
 	EstateReplicated Estate = "replicated"
 )
 
-// Estates are the two, in the order [Open] brings them up.
+// Estates are the two, in the order a node brings them up.
 var Estates = []Estate{EstateNode, EstateReplicated}
 
-// migrateMu serialises migration runs across every handle in the process.
-//
-// It replaces a Postgres advisory lock, and the replacement is smaller than
-// the original because the problem is: three OS processes could race the DDL
-// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
-// lock had to be a database object for that reason. Here one process owns the
-// file — Turso does not support any other arrangement — so the only race left
-// is two handles on one path inside this binary, which a package-level mutex
-// closes completely. Migrations run once at Open, so the contention is nil.
-var migrateMu sync.Mutex
+// Valid reports whether e is one of the two. The zero value is not: an
+// estate nobody named is not quietly the node's.
+func (e Estate) Valid() bool { return e == EstateNode || e == EstateReplicated }
 
 // migrate applies every embedded schema file that has not been applied yet, in
 // filename order, and returns the versions it applied.
@@ -80,16 +79,34 @@ var migrateMu sync.Mutex
 // lets a whole file go in as one statement batch: the Postgres migrator split
 // files on ';' and then had to validate its own naive splitter (dollar-quoted
 // bodies would be cut in half). Nothing here needs that.
+//
+// # One run per FILE at a time, and the lock is the file's
+//
+// This replaces a Postgres advisory lock, and the replacement is smaller than
+// the original because the problem is: three OS processes could race the DDL
+// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
+// lock had to be a database object for that reason. Here one process owns the
+// file — Turso does not support any other arrangement — so the only race left
+// is two handles on ONE PATH inside this binary: one would read a ledger the
+// other has not finished writing, apply a file the other already has, and fail
+// at its CREATE TABLE. A per-file transaction does not close it, because every
+// one of them begins after the ledger was read.
+//
+// So the lock is the path's: it lives on this process's claim on the file
+// ([fileLock]), which every handle open on that path shares, exactly as the
+// write queue does. It used to be one mutex for the whole process, on the
+// premise that migrations run once at Open and so contend with nothing. That
+// holds for one boot and for nothing else: a process that opens many stores —
+// an in-process fleet, any test binary — ran every migration of every file one
+// after another, and a test package spent most of its wall clock queued behind
+// other files' DDL that could never have raced its own.
 func (d *DB) migrate(ctx context.Context) ([]string, error) {
-	migrateMu.Lock()
-	defer migrateMu.Unlock()
+	running := d.lock.migrations()
+	running.Lock()
+	defer running.Unlock()
 
-	if _, err := d.sql.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    TEXT    NOT NULL PRIMARY KEY,
-			applied_at INTEGER NOT NULL
-		)`); err != nil {
-		return nil, fmt.Errorf("store: create schema_migrations: %w", err)
+	if err := d.createMigrationLedger(ctx); err != nil {
+		return nil, err
 	}
 
 	applied, err := d.appliedVersions(ctx)
@@ -120,6 +137,19 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	return done, nil
 }
 
+// createMigrationLedger creates `schema_migrations`, the table every applied
+// file is recorded in, if the database has none yet.
+func (d *DB) createMigrationLedger(ctx context.Context) error {
+	if _, err := d.sql.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT    NOT NULL PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("store: create schema_migrations: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) applyOne(ctx context.Context, version, body string) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -146,14 +176,23 @@ func (d *DB) applyOne(ctx context.Context, version, body string) error {
 // order. Read-only: it creates nothing, so a readiness probe may call it while
 // another handle is mid-migration.
 func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return nil, ErrNoEstate
 	}
 	return d.appliedVersions(ctx)
 }
 
+// appliedVersions reads the ledger through ONE CONNECTION DRAWN FROM THIS
+// HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a replicated estate closed
+// after [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than
+// database/sql's "database is closed".
 func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
-	rows, err := d.sql.QueryContext(ctx,
+	conn, err := d.conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rows, err := conn.QueryContext(ctx,
 		`SELECT version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
@@ -195,9 +234,12 @@ func SchemaFile(estate Estate, name string) ([]byte, error) {
 // there is no second source of truth for it.
 //
 // The two sequences are numbered INDEPENDENTLY. schema_migrations keys on the
-// base filename and each estate has its own table, so `0001` in one estate and
+// base filename and each file has its own table, so `0001` in one estate and
 // `0001` in the other are two migrations and neither can mask the other.
 func schemaVersions(estate Estate) ([]string, error) {
+	if !estate.Valid() {
+		return nil, fmt.Errorf("store: %q is not an estate; the estates are %v", estate, Estates)
+	}
 	entries, err := fs.ReadDir(schemaFS, path.Join("schema", string(estate)))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the %s estate's embedded schema: %w", estate, err)
@@ -229,12 +271,13 @@ func SchemaVersions(estate Estate) []string {
 	return names
 }
 
-// Pending reports, for EACH of a node's two estates, the schema files its
-// database has not applied — WITHOUT applying them.
+// Pending reports the schema files a node's two databases have not applied —
+// its own file at path, and its replicated estate where [ReplicatedPath] puts
+// it for opts — WITHOUT applying them.
 //
-// # Why this is not Open followed by a comparison
+// # Why this is not an open followed by a comparison
 //
-// Open migrates. That is the right default — every process that touches the
+// Opening migrates. That is the right default — every process that touches the
 // store gets a current schema without an operator remembering a step — but
 // it makes "what would this apply" unanswerable through it: by the time you
 // could ask, the answer is none.
@@ -254,17 +297,25 @@ func SchemaVersions(estate Estate) []string {
 // schema of a live engine's database and only refused at the point it tried
 // to change it: the check that runs first was the one with no guard.
 //
-// The lock is released before returning, and NOT because [Open] would
+// The lock is released before returning, and NOT because an open would
 // otherwise be refused — it would not. The claim is refcounted per process
-// (see lock.go), so `crewlet migrate` calling Pending and then Open shares one
-// claim either way, and a Pending that never released would look perfectly
-// fine from inside that command.
+// (see lock.go), so `crewlet migrate` calling Pending and then opening shares
+// one claim either way, and a Pending that never released would look
+// perfectly fine from inside that command.
 //
 // It is released because a claim this process no longer needs is a claim it
 // must not keep: the lock lives as long as the process, so a leak here would
 // leave the file excluded from every OTHER process for the rest of this one's
 // life, with nothing to point at. That is why the test asserts the refcount
-// rather than a following Open — an Open that succeeds proves nothing.
+// rather than a following open — an open that succeeds proves nothing.
+//
+// # Both files, always both
+//
+// A node is two databases with two independent sequences, and a report that
+// named one of them would be a deploy gate that passes while the other is
+// behind. Its caller refuses a scratch store — the one kind of node that holds
+// no replicated estate — before it asks, so every node this reports on holds
+// both.
 func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
 	out := make([]Schema, 0, len(Estates))
 	for _, estate := range Estates {
@@ -281,9 +332,9 @@ func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
 	return out, nil
 }
 
-// Schema is one estate's migration state.
+// Schema is one file's migration state.
 type Schema struct {
-	// Estate is which of a node's two databases this describes.
+	// Estate is which of the node's two files this describes.
 	Estate Estate
 	// Path is the file it lives in.
 	Path string
@@ -309,9 +360,9 @@ func KnownMigrations(estate Estate) ([]string, error) {
 //
 // It exists for the one caller that holds a database file which is not a
 // node's own: a snapshot being adopted. That file is a replicated estate and
-// nothing else, and it must be inspected BEFORE anything migrates it — a
-// recipient refuses a donor whose migrations this binary does not carry, and
-// migrating first would answer the question by changing it.
+// nothing else, and it must be inspected BEFORE anything migrates it — a recipient
+// refuses a donor whose migrations this binary does not carry, and migrating
+// first would answer the question by changing it.
 func PendingEstate(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
 	return pendingOne(ctx, estate, path, opts)
 }
@@ -325,14 +376,17 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	}
 	defer lock.release()
 
-	pool, err := openPrepared(ctx, path, opts.forEstate(estate))
+	pool, err := openPrepared(ctx, path, Options{
+		MaxOpenConns: opts.MaxOpenConns, BusyTimeout: opts.BusyTimeout,
+		WrapDriver: opts.WrapDriver,
+	})
 	if err != nil {
 		return Schema{}, err
 	}
 	defer func() { _ = pool.Close() }()
 
 	db := &DB{sql: pool, path: path, estate: estate,
-		busy: opts.busyTimeout(), pool: opts.forEstate(estate).poolSize(),
+		busy: opts.busyTimeout(), pool: opts.poolSize(),
 		writes: lock.queue()}
 	if out.Applied, err = db.appliedVersions(ctx); err != nil {
 		// A database that has never been migrated has no

@@ -52,7 +52,7 @@ func TestPendingReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestPendingWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
-	cmd.Env = append(os.Environ(), pendingChildEnv+"=1", tursoCacheEnv+"="+root)
+	cmd.Env = childEnv(pendingChildEnv+"=1", tursoCacheEnv+"="+root)
 	out, err := cmd.CombinedOutput()
 	requireChildRan(t, "Pending did not report the broken cache", out, err)
 }
@@ -132,7 +132,7 @@ func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 			"by a lock nothing is using", path, held.holds)
 	}
 
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Open after Pending: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestPendingPredictsWhatOpenApplies(t *testing.T) {
 		t.Errorf("a fresh database reports %d applied, want none", len(before.Applied))
 	}
 
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -206,8 +206,11 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = pool.Close() }()
-	if got := pool.Stats().MaxOpenConnections; got != 3 {
-		t.Errorf("max open conns = %d, want the requested 3", got)
+	// A CONFIGURED BOUND IS THE READERS', and the connection kept for
+	// identity work is added beside them rather than taken out of them.
+	if got, want := pool.Stats().MaxOpenConnections, 3+identityReserve; got != want {
+		t.Errorf("max open conns = %d, want the requested 3 readers and the "+
+			"identity reserve, %d", got, want)
 	}
 
 	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{})
@@ -225,35 +228,64 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 			got, wantUnset)
 	}
 
-	// AND A DECLARED PIN WIDENS THE ESTATE THAT HOLDS IT, rather than being
-	// taken out of the readers' share. The whole reason PinnedWriters
-	// exists is that a pin counts against MaxOpenConns like any other
-	// connection, so a handle running three statelog domains on a fixed
-	// four leaves one connection for every reader on the node.
+	// AND THE REPLICATED ESTATE'S PINS WIDEN THE FILE THAT HOLDS THEM,
+	// rather than being taken out of the readers' share: a pin counts
+	// against the pool like any other connection, so an estate carrying
+	// three logs on a fixed four would leave one connection for every
+	// reader of it.
 	//
-	// AND ONLY THAT ESTATE. An applier writes to the replicated estate, so
-	// widening the node estate for its pins would be headroom nothing ever
-	// takes on the file that is not being written.
-	pinned, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "p.db"),
-		Options{PinnedWriters: 3}.forEstate(EstateReplicated))
+	// AND ONLY THAT FILE. An applier writes the replicated estate, so
+	// widening the node's own file for the pins would be headroom nothing
+	// ever takes on the file that is not being written.
+	dir := t.TempDir()
+	node, err := OpenNode(t.Context(), filepath.Join(dir, "n.db"), Options{})
 	if err != nil {
-		t.Fatalf("openPrepared: %v", err)
+		t.Fatalf("open the node: %v", err)
 	}
-	defer func() { _ = pinned.Close() }()
-	if got, want := pinned.Stats().MaxOpenConnections, wantUnset+3; got != want {
+	defer func() { _ = node.Close() }()
+	replicated, err := node.OpenReplicated(t.Context(), 3)
+	if err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
+	if got, want := replicated.sql.Stats().MaxOpenConnections, wantUnset+3; got != want {
 		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
 			"has to be ADDED to the readers' bound, not carved out of it",
 			got, want)
 	}
-	node, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "n.db"),
-		Options{PinnedWriters: 3}.forEstate(EstateNode))
-	if err != nil {
-		t.Fatalf("openPrepared: %v", err)
-	}
-	defer func() { _ = node.Close() }()
-	if got := node.Stats().MaxOpenConnections; got != wantUnset {
+	if got := node.sql.Stats().MaxOpenConnections; got != wantUnset {
 		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
 			got, wantUnset)
+	}
+
+	// A CONFIGURED BOUND IS THE READERS' TOO, with the reserve and the
+	// pins added on top and never fewer than two readers. Bounded at the
+	// configured figure itself, a pool of three with three loops pinned
+	// would leave no reader at all — and one at or below the pin count
+	// leaves the last loop waiting for a connection none of the others
+	// gives back.
+	for _, c := range []struct{ conns, want int }{
+		{conns: 3, want: 3 + identityReserve + 3},
+		{conns: 1, want: replicatedReadFloor + identityReserve + 3},
+	} {
+		configured, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"),
+			Options{MaxOpenConns: c.conns})
+		if err != nil {
+			t.Fatalf("open a node bounded at %d: %v", c.conns, err)
+		}
+		defer func() { _ = configured.Close() }()
+		estate, err := configured.OpenReplicated(t.Context(), 3)
+		if err != nil {
+			t.Fatalf("open the replicated estate of a node bounded at %d: %v", c.conns, err)
+		}
+		if got := estate.sql.Stats().MaxOpenConnections; got != c.want {
+			t.Errorf("a node bounded at %d opened its replicated estate with %d "+
+				"connections for 3 pinned writers, want %d", c.conns, got, c.want)
+		}
+		if got, want := configured.sql.Stats().MaxOpenConnections,
+			c.conns+identityReserve; got != want {
+			t.Errorf("a node bounded at %d opened its own file with %d, want %d",
+				c.conns, got, want)
+		}
 	}
 	var busyMS int
 	if err := unset.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyMS); err != nil {

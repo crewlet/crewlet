@@ -119,6 +119,7 @@ export function ItemRail({
   const can = Boolean(edits?.can);
   const seatName = chrome.seatName ?? ((h: string) => h);
   const seatKind = chrome.seatKind ?? (() => undefined);
+  const seatAvatar = chrome.seatAvatar ?? (() => undefined);
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity
   // directory binds to a seat files AS that seat, so the reporter is them.
@@ -206,6 +207,7 @@ export function ItemRail({
                     name={seatName(item.assignee)}
                     handle={item.assignee}
                     kind={seatKind(item.assignee)}
+                    avatar={seatAvatar(item.assignee)}
                   />
                   <Tag appearance="outline" size="xs">
                     {seatKind(item.assignee) === "human" ? "person" : "agent"}
@@ -233,7 +235,12 @@ export function ItemRail({
         {
           label: "Reporter",
           value: reporter ? (
-            <SeatChip name={seatName(reporter)} handle={reporter} kind={seatKind(reporter)} />
+            <SeatChip
+              name={seatName(reporter)}
+              handle={reporter}
+              kind={seatKind(reporter)}
+              avatar={seatAvatar(reporter)}
+            />
           ) : undefined,
           setBy: by("reporter"),
         },
@@ -1005,6 +1012,7 @@ function Watching({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrom
               <SeatAvatar
                 name={seatName(handle)}
                 kind={chrome.seatKind?.(handle) === "human" ? "human" : "agent"}
+                avatar={chrome.seatAvatar?.(handle)}
                 size="xs"
               />
             </span>

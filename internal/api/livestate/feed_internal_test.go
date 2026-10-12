@@ -5,6 +5,8 @@ import (
 	"maps"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // THE ID INDEX HOLDS EXACTLY THE IDS THE RING HOLDS.
@@ -43,27 +45,68 @@ func TestTheFeedIndexForgetsWhatTheRingDrops(t *testing.T) {
 	}
 }
 
-// THE SPEND INDEX SHRINKS WITH THE WINDOW IT TRACKS.
+// THE SPEND INDEX HOLDS EXACTLY THE IDS THE WINDOW HOLDS.
 //
 // It is exact rather than capped, which is what makes it correct where a
-// bounded set was not — so the thing that bounds it is the prune. An id left
-// behind by a dropped record would make this map the one structure in the
-// projection that grows for the life of the process.
-func TestTheSpendIndexDropsWhatTheWindowDrops(t *testing.T) {
+// bounded set was not — so what bounds it is that an id leaves with its record
+// and never enters without one. An id left behind by a dropped record, or taken
+// for a record the window refused, would make this map the one structure in the
+// projection that grows for the life of the process: nothing that forgets an id
+// (the expiry, the cap) ever reaches one no held record carries. Every way an
+// id comes or goes is exercised: an expiry, an arrival already aged and its
+// redelivery, a seed of aged history, and the count cap.
+func TestTheSpendIndexHoldsExactlyTheWindowsIDs(t *testing.T) {
 	t.Parallel()
-	s := New()
-	aged := time.Now().UTC().Add(-LiveSpendWindow - time.Hour).Format(time.RFC3339Nano)
-	fresh := time.Now().UTC().Format(time.RFC3339Nano)
+	start := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	now := start
+	s := New(WithClock(func() time.Time { return now }))
+	fresh := start.Add(2 * time.Hour).Format(time.RFC3339Nano)
+	indexIsWindow := func(step string, outside ...string) {
+		t.Helper()
+		for _, id := range outside {
+			if _, indexed := s.spendIDs[id]; indexed {
+				t.Errorf("after %s the window still holds %q, which is older "+
+					"than it", step, id)
+			}
+		}
+		held := map[string]struct{}{}
+		for _, list := range [][]spendEntry{s.undatedSpend, s.spend} {
+			for i := range list {
+				held[list[i].EventID] = struct{}{}
+			}
+		}
+		if !maps.Equal(held, s.spendIDs) {
+			t.Errorf("after %s the index holds %d ids for the window's %d: "+
+				"want exactly the window's", step, len(s.spendIDs), len(held))
+		}
+	}
 
-	s.foldSpend(Envelope{ID: "aged", Timestamp: aged}, map[string]any{"total_tokens": 5})
+	s.foldSpend(Envelope{ID: "early", Timestamp: start.Format(time.RFC3339Nano)},
+		map[string]any{"total_tokens": 5})
+	now = start.Add(2 * time.Hour) // fresh arrives when it was stamped
 	s.foldSpend(Envelope{ID: "fresh", Timestamp: fresh}, map[string]any{"total_tokens": 5})
-	if got := len(s.spend); got != 1 {
-		t.Fatalf("holding %d records, want the aged one pruned", got)
+	now = start.Add(LiveSpendWindow + time.Hour) // early has aged, fresh has not
+	if !s.ExpireSpend() || len(s.spend) != 1 {
+		t.Fatalf("holding %d records, want the aged one expired", len(s.spend))
 	}
-	if got := len(s.spendIDs); got != 1 {
-		t.Errorf("the index holds %d ids for 1 record: it does not shrink with "+
-			"the window, so it grows for the life of the process", got)
+	indexIsWindow("an expiry", "early")
+
+	// AN ARRIVAL ALREADY AGED is refused without an id, and so is its
+	// redelivery: indexed, its id would be carried by no held record, so
+	// neither the expiry nor the cap would ever forget it.
+	for range 2 {
+		s.foldSpend(Envelope{ID: "late", Timestamp: start.Format(time.RFC3339Nano)},
+			map[string]any{"total_tokens": 5})
 	}
+	indexIsWindow("an aged arrival and its redelivery", "late")
+
+	// AND A SEED OF AGED HISTORY admits none of it, and says it moved nothing.
+	if s.Seed(History{Spend: []tokens.Record{{
+		EventID: "stored", Timestamp: start.Format(time.RFC3339Nano), TotalTokens: 5,
+	}}}).Tokens {
+		t.Error("a seed of history older than the window reported the rollup moved")
+	}
+	indexIsWindow("a seed of aged history", "stored")
 
 	// And the count cap prunes the index too, not just the slice.
 	for i := range SpendRecordLimit + 10 {
@@ -73,8 +116,5 @@ func TestTheSpendIndexDropsWhatTheWindowDrops(t *testing.T) {
 	if len(s.spend) != SpendRecordLimit {
 		t.Fatalf("holding %d records, want the cap's %d", len(s.spend), SpendRecordLimit)
 	}
-	if got := len(s.spendIDs); got != SpendRecordLimit {
-		t.Errorf("the index holds %d ids for %d records: the count cap's "+
-			"truncation left ids behind", got, SpendRecordLimit)
-	}
+	indexIsWindow("the count cap")
 }

@@ -63,6 +63,10 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return reconEvents[n.Metadata["event_type"]]
 }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject names the
+// issue, pull request or workflow the event is about.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // addressedEvents are the reasons that are an ASK of this seat rather than
 // news about something it follows.
 //

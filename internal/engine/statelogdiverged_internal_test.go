@@ -57,6 +57,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
 	d.a.Stream.StoreDir = filepath.Join(base, "stream")
+	SeedStore(t, &d.a)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -66,7 +67,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 
 	// A, FIRST BOOT: what the copy will hold.
 	e, back := bootNode(t, &d.a, cfg)
-	waitUntil(t, 20*time.Second, "node A to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node A to admit seats", hydrated(t, e))
 	at := time.Now().UTC()
 	mustApply(t, "the project", func() (tracker.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-project",
@@ -106,7 +107,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	// log's end stays below A's checkpoint across a record or two the
 	// restored log is written with.
 	e2, back2 := bootNode(t, &d.a, cfg)
-	waitUntil(t, 20*time.Second, "node A to admit seats again", e2.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node A to admit seats again", hydrated(t, e2))
 	for i := range 3 {
 		mustApply(t, "an edit after the copy", func() (tracker.WriteResult, error) {
 			title, done := fmt.Sprintf("after the copy %d", i), tracker.StatusDone
@@ -138,7 +139,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 func (d *divergedBroker) writePast(t *testing.T) {
 	t.Helper()
 	eb, backB := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
 	for {
 		stats, err := running.log.Stats(t.Context())
@@ -291,7 +292,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	// THE RECORD AT A'S CHECKPOINT GOES, purged through B's node on the one
 	// broker both share.
 	eb, backB := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	logB := eb.core.Load().log.Domain(tracker.Domain{}.Name()).log
 	if err := logB.Purge(t.Context(), d.checkpoint.at.Seq+1); err != nil {
 		t.Fatalf("purge the log past A's checkpoint: %v", err)

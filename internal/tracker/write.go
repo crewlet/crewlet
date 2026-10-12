@@ -36,13 +36,14 @@ import (
 // caller retries a write that landed — and collapsing them into "succeeded" is
 // how a caller reports work that was never recorded.
 
-// ErrStaleVersion reports an update conditioned on a version that has moved.
+// ErrStaleVersion reports an update conditioned on a version that has moved —
+// a task's, or a file's.
 //
 // ITS OWN SENTINEL because the caller's answer differs from every other
 // refusal: nothing is wrong with the request, somebody else simply got there
 // first, and the correct next move is to re-read and decide again — never to
 // retry the same patch, which is what a generic failure invites.
-var ErrStaleVersion = errors.New("tracker: the task has changed since it was read")
+var ErrStaleVersion = errors.New("tracker: it has changed since it was read")
 
 // ErrReassignmentBudget reports a hand-off past [ReassignmentBudget].
 var ErrReassignmentBudget = errors.New("tracker: this task has been handed on too many times")
@@ -189,7 +190,7 @@ type Writer struct {
 	// a subtree BEFORE their first append. It is never the write path's
 	// own snapshot — that is the framework's, taken per append — and
 	// nothing decided here is paired with an expectation.
-	db *store.DB
+	db store.ReplicatedReader
 
 	// claims is the coordination a walking sequence takes its claim from,
 	// and nodeID is where it runs — the prefix of every claim's owner, never
@@ -289,7 +290,7 @@ type Writer struct {
 // WriterDeps is everything a writer needs that it does not own.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
-	DB        *store.DB
+	DB        store.ReplicatedReader
 	Claims    Claims
 	NodeID    string
 
@@ -457,7 +458,12 @@ type Provenance struct {
 	// reported — the turn's own set, so the engine can charge a turn that
 	// nothing at dispatch named an item for to the one item it wrote. Nil
 	// reports nothing, which is every writer that is not a turn's.
-	Written WriteLog
+	//
+	// IN-PROCESS ONLY, and never encoded: it is a set the asking turn
+	// holds. A write that crosses to another node reports what it
+	// committed to in the answer instead, and the asking node adds it to
+	// this set itself (internal/estate's reply.Written).
+	Written WriteLog `json:"-"`
 }
 
 // WriteLog is what a turn's writer reports the tasks it committed to into.
@@ -643,6 +649,15 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			return WriteResult{}, err
 		}
 	}
+	if patch.FormerKeys != nil {
+		// THE DECIDE FORMS THEM, from the task in its own snapshot, when a
+		// mint re-keys it ([formerKeysAfterRekey]): the list is carried
+		// whole, and one a caller formed from its own read would replace
+		// whatever former keys the task gained since.
+		return WriteResult{}, invalid("a patch on task %s names its former "+
+			"keys, and nothing writes those but the move that re-keys it — "+
+			"the key a task leaves is read where the move decides", id)
+	}
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —
@@ -679,9 +694,21 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	// came up short again. Any edit at all to a task somebody waits on was
 	// refused for ever, with an error promising it would not be.
 	var err error
-	if scope, err = w.scopeForDependents(ctx, id, project, scope); err != nil {
+	if scope, err = w.scopeForDependents(ctx, id, scope); err != nil {
 		return WriteResult{}, err
 	}
+	// A WRITE THAT RE-KEYS THE TASK — one carrying a mint — names every key
+	// it held and the key it takes: its apply claims the new one and turns
+	// the old current key into a former one, which changes who a purge
+	// hands that key to — see [keyTerm]. Every other patch leaves the key
+	// directory alone, so it names none.
+	if patch.Mint != nil {
+		if scope, err = w.scopeForRekey(ctx, id, project, patch, scope); err != nil {
+			return WriteResult{}, err
+		}
+	}
+	// AND THE SUM STAYS UNDER THE CAP, for [ScopeSet.capped]'s reason.
+	scope = scope.capped()
 	at := w.Now()
 
 	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
@@ -701,14 +728,17 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			}
 			if !held {
 				// TWO ABSENCES, and only one is worth coming back for —
-				// see [absentTask].
-				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
+				// see [missingTask].
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"no change can be made to it")
 			}
 			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
 			// see [stillIn]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
 			// formed against it, so a task that moved in between is
-			// another project's write.
+			// another project's write. A bulk edit names one project for
+			// every task in it, which is where a task from elsewhere
+			// arrives.
 			if moved := stillIn(current, project); moved != nil {
 				return statelog.Decision{}, moved
 			}
@@ -779,6 +809,13 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 				patch = amended
+			}
+			if patch.Mint != nil {
+				// THE KEY IT LEAVES BECOMES A FORMER ONE, read here
+				// rather than where the caller read the task — see
+				// [formerKeysAfterRekey].
+				former := formerKeysAfterRekey(current)
+				patch.FormerKeys = &former
 			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
@@ -867,9 +904,27 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			// rather than published under a scope that does not cover
 			// it. The caller re-runs and the second attempt enumerates
 			// the dependent that arrived.
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := scope.covers(current.Dependents); err != nil {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			filed, err := dependentsFiled(ctx, tx, current.Dependents)
+			if err != nil {
 				return statelog.Decision{}, err
+			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := scope.covers(current.Dependents, filed); err != nil {
+				return statelog.Decision{}, err
+			}
+			// AND EVERY KEY THIS WRITE MOVES, on the same honest pairing:
+			// the keys were read before the request, and a task re-keyed
+			// in between holds one the request never probed. Asked with
+			// the applier's own question ([keysMoved]), of the stored task
+			// and the task this record leaves, so the write whose apply
+			// will touch the directory is exactly the one checked here.
+			if next := applyPatch(current, charged); keysMoved(current, next) {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := scope.coversKeys(append(keysOf(current),
+					keysOf(next)...)); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
@@ -1216,9 +1271,10 @@ func (w *Writer) publishOrder(ctx context.Context, opID, project string,
 
 // WriteDocument publishes a whole-document object.
 //
-// ONE PATH FOR SEVEN KINDS, because full post-state is one upsert with no
-// patch semantics to get wrong — and the kinds that take it are exactly the
-// ones small enough for that to be affordable.
+// ONE PATH FOR EVERY WHOLE-DOCUMENT KIND ([documentTable] is the list, and a
+// count kept here drifted from it), because full post-state is one upsert
+// with no patch semantics to get wrong — and the kinds that take it are
+// exactly the ones small enough for that to be affordable.
 func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject,
 	container string, document any, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
@@ -1263,7 +1319,8 @@ type TurnRecord struct {
 	// Seat is the seat whose turn it was, by its handle.
 	Seat string `json:"seat"`
 	// TurnID is the run the segment belongs to (ADR-0017), which a task's
-	// turn list groups segments by.
+	// turn list groups segments by. REQUIRED: [Writer.RecordTurn] refuses a
+	// segment that names none, since it would belong to no turn.
 	TurnID string `json:"turn_id"`
 	// Trigger is what woke the turn — the trigger type a reader filters by.
 	Trigger string `json:"trigger"`
@@ -1277,8 +1334,8 @@ type TurnRecord struct {
 
 	// Summary is what the segment did, in the agent's own words — the
 	// reviewer's account of what landed, or the executor's artifact — cut
-	// to [MaxTurnSummary]. Empty for a segment that parked before either
-	// was written.
+	// to [MaxTurnSummary]. Empty for a segment that failed or parked before
+	// either was written.
 	//
 	// ON THE RECORD, not read back from the event history at query time,
 	// because a task's turn list is the one account of its work that has
@@ -1398,6 +1455,9 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"makes a segment recorded twice count once", turn.Task)
 	case turn.Task == "":
 		return WriteResult{}, invalid("a turn names no task")
+	case turn.TurnID == "":
+		return WriteResult{}, invalid("a turn on task %s names no run — the "+
+			"run is what its task's turn list groups segments by", turn.Task)
 	case len(turn.Summary) > MaxTurnSummary, len(turn.Review) > MaxTurnSummary:
 		// REFUSED, NOT CUT: the caller is the engine, which cuts its own
 		// prose to the bound before it writes, so an overlong one here is
@@ -1408,7 +1468,7 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 	case len(turn.Tools) > MaxTurnTools:
 		return WriteResult{}, invalid("a turn on task %s names %d "+
 			"tools; at most %d", turn.Task, len(turn.Tools), MaxTurnTools)
-	case w.db == nil:
+	case w.db.IsZero():
 		return WriteResult{}, invalid("this writer holds no " +
 			"replicated estate, and a turn's scope is its task's project, " +
 			"which only the task's own row can say")
@@ -1430,7 +1490,7 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 // not hold, which the decide then refuses with the message that says why.
 func (w *Writer) projectOfTask(ctx context.Context, id string) (string, error) {
 	var project string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx,
 			`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&project)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1467,24 +1527,16 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 	})
 }
 
-// chargeable is the decide's own read of the task a turn is charged to.
+// chargeable is the decide's own read of the task a turn is charged to: a
+// task with no row is refused through [missingTask], which says whether that
+// is a purge — final — or a create this node has not applied yet.
 func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
-	var purged int
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?`, id).Scan(&purged); {
-	case err != nil:
-		return fmt.Errorf("tracker: read the deletion marker of task %s: %w", id, err)
-	case purged > 0:
-		return invalid("task %s was purged, and a turn cannot be "+
-			"charged to rows that no longer exist — the spend is still on the "+
-			"seat's own counters", id)
-	}
 	var home string
 	switch err := tx.QueryRowContext(ctx,
 		`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&home); {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("tracker: task %s is not on this node, so a turn "+
-			"cannot be charged to it: %w", id, statelog.ErrUnavailable)
+		return missingTask(ctx, tx, id, "a turn cannot be charged to rows that "+
+			"no longer exist — the spend is still on the seat's own counters")
 	case err != nil:
 		return fmt.Errorf("tracker: read task %s to charge a turn: %w", id, err)
 	case home != project:
@@ -1492,6 +1544,42 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 			errTurnTaskMoved, id, home, project)
 	}
 	return nil
+}
+
+// missingTask is the refusal of a task this node holds no row for —
+// THREE-VALUED, because the absence is two different facts and the third value
+// is the read failing.
+//
+// A PURGE LEAVES A MARKER that outlives the row (see [taskGuards]), so a task
+// carrying one is gone on every node and for good: [ErrNoTask], which is final
+// — so the refusal names the key the task held and says what the gesture cannot
+// do (refused, completing "task KEY (id) was purged, and …"). Only a task with
+// no row AND no marker is one this node may simply not have applied yet —
+// [statelog.ErrUnavailable], which a node that has applied its create will not
+// refuse, and the one absence worth coming back for.
+//
+// EVERY WRITE THAT MEETS A MISSING TASK ANSWERS THROUGH HERE. "Not on this
+// node" is a refusal the CALLER retries — the estate's router hands it back as
+// the answering holder gave it rather than asking another, since a holder that
+// has not applied the create yet is one that will, and what a seat must see of
+// its OWN writes is what its floors already hold every holder to — and every
+// node holding the task's deletion marker says it again. So a seat editing,
+// moving, merging, removing, restoring or charging a task somebody purged —
+// and a merge walk or a duty retrying one on every tick — was told to try again
+// for ever about a task no node will hold again.
+func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
+	var key string
+	err := tx.QueryRowContext(ctx,
+		`SELECT task_key FROM tracker_deletions WHERE task_id = ?`, id).Scan(&key)
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: task %s (%s) was purged, and %s", ErrNoTask,
+			key, id, refused)
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("tracker: read the deletion marker of %s: %w", id, err)
+	}
+	return fmt.Errorf("tracker: task %s is not on this node: %w", id,
+		statelog.ErrUnavailable)
 }
 
 // checkChangeKind is the rule that a record which writes a history row states
@@ -1506,11 +1594,8 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 // and a purge: those are the same operation on different subjects, and the
 // operation is all the applier has.
 //
-// It used to guess, from the operation and the moved fields, whenever a record
-// carried no [Notify] — and the guess answered `patch` and `purge`, which are
-// operations rather than [ChangeKind]s, so no feed filter could name them. A
-// build that can state the fact states it, and the applier files the row under
-// exactly what the record says.
+// The applier stores the kind verbatim and guesses nothing, so a record
+// reaching it without one is refused here, where the fact is known.
 //
 // THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
 // kind and a notification, they must AGREE. One fact with two carriers is one

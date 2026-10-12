@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -41,7 +42,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 		t.Fatalf("a write: %+v, %v", res, err)
 	}
 	logs := map[string]*jetstream.DomainLog{}
-	for _, name := range s.order {
+	for _, name := range s.held().order {
 		logs[name] = s.Domain(name).log
 	}
 	trackerName, vectorsName := tracker.Domain{}.Name(), search.Domain{}.Name()
@@ -57,10 +58,10 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	}
 	if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, 0, ?, ?, ?)
+			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, 0, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO NOTHING`,
-			vectors.domain.Stream().Name, int64(vstats.LastSeq),
+			vectors.spec.Name, int64(vstats.LastSeq),
 			store.EncodeTime(vstats.CreatedAt), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
@@ -148,7 +149,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -173,8 +174,8 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	// it has written since.
 	peerRecord := appendEviction(t, running, "op-peer", "node-z")
 	next := running.runner.Committed().Generation + 1
-	standUpDonor(t, q, rows, statelog.Position{
-		Stream: running.domain.Stream().Name, Generation: next, Seq: peerRecord - 1,
+	standUpDonor(t, e, q, rows, statelog.Position{
+		Stream: running.spec.Name, Generation: next, Seq: peerRecord - 1,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "donor", At: time.Now().UTC(),
@@ -188,7 +189,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 
 	// THE GUARD NAMES THE PEER, and adopting its snapshot is what it means.
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: running.domain.Stream().Name, Confirm: statelog.ConfirmationOf(live),
+		Stream: running.spec.Name, Confirm: statelog.ConfirmationOf(live),
 		By: reanchorOperator,
 	}); !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor with a re-anchored peer = %v, want a refusal", err)
@@ -217,7 +218,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if got := running.runner.StreamCreatedAt(); statelog.IdentityOf(live, got, true) != statelog.StreamSame {
 		t.Fatalf("the runner is keyed to %s, want the rebuilt stream's %s", got, live)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.StateLogHydrated)
+	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != next {
 		t.Fatalf("a write after the adoption: %+v, %v — want it applied in generation %d",
@@ -238,7 +239,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -260,14 +261,14 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 		Generation: next, Case: statelog.ReanchorRestored, By: "ops-1", Writer: "donor",
 		At: time.Now().UTC(),
 		Inputs: statelog.ReanchorInputs{
-			Stream: running.domain.Stream().Name, StreamCreatedAt: live, KeyedTo: live,
+			Stream: running.spec.Name, StreamCreatedAt: live, KeyedTo: live,
 		},
 	})
 	if err != nil || !keeps {
 		t.Fatalf("encode the peer's generation record: %v", err)
 	}
 	zero := uint64(0)
-	spec := running.domain.Stream()
+	spec := running.spec
 	genSeq, _, err := running.log.Append(t.Context(),
 		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero,
 		running.signer.Seal(record.Payload))
@@ -285,7 +286,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 			"record was applied into rows from the one before", got, end)
 	}
 
-	standUpDonor(t, q, rows, statelog.Position{
+	standUpDonor(t, e, q, rows, statelog.Position{
 		Stream: spec.Name, Generation: next, Seq: end,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
@@ -314,7 +315,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 func copyEstate(t *testing.T, back *Backends) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "crewlet-replicated.db")
-	if _, err := back.Store.Replicated().Backup(t.Context(), path); err != nil {
+	if _, err := storetest.ReplicatedDB(t, back.Store.Replicated()).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
 	return path
@@ -324,9 +325,13 @@ func copyEstate(t *testing.T, back *Backends) string {
 // at, keyed to created — on the node's broker, the way a peer that re-anchored
 // that domain would, until the test ends.
 //
+// AS A LIVE DATA NODE OF e's FLEET, which is what every donor is: a join waits
+// for the live data nodes to answer and no longer, so a donor nobody's
+// presence names is one a join may stop before hearing ([presentAsDataNode]).
+//
 // IT RETURNS ONCE THE DONOR ANSWERS AN ASK, and not merely once it has been
 // started: see [awaitDonor].
-func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
+func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
 	t.Helper()
@@ -334,20 +339,11 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (stream) DO UPDATE SET
-				generation = excluded.generation, seq = excluded.seq,
-				stream_created_at = excluded.stream_created_at`,
-			at.Stream, int64(at.Generation), int64(at.Seq),
-			store.EncodeTime(created), store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("move the copy's checkpoint: %v", err)
+	log, err := q.DomainLog(t.Context(), at.Stream)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
 	}
+	moveCheckpoint(t, log, copyDB, at, created)
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}
@@ -355,25 +351,21 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 		t.Fatalf("quiesce the copy: %v", err)
 	}
 	dir := filepath.Dir(rows)
-	donorNode, err := store.Open(t.Context(), filepath.Join(dir, "node.db"),
-		store.Options{ReplicatedPath: rows})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorNode, _ := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{ReplicatedPath: rows}, 1)
 	t.Cleanup(func() { _ = donorNode.Close() })
 	lag := uint64(0)
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain,
+			Domain: domain, Spec: domain.Stream(),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}
 	snapDir := filepath.Join(dir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, DB: donorNode, Dir: snapDir, NodeID: "donor",
+		Domains: registered, File: donorNode.Replicated(), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 2, nil },
+		Recipients:    func(context.Context) (int, error) { return 1, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -383,7 +375,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	serveDonor(t, q.Conn(), statelog.DonorDeps{
+	serveDonor(t, e, q.Conn(), statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return manifest, true },
@@ -392,8 +384,10 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 }
 
 // serveDonor serves deps as a donor until the test ends, and returns once it
-// answers an offer request on nc's broker: see [awaitDonor].
-func serveDonor(t *testing.T, nc *nats.Conn, deps statelog.DonorDeps) {
+// answers an offer request on nc's broker: see [awaitDonor]. Presented as a
+// live data node of e's fleet first ([presentAsDataNode]), where there is an
+// engine to join from; nil stands a donor up on the broker alone.
+func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps) {
 	t.Helper()
 	// up is closed once the donor's own connection is open, which is where
 	// awaitDonor's clock starts. Once, because how often Serve dials is that
@@ -412,6 +406,9 @@ func serveDonor(t *testing.T, nc *nats.Conn, deps statelog.DonorDeps) {
 	donor, err := statelog.NewDonor(deps)
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
+	}
+	if e != nil {
+		presentAsDataNode(t, e, deps.NodeID)
 	}
 	ctx, stop := context.WithCancel(t.Context())
 	// CLOSED after the send, so the cleanup's receive returns even when
@@ -439,7 +436,7 @@ func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
 	slow := statelog.OfferWindow + time.Second
-	serveDonor(t, q.Conn(), statelog.DonorDeps{
+	serveDonor(t, nil, q.Conn(), statelog.DonorDeps{
 		NodeID: "slow",
 		Dial: func(ctx context.Context) (*nats.Conn, error) {
 			select {
@@ -554,4 +551,12 @@ func awaitDonor(t *testing.T, nc *nats.Conn, node string, up <-chan struct{},
 	t.Fatalf("donor %q did not answer an offer request within %s of its "+
 		"connection opening, which is the window a join would have given it",
 		node, statelog.OfferWindow)
+}
+
+// presentAsDataNode claims a presence lease for id as a data node on e's
+// fleet, so a join e makes lists it and expects its answer
+// ([statelog.AdoptDeps.Donors]).
+func presentAsDataNode(t *testing.T, e *Engine, id string) {
+	t.Helper()
+	claimPresences(t, e.backends.Coord, map[string][]string{id: {"data"}})
 }

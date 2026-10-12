@@ -16,10 +16,10 @@ import (
 //
 // THE SWEEP PUBLISHER turns `api.audit`'s two horizons into positions and
 // publishes a retention record for every bucket that is due
-// ([iamdomain.Writer.Sweep]). The applier on every node deletes the same rows;
-// nothing else ever deletes from this estate. It claims its `worker:` lease
-// through [Engine.workerDuty], which gives it the roles gate and the release
-// on a graceful stop that every singleton has.
+// ([iamdomain.Writer.Sweep]). The applier on every data node deletes the same
+// rows; nothing else ever deletes from this estate. It claims its `worker:`
+// lease through [Engine.workerDuty], which gives it the roles gate and the
+// release on a graceful stop that every singleton has.
 //
 // # The loop ticks once at start
 //
@@ -70,7 +70,7 @@ type identityDuties struct {
 // startIdentityDuties arms every identity duty this node can run.
 //
 // A NODE THAT RUNS NO WORKERS ARMS NONE, although it runs the identity domain
-// as every node does: every duty here is a worker singleton, whose claim that
+// as every data node does: every duty here is a worker singleton, whose claim that
 // node's roles gate refuses on every tick ([Engine.workerDuty]), so arming them
 // there would be loops that never run, reported by [Engine.IdentityDuties] as
 // duties that do.

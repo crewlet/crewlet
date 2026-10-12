@@ -12,69 +12,59 @@ import (
 )
 
 // meteringReporter is a meter loop over a company capped at 1 000 tokens a
-// day, reading the given shared counters — everything a frame reads, and
-// nothing a publish adds.
-func meteringReporter(t *testing.T, counters coord.Fleet) *budgetReporter {
-	t.Helper()
-	e := &Engine{backends: &Backends{Fleet: counters}}
-	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
-	return &budgetReporter{engine: e}
-}
-
-// spentCounters is the shared counters with 250 tokens charged in now's day.
-func spentCounters(t *testing.T, now time.Time) coord.Fleet {
+// day that has spent 250 today, and the fleet store it reads — everything a
+// frame reads, and nothing a publish adds — on an engine whose clock reads
+// now, the instant the 250 were charged at.
+func meteringReporter(t *testing.T, now time.Time) (*budgetReporter, *coordmem.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
-	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250,
-		coord.WindowsAt(now, time.UTC)); err != nil {
+	windows := coord.WindowsAt(now, time.UTC)
+	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
-	return fleet
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(now)}
+	r := &budgetReporter{engine: e}
+	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
+	return r, fleet
 }
 
-// A CAPPED COMPANY'S FRAME IS ONE READ OF THE SHARED COUNTERS, stated against
-// its own ceiling.
+// A CAPPED COMPANY'S FRAME IS WHAT THE SHARED COUNTERS READ, from the first
+// frame on: every node of a fleet charges the windowed counters, so there is
+// no reading to wait for before this node's is the fleet's.
 //
 // Asked of [budgetReporter.frame], the decision [budgetReporter.publish]
-// sends or does not send, rather than of [budgetSnapshot] alone: a snapshot
-// nothing reads the counters into passes every test of the snapshot.
-func TestACappedCompanysFrameIsTheSharedCounter(t *testing.T) {
+// sends or does not send.
+func TestACappedCompanyPublishesWhatItsCountersRead(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	r := meteringReporter(t, spentCounters(t, now))
-	frame, sent := r.frame(t.Context(), now)
+	r, _ := meteringReporter(t, now)
+	frame, sent := r.frame(t.Context())
 	if !sent {
-		t.Fatal("a capped company whose counters could be read published nothing")
+		t.Fatal("a capped company whose counters can be read published nothing")
 	}
 	if w := frame.Org.Windows; len(w) != 1 || w[0].Used != 250 || w[0].Limit == nil || *w[0].Limit != 1000 {
 		t.Fatalf("frame = %+v, want the company's day at 250 of its 1000", w)
 	}
 }
 
-// A COUNTER THAT CANNOT BE READ PUBLISHES NO FRAME. The consumer replaces what
-// it holds on every report, so a frame of zeroes would render a company that
-// is spending as one that has spent nothing; a frame skipped costs one
-// interval of a meter that keeps its last reading.
+// A COUNTER THAT CANNOT BE READ PUBLISHES NOTHING, rather than a frame of
+// zeroes: the consumer replaces what it holds on every frame, so a zeroed one
+// would draw a company that is spending as one that has spent nothing.
 func TestAnUnreadableCounterPublishesNoFrame(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	r := meteringReporter(t, unreadableCounters{spentCounters(t, now)})
-	if frame, sent := r.frame(t.Context(), now); sent {
-		t.Fatalf("the meter published %+v from counters nobody could read", frame)
+	r, fleet := meteringReporter(t, now)
+	r.engine.backends.Fleet = unreadableUsage{fleet}
+	if frame, sent := r.frame(t.Context()); sent {
+		t.Fatalf("the meter published %+v on a counter nobody could read", frame)
 	}
 }
 
-// unreadableCounters is a coordination store whose token counters cannot be
-// listed.
-//
-// The store is embedded under an alias because [coord.Fleet] has a method of
-// that name (the config plane's per-node apply status), which a field named
-// Fleet would shadow.
-type unreadableCounters struct{ sharedState }
+// unreadableUsage is a fleet store whose counters cannot be read, embedded
+// through [fleetStore] for the reason that alias gives.
+type unreadableUsage struct{ *fleetStore }
 
-type sharedState = coord.Fleet
-
-func (unreadableCounters) Usage(context.Context, coord.Windows) ([]coord.Usage, error) {
+func (unreadableUsage) Usage(context.Context, coord.Windows) ([]coord.Usage, error) {
 	return nil, errors.New("the coordination store is unreachable")
 }
 
@@ -84,15 +74,16 @@ func (unreadableCounters) Usage(context.Context, coord.Windows) ([]coord.Usage, 
 // from "no node has reported yet" — so it is sent, where it used to be
 // withheld and the two collapsed into one empty meter that told the operator
 // of a CAPPED company, for the first interval after every start, that it had
-// no budget. And it is sent whatever the counters hold, because an empty list
-// of windows holds no figure a reading could change: the counters here cannot
-// be read at all.
+// no budget. And it is sent without reading the counters, because an empty
+// list of windows holds no figure a reading could make wrong: the counters
+// here cannot be read at all.
 func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
-	r := meteringReporter(t, unreadableCounters{coordmem.NewFleet()})
+	r, fleet := meteringReporter(t, now)
+	r.engine.backends.Fleet = unreadableUsage{fleet}
 	r.engine.epoch.current.Store(meteredCompany(config.TokenBudget{}))
-	frame, sent := r.frame(t.Context(), now)
+	frame, sent := r.frame(t.Context())
 	if !sent {
 		t.Fatal("an uncapped company published nothing, which a reader cannot tell from no report")
 	}

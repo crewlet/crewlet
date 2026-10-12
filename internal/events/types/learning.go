@@ -28,6 +28,32 @@ func init() {
 	events.Register[CompactionRequested]()
 	events.Register[CompactionCompleted]()
 	events.Register[ReflectionCompleted]()
+	events.Register[ReflectionDue]()
+}
+
+// ReflectionDue is the wake that puts a finished turn in front of post-turn
+// reflection ON THE SEAT'S HOLDER — published by the node that ran the turn
+// onto the seat's own reflection subject ([topics.AgentReflect]), which only
+// the node holding the seat attaches.
+//
+// A WAKE, NOT A RECORD: the turn is already a row (turn_completed), so this
+// carries it whole and is kept out of the event store, as a2a_request is.
+//
+// Why a wake rather than reflecting off turn_completed itself: reflection
+// writes the seat's memory into the store of the node that runs it, and only
+// the holder carries a seat's memory to the next holder. Off one fleet-wide
+// group, most reflections ran on a node that held nothing of the seat, and
+// what they wrote was never read.
+type ReflectionDue struct {
+	Turn TurnCompleted `json:"turn"`
+}
+
+// EventType is the "reflection_due" wire type.
+func (ReflectionDue) EventType() string { return "reflection_due" }
+
+// Summary names the turn the reflection is for.
+func (e ReflectionDue) Summary() string {
+	return fmt.Sprintf("Reflection due on %s's turn %s", e.Turn.AgentHandle, e.Turn.TurnID)
 }
 
 // MemoryScope is whose memory a persisted reflection belongs to.
@@ -206,18 +232,13 @@ type SkillUsed struct {
 	// SkillID is empty for a registry-loaded skill.
 	SkillID    string          `json:"skill_id"`
 	SourceKind SkillSourceKind `json:"source_kind"`
-	// FileLoaded was meant to name a bundled file a load read instead of
-	// the body. No skill in any build carries bundled files, so nothing
-	// writes it and it is always empty; it stays on the wire because
-	// ADR-0006 never removes a key a peer may still send.
-	FileLoaded string `json:"file_loaded"`
 
 	// SourcePageID and SourceContainer name the knowledge-base page a
 	// REGISTRY skill was read from, so a load is attributable to the page
 	// an author edits rather than only to a key — a key is inside the page
 	// and moves when the page is edited, and two pages can declare one.
-	// Empty for a synthesized skill, which lives in this node's own store
-	// and has no page, and absent on a record an older build wrote.
+	// Empty, and absent on the wire, for a synthesized skill, which lives
+	// in this node's own store and has no page.
 	SourcePageID    string `json:"source_page_id,omitempty"`
 	SourceContainer string `json:"source_container,omitempty"`
 }
@@ -237,17 +258,49 @@ func (e SkillUsed) SummaryFor(actor string) string {
 	return lead(actor, "used skill '"+e.SkillName+"' ("+string(e.SourceKind)+")")
 }
 
+// EmbedOutcome is what became of the one vector a turn's similarity searches
+// rank by — the personal-memory candidates' similarity half and episode
+// recall ([PrefetchSummary.TurnEmbedding]).
+//
+// A named string so a value from a newer peer is a value rather than a
+// panic; [EmbedOutcome.Valid] says whether this build knows it.
+type EmbedOutcome string
+
+const (
+	// EmbedEmbedded is a vector had, so the searches ranked by it — an
+	// empty block is then "nothing similar".
+	EmbedEmbedded EmbedOutcome = "embedded"
+	// EmbedFailed is an embedder that was asked and did not answer with a
+	// vector inside the turn's budget, or refused: the similarity halves
+	// did not run, so an empty episode block says nothing about the seat's
+	// past work.
+	EmbedFailed EmbedOutcome = "failed"
+	// EmbedUnconfigured is a company that configures no embeddings.
+	EmbedUnconfigured EmbedOutcome = "unconfigured"
+)
+
+// Valid reports whether this build knows the outcome.
+func (o EmbedOutcome) Valid() bool {
+	switch o {
+	case EmbedEmbedded, EmbedFailed, EmbedUnconfigured:
+		return true
+	}
+	return false
+}
+
 // PrefetchSummary fires once per turn, after the seven context blocks the
 // executor's prompt is built from resolve, recording hit and rendered size for
 // each of them.
 //
-// IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block degrades to empty
-// on failure by design — an unreachable store, an unconfigured auxiliary
-// model and a filter that selected nothing all render the same nothing — so
-// without this event a seat running with no memory at all looks exactly like
-// a seat whose stores had nothing to say. Operators plot per-block hit rate
-// per agent: a block stuck at zero is a configuration or data problem, not a
-// turn problem.
+// IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block but two degrades
+// silently on failure by design — an unreachable store, an unconfigured
+// auxiliary model and a filter that selected nothing all leave the seat with
+// no memory — so without this event a seat running with no memory at all
+// looks exactly like a seat whose stores had nothing to say. The two are the
+// knowledge and chat-thread blocks, which say in words when their source could
+// not be read, because there the difference sends a seat somewhere else.
+// Operators plot per-block hit rate per agent: a block stuck at zero is a
+// configuration or data problem, not a turn problem.
 type PrefetchSummary struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -263,8 +316,7 @@ type PrefetchSummary struct {
 	// between a turn announcing itself and its first phase opening — it
 	// reads a diary, a thread and a knowledge base, and calls an auxiliary
 	// model for two of them — and without its own measurement a turn's
-	// timeline had a gap there nothing on the record could explain. Absent
-	// on an older peer's summary.
+	// timeline had a gap there nothing on the record could explain.
 	StartedAt              time.Time `json:"started_at,omitzero"`
 	DurationMS             int       `json:"duration_ms"`
 	CounterpartyHit        bool      `json:"counterparty_hit"`
@@ -323,6 +375,13 @@ type PrefetchSummary struct {
 	// "empty because gated" from "the filter selected nothing". Such a turn
 	// searches later instead, with the executor's own search_knowledge call.
 	TriggerRequiresRecon bool `json:"trigger_requires_recon"`
+	// TurnEmbedding is what became of the vector the personal-memory and
+	// episode-recall searches rank by — see [EmbedOutcome]. It is the field
+	// that tells "the embedder failed, so nothing was searched" from
+	// "searched, and nothing was similar": both leave the episode block
+	// empty. Absent where no search asked for a vector — a thin trigger,
+	// an empty ask, a seat with neither store.
+	TurnEmbedding EmbedOutcome `json:"turn_embedding,omitempty"`
 }
 
 // EventType is the "prefetch_summary" wire type.
@@ -672,9 +731,13 @@ func (e CompactionCompleted) SummaryFor(actor string) string {
 
 // ReflectionCompleted fires at the end of every reflection pass that actually
 // dispatched workers. It carries no per-worker outcome — those have their own
-// events — because its job is to be a state-derivation sentinel: the aux
-// workers' phase events keep the agent showing as working during learning, and
-// this is what flips it back to idle when the whole pass is done.
+// events, and what each worker's model calls cost is the reflection stage's
+// `auxiliary_spend` — because its job is to be the pass's trailing SENTINEL:
+// the live view extends the seat's last turn to it, and the Turn screen's
+// Reflection lane ends at it. It does not end the turn's work, which
+// agent_turn_completed already did; the pass is not published on every path
+// (the reflector returns without it on every path where no worker runs), so nothing may wait
+// for it to call a seat idle.
 type ReflectionCompleted struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -692,8 +755,8 @@ type ReflectionCompleted struct {
 // EventType is the "reflection_completed" wire type.
 func (ReflectionCompleted) EventType() string { return "reflection_completed" }
 
-// Role is the seat the pass reflected for. This is the event that flips that
-// seat back to idle, so the projection needs the role to know whose.
+// Role is the seat the pass reflected for, whose last turn the projection
+// extends to the pass's end — so it needs the role to know whose.
 func (e ReflectionCompleted) Role() string { return e.RoleName }
 
 // AgentID is the instance whose learning workers have finished.

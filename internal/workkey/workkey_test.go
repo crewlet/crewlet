@@ -1,8 +1,6 @@
 package workkey
 
-import (
-	"testing"
-)
+import "testing"
 
 // TestDeriveIsOrderIndependent is the property the whole design rests on:
 // two nodes handed the same batch in different orders must derive the same

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -122,6 +123,14 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"a refusal the domain composed",
 			fmt.Errorf("%w: the comment is longer than a comment may be", tracker.ErrInvalid),
 			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
+		// THE ESTATE'S ROUTER FINDING NO DATA NODE TO RUN IT ON, which a
+		// write through this surface meets whenever every copy is out of
+		// service: a condition of the fleet, never a fault of this node,
+		// and told in fixed words — its detail names the nodes it asked.
+		{"an estate nobody served",
+			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+			"no data node could serve it", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,27 +159,77 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 }
 
 // THE CLASS OF A WRITER'S ERROR IS THE TOOLS' OWN RULE: a content refusal the
-// domain marked keeps its class, a condition waiting clears is `unavailable`,
-// a walk that stopped at a step nobody can confirm is `unavailable` — its
-// tracker sentence says the same operation finishes it — and anything
-// unmarked is a fault.
+// domain marked keeps its class, a condition waiting clears is `unavailable` —
+// an estate the router found nobody to serve among them — and anything
+// unmarked is a fault. And a write that MAY HAVE LANDED is an unknown, by the
+// tools' own rule for that ([builtin.UnknownCause]): a walk that stopped at a
+// step nobody can confirm, and a write the router sent to a node that never
+// answered — `unavailable` by class, and never read as a refusal that wrote
+// nothing, which is what the audit recorded the first as and the surface
+// answered the second as a fault.
+//
+// Mutation: drop the UnknownCause step from ClassifyWrite and the two
+// unknowns go red; drop the ErrUnserved arm from builtin.Condition and the
+// unserved estate does.
 func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		err  error
-		want crewletmcp.Refusal
+		err     error
+		want    crewletmcp.Refusal
+		unknown bool
 	}{
-		{tracker.ErrNoTask, crewletmcp.RefusalNotFound},
-		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, crewletmcp.RefusalUnavailable},
-		{fmt.Errorf("x: %w", coord.ErrUnavailable), crewletmcp.RefusalUnavailable},
-		{fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved), crewletmcp.RefusalUnavailable},
-		{errors.New(diskFault), crewletmcp.RefusalInternalError},
+		{err: tracker.ErrNoTask, want: crewletmcp.RefusalNotFound},
+		{err: &statelog.Unavailable{Reason: statelog.ReasonLogFull},
+			want: crewletmcp.RefusalUnavailable},
+		{err: fmt.Errorf("x: %w", coord.ErrUnavailable), want: crewletmcp.RefusalUnavailable},
+		{err: &estate.ErrUnserved{Detail: "data-b: out_of_service"},
+			want: crewletmcp.RefusalUnavailable},
+		{err: fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved),
+			want: crewletmcp.RefusalUnavailable, unknown: true},
+		{err: fmt.Errorf("%w (pages.trash, asked of data-b)", estate.ErrOutcomeUnknown),
+			want: crewletmcp.RefusalUnavailable, unknown: true},
+		{err: errors.New(diskFault), want: crewletmcp.RefusalInternalError},
 	} {
-		got := crewletmcp.RefusalOf(crewletmcp.Result{Failed: true,
-			Cause: operator.ClassifyWrite(tc.err)})
-		if got != tc.want {
+		result := crewletmcp.Result{Failed: true, Cause: operator.ClassifyWrite(tc.err)}
+		if got := crewletmcp.RefusalOf(result); got != tc.want {
 			t.Errorf("ClassifyWrite(%v) = %q, want %q", tc.err, got, tc.want)
 		}
+		if got := crewletmcp.UnknownOf(result); got != tc.unknown {
+			t.Errorf("ClassifyWrite(%v) is an unknown outcome: %v, want %v", tc.err,
+				got, tc.unknown)
+		}
+		if !errors.Is(result.Cause, tc.err) {
+			t.Errorf("ClassifyWrite(%v) lost the writer's error beneath it", tc.err)
+		}
+	}
+}
+
+// A WRITE THE ROUTER SENT AND NEVER HEARD BACK ABOUT IS ANSWERED AS AN
+// UNKNOWN: `503` with `outcome: "unknown"` under the request's own key, so the
+// client reads back before sending it again — never the `500` it was, which
+// told a person sending it again could not help and named no key. Its words
+// are fixed: the router's name the node it asked.
+//
+// Mutation: drop the UnknownCause step from ClassifyWrite and this answers
+// 500; drop the ErrOutcomeUnknown arm from writeSentence and the node's name
+// reaches the answer.
+func TestAWriteNobodyAnsweredForIsAnsweredAsAnUnknown(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	key := newKey()
+	operator.FailWrite(t.Context(), rec,
+		fmt.Errorf("%w (pages.trash, asked of 10.0.0.7)", estate.ErrOutcomeUnknown),
+		key, nil)
+	body := decode(t, rec)
+	if rec.Code != http.StatusServiceUnavailable || body["outcome"] != "unknown" ||
+		body["op_id"] != key {
+		t.Fatalf("answered %d %v, want 503 with outcome unknown under the key", rec.Code, body)
+	}
+	if said, _ := body["tool_detail"].(string); said != builtin.Unanswered {
+		t.Errorf("tool_detail = %q, want the fixed words %q", said, builtin.Unanswered)
+	}
+	if strings.Contains(fmt.Sprint(body), "10.0.0.7") {
+		t.Errorf("the node the router asked reached the answer: %v", body)
 	}
 }
 

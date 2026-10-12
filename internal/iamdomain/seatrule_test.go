@@ -20,16 +20,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0026): the writer's half.
+// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0032): the writer's half.
 //
 // A person with no seat acted under their bare login, in no unit, led by
 // nobody and reached by no contact route, so every rule the org chart decides
 // had nothing to say about them — and a person on an AGENT's seat was refused
 // 403 on every request they sent, a principal the request path could never
-// serve. These cases hold the writer to the rule at every write that binds,
-// and the applier to the other half: it writes whatever a record says, a
-// seatless person a build before the rule enrolled included, because refusing
-// a record there stops the log on every node.
+// serve. These cases hold the writer to the rule at every write that binds —
+// the writer and never the applier, which writes whatever a record says,
+// because refusing a record there stops the log on every node.
 
 // A PERSON ENROLS ONLY ONTO A HUMAN SEAT; A SERVICE ACCOUNT ONTO ONE OR NONE.
 //
@@ -102,7 +101,7 @@ func TestAPersonEnrolsOnlyOntoAHumanSeat(t *testing.T) {
 		}
 		// THE SEAT THE CALLER TYPED WRONG IS NOT THE ONE THEY LEFT OUT:
 		// a surface names a different remedy for each.
-		if tc.want != iamdomain.ErrSeatRequired && errors.Is(err, iamdomain.ErrSeatRequired) {
+		if !errors.Is(tc.want, iamdomain.ErrSeatRequired) && errors.Is(err, iamdomain.ErrSeatRequired) {
 			t.Errorf("%s answered %v, which says no seat was named", tc.name, err)
 		}
 	}
@@ -130,27 +129,6 @@ func TestAPersonEnrolsOnlyOntoAHumanSeat(t *testing.T) {
 	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
 		seated.PersonID); len(got) != 1 || got[0] != "sarah-chen" {
 		t.Errorf("the person holds %v, want sarah-chen", got)
-	}
-
-	// THE APPLIER SALVAGES what a build before the rule published: a person
-	// enrolled with no seat lands as one, and the directory says so.
-	legacy := uuid.Must(uuid.NewV7()).String()
-	applyByHand(t, rig, iamdomain.OpEnrol, legacy, iamdomain.PeopleScope(legacy),
-		legacyEnrolment(t, rig, legacy, "lee.legacy", "lee@example.com"), 1)
-	page, err := rig.reader(t).People(t.Context(),
-		iamdomain.PeopleQuery{Limit: iamdomain.MaxPageSize})
-	if err != nil {
-		t.Fatalf("People: %v", err)
-	}
-	seatless := map[string]bool{}
-	for _, row := range page.People {
-		seatless[row.Login] = row.Seatless()
-	}
-	if want := map[string]bool{"lee.legacy": true, "sarah.chen": false,
-		"svc:release": false, "svc:deploy": false}; fmt.Sprint(seatless) !=
-		fmt.Sprint(want) {
-		t.Errorf("the directory reads seatless as %v, want %v — only a PERSON "+
-			"with no seat is, a service account never", seatless, want)
 	}
 }
 
@@ -261,8 +239,9 @@ func TestAnOpenInvitationHoldsItsSeat(t *testing.T) {
 
 // TWO OPEN INVITATIONS ON ONE SEAT DO NOT DEADLOCK THEIR REDEMPTIONS.
 //
-// A build before invitations held their seats could issue a second invitation
-// onto a seat one was already outstanding on, and the applier writes both. Were
+// The writer never issues a second invitation onto a seat one is outstanding
+// on, but a node that retained the record cancelling one, or a restore, can
+// hold two — and the applier writes whatever a record says. Were
 // a redemption held to the OPEN INVITATIONS on its seat, each link would be
 // refused for the other's sake and neither could ever be redeemed. So a
 // redemption is held to the PEOPLE alone: the first one redeemed lands, and the
@@ -278,9 +257,9 @@ func TestTwoOpenInvitationsOnOneSeatDoNotDeadlockTheirRedemptions(t *testing.T) 
 	seat := rig.vacantSeat("platform-lead")
 	issued := issueOnto(t, rig, "priya@example.com", seat,
 		brokerAt.Add(168*time.Hour))
-	legacy := iamdomain.InviteIssued{ID: uuid.Must(uuid.NewV7()).String(),
-		Secret: "a-legacy-links-secret"}
-	applyLegacyInvitation(t, rig, legacy.ID, "noor@example.com", legacy.Secret,
+	other := iamdomain.InviteIssued{ID: uuid.Must(uuid.NewV7()).String(),
+		Secret: "the-other-links-secret"}
+	applyInvitationByHand(t, rig, other.ID, "noor@example.com", other.Secret,
 		seat, brokerAt.Add(168*time.Hour), 1)
 	claims, err := rig.reader(t).SeatClaims(t.Context(), brokerAt)
 	if err != nil {
@@ -291,7 +270,7 @@ func TestTwoOpenInvitationsOnOneSeatDoNotDeadlockTheirRedemptions(t *testing.T) 
 			len(claims.Invitations), seat, claims.Invitations)
 	}
 
-	if _, err := redeemAs(t, rig, legacy, "noor@example.com", legacy.Secret,
+	if _, err := redeemAs(t, rig, other, "noor@example.com", other.Secret,
 		seat); err != nil {
 		t.Fatalf("the first of two invitations on one seat was refused: %v — "+
 			"held to the other one, neither link could ever be redeemed", err)
@@ -584,95 +563,36 @@ func (r *raceOnOneKey) Append(ctx context.Context, subject, msgID string,
 	return r.Appender.Append(ctx, subject, msgID, expect, body)
 }
 
-// AN INVITATION ISSUED BEFORE EVERY INVITATION NAMED A SEAT IS REDEEMABLE BY
-// NOBODY.
+// A REDEMPTION NAMING NO SEAT IS ITS CALLER'S FAULT, never the link's.
 //
-// It creates a person, who would hold no seat — so it is refused as the
-// LINK's refusal ([iamdomain.ErrRefused]), whose remedy is a new invitation,
-// and never as a value the invitee left out or typed wrong: they left nothing
-// out. The reads say the same before anybody chooses a password: the row is
-// spent, it is listed as open nowhere, and it holds neither its address nor a
-// seat. The applier wrote it as it came — refusing an older build's record
-// stops the log on every node.
-//
-// IT IS THE LINK'S REFUSAL ON EVERY NODE, a node that cannot look a seat up
-// included: the clause is asked before the seat is, since there is no seat to
-// look up, so a node running no company — or one whose lookup failed — still
-// tells the invitee the link creates nobody, rather than a 503 telling them to
-// retry a link no node will ever redeem.
+// Every invitation holds a seat, and the surface redeeming one hands on the
+// seat it read off the invitation, so a redemption that names none is a call
+// formed wrong — [iamdomain.ErrInvalid], refused before anything is read or
+// published — and never the link's refusal ([iamdomain.ErrRefused]), which
+// would tell an invitee their link is dead, nor [iamdomain.ErrSeatRequired],
+// which would ask them for a field their form does not have. The CONTROL is
+// the same redemption naming the invitation's seat, which lands.
 //
 // Mutation: drop the seat clause from the redemption's validation and the
-// redemption on a node that cannot look a seat up answers unavailable; drop it
-// from [iamdomain.InvitationRow.Spent] and the link reads as open.
-func TestALegacySeatlessInvitationIsNotRedeemable(t *testing.T) {
+// record's own comparison refuses it as the link's, ErrRefused.
+func TestARedemptionNamingNoSeatIsItsCallersFault(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const address = "lee@example.com"
-	id := uuid.Must(uuid.NewV7()).String()
-	secret := "a-legacy-links-secret"
-	applyLegacyInvitation(t, rig, id, address, secret, "", brokerAt.Add(168*time.Hour), 1)
-
-	row, err := rig.invitationRow(t, id)
-	if err != nil {
-		t.Fatalf("InvitationByID: %v", err)
+	seat := rig.vacantSeat("platform-lead")
+	issued := issueOnto(t, rig, address, seat, brokerAt.Add(168*time.Hour))
+	before, _ := rig.end(t.Context())
+	_, err := redeemAs(t, rig, issued, address, issued.Secret, "")
+	if !errors.Is(err, iamdomain.ErrInvalid) || errors.Is(err, iamdomain.ErrRefused) ||
+		errors.Is(err, iamdomain.ErrSeatRequired) {
+		t.Errorf("a redemption naming no seat answered %v, want %v and only that",
+			err, iamdomain.ErrInvalid)
 	}
-	if row.ID != id || row.Seat != "" || !row.Admits(secret) {
-		t.Fatalf("the legacy invitation reads %+v", row)
+	if after, _ := rig.end(t.Context()); after != before {
+		t.Errorf("the refused redemption published %d records", after-before)
 	}
-	if !row.Spent(brokerAt) {
-		t.Error("an invitation naming no seat reads as redeemable")
-	}
-	page, err := rig.reader(t).Invitations(t.Context(),
-		iamdomain.InvitationsQuery{Now: brokerAt})
-	if err != nil || len(page.Invitations) != 0 {
-		t.Errorf("the open listing holds %+v (%v), want nothing", page.Invitations, err)
-	}
-
-	issued := iamdomain.InviteIssued{ID: id, Secret: secret}
-	rig.seatOnly("platform-lead")
-	for _, seat := range []string{"", "platform-lead"} {
-		_, err := redeemAs(t, rig, issued, address, secret, seat)
-		if !errors.Is(err, iamdomain.ErrRefused) || errors.Is(err, iamdomain.ErrInvalid) {
-			t.Errorf("redeeming it naming seat %q answered %v, want %v and only "+
-				"that", seat, err, iamdomain.ErrRefused)
-		}
-	}
-	for _, lookup := range []struct {
-		name string
-		err  error
-	}{
-		{"running no company", fmt.Errorf("engine: %w", session.ErrNoCompany)},
-		{"whose lookup failed", errors.New("the organisation could not be read")},
-	} {
-		deps := rig.nodeDeps
-		deps.Seats = failingSeats{err: lookup.err}
-		writer, err := iamdomain.NewWriter(deps)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = writer.Redeem(t.Context(), iamdomain.Redemption{
-			PersonID: uuid.Must(uuid.NewV7()).String(), Stage: iam.StageActive,
-			Email: address, Login: iam.LoginFromAddress(address),
-			Password: aPassword(), Grants: []iam.Grant{iam.GrantStateRead},
-			Invitation: id, InvitationSecret: secret,
-			OpID: "invite:" + id, Reason: "redeemed an invitation",
-		})
-		if !errors.Is(err, iamdomain.ErrRefused) ||
-			errors.Is(err, statelog.ErrUnavailable) ||
-			errors.Is(err, iamdomain.ErrNoCompany) {
-			t.Errorf("redeeming it on a node %s answered %v, want %v and only "+
-				"that — no node will ever redeem it, so a retry is no remedy",
-				lookup.name, err, iamdomain.ErrRefused)
-		}
-	}
-	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 0 {
-		t.Errorf("a refused redemption left %v", rows)
-	}
-
-	// IT HOLDS NOTHING: a new invitation to its address, onto a seat, lands.
-	if _, err := inviteFor(t, rig, address, "platform-lead"); err != nil {
-		t.Errorf("an invitation to a legacy invitation's address was refused: %v",
-			err)
+	if _, err := redeemAs(t, rig, issued, address, issued.Secret, seat); err != nil {
+		t.Errorf("the same redemption naming its seat was refused: %v", err)
 	}
 }
 
@@ -706,7 +626,7 @@ func TestAnInvitationWithNoExpiryOpensNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyLegacyInvitation(t, rig, id, address, secret, seat, time.Time{}, 1)
+	applyInvitationByHand(t, rig, id, address, secret, seat, time.Time{}, 1)
 
 	row, err := rig.invitationRow(t, id)
 	if err != nil || row.ID != id {
@@ -740,20 +660,21 @@ func TestAnInvitationWithNoExpiryOpensNothing(t *testing.T) {
 	}
 }
 
-// THE APPLIER RE-DERIVES AN INVITATION'S SEAT on the rows an older build applied.
+// THE APPLIER RE-DERIVES AN INVITATION'S SEAT whenever the checkpoint's rule
+// set differs from this build's.
 //
-// The seat column arrived after the table (replicated migration 0032), so on a
-// node upgraded in place every row an older build applied holds the column's
-// default — while a node replaying the log writes each row's seat from its
-// record. The derivation bump runs [iamdomain.Applier.Rederive] once, from the
-// same decode the apply writes the column from, so both nodes hold the same
-// rows: an invitation's seat where its document names one, and nothing where
-// it names none. Only rows that differ are written, so a second run — the
-// rows this build has been maintaining — writes nothing.
+// `seat_id` is a DERIVED column ([statelog.Deriver]): the apply writes it from
+// the record, and [iamdomain.Applier.Rederive] recomputes it from the row's own
+// document when a node holds rows derived under other rules — a checkpoint a
+// reanchor created (derivation 0), or rows adopted from a build whose rules
+// differ — so every node converges on the rows a node replaying the log
+// writes. It recomputes from the same decode the apply writes the column
+// from, and writes only rows that differ, so a second run — over rows this
+// build has been maintaining — writes nothing.
 //
-// Mutation: leave the column alone in Rederive and the planted rows keep
-// their default; derive every row's seat as empty and the issued ones lose
-// theirs.
+// Mutation: leave the column alone in Rederive and the planted rows keep what
+// another rule set left; derive every row's seat as empty and the issued ones
+// lose theirs.
 func TestTheApplierRederivesAnInvitationsSeat(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -765,18 +686,18 @@ func TestTheApplierRederivesAnInvitationsSeat(t *testing.T) {
 		brokerAt.Add(168*time.Hour))
 	second := issueOnto(t, rig, "noor@example.com", "data-lead",
 		brokerAt.Add(168*time.Hour))
-	legacy := uuid.Must(uuid.NewV7()).String()
-	applyLegacyInvitation(t, rig, legacy, "lee@example.com", "a-secret", "",
-		brokerAt.Add(168*time.Hour), 1)
+	third := issueOnto(t, rig, "lee@example.com", "design-lead",
+		brokerAt.Add(168*time.Hour))
 	maintained := seatsOf(t, rig)
 
-	// AS AN OLDER BUILD LEFT THEM: the default, and one stale value.
+	// AS ROWS DERIVED UNDER ANOTHER RULE SET MIGHT HOLD THEM: the column's
+	// default, and one value the rule here would never derive.
 	plant(t, rig, `UPDATE iam_invites SET seat_id = ''`)
-	plant(t, rig, `UPDATE iam_invites SET seat_id = 'stale' WHERE id = ?`, legacy)
+	plant(t, rig, `UPDATE iam_invites SET seat_id = 'stale' WHERE id = ?`, third.ID)
 	rederive := func() int {
 		t.Helper()
 		var rows int
-		if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			var err error
 			rows, err = rig.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{
 				Now: brokerAt, StoredAt: brokerAt})
@@ -791,7 +712,7 @@ func TestTheApplierRederivesAnInvitationsSeat(t *testing.T) {
 	}
 	derived := seatsOf(t, rig)
 	if want := map[string]string{first.ID: "platform-lead", second.ID: "data-lead",
-		legacy: ""}; fmt.Sprint(derived) != fmt.Sprint(want) ||
+		third.ID: "design-lead"}; fmt.Sprint(derived) != fmt.Sprint(want) ||
 		fmt.Sprint(derived) != fmt.Sprint(maintained) {
 		t.Errorf("the re-derived seats are %v, the applied ones %v, want %v",
 			derived, maintained, want)
@@ -927,13 +848,14 @@ func (f failingSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 	return session.Seat{}, false, f.err
 }
 
-// --- records a writer of this build no longer forms ------------------------- //
+// --- records this build's writer refuses to form ---------------------------- //
 
 // applyByHand applies one directory record straight through the rig's applier,
-// at sequence 1<<30+n — past everything the log holds, as a peer's record a
-// build before this one published would arrive. It is how a residue this
-// build's writer refuses to produce is put in front of the applier and the
-// readers, which must still take it.
+// at sequence 1<<30+n — past everything the log holds. It is how a residue
+// this build's writer refuses to produce — what a retained record, a restore
+// or a newer peer's record can put in front of a node — reaches the applier
+// and the readers, which must still take it: the applier writes whatever a
+// record says, since refusing one stops the log on every node.
 func applyByHand(t *testing.T, rig *writeRig, op iamdomain.OpKind, person string,
 	scope iamdomain.ScopeSet, mutation []byte, n uint64) {
 
@@ -961,7 +883,7 @@ func applyByHand(t *testing.T, rig *writeRig, op iamdomain.OpKind, person string
 			Seq: 1<<30 + n},
 		Payload: payload, StoredAt: brokerAt,
 	}
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := rig.applier.Apply(t.Context(), tx, record,
 			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
 		return err
@@ -970,36 +892,10 @@ func applyByHand(t *testing.T, rig *writeRig, op iamdomain.OpKind, person string
 	}
 }
 
-// legacyEnrolment is a person's enrolment as a build before every person held
-// a seat formed it: an address, a login, and no seat.
-func legacyEnrolment(t *testing.T, rig *writeRig, id, login, address string) []byte {
-	t.Helper()
-	name, err := rig.sealer.Seal(id, iamdomain.FieldName, "A colleague")
-	if err != nil {
-		t.Fatal(err)
-	}
-	email, err := rig.sealer.Seal(id, iamdomain.FieldEmail, address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutation, err := iamdomain.EncodeEnrolled(iamdomain.Enrolled{
-		V: iamdomain.DocumentVersion,
-		Person: iamdomain.Person{
-			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
-			Stage: iam.StageActive, NameSealed: name, EmailSealed: email,
-		},
-		Holds: iamdomain.Identifiers{EmailBlind: blindOf(t, address), Login: login},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return mutation
-}
-
-// applyLegacyInvitation applies an invitation as a record a writer of this
-// build no longer forms carries it — naming seat, possibly none, and expiring
-// at expires, possibly never — at sequence 1<<30+n.
-func applyLegacyInvitation(t *testing.T, rig *writeRig, id, address, secret,
+// applyInvitationByHand applies an invitation the writer's decides would
+// refuse — a second one onto a seat an open invitation holds, or one expiring
+// never — naming seat and expiring at expires, at sequence 1<<30+n.
+func applyInvitationByHand(t *testing.T, rig *writeRig, id, address, secret,
 	seat string, expires time.Time, n uint64) {
 
 	t.Helper()

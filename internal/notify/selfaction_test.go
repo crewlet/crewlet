@@ -27,8 +27,9 @@ func TestASeatIsNotWokenByItsOwnAction(t *testing.T) {
 	if ok {
 		t.Fatal("a seat was woken by its own comment")
 	}
-	if reason == "" {
-		t.Fatal("the skip carries no reason for an operator to read")
+	if reason != notify.ReasonSelfAction {
+		t.Fatalf("the skip reads %q, want %q for an operator to read", reason,
+			notify.ReasonSelfAction)
 	}
 
 	// Somebody else's comment on the same issue still lands.
@@ -104,8 +105,8 @@ func TestAHumanSeatIsNeverDelivered(t *testing.T) {
 	if ok {
 		t.Fatal("a turn was going to be spawned for a person")
 	}
-	if reason == "" {
-		t.Fatal("the skip carries no reason")
+	if reason != notify.ReasonHumanSeat {
+		t.Fatalf("the skip reads %q, want %q", reason, notify.ReasonHumanSeat)
 	}
 }
 

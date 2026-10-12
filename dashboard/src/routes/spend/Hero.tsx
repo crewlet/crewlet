@@ -24,7 +24,7 @@ export function Hero({
   named,
   prior,
   budget,
-  raises,
+  mayConfigure,
 }: {
   rollup: Rollup | null;
   loading: boolean;
@@ -35,8 +35,11 @@ export function Hero({
   prior: QueryResult<TokenSeries>;
   /** `null` until a node has reported the counters. */
   budget: OrgBudget | null;
-  /** The reader may set a ceiling — holds `config:write`. */
-  raises: boolean;
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * `config:write` and, on a managed document, are one of its writers.
+   */
+  mayConfigure: boolean;
 }) {
   const total = rollup?.totals.total_tokens;
   return (
@@ -65,7 +68,7 @@ export function Hero({
           </span>
         )}
       </div>
-      <BudgetTile budget={budget} raises={raises} />
+      <BudgetTile budget={budget} mayConfigure={mayConfigure} />
       <div className="spend-tiles">
         <CacheTile totals={rollup?.totals ?? null} loading={loading} words={words} />
         <TaskMedianTile since={rollup?.since} until={rollup?.until} words={words} />

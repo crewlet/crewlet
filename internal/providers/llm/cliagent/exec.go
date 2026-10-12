@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // termGrace is how long a terminated CLI has to exit before it is killed.
@@ -24,6 +25,12 @@ import (
 // that a wedged child does not hold the seat's concurrency slot for a
 // meaningful fraction of the next call. Same figure the sandbox uses for the
 // same reason.
+//
+// Every provider [New] builds carries it as [Provider.termGrace], which is
+// what every child this package starts is given — a seat's call, the doctor's
+// version probe and the credential commands alike — so one figure governs
+// them all and the suite can witness a kill without sitting out five seconds
+// of it.
 const termGrace = 5 * time.Second
 
 // stderrTail is how many lines of a failed child's stderr are reported.
@@ -55,6 +62,12 @@ type invocation struct {
 	env     []string
 	timeout time.Duration
 
+	// grace is how long a child signalled to stop has before it is killed —
+	// the provider's [Provider.termGrace]. Zero is refused by [run] rather
+	// than read as os/exec's own zero, which is no bound at all: a child
+	// that ignored SIGTERM would then hold the call open for ever.
+	grace time.Duration
+
 	// onLine, when set, receives each COMPLETE line of stdout as the child
 	// writes it, before the call returns. Nil takes the ordinary path where
 	// stdout is only read after the process exits.
@@ -74,14 +87,26 @@ type invocation struct {
 // tail after the last newline is deliberately NOT delivered: a partial JSON
 // object is not parseable, and the buffered copy is what the extractor reads
 // once the process exits, so nothing is lost by waiting.
+//
+// BOUNDED BY THE SINK'S OWN CAP, which it used not to be: the sink drops past
+// [maxOutput] and still reports every byte written, so this kept appending a
+// line with no newline in it for as long as the child printed one — the very
+// memory the cap exists to protect. Past the cap it forwards nothing more,
+// because the answer it would be streaming is refused as clipped anyway.
 type lineTee struct {
-	sink io.Writer
-	on   func(string)
-	buf  []byte
+	sink  io.Writer
+	on    func(string)
+	buf   []byte
+	limit int
+	seen  int
 }
 
 func (t *lineTee) Write(b []byte) (int, error) {
 	n, err := t.sink.Write(b)
+	if t.seen += n; t.seen > t.limit {
+		t.buf = nil
+		return n, err
+	}
 	if n > 0 {
 		t.buf = append(t.buf, b[:n]...)
 		for {
@@ -132,6 +157,11 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 			"of its own, which os/exec would fill with the engine's; it was not "+
 			"started", in.binary)
 	}
+	if in.grace <= 0 {
+		return nil, fmt.Errorf("cli-agent: starting %q with no termination grace — "+
+			"a child that ignored SIGTERM would hold the call open for ever; "+
+			"an invocation takes its provider's termGrace", in.binary)
+	}
 	callCtx, cancel := context.WithTimeout(ctx, in.timeout)
 	defer cancel()
 
@@ -146,7 +176,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	stderr.limit = maxOutput
 	cmd.Stdout = io.Writer(&stdout)
 	if in.onLine != nil {
-		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine}
+		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput}
 	}
 	cmd.Stderr = &stderr
 	procgroup.Set(cmd)
@@ -155,7 +185,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// process it knows about, and WaitDelay bounds how long a child that
 	// ignored SIGTERM can hold the call open.
 	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
-	cmd.WaitDelay = termGrace
+	cmd.WaitDelay = in.grace
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("cli-agent: starting %q: %w", in.binary, err)
@@ -298,13 +328,13 @@ type extracted struct {
 }
 
 // extract pulls the answer and the usage out of one CLI's stdout.
-func extract(p Profile, stdout string) extracted {
-	switch p.output() {
-	case OutputText:
+func extract(p cliprofile.Profile, stdout string) extracted {
+	switch p.EffectiveOutput() {
+	case cliprofile.OutputText:
 		// Located by definition: a text profile declares that stdout IS
 		// the answer, so there is no path that could fail to resolve.
 		return extracted{text: strings.TrimSpace(stdout), located: true}
-	case OutputJSONL:
+	case cliprofile.OutputJSONL:
 		return extractStream(p, stdout)
 	default:
 		return extractObject(p, stdout)
@@ -316,7 +346,7 @@ func extract(p Profile, stdout string) extracted {
 // A CLI that printed a banner before its JSON is common enough to handle
 // here: the outermost braces are tried when the whole of stdout does not
 // parse, which costs nothing and saves an operator an override.
-func extractObject(p Profile, stdout string) extracted {
+func extractObject(p cliprofile.Profile, stdout string) extracted {
 	doc, ok := decodeObject(strings.TrimSpace(stdout))
 	if !ok {
 		if bare, found := outermostObject(stdout); found {
@@ -353,7 +383,7 @@ func extractObject(p Profile, stdout string) extracted {
 // Text CONCATENATES in stream order — an event stream spells one answer
 // across several events — while usage figures take the LAST value found,
 // because a stream reports a running total and the final one is the total.
-func extractStream(p Profile, stdout string) extracted {
+func extractStream(p cliprofile.Profile, stdout string) extracted {
 	var out extracted
 	var text strings.Builder
 	for line := range strings.SplitSeq(stdout, "\n") {
@@ -401,14 +431,14 @@ func extractStream(p Profile, stdout string) extracted {
 }
 
 // applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose CLI writes one — see [Profile.UsageFileArgs].
+// said, for a profile whose CLI writes one — see [cliprofile.Profile.UsageFileArgs].
 //
 // BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
 // would pair one source's input count with another's output count, and the
 // sum is what a budget is charged. The two cache figures are not part of that
 // test: a provider that caches nothing reports neither, and zero is the true
 // answer there.
-func (e *extracted) applyUsageFile(p Profile, raw string) {
+func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
 	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
 		return
 	}
@@ -441,7 +471,7 @@ func (e *extracted) applyUsageFile(p Profile, raw string) {
 // count as "located": a stream that spliced a tool's output into the reply
 // and then repeated the reply would look, to every frame downstream, exactly
 // like a model that had said all of it.
-func textOf(p Profile, doc map[string]any) (string, bool) {
+func textOf(p cliprofile.Profile, doc map[string]any) (string, bool) {
 	if len(p.EventTypePath) == 0 {
 		return firstString(doc, p.TextPaths)
 	}
@@ -468,7 +498,7 @@ func decodeObject(s string) (map[string]any, bool) {
 }
 
 // lookup walks one path into a decoded document.
-func lookup(doc map[string]any, path Path) (any, bool) {
+func lookup(doc map[string]any, path cliprofile.Path) (any, bool) {
 	var current any = doc
 	for _, step := range path {
 		switch node := current.(type) {
@@ -505,7 +535,7 @@ func lookup(doc map[string]any, path Path) (any, bool) {
 // override, and cursor-agent's `[["result"], ["response"]]` depends on an
 // empty `result` falling through to `response`. So the first NON-EMPTY hit
 // wins, and an all-empty walk still reports located.
-func firstString(doc map[string]any, paths []Path) (string, bool) {
+func firstString(doc map[string]any, paths []cliprofile.Path) (string, bool) {
 	located := false
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
@@ -524,7 +554,7 @@ func firstString(doc map[string]any, paths []Path) (string, bool) {
 	return "", located
 }
 
-func firstBool(doc map[string]any, paths []Path) bool {
+func firstBool(doc map[string]any, paths []cliprofile.Path) bool {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {
@@ -539,7 +569,7 @@ func firstBool(doc map[string]any, paths []Path) bool {
 
 // firstInt reads a token count, accepting the float64 every JSON number
 // decodes to as well as a string, which some CLIs emit for large counts.
-func firstInt(doc map[string]any, paths []Path) (int, bool) {
+func firstInt(doc map[string]any, paths []cliprofile.Path) (int, bool) {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {

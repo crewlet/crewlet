@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A ROW'S COST IS ITS OWN, AND ONLY THE ROWS ASKED ABOUT ARE ANSWERED.
@@ -18,17 +19,13 @@ import (
 // which would read as "this task cost nothing" about a task that is not there.
 func TestSpendOfAnswersExactlyTheAskedIds(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	w, err := db.Replicated().Writer(t.Context())
+	w, err := estate.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("take the writer: %v", err)
 	}

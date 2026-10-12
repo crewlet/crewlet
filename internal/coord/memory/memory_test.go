@@ -19,6 +19,16 @@ func TestContract(t *testing.T) {
 	coordtest.Run(t, func(t *testing.T) coord.Backend { return memory.New() })
 }
 
+// And through several handles on one store — the twin has one process, so the
+// same store is every handle, which is the shape the shared cases hold a
+// replicated backend to.
+func TestSharedContract(t *testing.T) {
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		b := memory.New()
+		return []coord.Backend{b, b, b}
+	})
+}
+
 // The zero value has to work: callers construct plain data without
 // constructors, and a store that only functions when built by New would fail
 // on a struct field somebody forgot to initialise.
@@ -35,7 +45,7 @@ func TestInjectedClockDecidesExpiry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	b := &memory.Backend{Clock: func() time.Time { return now }}
 
-	lease, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	lease, _, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: 30 * time.Second,
 	})
 	if err != nil || lease == nil {
@@ -82,7 +92,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		call func() error
 	}{
 		{"TryAcquire", func() error {
-			lease, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+			lease, _, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 				Owner: "node-a:1", TTL: time.Minute,
 			})
 			if lease != nil {
@@ -163,7 +173,7 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 		{"a value no encoder accepts", make(chan int)},
 		{"a value that encodes but will not decode", json.Number("1e1000")},
 	} {
-		lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: "n1:a", TTL: time.Minute, Ungated: true,
 			Meta: map[string]any{"roles": []any{"seats"}, "bad": bad.value},
 		})
@@ -192,13 +202,5 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 // so a divergence between it and the store a fleet runs on would be a
 // behaviour that only appears on the second node.
 func TestFleetContract(t *testing.T) {
-	coordtest.RunFleet(t, func(t *testing.T, ages coordtest.FleetAges) coord.Fleet {
-		// THE AGES THE CASE ASKED FOR, because a record here lapses with
-		// its bucket exactly as it does on the KV — which is the whole
-		// property the suite could not see while a claim carried a TTL
-		// of its own.
-		return memory.NewFleetWithAges(memory.FleetAges{
-			Claim: ages.Claim, Setup: ages.Setup,
-		})
-	})
+	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet { return memory.NewFleet() })
 }

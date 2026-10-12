@@ -34,16 +34,17 @@ type Revision struct {
 	// to be, which held the credential and so named, for a revision written
 	// through a person's machine token, a token whose row the identity
 	// sweep collects a week after it lapses. See
-	// node migration `0038_identity_and_access.sql`.
+	// node migration `0047_identity_and_access.sql`.
 	//
 	// THE KIND IS [iam.ActorKind], the vocabulary every other trail in the
 	// engine records an author in, rather than a second one of this
 	// table's: a label alone cannot say whether a person or the engine
 	// wrote the revision — the name spaces overlap, and nothing stops a
 	// token being called after a node — so the writer states it at the
-	// write, where it is a fact. EMPTY only on a revision this node adopted
-	// from a pointer that did not say, which a reader shows as "not
-	// recorded" rather than picking a kind.
+	// write, where it is a fact. NEVER EMPTY: one of this build's kinds on
+	// every revision it writes, and on an adopted one whatever kind the
+	// fleet's pointer carries — which may be one a newer build added, and
+	// arrives as itself ([Configs.Adopt]).
 	CreatedBy     string
 	CreatedByKind iam.ActorKind
 	OperatorID    string
@@ -262,21 +263,28 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 // rather than "peer" everywhere but the one it was written on. The kind is NOT
 // held to [iam.ActorKind.Valid] here, as a local write's is: an unknown kind
 // off the wire is a value, and refusing it would stop this node recording a
-// revision it is running.
+// revision it is running. But it must be SOME kind, as must the source and both
+// instants: the pointer always carries them, and a row missing one is a guess
+// on the audit screen. The credential alone may be empty — a revision no
+// credential wrote, the engine's own, names none.
 //
-// A row that is already here keeps its body, but an author it did not know
-// is FILLED IN when the fleet now says: a node that adopted a revision from a
-// pointer that named nobody learns who wrote it — and through which
-// credential — the next time the fleet points at it. A known author is never
-// overwritten — the row this node wrote itself is the authority on its own
-// write.
+// A row that is already here keeps its body and its author: the row this node
+// wrote, or adopted first, is the authority on that write. Only its active
+// flag and activated_at move — to r.ActivatedAt, the fleet's instant.
 func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if r.ID == "" {
 		return fmt.Errorf("store: adopting a revision needs its fleet id")
 	}
-	at := r.CreatedAt
-	if at.IsZero() {
-		at = now()
+	switch {
+	case r.CreatedByKind == "":
+		return fmt.Errorf("store: adopting revision %s needs its author's kind", r.ID)
+	case r.Source == "":
+		return fmt.Errorf("store: adopting revision %s needs its source", r.ID)
+	case r.CreatedAt.IsZero():
+		return fmt.Errorf("store: adopting revision %s needs its creation instant", r.ID)
+	case r.ActivatedAt.IsZero():
+		return fmt.Errorf("store: adopting revision %s needs the instant the fleet "+
+			"activated it", r.ID)
 	}
 	payload := r.Payload
 	if len(payload) == 0 {
@@ -293,15 +301,10 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 			      created_by_kind, operator_id, source, summary, payload,
 			      is_active, activated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (revision_id) DO UPDATE
-			    SET created_by = excluded.created_by,
-			        created_by_kind = excluded.created_by_kind,
-			        operator_id = excluded.operator_id
-			  WHERE company_config.created_by_kind = ''
-			    AND excluded.created_by_kind <> ''`,
-			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
+			 ON CONFLICT (revision_id) DO NOTHING`,
+			r.ID, NullText(r.ParentID), EncodeTime(r.CreatedAt), r.CreatedBy,
 			string(r.CreatedByKind), r.OperatorID, r.Source, r.Summary,
-			string(payload), EncodeTime(at)); err != nil {
+			string(payload), EncodeTime(r.ActivatedAt)); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
@@ -309,7 +312,7 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		// activate is unconditional rather than part of the insert.
 		_, err := tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 1, activated_at = ?
-			 WHERE revision_id = ?`, EncodeTime(at), r.ID)
+			 WHERE revision_id = ?`, EncodeTime(r.ActivatedAt), r.ID)
 		return err
 	})
 	if err != nil {

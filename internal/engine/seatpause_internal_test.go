@@ -68,7 +68,9 @@ func pauseSeatCtx(ctx context.Context, t *testing.T, f coord.SeatPauses, seat uu
 	return p
 }
 
-func held(q *memory.Queue, seat uuid.UUID) bool {
+// pauseHeld reports whether the pause's own hold is on seat's inbox — named by
+// the seat's id, as every one of its mailboxes is.
+func pauseHeld(q *memory.Queue, seat uuid.UUID) bool {
 	return slices.Contains(q.PauseHolds(topics.AgentInbox(seat),
 		topics.AgentInboxGroup(seat)), seatPauseHold)
 }
@@ -147,7 +149,7 @@ func TestAPausedSeatStartsNoNewTurnAndLosesNoDelivery(t *testing.T) {
 	waitFor(t, "the unpaused seat to work", func() bool { return len(turns.seen()) == 1 })
 
 	p := pauseSeat(t, fleet, ceoSeat, false)
-	waitFor(t, "the watch to hold the inbox", func() bool { return held(q, ceoSeat) })
+	waitFor(t, "the watch to hold the inbox", func() bool { return pauseHeld(q, ceoSeat) })
 	sendTask(t, q, "ceo", "during-1")
 	sendTask(t, q, "ceo", "during-2")
 	time.Sleep(50 * time.Millisecond)
@@ -162,7 +164,7 @@ func TestAPausedSeatStartsNoNewTurnAndLosesNoDelivery(t *testing.T) {
 	if got := turns.seen(); !slices.Equal(got, []string{"before", "during-1", "during-2"}) {
 		t.Errorf("turns = %v, want the held mail in the order it was sent", got)
 	}
-	if held(q, ceoSeat) {
+	if pauseHeld(q, ceoSeat) {
 		t.Error("the resume left the pause hold on the inbox")
 	}
 }
@@ -187,7 +189,7 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 	sendTask(t, q, "ceo", "raced")
-	waitFor(t, "the screening to take the hold", func() bool { return held(q, ceoSeat) })
+	waitFor(t, "the screening to take the hold", func() bool { return pauseHeld(q, ceoSeat) })
 	time.Sleep(50 * time.Millisecond)
 	if got := turns.seen(); len(got) != 0 {
 		t.Fatalf("a delivery that raced the pause ran %v", got)
@@ -340,13 +342,16 @@ func TestARemovedSeatLeavesNoPauseBehind(t *testing.T) {
 		_, b, _ := e.pauseOf(ghost)
 		return a && b
 	})
+	// EVERY ACTIVATION CARRIES ITS ORIGIN: the store refuses one without.
+	origin := coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman,
+		Source: "api", CreatedAt: time.Now()}
 	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now(), Origin: origin})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	current, err := fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now()})
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now(), Origin: origin})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
@@ -414,7 +419,7 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 	if _, paused, known := e.pauseOf(ceoSeat); !known || !paused {
 		t.Fatalf("paused=%v known=%v after the store went away, want the pause kept", paused, known)
 	}
-	if !held(q.(*memory.Queue), ceoSeat) {
+	if !pauseHeld(q.(*memory.Queue), ceoSeat) {
 		t.Error("the hold was lifted when the watch ended")
 	}
 	if paused, err := e.seatPaused(ceoSeat); err != nil || !paused {

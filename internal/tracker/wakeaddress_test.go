@@ -18,7 +18,7 @@ import (
 // next create mints a number a task already holds.
 func (r *roundTrip) restoreCounter(project string) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(),
 			`UPDATE tracker_counters SET last = 0 WHERE project_key = ?`, project)
 		return err

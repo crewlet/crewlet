@@ -143,6 +143,7 @@ func requireSafeSubject(t *testing.T, company, handle string) {
 	}{
 		{"AgentInbox", topics.AgentInbox(id), []string{"crewlet", "agent", token, "inbox"}},
 		{"AgentControl", topics.AgentControl(id), []string{"crewlet", "agent", token, "control"}},
+		{"AgentReflect", topics.AgentReflect(id), []string{"crewlet", "agent", token, "reflect"}},
 	} {
 		got := strings.Split(tc.subject, ".")
 		if len(got) != len(tc.want) {
@@ -174,6 +175,17 @@ func requireSafeSubject(t *testing.T, company, handle string) {
 			"want the same id — a subject its own inverse refuses is a mailbox "+
 			"nothing can identify", id, back, ok, company, handle)
 	}
+	for _, pair := range [][2]string{
+		{topics.AgentInbox(id), topics.AgentInboxGroup(id)},
+		{topics.AgentControl(id), topics.AgentControlGroup(id)},
+		{topics.AgentReflect(id), topics.AgentReflectGroup(id)},
+	} {
+		if back, ok := topics.MailboxSeat(pair[0], pair[1]); !ok || back != id {
+			t.Errorf("MailboxSeat(%q, %q) = (%s, %v) for company %q seat %q, want "+
+				"%s — the retirement sweep would read this seat's mailbox as "+
+				"nobody's", pair[0], pair[1], back, ok, company, handle, id)
+		}
+	}
 
 	// Groups are not subjects, but they are wire names on the same
 	// characters, and a wildcard in a durable subscription name is
@@ -182,6 +194,7 @@ func requireSafeSubject(t *testing.T, company, handle string) {
 	for _, tc := range []struct{ what, group string }{
 		{"AgentInboxGroup", topics.AgentInboxGroup(id)},
 		{"AgentControlGroup", topics.AgentControlGroup(id)},
+		{"AgentReflectGroup", topics.AgentReflectGroup(id)},
 	} {
 		if i := strings.IndexAny(tc.group, separators); i >= 0 {
 			t.Errorf("%s for company %q seat %q = %q contains %q",
@@ -247,6 +260,7 @@ func TestDistinctSeatsNeverShareAName(t *testing.T) {
 		{"acme", "alice"}, {"acme", "alice-2"}, {"acme", "a"}, {"acme", "ab"},
 		{"acme", "a-b"}, {"acme", "0"}, {"acme", "release"},
 		{"acme", "release-control"}, {"acme", "control"}, {"acme", "inbox"},
+		{"acme", "release-reflect"}, {"acme", "reflect"},
 		// Two companies sharing a handle: the derivation is namespaced by
 		// the company name precisely so these cannot collide.
 		{"acme-two", "alice"}, {"acme", "alice"},
@@ -276,6 +290,7 @@ func TestDistinctSeatsNeverShareAName(t *testing.T) {
 	for id, s := range ids {
 		claim(t, topics.AgentInbox(id), fmt.Sprintf("inbox of %q/%q", s.company, s.handle))
 		claim(t, topics.AgentControl(id), fmt.Sprintf("control of %q/%q", s.company, s.handle))
+		claim(t, topics.AgentReflect(id), fmt.Sprintf("reflection of %q/%q", s.company, s.handle))
 	}
 
 	for a := range ids {
@@ -292,11 +307,15 @@ func TestDistinctSeatsNeverShareAName(t *testing.T) {
 					"sandbox completion would be requeued behind the wait it exists to end",
 					a, b)
 			}
+			if topics.Match(topics.AgentReflect(a), topics.AgentReflect(b)) {
+				t.Errorf("seat %s's reflection subject matches seat %s's — one seat's "+
+					"turns would be reflected into the other's memory", a, b)
+			}
 		}
 	}
-	if len(seen) != 2*len(ids) {
+	if len(seen) != 3*len(ids) {
 		t.Fatalf("minted %d distinct names for %d seats; the corpus or the walk is wrong",
-			len(seen), 2*len(ids))
+			len(seen), 3*len(ids))
 	}
 }
 
@@ -304,14 +323,16 @@ func TestDistinctSeatsNeverShareAName(t *testing.T) {
 // file's local name for.
 const topicsImport = "github.com/crewlet/crewlet/internal/queue/topics"
 
-// seatGrammar is the pieces a SEAT's mailbox names are composed of: the inbox
-// and control subjects, and their two consumer groups.
+// seatGrammar is the pieces a SEAT's mailbox names are composed of: the inbox,
+// control and reflection subjects, and their three consumer groups.
 var seatGrammar = map[string]bool{
 	"AgentInboxPrefix":        true,
 	"AgentInboxSuffix":        true,
 	"AgentControlSuffix":      true,
+	"AgentReflectSuffix":      true,
 	"AgentGroupPrefix":        true,
 	"AgentControlGroupSuffix": true,
+	"AgentReflectGroupSuffix": true,
 }
 
 // suffixReaders are the strings functions that READ a name against a piece of
@@ -323,8 +344,8 @@ var suffixReaders = map[string]bool{
 }
 
 // TestNoPackageBuildsASeatsMailboxFromAString fails the build when a package
-// outside this one composes a seat's inbox or control subject, or either of
-// their consumer groups, out of the grammar's pieces — `AgentInboxPrefix + x +
+// outside this one composes a seat's inbox, control or reflection subject, or
+// any of their consumer groups, out of the grammar's pieces — `AgentInboxPrefix + x +
 // AgentInboxSuffix`, a Sprintf over them, a piece held in a variable to be
 // joined later.
 //
@@ -357,6 +378,8 @@ func TestNoPackageBuildsASeatsMailboxFromAString(t *testing.T) {
 		"a group by Sprintf":                {`_ = fmt.Sprintf("%s%s", topics.AgentGroupPrefix, "alice")`, 1},
 		"a piece held for later":            {`p := topics.AgentInboxPrefix; _ = p`, 1},
 		"a control group":                   {`_ = topics.AgentGroupPrefix + "alice" + topics.AgentControlGroupSuffix`, 2},
+		"a reflection subject":              {`_ = topics.AgentInboxPrefix + "alice" + topics.AgentReflectSuffix`, 2},
+		"a reflection group":                {`_ = topics.AgentGroupPrefix + "alice" + topics.AgentReflectGroupSuffix`, 2},
 		"the wildcard, extended":            {`_ = topics.AgentInboxPrefix + ">" + "x"`, 1},
 		"the wildcard over every inbox":     {`_ = []string{topics.AgentInboxPrefix + ">"}`, 0},
 		"a parenthesised wildcard":          {`_ = (topics.AgentInboxPrefix + ">")`, 0},
@@ -441,7 +464,7 @@ func TestNoPackageBuildsASeatsMailboxFromAString(t *testing.T) {
 	for _, at := range builds {
 		t.Errorf("%s: builds a seat's mailbox name out of the grammar's pieces.\n"+
 			"\tcall topics.AgentInbox / AgentInboxGroup / AgentControl / "+
-			"AgentControlGroup with the seat's id — a name composed from "+
+			"AgentControlGroup / AgentReflect / AgentReflectGroup with the seat's id — a name composed from "+
 			"anything else is a mailbox nobody is attached to", at)
 	}
 	t.Logf("scanned %d files: %d legal readings of the seat grammar, %d builds",

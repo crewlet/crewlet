@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -48,15 +52,15 @@ type Providers struct {
 	//
 	// An explicit value WINS over the document's key order, which is what
 	// makes that round trip lossless and lets an operator pin the order
-	// deliberately. A document carrying neither — hand-written JSON, or a
-	// revision stored before this existed — falls back to sorted keys,
-	// arbitrary but stable; see ProviderOrder.
+	// deliberately. A document carrying neither — a value built in Go —
+	// falls back to sorted keys, arbitrary but stable; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
-	// Embeddings powers the learning subsystem's vector recall. Nil
-	// disables it — episodes are still written, but nothing searches them
-	// by similarity.
-	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for diary and episode recall."`
+	// Embeddings powers every vector this engine computes: the semantic half
+	// of a native knowledge search and the similarity halves of diary and
+	// episode recall. Nil disables them — a search is keyword only, and
+	// episodes are still written, but nothing searches them by similarity.
+	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
 
 	// Sandbox is the code-runtime backend. Nil (or type none) means no
 	// seat can run a sandboxed coding run, whatever its own gate says.
@@ -294,24 +298,42 @@ var LLMProviderTypes = []LLMProviderType{
 	LLMOpenAI, LLMAnthropic, LLMOpenAICompatible, LLMCLIAgent,
 }
 
-// ReasoningEffort is the OpenAI-side reasoning budget selector.
+// ReasoningEffort is how hard a model thinks: OpenAI's `reasoning_effort` and
+// Anthropic's `output_config.effort`, which share these spellings. Ordered,
+// lowest first, because a call may lower it (llm.Request.Effort) and lowering
+// needs an order.
 type ReasoningEffort string
 
-// The reasoning-effort levels.
+// The reasoning-effort levels. `xhigh` is accepted by Claude from Opus 4.7 on
+// and by OpenAI's reasoning models; an anthropic entry is held to what its own
+// model takes (see [LLMProvider.validate]).
 const (
 	EffortLow    ReasoningEffort = "low"
 	EffortMedium ReasoningEffort = "medium"
 	EffortHigh   ReasoningEffort = "high"
+	EffortXHigh  ReasoningEffort = "xhigh"
 	EffortMax    ReasoningEffort = "max"
 )
 
-// ReasoningEfforts is the closed set.
-var ReasoningEfforts = []ReasoningEffort{EffortLow, EffortMedium, EffortHigh, EffortMax}
+// ReasoningEfforts is the closed set, lowest first.
+var ReasoningEfforts = []ReasoningEffort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 
 // LLMProvider is one named entry under providers.llm.
 type LLMProvider struct {
 	Type  LLMProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|anthropic|openai-compatible|cli-agent" desc:"Which implementation to construct."`
 	Model string          `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id this provider serves."`
+
+	// ClaudeModel names the Claude model whose request shape an anthropic
+	// entry uses, when `model` is a gateway alias the capability table
+	// cannot read. An anthropic request's shape — how it thinks, which
+	// effort levels it takes, whether it may carry a temperature, its
+	// output cap — is a function of the model, read from
+	// internal/providers/llm/anthropic/claudemodel; an id the table does
+	// not know is shaped as the current generation, which is right for a
+	// model newer than the table and wrong for an alias hiding an older
+	// one. That last case is what this names. An exact table id; refused
+	// on any other type and beside a model the table already reads.
+	ClaudeModel string `yaml:"claude_model,omitempty" json:"claude_model,omitempty" desc:"anthropic only: the Claude model id whose request shape this entry uses, when model is a gateway alias the table cannot read."`
 
 	// APIKeys is always a list: one entry for the ordinary case, several
 	// for rotation. With more than one the provider rotates on rate-limit
@@ -337,20 +359,30 @@ type LLMProvider struct {
 	// default to fall back to.
 	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy)."`
 
-	// Reasoning turns on extended thinking.
-	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"Enable extended thinking (openai and anthropic only)."`
-	// ReasoningEffort is the OpenAI-side budget selector. Refused on a
-	// cli-agent entry, which takes no per-call effort flag.
-	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|max" desc:"OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider."`
-	// ReasoningBudgetTokens is the Anthropic-side thinking budget. Refused
-	// on a cli-agent entry, which carries its own.
-	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider."`
+	// Reasoning turns on an OpenAI reasoning model's effort. Refused on an
+	// anthropic entry, where thinking is not a switch: every current Claude
+	// model thinks on every call (several refuse to be told not to), and
+	// the depth is `reasoning_effort`.
+	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"openai only: send reasoning_effort to a reasoning model."`
+	// ReasoningEffort is how hard the model thinks — OpenAI's
+	// reasoning_effort while `reasoning` is on, Anthropic's
+	// output_config.effort on every call (high when unset, on a model
+	// that takes effort). A call may lower it and never raise it.
+	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|xhigh|max" desc:"How hard the model thinks. openai: sent while reasoning is on. anthropic: sent on every call, high when unset, refused at a level the model does not take."`
+	// ReasoningBudgetTokens is the thinking budget of a BUDGET-ERA Claude
+	// model (Haiku 4.5, Sonnet 4.5, Opus 4.5 and older): 0 means it does
+	// not think. Refused on every other model — the adaptive ones answer a
+	// budget with a 400 or have deprecated it — and on every other type.
+	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking."`
 
-	// TimeoutSeconds is the HTTP client timeout for one call. Raise it for
-	// slow or large-output models that otherwise time out mid-generation;
-	// lower it to fail fast. The cli-agent backend drives a subprocess
-	// rather than an HTTP client and has its own timeout.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Per-request HTTP timeout in seconds."`
+	// TimeoutSeconds bounds one HTTP attempt, and what it bounds depends on
+	// how the call is made: a unary call IN TOTAL, a streamed one by its
+	// SILENCE — the longest wait with nothing arriving, the first byte
+	// included — and never by its length, because a round that thinks at a
+	// high effort writes for many minutes and every one of them is the model
+	// working. The cli-agent backend drives a subprocess rather than an HTTP
+	// client and has its own timeout.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Seconds one HTTP attempt may take: the whole of a unary call, the longest silence in a streamed one (default 600)."`
 
 	// CLI is the cli-agent block: which coding CLI to drive, where its
 	// per-seat state lives, how it authenticates. Required when Type is
@@ -358,11 +390,16 @@ type LLMProvider struct {
 	CLI *CLIAgent `yaml:"cli,omitempty" json:"cli,omitempty" desc:"The cli-agent block. Required for type cli-agent, refused otherwise."`
 }
 
-// defaultLLMTimeoutSeconds is the HTTP client timeout an entry that names
-// none gets. Two minutes covers an ordinary completion with headroom; a
-// reasoning model or a very large output wants more, which is what the
-// field is for.
-const defaultLLMTimeoutSeconds = 120.0
+// defaultLLMTimeoutSeconds is the bound an entry that names none gets: ten
+// minutes, the vendors' own SDK default and Anthropic's documented ceiling for
+// a non-streaming call. It is the TOTAL of a unary call, which now asks for the
+// model's whole output cap (128K tokens on the current Claude models) at a
+// thinking effort, so the two minutes it replaced cut off exactly the calls
+// that were doing the most; and it is the longest SILENCE a streamed call may
+// keep, where a live vendor stream sends a keep-alive long before ten minutes
+// pass, so the generous figure costs nothing on a healthy connection and only
+// bounds how long a dead one holds a seat.
+const defaultLLMTimeoutSeconds = 600.0
 
 // Timeout is the per-request timeout, applying the default.
 func (l *LLMProvider) Timeout() float64 {
@@ -494,7 +531,20 @@ func (l *LLMProvider) validate(path Path) error {
 		case LLMOpenAICompatible:
 			p.add(at(path, "reasoning"), ErrConflict,
 				"reasoning is not supported for openai-compatible providers; "+
-					"use type openai or anthropic")
+					"use type openai")
+		case LLMAnthropic:
+			// Not a switch on a Claude model: every current one thinks on
+			// every call — Opus 5.5, Fable and Mythos refuse to be told
+			// otherwise, and Opus 4.8 and 5 with thinking off write a tool
+			// call into their prose instead of making it. Accepting the
+			// field and ignoring it would be the "configured it and nothing
+			// happened" this file refuses everywhere else.
+			p.add(at(path, "reasoning"), ErrConflict,
+				"thinking always runs on an anthropic entry, so there is nothing to "+
+					"switch: drop reasoning, and tune how hard it thinks with "+
+					"reasoning_effort — or, on a budget-era model (claude-haiku-4-5, "+
+					"claude-sonnet-4-5, claude-opus-4-5 and older), turn thinking on with "+
+					"reasoning_budget_tokens")
 		case LLMCLIAgent:
 			p.add(at(path, "reasoning"), ErrConflict,
 				"reasoning is not a Crewlet setting for cli-agent providers: "+
@@ -505,19 +555,22 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	// The two DIALS beside that switch are refused on the same entry for the
 	// same reason, and refused rather than wired up: both are per-call API
-	// parameters (an OpenAI request field and an Anthropic thinking budget),
-	// and a coding CLI driven headlessly takes neither — it exposes no flag
-	// for either and reads its reasoning setup from its own plan. Nothing in
-	// engine/providers.go passes them to cliagent.Config, so today they
-	// validate clean and are read by nobody, which is the worst of the three
-	// possible behaviours: an operator sent here by an error message telling
-	// them to raise the model's effort would set one, see no change, and have
-	// nothing to look at. The honest fix for an under-reasoning CLI entry is
-	// its `model`.
-	if kind == LLMCLIAgent {
+	// parameters (an effort level and an Anthropic thinking budget), and a
+	// coding CLI driven headlessly takes neither — it exposes no flag for
+	// either and reads its reasoning setup from its own plan. Accepted, they
+	// would validate clean and be read by nobody, which is the worst of the
+	// three possible behaviours: an operator sent here by an error message
+	// telling them to raise the model's effort would set one, see no change,
+	// and have nothing to look at. The honest fix for an under-reasoning CLI
+	// entry is its `model`.
+	//
+	// The same rule, applied to every type: a dial is refused wherever the
+	// backend it would reach does not send it.
+	switch kind {
+	case LLMCLIAgent:
 		if l.ReasoningEffort != "" {
 			p.add(at(path, "reasoning_effort"), ErrConflict,
-				"reasoning_effort is an OpenAI request field and does nothing on a "+
+				"reasoning_effort is an API request field and does nothing on a "+
 					"cli-agent provider: the CLI takes no per-call effort flag. "+
 					"Drop it, and point `model` at a stronger model instead")
 		}
@@ -527,6 +580,20 @@ func (l *LLMProvider) validate(path Path) error {
 					"nothing on a cli-agent provider: the CLI carries its own. "+
 					"Drop it, and point `model` at a stronger model instead")
 		}
+	case LLMOpenAI, LLMOpenAICompatible:
+		// The OpenAI backend sends reasoning_effort only while reasoning
+		// is on, and an openai-compatible entry cannot turn it on.
+		if l.ReasoningEffort != "" && !l.Reasoning {
+			p.add(at(path, "reasoning_effort"), ErrConflict,
+				"reasoning_effort is sent only while reasoning is on, so here it does "+
+					"nothing: set `reasoning: true` (type openai only), or drop it")
+		}
+		if l.ReasoningBudgetTokens != 0 {
+			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
+				"reasoning_budget_tokens is an Anthropic thinking budget and does nothing "+
+					"on an %s provider: drop it, and set reasoning_effort for how hard "+
+					"a reasoning model thinks", kind)
+		}
 	}
 	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
 		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
@@ -535,6 +602,13 @@ func (l *LLMProvider) validate(path Path) error {
 	if l.ReasoningBudgetTokens < 0 {
 		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
 			"must not be negative, got %d", l.ReasoningBudgetTokens)
+	}
+	if kind == LLMAnthropic {
+		p.wrap(l.validateClaudeShape(path))
+	} else if l.ClaudeModel != "" {
+		p.add(at(path, "claude_model"), ErrConflict,
+			"claude_model names the request shape of an anthropic entry and does "+
+				"nothing on a %s provider: drop it", kind)
 	}
 
 	// Left unbounded, a timeout of 0 or a negative one passes validation
@@ -563,6 +637,7 @@ func (l *LLMProvider) validate(path Path) error {
 				"Remove the block, or change the type", kind)
 	case l.CLI != nil:
 		p.wrap(l.CLI.validate(at(path, "cli")))
+		p.wrap(l.validateCLIProfile(path))
 	}
 
 	if kind == LLMOpenAICompatible && strings.TrimSpace(l.BaseURL) == "" {
@@ -571,6 +646,88 @@ func (l *LLMProvider) validate(path Path) error {
 		// api.openai.com with whatever key it was given.
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible provider needs the endpoint to talk to")
+	}
+	return p.err()
+}
+
+// llmWarnings is every LLM entry that is valid and worth a second look, in
+// declaration order.
+//
+// One today: an anthropic model the capability table does not know, named
+// with no claude_model. That is VALID — most likely a model released after the
+// table, and the current-generation shape it gets is what those accept — and
+// it is wrong in exactly one case nothing can detect offline, an alias that
+// hides an OLDER model, whose every call would then be a 400. Located at the
+// field that settles it.
+func (p *Providers) llmWarnings() []Warning {
+	var out []Warning
+	for _, key := range p.ProviderOrder() {
+		entry := p.LLM[key]
+		model := strings.TrimSpace(entry.Model)
+		if entry.Type != LLMAnthropic || entry.ClaudeModel != "" || model == "" || envref.Has(model) {
+			continue
+		}
+		if _, known := claudemodel.Lookup(model); known {
+			continue
+		}
+		out = append(out, advisory(at(entryPath(key), "claude_model"), fmt.Sprintf(
+			"provider %q: model %q is not in the Claude capability table, so its "+
+				"requests use the current-generation shape (adaptive thinking, every "+
+				"effort level, no temperature, a %d-token output cap). That is right "+
+				"for a model newer than the table; if it is a gateway alias for an "+
+				"older Claude model, name that model with claude_model, or every call "+
+				"may be refused", key, model, claudemodel.Modern.MaxOutput)))
+	}
+	return out
+}
+
+// entryPath is where provider key sits in the document.
+func entryPath(key string) Path { return entry(field("providers.llm"), key) }
+
+// validateClaudeShape holds an anthropic entry's settings to what its model
+// accepts — the profile its requests are shaped from — by the SAME rules the
+// backend's constructor applies (claudemodel), so `crewlet validate` refuses
+// exactly what would otherwise be a 400 on every call.
+//
+// A model written as a `${VAR}` is judged only once it resolves, by the
+// backend at build, because before then there is no id to look up — unless
+// claude_model names the shape, which needs no model id at all.
+func (l *LLMProvider) validateClaudeShape(path Path) error {
+	var p problems
+	model := strings.TrimSpace(l.Model)
+	if model == "" || (envref.Has(model) && l.ClaudeModel == "") {
+		return nil
+	}
+	profile, err := claudemodel.Resolve(model, l.ClaudeModel)
+	switch {
+	case errors.Is(err, claudemodel.ErrNotInTable):
+		p.add(at(path, "claude_model"), ErrUnknownValue, "%v", err)
+		return p.err()
+	case err != nil:
+		p.add(at(path, "claude_model"), ErrConflict, "%v: drop claude_model", err)
+		return p.err()
+	}
+
+	effort := claudemodel.Effort(l.ReasoningEffort)
+	if effort.Valid() { // an unknown level is reported once, above
+		switch err := profile.CheckEffort(model, effort); {
+		case errors.Is(err, claudemodel.ErrTakesNoEffort):
+			p.add(at(path, "reasoning_effort"), ErrConflict,
+				"%v: drop reasoning_effort (this model's depth is reasoning_budget_tokens)", err)
+		case err != nil:
+			p.add(at(path, "reasoning_effort"), ErrOutOfRange, "%v", err)
+		}
+	}
+	if l.ReasoningBudgetTokens > 0 { // a negative one is reported once, above
+		switch err := profile.CheckBudget(model, l.ReasoningBudgetTokens); {
+		case errors.Is(err, claudemodel.ErrTakesNoBudget):
+			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
+				"%v: drop it, and tune how hard the model thinks with reasoning_effort — "+
+					"or, if model is a gateway alias for a budget-era model, name that "+
+					"model with claude_model", err)
+		case err != nil:
+			p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange, "%v", err)
+		}
 	}
 	return p.err()
 }
@@ -719,8 +876,10 @@ const (
 	// secret store, or the credential files `crewlet llm login` wrote.
 	// The default, and the point of this backend.
 	AuthSubscription CLIAgentAuthMode = "subscription"
-	// AuthAPIKey puts the first configured api_key into the CLI's key
-	// variable, billing the metered account.
+	// AuthAPIKey puts the entry's one api_keys value into the CLI's key
+	// variable (its profile's api_key_env), billing the metered account.
+	// Refused on a CLI whose profile names no such variable, where the key
+	// would reach nothing.
 	AuthAPIKey CLIAgentAuthMode = "api-key"
 	// AuthInheritEnv forwards whichever of the two variables the engine's
 	// own environment has — an escape hatch for an unusual CLI, and the
@@ -744,6 +903,9 @@ type CLIAgentAuth struct {
 	// Empty falls back to the profile's own token variable. This is the
 	// best headless path where a CLI offers one: no credential files to
 	// sync, no refresh rotation, and it survives an ephemeral container.
+	// Read only under auth.mode subscription and only by a CLI whose
+	// profile names a token_env; set anywhere else it is refused, because
+	// it would reach nothing.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
@@ -936,6 +1098,281 @@ func (c *CLIAgent) validate(path Path) error {
 	return p.err()
 }
 
+// validateCLIProfile holds a cli-agent entry to the profile it drives — the
+// built-in profile with cli.overrides merged in, loaded by the same
+// [cliprofile.Load] the backend is built from — and its model to that
+// profile's model flag.
+//
+// HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
+// `crewlet validate` and every node's apply do and what no API write does: a
+// PUT, a PATCH, a setup write or a revert runs these rules and never builds a
+// provider. Judged at the build alone, an override typo was admitted by the
+// API, activated, and then refused by every node.
+//
+// RUNNABLE, because each says the backend cannot be built: the profile does
+// not load, or no model_args element carries {model}, and every entry names a
+// model (the backend refuses to drop one silently). Where the entry's
+// CREDENTIALS go is the admission half, [LLMProvider.validateCLICredentials].
+func (l *LLMProvider) validateCLIProfile(path Path) error {
+	cli := l.CLI
+	if cli.Agent != "" && !cli.Agent.Valid() {
+		return nil // reported at cli.agent; there is no profile to judge
+	}
+	var p problems
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	switch {
+	case errors.Is(err, cliprofile.ErrOverrides):
+		p.add(at(path, "cli.overrides"), ErrShape, "%v", err)
+		return p.err()
+	case err != nil:
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+		return p.err()
+	}
+	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
+		p.add(at(path, "cli.overrides.model_args"), ErrMissing,
+			"the %q profile's model_args carry no {model}, so the model %q this entry "+
+				"names would never reach the CLI, and every entry names one: declare "+
+				`the flag with the placeholder, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
+			cli.Name(), l.Model)
+	}
+	return p.err()
+}
+
+// validateCLIAgentCredentials is [LLMProvider.validateCLICredentials] over
+// every cli-agent entry of the company, in key order.
+func (c *Company) validateCLIAgentCredentials() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != LLMCLIAgent || spec.CLI == nil {
+			continue
+		}
+		p.wrap(spec.validateCLICredentials(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateCLIAgentModels is [LLMProvider.validateCLIModel] over every
+// cli-agent entry of the company, in key order.
+func (c *Company) validateCLIAgentModels() error {
+	var p problems
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		spec := c.Providers.LLM[key]
+		if spec.Type != LLMCLIAgent || spec.CLI == nil {
+			continue
+		}
+		p.wrap(spec.validateCLIModel(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateCLIModel holds a cli-agent entry's model to the grammar its CLI
+// reads it in, where the merged profile declares one
+// ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
+// the first slash into a provider and a model, so a bare `claude-sonnet-5`
+// names the provider "claude-sonnet-5" and no model, and every call the entry
+// makes — the text calls and an agent-mode run alike, which are handed the
+// same value — fails inside the CLI with "Model not found".
+//
+// JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
+// profile's model_args, so an override that puts the provider in the flag
+// (["--model", "anthropic/{model}"]) admits a bare model. A model written as a
+// `${VAR}` is not judged: its value is the secret store's and the
+// environment's, which a write cannot see.
+//
+// ADMISSION rather than runnable: the provider builds and the CLI starts, the
+// refusal is the CLI's grammar — a vendor fact that moves between releases,
+// which is why it is a profile declaration — and a newer peer may admit what
+// this build would not. So a write is refused and an apply only warns.
+func (l *LLMProvider) validateCLIModel(path Path) error {
+	cli := l.CLI
+	if (cli.Agent != "" && !cli.Agent.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
+		return nil
+	}
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil || !profile.ModelNamesProvider {
+		//nolint:nilerr // Deliberate: a profile that does not load is a
+		// runnable fault validateCLIProfile already reports at
+		// cli.overrides, and there is no grammar to judge the model by.
+		return nil
+	}
+	value := profile.ModelArgument(l.Model)
+	provider, model, _ := strings.Cut(value, "/")
+	if strings.TrimSpace(provider) != "" && strings.TrimSpace(model) != "" {
+		return nil
+	}
+	var p problems
+	what := fmt.Sprintf("names the provider %q and no model", provider)
+	if strings.TrimSpace(provider) == "" {
+		what = "names no provider"
+	}
+	// THE VENDOR'S OWN WORDS ONLY FOR THE CLI THEY ARE MEASURED ON. Any
+	// profile can declare the grammar through cli.overrides, and an
+	// operator pointed at `opencode models` for a hermes entry is sent to
+	// a tool that entry does not run.
+	failure, listing := "with the CLI's own model-not-found error", ""
+	if cli.Name() == string(CLIOpenCode) {
+		failure = `with OpenCode's "Model not found"`
+		listing = " (`opencode models` lists them)"
+	}
+	p.add(at(path, "model"), ErrConflict,
+		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
+			"slash, so %q %s: every call this entry makes, an agent-mode run included, "+
+			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
+			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
+			"provider's key in cli.env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
+			"login of the CLI's own",
+		cli.Name(), value, what, failure, listing)
+	return p.err()
+}
+
+// validateCLICredentials holds a cli-agent entry's credentials to the
+// variables its merged profile names, and the profile itself to keeping every
+// credential behind cli.auth ([cliprofile.Profile.ValidateCredentials]).
+//
+// The rules exist because the backend's applyAuth (in
+// internal/providers/llm/cliagent) places a credential only where the profile
+// names a variable for it and drops it silently otherwise: an api-key entry
+// on a CLI with no api_key_env ran signed in to nothing, and so did a token on
+// a CLI with no token_env. Every such shape is refused, naming the route the
+// CLI does read.
+//
+// ADMISSION rather than runnable, because an entry that breaks one still
+// runs: the provider builds, the CLI starts, and it signs in from whatever it
+// does read — its credential files, a bundle, its own environment — while only
+// the misplaced credential goes unused. So a write that keeps one is refused,
+// and a revision being applied is only warned about. Refusing it at apply
+// would take this node off the fleet's epoch during a rolling upgrade over a
+// revision a newer peer admitted — one whose profile gained the very variable
+// this build's lacks, which is how a guess like an api_key_env for opencode
+// would arrive.
+//
+// Skipped where the runnable half already refused the entry (an unknown agent,
+// a profile that does not load): there is no profile to judge credentials
+// against, and the refusal that matters is already reported.
+func (l *LLMProvider) validateCLICredentials(path Path) error {
+	cli := l.CLI
+	if cli.Agent != "" && !cli.Agent.Valid() {
+		return nil
+	}
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		//nolint:nilerr // Deliberate: a profile that does not load is a
+		// runnable fault validateCLIProfile already reports at
+		// cli.overrides, and there is no profile to judge credentials by.
+		return nil
+	}
+	var p problems
+	agent := cli.Name()
+	if err := profile.ValidateCredentials(agent); err != nil {
+		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+	}
+
+	// The mode-dependent rules each state what a mode does with a
+	// credential, and an unknown mode does nothing this file can describe:
+	// judged as one, a typo drew refusals naming a mode that does not exist.
+	// The fault is reported once, at cli.auth.mode.
+	mode := cli.Auth.Mode
+	if mode == "" {
+		mode = AuthSubscription
+	}
+	if !slices.Contains(CLIAgentAuthModes, mode) {
+		return p.err()
+	}
+
+	switch {
+	case len(l.APIKeys) > 0 && mode != AuthAPIKey:
+		p.add(at(path, "api_keys"), ErrConflict,
+			"a cli-agent entry reads api_keys only under cli.auth.mode api-key, which "+
+				"puts the key in the CLI's key variable; under %s it reaches nothing. "+
+				"Set auth.mode: api-key, or drop api_keys", mode)
+	case len(l.APIKeys) > 1:
+		p.add(at(path, "api_keys"), ErrConflict,
+			"a cli-agent entry holds one login and rotates nothing, so only the "+
+				"first key would ever reach the CLI: keep one, and put another key "+
+				"on an entry of its own in the seat's fallback chain")
+	}
+
+	if mode == AuthAPIKey {
+		switch {
+		case profile.APIKeyEnv == "" && profile.EnvSignIn:
+			p.add(at(path, "cli.auth.mode"), ErrConflict,
+				"api-key puts the api_keys value in the CLI's key variable, and the "+
+					"%q profile names none (api_key_env): this CLI reads each model "+
+					"provider's key from that provider's own variable. Leave auth.mode "+
+					"at subscription, drop api_keys, and set the key in cli.env under "+
+					"the variable of the provider its model names, as a ${VAR} — e.g. "+
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+		case profile.APIKeyEnv == "":
+			p.add(at(path, "cli.auth.mode"), ErrConflict,
+				"api-key puts the api_keys value in the CLI's key variable, and the "+
+					"%q profile names none (api_key_env), so the key would reach "+
+					"nothing: this CLI reads a key only from its credential files "+
+					"(%s), so put it there — `crewlet llm login`, or a credential "+
+					"bundle — or, if your build of the CLI does read a key variable, "+
+					"name it with cli.overrides.api_key_env",
+				agent, strings.Join(profile.CredentialPaths, ", "))
+		case len(l.APIKeys) == 0:
+			p.add(at(path, "api_keys"), ErrMissing,
+				"auth.mode api-key puts the api_keys value in %s, and this entry "+
+					`names none: add one, e.g. ["${%s}"]`, profile.APIKeyEnv, profile.APIKeyEnv)
+		}
+	}
+
+	if cli.Auth.Token != "" {
+		switch {
+		case profile.TokenEnv == "":
+			p.add(at(path, "cli.auth.token"), ErrConflict,
+				"the %q profile names no token_env — this CLI mints no headless "+
+					"token — so the token would reach nothing: remove it, or name the "+
+					"variable your build of the CLI reads with cli.overrides.token_env", agent)
+		case mode != AuthSubscription:
+			p.add(at(path, "cli.auth.token"), ErrConflict,
+				"a token is read only under auth.mode subscription: %s removes %s "+
+					"from the CLI's environment or forwards the engine's own. Remove "+
+					"it, or set auth.mode: subscription", mode, profile.TokenEnv)
+		}
+	}
+
+	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
+		remedy := "sign the CLI in with `crewlet llm login`"
+		if profile.EnvSignIn {
+			remedy = "set the key in cli.env under the variable of the provider " +
+				"its model names, as a ${VAR}"
+		}
+		p.add(at(path, "cli.auth.mode"), ErrConflict,
+			"inherit-env forwards the profile's token_env and api_key_env from the "+
+				"engine's own environment, and the %q profile names neither, so "+
+				"nothing would be forwarded: leave auth.mode at subscription and %s",
+			agent, remedy)
+	}
+
+	// The two variables cli.auth owns. It is layered over cli.env, and
+	// whether it then replaces, removes or leaves a value written here turns
+	// on the mode and on whether the secret store or the engine's own
+	// environment holds a credential — which the document cannot see, so an
+	// entry relying on cli.env for one is configured to work only sometimes.
+	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
+		switch name {
+		case "":
+			continue
+		case profile.TokenEnv:
+			p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				"%s is this CLI's token variable, which cli.auth owns: whether a value "+
+					"here reaches the CLI depends on auth.mode and on whether the secret "+
+					"store or the engine's environment holds a token of its own. Give "+
+					"the token as cli.auth.token", name)
+		case profile.APIKeyEnv:
+			p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				"%s is this CLI's key variable, which cli.auth owns: whether a value "+
+					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
+					"resolves or the engine's environment holds a key of its own. Give "+
+					"the key as api_keys with cli.auth.mode api-key", name)
+		}
+	}
+	return p.err()
+}
+
 // AgentMode reports whether this entry runs the executor as the CLI's own
 // agentic run.
 func (c *CLIAgent) AgentMode() bool { return c != nil && c.Mode == CLIModeAgent }
@@ -955,7 +1392,10 @@ const (
 // EmbeddingProviderTypes is the closed set.
 var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingOpenAICompatible}
 
-// EmbeddingProvider is the vector backend behind diary and episode recall.
+// EmbeddingProvider is the vector backend, and it has four callers: the
+// fleet-singleton duty that embeds the company's own pages and work items for
+// the semantic half of a native knowledge search, each such search's query
+// vector, and the similarity halves of diary and episode recall.
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`
 	Model   string                `yaml:"model,omitempty" json:"model,omitempty" desc:"Embedding model id."`
@@ -967,7 +1407,7 @@ type EmbeddingProvider struct {
 	// The width is a property of the model, not a setting with a global
 	// default: text-embedding-3-large emits 3072 and -3-small emits 1536,
 	// and a number that was right for one is silently wrong for the other.
-	// So an unset value resolves from [ModelWidths], and a model this
+	// So an unset value resolves from [EmbeddingModels], and a model this
 	// build does not know is REFUSED rather than given a guess — see
 	// Width.
 	//
@@ -975,29 +1415,331 @@ type EmbeddingProvider struct {
 	// shortening its output. It must match what the model actually
 	// produces: the store's vector columns are checked against it, and a
 	// mismatch is not a degraded search but a write that cannot be read
-	// back.
+	// back. So a model whose endpoint documents the `dimensions` parameter
+	// as unsupported ([DimensionsUnsupported] — embed-v4.0 through
+	// Cohere's Compatibility API) is refused any width but its own, and is
+	// never sent the parameter at that one.
 	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0;max=4096" desc:"Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces."`
+
+	// MaxInputTokens, MaxBatchInputs and MaxBatchTokens are the model's
+	// LIMITS — the most tokens one input may hold, the most inputs one
+	// request may carry, and the most tokens one request may carry summed
+	// over its inputs — and 0 means THE MODEL'S OWN, on exactly the rule
+	// Dimensions follows and for the same reason: a limit is a fact about
+	// the model, and a guess at it is a company whose every long document
+	// is refused by its provider, or whose every batch is, from the day
+	// embeddings are turned on.
+	//
+	// So an unset value resolves from [EmbeddingModels], and one the table
+	// does not carry — a model this build does not know, or a limit its
+	// vendor does not document for the endpoint this backend calls — is
+	// REFUSED until it is stated. A stated value for a limit the table does
+	// carry may only LOWER it, which is what it is for: a gateway or a proxy
+	// in front of the model that accepts less than the model does. Raising a
+	// documented limit is refused, naming the field, because the provider
+	// would refuse what this engine then sends.
+	//
+	// Tokens, because that is the unit every vendor documents a limit in;
+	// what the engine counts is bytes, and [EmbeddingProvider.InputBound] is
+	// the one conversion, which [EmbeddingProvider.Limits] carries.
+	//
+	// THIS BUILD REFUSES A STORED REVISION THAT LACKS ONE IT NEEDS — a
+	// company naming gemini-embedding-001, embed-v4.0 or a model the table
+	// does not carry, with no limits stated — exactly as it refuses an
+	// unknown model with no width: a RUNNABLE rule, not an admission one,
+	// because there is no running such a company without either guessing
+	// the limits or sending what the model refuses. It is refused at boot as
+	// well as at an apply, so no node starts on that revision; the
+	// configuration guide tells an operator to state the limits in the same
+	// edit that names the model.
+	MaxInputTokens int `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty" js:"min=0" desc:"Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one."`
+	MaxBatchInputs int `yaml:"max_batch_inputs,omitempty" json:"max_batch_inputs,omitempty" js:"min=0" desc:"Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
+	MaxBatchTokens int `yaml:"max_batch_tokens,omitempty" json:"max_batch_tokens,omitempty" js:"min=0" desc:"Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
 }
 
-// ModelWidths is what each embedding model this build knows emits.
+// EmbeddingModel is what this build knows about one embedding model: the width
+// it emits, what the endpoint the embedding backend calls does with a width
+// asked for, and the limits its vendor documents for that endpoint — an
+// OpenAI-shaped POST /embeddings carrying `model`, an `input` array and, where
+// the endpoint takes it, `dimensions` (internal/providers/embeddings).
+//
+// A ZERO LIMIT IS "NOT DOCUMENTED", never "unlimited": [Undocumented] says
+// which source was read and what it did not say, and validation refuses the
+// provider until the operator states the value ([EmbeddingProvider]). A
+// guessed limit is the failure the table exists to prevent — and a limit
+// copied from a DIFFERENT endpoint of the same vendor is a guess with a
+// citation, which is worse, because it reads as checked.
+type EmbeddingModel struct {
+	// Width is the vector width the model emits when no shorter one is
+	// asked for.
+	Width int
+
+	// Dimensions is what the endpoint does with the request's `dimensions`
+	// parameter for this model, as its vendor documents it — which decides
+	// whether the embedder sends it ([EmbeddingProvider.SendsDimensions])
+	// and whether a width other than [EmbeddingModel.Width] can be
+	// configured at all.
+	Dimensions DimensionsSupport
+
+	// DimensionsSource is the documentation [EmbeddingModel.Dimensions] is
+	// read from, which a refusal of a width the endpoint cannot produce
+	// quotes — so the operator is told where to check, not merely that
+	// this build says no.
+	DimensionsSource string
+
+	// InputTokens is the most tokens one input may hold.
+	InputTokens int
+
+	// BatchInputs is the most inputs one request may carry.
+	BatchInputs int
+
+	// BatchTokens is the most tokens one request may carry, summed over its
+	// inputs.
+	BatchTokens int
+
+	// WrapTokens is how many tokens the server may add around each input
+	// beyond the input's own: the special tokens a model is fed with its
+	// text. Zero only where the vendor documents its count as the input's
+	// own tokens and nothing else; [EmbeddingWrapTokens] everywhere else.
+	WrapTokens int
+
+	// Undocumented names, when any limit above is zero, the documentation
+	// that was read and what it does not state — which is what the refusal
+	// tells an operator, so the field they are asked for comes with the
+	// reason nobody filled it in for them.
+	Undocumented string
+}
+
+// DimensionsSupport is what an embedding endpoint does with the request's
+// `dimensions` parameter for one model, as its vendor documents it.
+//
+// THREE VALUES, because the documentation says one of three things, and each
+// is acted on differently. An endpoint that SHORTENS to the width asked for is
+// sent it, so a store sized below the model's own width is filled at that
+// width. One documented as NOT TAKING it is never sent it, and holds a company
+// to the model's own width, because a width it cannot produce is a store whose
+// every vector would be refused. And where the documentation is SILENT the
+// parameter is sent as it always has been, since dropping it would rest on a
+// guess about the endpoint as much as keeping it does — and the width check
+// every response passes (internal/providers/embeddings) is what catches an
+// endpoint that ignores it.
+type DimensionsSupport string
+
+// The documented answers.
+const (
+	// DimensionsShortens is an endpoint that documents the parameter and
+	// returns a vector of the width asked for.
+	DimensionsShortens DimensionsSupport = "shortens"
+
+	// DimensionsUnsupported is an endpoint that documents the parameter as
+	// one it does not take, so it returns the model's own width and no
+	// other.
+	DimensionsUnsupported DimensionsSupport = "unsupported"
+
+	// DimensionsUnstated is an endpoint whose documentation says nothing
+	// about the parameter.
+	DimensionsUnstated DimensionsSupport = "unstated"
+)
+
+// Valid reports whether d is one of the documented answers.
+func (d DimensionsSupport) Valid() bool {
+	switch d {
+	case DimensionsShortens, DimensionsUnsupported, DimensionsUnstated:
+		return true
+	}
+	return false
+}
+
+// EmbeddingModels is every embedding model this build knows, keyed by the id
+// the provider is configured with.
 //
 // # Why a table and not a default
 //
 // The width decides whether a vector written today can be read tomorrow, and
-// it is a fact about the MODEL. A single default was wrong the moment a
-// company named a model that emits something else — and the default this
-// replaces justified itself by a case that could not exist: it was documented
-// as "what an entry that names no model gets", while validation refuses
-// exactly that entry.
+// the limits decide whether a request is accepted at all — and all four are
+// facts about the MODEL. A single default was wrong the moment a company named
+// a model that emits something else — and the default this replaced justified
+// itself by a case that could not exist: it was documented as "what an entry
+// that names no model gets", while validation refuses exactly that entry. A
+// model absent from this table is refused rather than guessed at, naming both
+// ways to fix it: name a model this build knows, or state the values.
 //
-// A model absent from this table is refused rather than guessed at, naming
-// both ways to fix it: name a model this build knows, or state the width.
-var ModelWidths = map[string]int{
-	"text-embedding-3-large": 3072,
-	"text-embedding-3-small": 1536,
-	"gemini-embedding-001":   3072,
-	"embed-v4.0":             1536,
+// # Why the engine counts BYTES against a limit stated in tokens
+//
+// Every tokenizer these models use emits at most one token per byte of the
+// text it is given, plus the special tokens a server wraps an input in:
+//
+//   - a BYTE-LEVEL BPE (OpenAI's cl100k_base) starts from one token per byte
+//     and every merge replaces two tokens with one;
+//   - a SENTENCEPIECE model with byte fallback (Gemma's, which the Gemini
+//     embedders share, and most open models') emits pieces that each cover at
+//     least one character, falling back to one token per BYTE for a character
+//     its vocabulary lacks — plus, at most, a word-boundary marker in front of
+//     the first piece;
+//   - a WORDPIECE model (the BERT family most self-hosted embedders are)
+//     emits pieces that each cover at least one character, and one [UNK] for
+//     a word it cannot split.
+//
+// So a text of N bytes is at most N tokens plus the wrapper, which is a bound
+// that needs NO TOKENIZER — and that is the reason for it. A tokenizer port
+// (a Go tiktoken with its ranks embedded) was the alternative and is
+// rejected: it is exact for one vendor only, every other model this backend
+// serves has its own, and the standard library plus this argument already
+// keeps every input inside every window.
+//
+// The argument has one hole and it is stated rather than papered over: a
+// tokenizer that applies Unicode COMPATIBILITY normalisation (NFKC) before it
+// splits can lengthen a few characters — U+FDFA, one character of three bytes,
+// becomes eighteen. Byte-level BPE normalises nothing, so OpenAI's bound is
+// exact; for a normalising model the wrap allowance absorbs a handful of
+// those characters, and an input dense with them is refused by the provider
+// as a request it will refuse again, which the embedder classifies so a
+// caller can set that one input aside.
+//
+// The price of counting bytes is that ordinary prose — three to four bytes a
+// token — is held to about a quarter of a model's window. For a caller that
+// represents a long text in CHUNKS that costs nothing but more chunks for the
+// same tokens; for a caller that embeds a text's OPENING it is a shorter
+// opening, which is that caller's policy to weigh.
+//
+// # Over the limit, refused or truncated?
+//
+// Each entry says what its vendor documents, and none of it decides anything:
+// the embedder refuses, BEFORE any request, an input past the byte bound, and
+// the byte bound is inside the window, so no server is ever sent an input its
+// over-length behaviour applies to.
+var EmbeddingModels = map[string]EmbeddingModel{
+	// OpenAI's embeddings reference
+	// (https://developers.openai.com/api/reference/resources/embeddings/methods/create):
+	// "The input must not exceed the max input tokens for the model (8192
+	// tokens for all embedding models)", an array of at most 2048 inputs, and
+	// "a maximum of 300,000 tokens summed across all inputs in a single
+	// request". 8192, not the 8191 older pages gave: the reference and the
+	// embeddings guide's model table (developers.openai.com/api/docs/guides/
+	// embeddings) both say 8192 today. WrapTokens is 0 because the guide's
+	// own way to check an input against the limit is to count it with
+	// cl100k_base and nothing else — so the per-input byte bound is exactly
+	// 8192, which is the size the knowledge corpus has always embedded at
+	// (search.EmbedInputBytes): a byte less would move the opening of every
+	// long document, change the digest its replicated vector record carries,
+	// and re-embed the corpus.
+	//
+	// `dimensions`: "The number of dimensions the resulting output
+	// embeddings should have. Only supported in text-embedding-3 and later
+	// models" (the same reference), and the guide's table gives each
+	// model's own width.
+	"text-embedding-3-large": {
+		Width: 3072, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
+	"text-embedding-3-small": {
+		Width: 1536, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
+
+	// The model page (https://ai.google.dev/gemini-api/docs/models/gemini-embedding-001):
+	// an input token limit of 2,048 and a flexible output of 128..3072. The
+	// OpenAI-compatible endpoint this backend calls is documented only by an
+	// example (https://ai.google.dev/gemini-api/docs/openai); the native API
+	// truncates an over-long input silently when asked to (autoTruncate,
+	// https://ai.google.dev/api/embeddings), and neither page says what the
+	// compatible endpoint does.
+	//
+	// `dimensions` is not mentioned on the compatibility page at all, and its
+	// examples send none. The native API shortens on request through its own
+	// `output_dimensionality` and emits 3072 by default
+	// (https://ai.google.dev/gemini-api/docs/embeddings), which says nothing
+	// about whether the compatible endpoint maps the OpenAI parameter onto
+	// it, ignores it or refuses it — so it is sent as it always was, and the
+	// width check on every response is what holds the vector to the store.
+	"gemini-embedding-001": {
+		Width: 3072, Dimensions: DimensionsUnstated,
+		DimensionsSource: "Google's page for the OpenAI-compatible endpoint " +
+			"(ai.google.dev/gemini-api/docs/openai) does not mention `dimensions`",
+		InputTokens: 2048, WrapTokens: EmbeddingWrapTokens,
+		Undocumented: "Google's page for the OpenAI-compatible endpoint " +
+			"(ai.google.dev/gemini-api/docs/openai) states no limit on the " +
+			"inputs or the tokens one request may carry, and the native " +
+			"batchEmbedContents reference states none either",
+	},
+
+	// The model page (https://docs.cohere.com/docs/cohere-embed): a 128k
+	// context, read as 128 000 — the smaller of the two things "128k" can
+	// mean, so the bound holds under either — and a default output of 1536.
+	// The Compatibility API this backend calls
+	// (https://docs.cohere.com/docs/compatibility-api) documents no limit at
+	// all; the 96 texts a call of the native Embed API
+	// (https://docs.cohere.com/reference/embed) is that endpoint's, and so is
+	// its silent END truncation.
+	//
+	// That page lists `dimensions` among the embeddings parameters it does
+	// NOT support (it takes `input`, `model` and `encoding_format`), and
+	// says neither whether one sent is ignored or refused nor how a width is
+	// chosen instead — the native API's `output_dimension` is among the
+	// Cohere-specific parameters it does not take either. So the endpoint
+	// returns the model's own width, 1536 of 256, 512, 1024 and 1536 (the
+	// model page), and nothing else: the parameter is never sent, and no
+	// other width can be configured.
+	"embed-v4.0": {
+		Width: 1536, Dimensions: DimensionsUnsupported,
+		DimensionsSource: "Cohere's Compatibility API " +
+			"(docs.cohere.com/docs/compatibility-api) lists `dimensions` among " +
+			"the embeddings parameters it does not support",
+		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
+		Undocumented: "Cohere's Compatibility API " +
+			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
+			"inputs or the tokens one request may carry — the native Embed " +
+			"API's 96 texts a call is a different endpoint's",
+	},
 }
+
+// openAIDimensions is where OpenAI documents the `dimensions` parameter for its
+// third-generation models.
+const openAIDimensions = "OpenAI's embeddings reference " +
+	"(developers.openai.com/api/reference/resources/embeddings/methods/create): " +
+	"`dimensions` is supported in text-embedding-3 and later models"
+
+// EmbeddingWrapTokens is the allowance, in tokens, for what a server adds
+// around each input of a model whose vendor does not document its count —
+// every model in [EmbeddingModels] that is not OpenAI's, and every model it
+// does not carry.
+//
+// SIXTEEN. The wrappers in use are two or three tokens — [CLS] and [SEP] for
+// the BERT family, <s> and </s> plus SentencePiece's word-boundary marker,
+// BOS and EOS for a decoder used as an embedder — so sixteen is five times the
+// largest, with room left for the few NFKC expansions the byte argument cannot
+// cover ([EmbeddingModels]). It costs sixteen bytes of an input's bound,
+// under one percent of a 2 048-token window. A server configured to PREPEND
+// an instruction of its own is outside it: declare `max_input_tokens` net of
+// that instruction.
+const EmbeddingWrapTokens = 16
+
+// EmbeddingLimits is what the embedder enforces, in the unit it counts without
+// a tokenizer: bytes of PREPARED text — whitespace collapsed and every stray
+// byte a U+FFFD, which is the text the server decodes from the request
+// (embeddings.Prepare).
+type EmbeddingLimits struct {
+	// InputBytes is the most prepared bytes one input may hold.
+	InputBytes int
+
+	// BatchInputs is the most inputs one request may carry.
+	BatchInputs int
+
+	// BatchBytes is the most one request may carry, counting each input as
+	// its prepared bytes plus InputOverhead.
+	BatchBytes int
+
+	// InputOverhead is what each input costs a request beyond its own
+	// bytes: the model's wrap allowance.
+	InputOverhead int
+}
+
+// MinEmbeddingInputBytes is the narrowest input bound the limits may resolve
+// to: one character of any script, which is four bytes in UTF-8. A bound
+// narrower than that cannot hold every text at all, so a declaration that
+// resolves below it is refused rather than turned into an embedder that
+// refuses whatever it is given.
+const MinEmbeddingInputBytes = 4
 
 // The bounds on an explicit width.
 const (
@@ -1017,7 +1759,108 @@ func (e *EmbeddingProvider) Width() int {
 	if e.Dimensions > 0 {
 		return e.Dimensions
 	}
-	return ModelWidths[strings.TrimSpace(e.Model)]
+	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
+}
+
+// SendsDimensions is whether the embedder asks for its width in every request
+// — the `dimensions` parameter — rather than only checking the width of what
+// comes back.
+//
+// Every model but one kind is asked: an endpoint that shortens answers at the
+// width the store was sized for, and one whose documentation is silent, or a
+// model this build does not know, is asked as it always has been. The one
+// kind is a model whose endpoint documents the parameter as NOT SUPPORTED
+// ([DimensionsUnsupported]) at the width it emits on its own: the answer is
+// that width without the parameter, and a parameter an endpoint says it does
+// not take is one it may refuse. At any other width the parameter is sent as
+// before — validation refuses that width, so only a caller that skipped
+// validation meets it, and it then fails as it always did, at the width check.
+func (e *EmbeddingProvider) SendsDimensions() bool {
+	model, known := EmbeddingModels[strings.TrimSpace(e.Model)]
+	return !known || model.Dimensions != DimensionsUnsupported || e.Width() != model.Width
+}
+
+// InputBound is the most PREPARED BYTES one input to this provider may hold,
+// and 0 when the model's window is unknown — which validation refuses, so no
+// caller of [EmbeddingProvider.Limits] meets it.
+//
+// THE ONE CONVERSION from what a vendor documents (tokens) to what the engine
+// counts (bytes), by the argument at [EmbeddingModels]: a prepared text of N
+// bytes is at most N tokens plus the wrap allowance, so an input of
+// window − wrap bytes is inside the window. The window is the model's
+// documented one, lowered by a stated `max_input_tokens`, and — because one
+// input must fit one request — lowered again to the request's own token total
+// where that is known and smaller: a gateway whose request is smaller than the
+// model's window bounds the input too.
+//
+// Its own method rather than a field of [EmbeddingProvider.Limits], because
+// the bound is known wherever the window is, and the request limits are not:
+// a model whose vendor documents its window but nothing per request still has
+// a per-input bound a reader of its vectors needs — the window a stored corpus
+// was embedded at — while it has no limits an embedder could be built from.
+// Limits takes this value; nothing re-derives it.
+//
+// A stated limit LOWERS a documented one and never raises it — validation
+// refuses the attempt, and this takes the lower of the two regardless, so a
+// bound the provider would refuse is not enforced even by a caller that
+// skipped validation.
+func (e *EmbeddingProvider) InputBound() int {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	window := limitOf(e.MaxInputTokens, model.InputTokens)
+	if tokens := limitOf(e.MaxBatchTokens, model.BatchTokens); tokens > 0 {
+		window = min(window, tokens)
+	}
+	if bound := window - e.wrapTokens(); window > 0 && bound >= MinEmbeddingInputBytes {
+		return bound
+	}
+	return 0
+}
+
+// Limits is what the embedder enforces for this provider, and the zero value
+// when any limit is unknown — which validation refuses, so no caller meets it.
+//
+// The per-input bound is [EmbeddingProvider.InputBound], the one conversion;
+// the request half is counted in the same unit — a request whose inputs'
+// bytes plus one wrap allowance each sum to the request's token total is
+// inside that total. A stated limit lowers a documented one and never raises
+// it, as there.
+func (e *EmbeddingProvider) Limits() EmbeddingLimits {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	bound := e.InputBound()
+	inputs := limitOf(e.MaxBatchInputs, model.BatchInputs)
+	tokens := limitOf(e.MaxBatchTokens, model.BatchTokens)
+	if bound == 0 || inputs <= 0 || tokens <= 0 {
+		return EmbeddingLimits{}
+	}
+	return EmbeddingLimits{
+		InputBytes:    bound,
+		BatchInputs:   inputs,
+		BatchBytes:    tokens,
+		InputOverhead: e.wrapTokens(),
+	}
+}
+
+// wrapTokens is the model's wrap allowance: the table's for a model it
+// carries, [EmbeddingWrapTokens] for one it does not.
+func (e *EmbeddingProvider) wrapTokens() int {
+	if model, known := EmbeddingModels[strings.TrimSpace(e.Model)]; known {
+		return model.WrapTokens
+	}
+	return EmbeddingWrapTokens
+}
+
+// limitOf is a limit as stated over the documented one: the stated value where
+// there is one, never above the documented one, and the documented one where
+// nothing was stated. Zero is "unknown".
+func limitOf(stated, documented int) int {
+	switch {
+	case stated <= 0:
+		return documented
+	case documented > 0:
+		return min(stated, documented)
+	default:
+		return stated
+	}
 }
 
 // ResolvedKey is the embedder's credential, resolved through r and trimmed.
@@ -1062,17 +1905,33 @@ func (e *EmbeddingProvider) validate(path Path) error {
 		p.add(at(path, "dimensions"), ErrOutOfRange,
 			"%d is past the %d ceiling, which is the widest any model in current "+
 				"use emits", e.Dimensions, MaxEmbeddingWidth)
+	case e.Dimensions > 0 && fixedWidth(strings.TrimSpace(e.Model)) && e.Dimensions != e.modelWidth():
+		// A WIDTH THE ENDPOINT CANNOT PRODUCE is refused here, not
+		// discovered at the first embedding: the store's columns are
+		// sized from this value, and an endpoint that takes no
+		// `dimensions` answers at the model's own width whatever was
+		// configured, so every vector would be refused as the wrong
+		// width for as long as the company ran.
+		model := EmbeddingModels[strings.TrimSpace(e.Model)]
+		p.add(at(path, "dimensions"), ErrConflict,
+			"%q emits %d through the endpoint this backend calls, and that "+
+				"endpoint takes no width of its own: %s. Leave `dimensions` "+
+				"unset, or state %d",
+			strings.TrimSpace(e.Model), model.Width, model.DimensionsSource, model.Width)
 	case e.Dimensions == 0 && strings.TrimSpace(e.Model) != "":
 		// AN UNKNOWN MODEL WITH NO WIDTH IS REFUSED, not defaulted. The
 		// width decides whether a vector written today can be read
 		// tomorrow, and a guess here is a company whose recall silently
 		// stops working the day it is turned on.
-		if _, known := ModelWidths[strings.TrimSpace(e.Model)]; !known {
+		if _, known := EmbeddingModels[strings.TrimSpace(e.Model)]; !known {
 			p.add(at(path, "dimensions"), ErrMissing,
 				"this build does not know how wide %q's vectors are. Either name "+
 					"a model it knows (%s) or state `dimensions` yourself",
 				strings.TrimSpace(e.Model), knownModels())
 		}
+	}
+	if strings.TrimSpace(e.Model) != "" {
+		e.validateLimits(path, &p)
 	}
 	if e.Type == EmbeddingOpenAICompatible && strings.TrimSpace(e.BaseURL) == "" {
 		p.add(at(path, "base_url"), ErrMissing,
@@ -1081,12 +1940,110 @@ func (e *EmbeddingProvider) validate(path Path) error {
 	return p.err()
 }
 
-// knownModels lists the models whose width this build carries, sorted, for
-// the refusal above.
+// fixedWidth reports whether the endpoint for model takes no `dimensions`, so
+// the model's own width is the only one it produces.
+func fixedWidth(model string) bool {
+	return EmbeddingModels[model].Dimensions == DimensionsUnsupported
+}
+
+// modelWidth is the width the named model emits on its own, 0 for a model this
+// build does not carry.
+func (e *EmbeddingProvider) modelWidth() int {
+	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
+}
+
+// validateLimits refuses a limit that is unknown, negative, above the model's
+// documented one, or too small to hold a character — each naming the field.
+func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
+	name := strings.TrimSpace(e.Model)
+	model, known := EmbeddingModels[name]
+	wrap := e.wrapTokens()
+	for _, limit := range []struct {
+		field  string
+		stated int
+		of     func(EmbeddingModel) int
+		what   string
+	}{
+		{"max_input_tokens", e.MaxInputTokens, func(m EmbeddingModel) int { return m.InputTokens }, "tokens one input may hold"},
+		{"max_batch_inputs", e.MaxBatchInputs, func(m EmbeddingModel) int { return m.BatchInputs }, "inputs one request may carry"},
+		{"max_batch_tokens", e.MaxBatchTokens, func(m EmbeddingModel) int { return m.BatchTokens }, "tokens one request may carry"},
+	} {
+		documented := limit.of(model)
+		switch {
+		case limit.stated < 0:
+			p.add(at(path, limit.field), ErrOutOfRange,
+				"must be 0 (the named model's documented limit) or the most %s, "+
+					"got %d", limit.what, limit.stated)
+		case limit.stated > 0 && documented > 0 && limit.stated > documented:
+			// RAISING A DOCUMENTED LIMIT is refused, not obeyed: the
+			// provider would refuse what the engine then sends, and
+			// the field exists to LOWER one — a gateway or proxy in
+			// front of the model that accepts less.
+			p.add(at(path, limit.field), ErrOutOfRange,
+				"%d is above the %d %s for %q as its vendor documents it; this "+
+					"field may only lower a documented limit (for a gateway or a "+
+					"proxy that accepts less) — leave it unset to take %d",
+				limit.stated, documented, limit.what, name, documented)
+		case limit.stated == 0 && documented == 0 && known:
+			p.add(at(path, limit.field), ErrMissing,
+				"this build carries no value for the most %s for %q: %s. State "+
+					"`%s` from the limit your endpoint enforces",
+				limit.what, name, model.Undocumented, limit.field)
+		case limit.stated == 0 && documented == 0:
+			// THE WAY OUT NAMES ONLY MODELS THAT TAKE IT: a model the
+			// table carries without this limit would be refused for
+			// the same field, so suggesting it is advice that does not
+			// clear the error. With none to name, stating it is the
+			// one way out, and the refusal says only that.
+			if models := modelsDocumenting(limit.of); models != "" {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q. Either name a "+
+						"model whose limit it carries (%s) or state `%s` yourself",
+					limit.what, name, models, limit.field)
+			} else {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q, nor for any "+
+						"model it carries. State `%s` from the limit your endpoint "+
+						"enforces", limit.what, name, limit.field)
+			}
+		}
+	}
+	// AN INPUT BOUND THAT CANNOT HOLD A CHARACTER is refused here rather
+	// than built into an embedder that refuses everything: the bound is a
+	// window less the wrap allowance, and a window at or under the
+	// allowance leaves nothing for the text.
+	input := limitOf(e.MaxInputTokens, model.InputTokens)
+	tokens := limitOf(e.MaxBatchTokens, model.BatchTokens)
+	floor := wrap + MinEmbeddingInputBytes
+	if e.MaxInputTokens > 0 && input < floor {
+		p.add(at(path, "max_input_tokens"), ErrOutOfRange,
+			"%d leaves no room for text: %d tokens are reserved for what a "+
+				"server wraps around each input, so the window must be at least %d",
+			e.MaxInputTokens, wrap, floor)
+	}
+	if e.MaxBatchTokens > 0 && tokens < floor {
+		p.add(at(path, "max_batch_tokens"), ErrOutOfRange,
+			"%d leaves no room for text: %d tokens are reserved for what a "+
+				"server wraps around each input, so a request must take at least %d",
+			e.MaxBatchTokens, wrap, floor)
+	}
+}
+
+// knownModels lists the models this build carries, sorted, for the refusals
+// above.
 func knownModels() string {
-	out := make([]string, 0, len(ModelWidths))
-	for model := range ModelWidths {
-		out = append(out, model)
+	return modelsDocumenting(func(EmbeddingModel) int { return 1 })
+}
+
+// modelsDocumenting lists, sorted, the models this build carries a value of
+// limit for — the models that name in a refusal of that limit is a way out of
+// it — or "" when none does.
+func modelsDocumenting(limit func(EmbeddingModel) int) string {
+	out := make([]string, 0, len(EmbeddingModels))
+	for name, model := range EmbeddingModels {
+		if limit(model) > 0 {
+			out = append(out, name)
+		}
 	}
 	slices.Sort(out)
 	return strings.Join(out, ", ")

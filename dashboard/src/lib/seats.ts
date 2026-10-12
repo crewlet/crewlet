@@ -19,13 +19,14 @@
  * nothing compared the two. So no manager, lead, `manages` or handle logic
  * remains here, and there is no client-side handle derivation at all.
  *
- * AN OLDER ENGINE SENDS NO `derived` BLOCK, and the index then SAYS SO
- * (`hierarchy: false`) rather than guessing: seats sit where the document
- * wrote them, a handle is known only where the document declares one, and
- * every question only the engine can answer is reported as unknown. A block
- * that does not describe the tree it arrived with is treated the same way,
- * because a chart drawn from a hierarchy that disagrees with its own seats is
- * a chart that lies.
+ * THE BLOCK IS THE AUTHORITY, AND IT IS NEVER CHECKED AGAINST ITS TREE. The
+ * engine derives both halves from one document in one call
+ * (`internal/api/orgprojection.go`), so they pair by construction: every seat
+ * the block names is a seat of the tree, by its handle, every unit by its key,
+ * and every handle it mentions is one of its own seats. There is no "hierarchy not reported"
+ * state for a screen to draw, because every projection that carries a seat
+ * carries the block. `{}`, the answer of a node running no company, carries
+ * neither half and indexes as an empty company, as does an org not read yet.
  *
  * THE GUARDED HALF IS NOT HERE EITHER. `/org` is the `state:read` projection,
  * so it carries a charter, a tree and the budgets as written — and, to a
@@ -43,6 +44,7 @@
  */
 
 import { useMemo } from "react";
+import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useLeadScope } from "./leadScope.ts";
 import { needsSentence } from "./refusal.ts";
@@ -84,7 +86,7 @@ export interface Unit {
   /** What a person reads. Prose, and two units may share one, so nothing
    *  addresses a unit by it. */
   name: string;
-  /** The EFFECTIVE type where the hierarchy is reported, else as written. */
+  /** The EFFECTIVE type, after the engine's default. */
   type: string;
   purpose: string;
   goals: string[];
@@ -137,21 +139,21 @@ export interface Unit {
 export type SeatKind = "agent" | "human";
 
 export interface Seat {
-  /**
-   * Stable React key and DOM id suffix: the handle, or `#<position>` where no
-   * unique handle is known. The position key carries a `#`, which no handle
-   * can, so the two can never collide.
-   */
+  /** Stable React key and DOM id suffix: the handle, unique in a company. */
   key: string;
   name: string;
   /**
-   * The handle this seat RUNS UNDER, as the engine reports it. "" when the
-   * projection carries no derived hierarchy and the document declares none: a
-   * handle this client derived would be a second implementation of the rule
-   * that keys the seat's memory, so it never makes one up.
+   * The handle this seat RUNS UNDER, as the engine derived it. Never derived
+   * here: a handle this client worked out would be a second implementation of
+   * the rule that keys the seat's memory.
    */
   handle: string;
   kind: SeatKind;
+  /**
+   * How an agent seat is drawn: its character and colour, as the engine
+   * published them. Null for a person, who is drawn as themself.
+   */
+  avatar: AgentAvatar | null;
   goal: string;
   backstory: string;
   responsibilities: string[];
@@ -163,14 +165,14 @@ export interface Seat {
   unitChain: Unit[];
   unit: Unit | null;
   /**
-   * The effective unit lead's NAME, declared or inherited, and "" where the
-   * engine did not say. A name rather than a seat because every caller draws
-   * it as words beside the unit.
+   * The effective unit lead's NAME, declared or inherited, and "" at the root
+   * or where the unit has no lead. A name rather than a seat because every
+   * caller draws it as words beside the unit.
    */
   unitLead: string;
   /** A root seat the engine moved into a unit because of its `unit:` reference. */
   placedByRef: boolean;
-  /** The engine's primary manager. Null when it has none, or none was reported. */
+  /** The engine's primary manager. Null when it has none. */
   manager: Seat | null;
   /** Every seat whose `manages` reaches this one, in engine order. */
   managers: Seat[];
@@ -182,13 +184,6 @@ export interface Seat {
 }
 
 export interface OrgIndex {
-  /**
-   * Whether the engine's derived hierarchy is present AND describes this tree.
-   * False means every reporting line, inherited lead and placement below is
-   * UNKNOWN rather than absent, and a screen has to say so rather than
-   * drawing a zero.
-   */
-  hierarchy: boolean;
   seats: Seat[];
   /** The seats above every unit. */
   rootSeats: Seat[];
@@ -204,9 +199,11 @@ export interface OrgIndex {
  * The route segments that open a seat's page: its handle, or its name where no
  * handle is known.
  *
- * ONE HELPER, because the rule for a seat the engine reported no handle for
- * has to live in one place: the seat screen resolves a name as well as a
- * handle, so such a seat still has a page a link can reach.
+ * ONE HELPER, because the rule for a seat addressed from its document entry —
+ * which declares a handle only where it overrides the derived one, so the
+ * builder can hold a saved seat with none — has to live in one place: the
+ * seat screen resolves a name as well as a handle, so such a seat still has a
+ * page a link can reach.
  */
 export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["agents", "seats", seat.handle || seat.name];
@@ -292,6 +289,7 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
     name: raw.name ?? "",
     handle,
     kind: raw.kind === "human" ? "human" : "agent",
+    avatar: raw.kind === "human" ? null : avatarOf(raw.avatar),
     goal: raw.goal ?? "",
     backstory: raw.backstory ?? "",
     responsibilities: list(raw.responsibilities),
@@ -310,7 +308,7 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
   };
 }
 
-/** Link the units into a tree. Shared by both halves below. */
+/** Link the units into a tree, in the depth-first order [walk] visited them. */
 function link(authored: Authored): Unit[] {
   const units = authored.units.map(({ raw }, i) => newUnit(raw, i));
   units.forEach((unit, i) => {
@@ -323,61 +321,67 @@ function link(authored: Authored): Unit[] {
 }
 
 /**
- * Lay the engine's derived block over the authored tree, or report that it
- * cannot be.
+ * Lay the engine's derived block over the authored tree.
  *
- * The block names units in depth-first order and seats by name, so the pairing
- * is CHECKED rather than assumed: the same number of units with the same keys
- * in the same order, every seat accounted for exactly once, and every handle
- * it mentions belonging to one of them. Anything else returns null and the
- * caller falls back to the authored tree, because half a hierarchy drawn as a
- * whole one is worse than an honest "the engine did not say".
+ * Units pair by KEY — the block names each by the key the engine minted into
+ * the document, which is [Unit.id] — and seats by HANDLE, which the engine
+ * mints into every stored seat (ADR-0013). Neither pairs by position or by
+ * name: the engine's seat order is not the document's, since a root seat moved
+ * into a unit comes after that unit's own seats, and a NAME IS PROSE, held by
+ * as many seats and units as a company likes, so a pairing by it hands one
+ * seat its namesake's document. Only an entry that declares no handle — a
+ * fixture, a document nothing has stored — is claimed by its name, the first
+ * unclaimed one, and never an entry declaring another seat's handle. Every
+ * seat, unit, lead and reporting line in the index is the block's; the tree
+ * contributes only what the document wrote about each (its goal, its purpose,
+ * its knowledge).
+ *
+ * TOTAL rather than validating: both halves come from one document in one
+ * call, so there is no mismatch a working engine can send, and a reader that
+ * second-guessed the block would need a "the engine did not say" state for
+ * every screen to draw. A unit the block does not name keeps what the
+ * document wrote, and a handle the block mentions that it does not list is
+ * skipped rather than thrown on, because this runs in the sidebar, outside
+ * every error boundary.
  */
-function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | null {
-  if (!derived || typeof derived !== "object") return null;
-  const dUnits = list(derived.units);
-  const dSeats = list(derived.seats);
-  if (dUnits.length !== authored.units.length || dSeats.length !== authored.seats.length) {
-    return null;
-  }
-
+function overlay(authored: Authored, derived: Derived): OrgIndex {
   const units = link(authored);
-  for (let i = 0; i < units.length; i++) {
-    const d = dUnits[i];
-    const unit = units[i]!;
-    if (!d || d.id !== unit.id) return null;
+  const dByKey = new Map(list(derived.units).map((d) => [d.id, d]));
+  const derivedOf = (unit: Unit) => (unit.id ? dByKey.get(unit.id) : undefined);
+  for (const unit of units) {
+    const d = derivedOf(unit);
+    if (!d) continue;
     unit.type = d.type || unit.type;
     unit.channel = d.channel ?? "";
     unit.channelInherited = !!d.channel_inherited;
     unit.leadInherited = !!d.lead_inherited;
   }
 
-  // Seats pair by NAME, and a name that repeats (only possible in a revision
-  // stored before names had to be unique) is not paired by position. The
-  // engine's order is not the document's — a root seat moved into a unit comes
-  // after that unit's own seats — so the first "Designer" the engine lists can
-  // be the second one the document wrote, and pairing them in turn would draw
-  // one seat's goal under the other's handle. A declared handle is what tells
-  // two such seats apart, so a seat pairs with the authored one declaring its
-  // handle, or else with one declaring none.
-  const unpaired = new Map<string, OrgSeat[]>();
+  // The entries that declare a handle, by it, and the ones that declare none,
+  // by name — the only entries a name may claim.
+  const declared = new Map<string, OrgSeat>();
+  const undeclared = new Map<string, OrgSeat[]>();
   for (const { raw } of authored.seats) {
+    if (raw.handle) {
+      if (!declared.has(raw.handle)) declared.set(raw.handle, raw);
+      continue;
+    }
     const name = raw.name ?? "";
-    unpaired.set(name, [...(unpaired.get(name) ?? []), raw]);
+    undeclared.set(name, [...(undeclared.get(name) ?? []), raw]);
   }
-  const claim = (name: string, handle: string): OrgSeat | null => {
-    const candidates = unpaired.get(name) ?? [];
-    let at = candidates.findIndex((raw) => raw.handle === handle);
-    if (at < 0) at = candidates.findIndex((raw) => !raw.handle);
-    return at < 0 ? null : candidates.splice(at, 1)[0]!;
+  const claim = (name: string, handle: string): OrgSeat => {
+    const own = declared.get(handle);
+    if (own) {
+      declared.delete(handle);
+      return own;
+    }
+    return undeclared.get(name)?.shift() ?? { name };
   };
   const byHandle = new Map<string, Seat>();
   const seats: Seat[] = [];
+  const dSeats = list(derived.seats);
   for (const d of dSeats) {
-    if (!d.handle || byHandle.has(d.handle)) return null;
-    const raw = claim(d.name, d.handle);
-    if (!raw) return null;
-    const seat = newSeat(raw, d.handle, d.handle);
+    const seat = newSeat(claim(d.name, d.handle), d.handle, d.handle);
     // The derived kind is the ENGINE'S reading of the field, so a value off
     // the wire this build does not know is the same value everywhere.
     seat.kind = d.kind === "human" ? "human" : "agent";
@@ -386,100 +390,30 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     seats.push(seat);
   }
 
-  const resolve = (handles: string[] | null | undefined): Seat[] | null => {
-    const out: Seat[] = [];
-    for (const handle of list(handles)) {
-      const seat = byHandle.get(handle);
-      if (!seat) return null;
-      out.push(seat);
-    }
-    return out;
-  };
+  const resolve = (handles: string[] | null | undefined): Seat[] =>
+    list(handles).flatMap((handle) => byHandle.get(handle) ?? []);
 
-  for (let i = 0; i < units.length; i++) {
-    const d = dUnits[i]!;
-    const unit = units[i]!;
-    const members = resolve(d.seats);
-    if (!members) return null;
-    for (const seat of members) {
-      if (seat.unit) return null;
-      seat.unit = unit;
-      seat.unitChain = unit.chain;
-    }
-    unit.seats = members;
-    if (d.lead) {
-      const lead = byHandle.get(d.lead);
-      if (!lead) return null;
-      unit.effectiveLead = lead;
-    }
-  }
-  for (const seat of seats) seat.unitLead = seat.unit?.effectiveLead?.name ?? "";
-
-  for (let i = 0; i < dSeats.length; i++) {
-    const d = dSeats[i]!;
-    const seat = seats[i]!;
-    const managers = resolve(d.managers);
-    const reports = resolve(d.reports);
-    const autoReports = resolve(d.auto_reports);
-    if (!managers || !reports || !autoReports) return null;
-    seat.managers = managers;
-    seat.reports = reports;
-    seat.autoReports = autoReports;
-    if (d.manager) {
-      const manager = byHandle.get(d.manager);
-      if (!manager) return null;
-      seat.manager = manager;
-    }
-  }
-
-  return {
-    hierarchy: true,
-    seats,
-    rootSeats: seats.filter((s) => !s.unit),
-    units,
-    topUnits: units.filter((u) => !u.parent),
-    byHandle,
-    byName: new Map(),
-  };
-}
-
-/**
- * The authored tree with nothing derived: what an engine that sends no
- * `derived` block leaves a reader able to state.
- */
-function authoredOnly(authored: Authored): OrgIndex {
-  const units = link(authored);
-  // A key is the declared handle where that is unique, and the seat's position
-  // otherwise. The position key carries a `#`, which no handle can (a handle
-  // is lower-case letters, digits and hyphens), so a seat declaring the handle
-  // `s1` cannot collide with the second seat's position key.
-  const keys = new Set<string>();
-  const seats = authored.seats.map(({ raw, container }, i) => {
-    const handle = raw.handle ?? "";
-    const key = handle && !keys.has(handle) ? handle : `#${i}`;
-    keys.add(key);
-    const seat = newSeat(raw, handle, key);
-    if (container >= 0) {
-      const unit = units[container]!;
-      seat.unit = unit;
-      seat.unitChain = unit.chain;
-      unit.seats.push(seat);
-    }
-    return seat;
-  });
-  const byHandle = new Map<string, Seat>();
-  for (const seat of seats) {
-    if (seat.handle && !byHandle.has(seat.handle)) byHandle.set(seat.handle, seat);
-  }
-  // A lead the unit DECLARES is a fact of the document and names a seat by its
-  // handle; an inherited one is the engine's conclusion, so it stays unknown
-  // here rather than being cascaded by a second implementation.
   for (const unit of units) {
-    unit.effectiveLead = unit.lead ? (byHandle.get(unit.lead) ?? null) : null;
+    const d = derivedOf(unit);
+    if (!d) continue;
+    unit.seats = resolve(d.seats);
+    for (const seat of unit.seats) {
+      seat.unit = unit;
+      seat.unitChain = unit.chain;
+    }
+    unit.effectiveLead = d.lead ? (byHandle.get(d.lead) ?? null) : null;
   }
   for (const seat of seats) seat.unitLead = seat.unit?.effectiveLead?.name ?? "";
+
+  dSeats.forEach((d, i) => {
+    const seat = seats[i]!;
+    seat.managers = resolve(d.managers);
+    seat.reports = resolve(d.reports);
+    seat.autoReports = resolve(d.auto_reports);
+    seat.manager = d.manager ? (byHandle.get(d.manager) ?? null) : null;
+  });
+
   return {
-    hierarchy: false,
     seats,
     rootSeats: seats.filter((s) => !s.unit),
     units,
@@ -489,7 +423,6 @@ function authoredOnly(authored: Authored): OrgIndex {
   };
 }
 
-/** Index the org projection once. Everything a screen needs comes off this. */
 /**
  * Fill every unit's [Unit.allSeats] from its own members and its children's.
  *
@@ -510,11 +443,16 @@ function fillSubtrees(units: Unit[]): void {
   }
 }
 
+/** What `{}` (a node running no company) and an org not read yet describe:
+ *  no seats and no units, laid over their empty tree. */
+const NO_HIERARCHY: Derived = { seats: [], units: [] };
+
+/** Index the org projection once. Everything a screen needs comes off this. */
 export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   const authored = walk(org);
-  const built = overlay(authored, org?.derived) ?? authoredOnly(authored);
-  // AFTER whichever half built the tree, because both build one and the pass
-  // reads only `seats` and `children` — which both of them have set by here.
+  const built = overlay(authored, org?.derived ?? NO_HIERARCHY);
+  // AFTER the overlay, because the pass reads only `seats` and `children` —
+  // which it has set by here.
   fillSubtrees(built.units);
   for (const seat of built.seats) {
     if (!built.byName.has(seat.name)) built.byName.set(seat.name, seat);
@@ -600,13 +538,8 @@ export function unitDirectLabel(n: number): string {
  * looking at a number larger than their own `manages:` list has no other way to
  * find out why. [Seat.autoReports] is the engine's own subset, so this is a
  * reading of what the engine derived rather than a rule re-applied here.
- *
- * AND WITHOUT THE DERIVED BLOCK THERE IS NO COUNT TO BREAK DOWN. The tile draws
- * a marked absence in that case, so the caption says what is missing rather
- * than explaining a number that is not on screen.
  */
-export function reportsCaption(seat: Seat, hierarchy: boolean): string {
-  if (!hierarchy) return "this engine did not report its hierarchy";
+export function reportsCaption(seat: Seat): string {
   const total = seat.reports.length;
   if (total === 0) return "nobody reports to this seat";
   const auto = seat.autoReports.length;
@@ -617,7 +550,7 @@ export function reportsCaption(seat: Seat, hierarchy: boolean): string {
 
 /**
  * Whether `lead` is anywhere above `handle` in the chart — a lead in their
- * LINE — or null where this client cannot say.
+ * LINE.
  *
  * ANY ANCESTOR, not only the direct manager, which is the engine's own reading
  * of "a lead may set what somebody in their line does next" (`leadsOf` in
@@ -625,14 +558,8 @@ export function reportsCaption(seat: Seat, hierarchy: boolean): string {
  * everybody, and an authority that stopped one level up would make a line mean
  * the people directly under you. The walk is over [Seat.managers], the
  * engine's derived relation, never a second reading of `manages:` here.
- *
- * NULL IS NOT FALSE. Without the engine's derived hierarchy every reporting
- * line is unknown ([OrgIndex.hierarchy]), and a screen that turned that into
- * "you do not lead them" would refuse somebody the chart simply did not
- * describe — so the caller says which of the two it is.
  */
-export function leadsInLine(index: OrgIndex, lead: string, handle: string): boolean | null {
-  if (!index.hierarchy) return null;
+export function leadsInLine(index: OrgIndex, lead: string, handle: string): boolean {
   if (!lead || !handle || lead === handle) return false;
   const start = index.byHandle.get(handle);
   if (!start) return false;
@@ -755,10 +682,10 @@ export function seatReading(
     return { state: "read", role: settings.role, unit: settings.unit };
   }
   // `missing` AND `ambiguous` ARE ONE ANSWER HERE. Both mean the revision
-  // holds no single entry this page may attribute to this seat, and the second
-  // is only reachable from a document holding one handle twice, which the
-  // engine refuses — so a distinct sentence for it would be a sentence nobody
-  // will ever read.
+  // holds no single entry this page may attribute to this seat. The second is
+  // only reachable from a document holding one handle twice, which the engine
+  // refuses; the seat's own screen says which ([SeatSettings]), and a panel
+  // reading the reading only needs to know it has nothing to draw.
   return { state: "absent" };
 }
 
@@ -832,8 +759,8 @@ export interface SeatSetup {
  * [seatReading] exists for — and printed a revoked reader's model beside a
  * banner saying the answer needs a grant — or collapsed "absent", "refused"
  * and "not read yet" into one sentence. The seat is resolved by handle, or by
- * name for a seat the engine reported no handle for, which is how
- * [seatPath] addresses one.
+ * name for a link built from a document entry that declares no handle, which
+ * is how [seatPath] addresses one.
  *
  * A reader without the grant is never asked: see the query below. A LEAD of
  * the seat's unit is, through the reads the engine admits them instead — the
@@ -1069,11 +996,25 @@ function dedupe(keys: string[]): string[] {
  * holds its work. The name it was filed under is what a reader needs to find
  * that work, and a dash would lose it.
  */
-export function seatLookup(index: OrgIndex): (handle: string) => { name: string; kind?: SeatKind } {
-  return (handle) => {
-    const seat = index.byHandle.get(handle);
-    return seat ? { name: seat.name, kind: seat.kind } : { name: handle };
-  };
+export function seatLookup(index: OrgIndex): (handle: string) => SeatBadge {
+  return (handle) => badgeOfSeat(index.byHandle.get(handle), handle);
+}
+
+/**
+ * What a seat's badge is drawn from: its name, its kind, and how an agent is
+ * drawn. KIND AND AVATAR ARE ABSENT for a key the chart does not hold, which
+ * is a third answer rather than a missing one (see [seatResolvers]): a renamed
+ * or removed seat keeps its name and is drawn with the kit's defaults.
+ */
+export interface SeatBadge {
+  name: string;
+  kind?: SeatKind;
+  avatar?: AgentAvatar | null;
+}
+
+/** A seat's badge, or the key's own words where the chart has no such seat. */
+function badgeOfSeat(seat: Seat | undefined, key: string): SeatBadge {
+  return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : { name: key };
 }
 
 /**
@@ -1084,11 +1025,8 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
  * the badge in both kinds of column needs both lookups. Handle first, because
  * a handle is unique and a name only the first seat's.
  */
-export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; kind?: SeatKind } {
-  return (key) => {
-    const seat = index.byHandle.get(key) ?? index.byName.get(key);
-    return seat ? { name: seat.name, kind: seat.kind } : { name: key };
-  };
+export function seatBadgeOf(index: OrgIndex): (key: string) => SeatBadge {
+  return (key) => badgeOfSeat(index.byHandle.get(key) ?? index.byName.get(key), key);
 }
 
 /**
@@ -1103,7 +1041,7 @@ export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; k
  * "useClient outside a ClientContext provider". This module already reads
  * the store; the store no longer reads this module.
  */
-export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKind } {
+export function useSeatBadgeOf(): (key: string) => SeatBadge {
   const org = useOrg();
   return useMemo(() => seatBadgeOf(indexOrg(org)), [org]);
 }
@@ -1134,11 +1072,13 @@ export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKi
 export function seatResolvers(index: OrgIndex): {
   seatName: (handle: string) => string;
   seatKind: (handle: string) => SeatKind | undefined;
+  seatAvatar: (handle: string) => AgentAvatar | null | undefined;
 } {
   const lookup = seatLookup(index);
   return {
     seatName: (handle) => lookup(handle).name,
     seatKind: (handle) => lookup(handle).kind,
+    seatAvatar: (handle) => lookup(handle).avatar,
   };
 }
 
@@ -1228,14 +1168,57 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
  * first — the order every list of running turns draws (Home's Live now, Live ›
  * Now running), because the longest-running turn is the one a reader is most
  * likely looking for, and two lists of one set in two orders read as two sets.
+ *
+ * A SEAT WITH NO READABLE START SORTS LAST. The engine calls a seat working
+ * while a coding run of its is out even when its projection holds no turn
+ * record for it — a parked turn it never saw start — and when that turn
+ * resumes, the record it creates is stamped with the RESUME instant, the
+ * newest start there is. So last is where the row will land anyway, and a
+ * row that arrives last never moves: read as 0 it led every list and then
+ * jumped to the bottom, which is the reshuffle "a turn that starts is
+ * appended" promises a reader never sees. The compare is explicit three-way
+ * because two unknowns are a tie (stable, so they keep the push's order),
+ * where `Infinity - Infinity` is NaN and leaves the order to the engine.
  */
 export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
+  const started = (a: AgentRow) => {
+    const at = Date.parse(a.turn?.started_at ?? "");
+    return Number.isFinite(at) ? at : Infinity;
+  };
   return agents
     .filter((a) => activityOf(a) === "working")
-    .sort(
-      (a, b) =>
-        (Date.parse(a.turn?.started_at ?? "") || 0) - (Date.parse(b.turn?.started_at ?? "") || 0),
-    );
+    .map((row) => ({ row, at: started(row) }))
+    .sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1))
+    .map(({ row }) => row);
+}
+
+/**
+ * How many running turns a SHORT list of them names before it hands the rest
+ * to Live › Now running, which lists every one: Home's Live now card, and the
+ * sidebar's Running group.
+ *
+ * ONE NUMBER FOR BOTH, because they are one list in one order
+ * ([workingLongestFirst]) and two caps would name two different sets of seats
+ * on the same screen — and one SELECTION for both, `lib/turns.ts`'
+ * `runningShortList`, since one cap applied after two different filters
+ * named two sets just the same. Four is what Home's card holds level with the figures
+ * beside it, and four sidebar rows are about the height of the Pinned group a
+ * reader keeps there — a fifth working seat is the point where a shortcut
+ * becomes a second copy of Now running, so it is a "more" row instead.
+ */
+export const RUNNING_ROWS = 4;
+
+/**
+ * The key of the work item a seat's turn is CHARGED to — its call's, then its
+ * turn's — or "" for a turn on none. The item the engine charges the turn to,
+ * never a `work_key` a trigger happened to name (see [stateLine]).
+ *
+ * A LABEL, never a join: two tasks can hold one key (`key_collision`), so
+ * anything that pairs a turn with a task joins on the item's id
+ * ([liveOnItems]) and only draws this.
+ */
+export function turnItemKey(row: AgentRow | null | undefined): string {
+  return row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
 }
 
 /**
@@ -1298,7 +1281,7 @@ export function heldBy(
   health: EngineHealth | null,
 ): string {
   if (agent?.stopped_reason === "unplaced") return "no node — not placed";
-  if (!health?.seats) return "not reported by this node";
+  if (!health) return "not reported by this node";
   if (health.seats.includes(handle))
     return health.node ? `this node · ${health.node}` : "this node";
   return "another node";
@@ -1312,6 +1295,15 @@ export function toneOf(state: SeatState | undefined): SeatRing | "neutral" {
 /** The state in one lowercase word or two, for a pill. */
 export function activityWord(state: SeatState): string {
   return state === "needs" ? "needs you" : state;
+}
+
+/**
+ * The same word capitalised, as a line of its own writes it: a chart node's
+ * caption and the legend that counts those captions.
+ */
+export function stateWord(state: SeatState): string {
+  const word = activityWord(state);
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 /**
@@ -1444,7 +1436,7 @@ export function stateLine(
     return seat.availability || "Human teammate — not run by the engine";
   }
   const state = activityOf(row);
-  const item = row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+  const item = turnItemKey(row);
   switch (state) {
     case "working": {
       // A DETACHED CODING RUN parks the turn while the box works: the seat is
@@ -1537,10 +1529,10 @@ export function doingWords(row: AgentRow): string {
 }
 
 /**
- * A handle as a reader sees it: `@pm`, and NOTHING for a seat the engine
- * reported no handle for. A bare `@` printed beside a name read as a handle
- * that is empty, which is a claim about the seat rather than about what this
- * client was told.
+ * A handle as a reader sees it: `@pm`, and NOTHING where there is none — a
+ * builder seat the engine has not derived one for yet, or a row that names no
+ * seat. A bare `@` printed beside a name read as a handle that is empty, which
+ * is a claim about the seat rather than about what this client was told.
  */
 export function handleLabel(handle: string | null | undefined): string {
   const h = (handle ?? "").trim();

@@ -159,8 +159,8 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// below that supplying the base IS the permission to register. That
 		// reasoning is right about the PERMISSION and wrong about the FACT:
 		// a vendor reads an empty base as "this deployment has no public
-		// base URL" and reports ingress_blocked against
-		// api.external_url, owed by an admin — and `check`
+		// base URL" and reports ingress_blocked against the
+		// address's Tier A key, owed by an admin — and `check`
 		// persists its findings through the same fold the loop uses. So
 		// pressing Check on a perfectly healthy company wrote "every
 		// monitor that fires reaches nobody" into the live status row and
@@ -174,17 +174,18 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// read-only run holding the address still writes nothing at the
 		// third-party app. What it gains is the ability to say what is
 		// TRUE: the webhook points somewhere else, or there is no address
-		// at all.
-		WebhookBase: s.externalBase,
+		// at all — and, for the second, which Tier A key to set.
+		WebhookBase:    s.webhookBase,
+		WebhookBaseKey: s.webhookBaseKey,
 	}
 	if !readOnly {
 		if in.WebhookBase == "" {
 			// A WRITING PASS WITH NO ADDRESS IS REFUSED BY NAME, rather
 			// than run to register nothing and report success.
 			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
-				"config_path": "api.external_url",
-				"hint": "set `api.external_url` in this node's Tier A file to " +
-					"the HTTPS address a browser and a vendor reach this " +
+				"config_path": s.webhookBaseKey,
+				"hint": "set `" + s.webhookBaseKey + "` in this node's Tier A " +
+					"file to the HTTPS address a vendor reaches this " +
 					"deployment on, and restart it; without one the pass can " +
 					"register no webhook",
 			})
@@ -458,12 +459,13 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 				"loop's next tick reports it")
 		return
 	}
+	integration.LogWhole(ctx, kind, run.Findings, passErr)
 	next, forget := integration.Observe(current, kind, run.Findings, passErr, now)
 	// THE ADDRESS THIS PASS RAN AGAINST, and only where this pass is what
 	// keeps that address current — the same three-way rule the loop applies,
 	// through the same helper, so a row cannot mean one thing when a tick
 	// wrote it and another when a button did.
-	integration.StampEndpoint(&next, kind, s.externalBase)
+	integration.StampEndpoint(&next, kind, s.webhookBase)
 	if forget {
 		if err := s.status.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "setup_status_not_forgotten",

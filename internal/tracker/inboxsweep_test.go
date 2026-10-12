@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -50,21 +51,26 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
 			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
-	// NO HORIZON OF ITS OWN, so the worker hands it no cutoff to trust:
-	// a static one is the value that stayed at the boot company's.
-	if jobs[0].Horizon != 0 {
-		t.Fatalf("the job declares a horizon of %s, which the worker would "+
-			"hold for the life of the process", jobs[0].Horizon)
+	// THE JOB'S HORIZON IS THE SOURCE, asked rather than copied: a value
+	// taken once is the one that stayed at the boot company's.
+	if jobs[0].Horizon == nil {
+		t.Fatal("the job declares no horizon, so the worker would hand it " +
+			"the sweep's own instant as its cutoff and every notice would go")
+	}
+	if got := jobs[0].Horizon(); got != horizon {
+		t.Fatalf("the job's horizon is %s, want the retention it was given", got)
 	}
 
 	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin
 	// for the life of the process: a sweep that asked for one of its own
 	// was refused on every tick of a running node.
 	holdTheAppliersPin(t, r)
-	// The cutoff argument is the worker's, derived from a horizon the job
-	// does not declare, so it is deliberately nonsense here: the job must
-	// derive its own from the instant.
-	swept, err := jobs[0].Run(t.Context(), wednesday, wednesday)
+	// THE CUTOFF IS THE WORKER'S, derived from the job's horizon asked at
+	// this sweep, so each tick here derives it exactly as the worker does.
+	sweep := func() (int64, error) {
+		return jobs[0].Run(t.Context(), wednesday, wednesday.Add(-jobs[0].Horizon()))
+	}
+	swept, err := sweep()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -73,7 +79,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 			"none — the oldest notice is 400 days old", swept)
 	}
 	horizon = 365 * 24 * time.Hour
-	swept, err = jobs[0].Run(t.Context(), wednesday, wednesday)
+	swept, err = sweep()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -103,7 +109,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 
 	// A SECOND SWEEP IS A NO-OP, so a tick with nothing to do costs one
 	// range delete and reports zero rather than re-reporting the first.
-	again, err := jobs[0].Run(t.Context(), wednesday, wednesday)
+	again, err := sweep()
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
@@ -112,30 +118,12 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheInboxSweepDeclinesWithNoStore keeps the nil guard honest: a node with
-// no store contributes no job rather than a job that panics on its first tick.
+// TestTheInboxSweepDeclinesWithNoStore keeps the zero guard honest: a node
+// with no tracker to sweep contributes no job rather than a job that fails on
+// its first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
-	if jobs := tracker.InboxJobs(nil, func() time.Duration { return time.Hour }); jobs != nil {
-		t.Fatalf("a node with no store contributed %d sweep jobs", len(jobs))
-	}
-}
-
-// A HORIZON NOBODY STATED SWEEPS NOTHING. Zero is the answer of a source with
-// no company behind it, and read as a duration it is "retain nothing" — the
-// cutoff would be the tick's own instant and every notice would go.
-func TestAnInboxHorizonOfZeroSweepsNothing(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	r.at = wednesday
-	routeTo(t, r, "t-1", "ENG-1", "bob")
-	holdTheAppliersPin(t, r)
-	jobs := tracker.InboxJobs(r.db, func() time.Duration { return 0 })
-	swept, err := jobs[0].Run(t.Context(), wednesday.Add(time.Hour), wednesday)
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-	if swept != 0 {
-		t.Fatalf("a zero horizon deleted %d notices", swept)
+	if jobs := tracker.InboxJobs(store.ReplicatedHandle{}, maintenance.Fixed(time.Hour)); jobs != nil {
+		t.Fatalf("a node with no tracker contributed %d sweep jobs", len(jobs))
 	}
 }

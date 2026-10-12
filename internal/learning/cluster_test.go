@@ -200,6 +200,7 @@ func TestTheStrongestPatternIsDraftedFirst(t *testing.T) {
 	if !strings.Contains(prompt, "fetch -> build -> tag -> announce") {
 		t.Fatalf("the prompt is about the wrong cluster:\n%s", prompt)
 	}
+	wantLowEffort(t, p.seen[0])
 }
 
 // A CLUSTER THE SEAT HAS ALREADY LEARNED IS NOT A REASON TO STOP: the next

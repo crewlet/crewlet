@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -76,6 +77,10 @@ type TransportOptions struct {
 	Config    Config
 	Publisher Publisher
 
+	// Claims is the fleet-wide registry each post is claimed in before it
+	// is published — see [FleetOptions.Claims]. Required.
+	Claims Claims
+
 	// Follows persists thread-follow state. Nil turns thread routing off,
 	// which is the pre-follow behaviour and legitimate for a single-agent
 	// workspace where there is no second bot for a reply to belong to.
@@ -142,7 +147,7 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 	}
 
 	fleet, err := NewFleet(FleetOptions{
-		Publisher: opts.Publisher, Connect: opts.Connect,
+		Publisher: opts.Publisher, Claims: opts.Claims, Connect: opts.Connect,
 		Backoff: opts.Backoff, Backfill: opts.Backfill, Now: t.now,
 	})
 	if err != nil {
@@ -189,8 +194,11 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 // config holds — that one is usually a ${VAR}.
 func (t *Transport) URL() string { return t.cfg.URL }
 
-// Start connects every configured seat, opening the websocket fleet that
-// delivers to the seats this node holds.
+// Start connects every configured seat — every one, on every node, whatever
+// seats this node holds. The fleet claims each post before it publishes it, so
+// exactly one node delivers a post however many read it (see the "Every node
+// listens" section of fleet.go): a node restarting or losing a seat leaves it
+// heard by the rest, with no gap and no handover.
 //
 // A SEAT THAT FAILS DOES NOT STOP THE OTHERS. One bot's token being revoked
 // is an ordinary state — an operator rotating credentials one at a time —
@@ -202,29 +210,53 @@ func (t *Transport) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// CONCURRENTLY, and that is not an optimisation. Each seat resolves
-	// its identity against the server, and a failing call spends the
-	// client's whole retry budget — so started in sequence, an instance
-	// that is down delays boot by that budget times the number of seats.
-	// Started together, it costs one budget however many seats there are,
-	// and the fleet's own reconnect loop keeps trying afterwards. The
-	// server's own typing cadence and Site URL are read beside them, once,
-	// for the same reason: read first, a down instance cost one budget for
-	// the read and another for the seats.
+	// THE INSTANCE AND EVERY SEAT'S IDENTITY ARE READ TOGETHER, and that
+	// is not an optimisation. Each is a call the client retries for its
+	// whole budget against a server that is down, so read in sequence an
+	// unreachable instance delays boot by that budget times every call:
+	// the instance read once per seat's token, then the identities. Read
+	// together they cost one budget however many seats there are, and the
+	// fleet's own reconnect loop keeps trying afterwards.
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		failed []string
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		failed   []string
+		resolved []identifiedSeat
 	)
+	fail := func(handle string, err error) {
+		mu.Lock()
+		failed = append(failed, handle)
+		mu.Unlock()
+		log.ErrorContext(ctx, "mattermost_seat_failed", "handle", handle,
+			"error", err.Error())
+	}
+	// The server's own typing cadence and Site URL, read ONCE from the
+	// first seat whose token the server takes: they are properties of the
+	// instance, not of a bot, and reading them per seat would be N
+	// identical calls.
 	wg.Go(func() { t.readInstance(ctx) })
 	for _, cfg := range t.cfg.Seats {
 		wg.Go(func() {
-			if err := t.startSeat(ctx, cfg.Resolve()); err != nil {
-				mu.Lock()
-				failed = append(failed, cfg.Handle)
-				mu.Unlock()
-				log.ErrorContext(ctx, "mattermost_seat_failed", "handle", cfg.Handle,
-					"error", err.Error())
+			seat, err := t.identify(ctx, cfg.Resolve())
+			if err != nil {
+				fail(cfg.Handle, err)
+				return
+			}
+			mu.Lock()
+			resolved = append(resolved, seat)
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	// THE SOCKETS ATTACH ONLY ONCE THE INSTANCE IS READ, because the first
+	// post a socket hears can raise a typing indicator, and that indicator
+	// must run at the cadence the server enforces ([Transport.StatusRefresh])
+	// — sent faster than the server allows, it is rejected and never shows.
+	// Concurrently for the identities' reason.
+	for _, seat := range resolved {
+		wg.Go(func() {
+			if err := t.attach(ctx, seat); err != nil {
+				fail(seat.seat.Handle, err)
 			}
 		})
 	}
@@ -242,14 +274,21 @@ func (t *Transport) Start(ctx context.Context) error {
 	return nil
 }
 
-// startSeat resolves one bot's identity and attaches its socket.
-func (t *Transport) startSeat(ctx context.Context, cfg SeatConfig) error {
+// identifiedSeat is a seat whose bot the server has named, with the client
+// that asked, before its socket is attached.
+type identifiedSeat struct {
+	seat   Seat
+	client *Client
+}
+
+// identify resolves one bot's identity.
+func (t *Transport) identify(ctx context.Context, cfg SeatConfig) (identifiedSeat, error) {
 	if cfg.Token == "" {
-		return fmt.Errorf("seat %q has no bot token", cfg.Handle)
+		return identifiedSeat{}, fmt.Errorf("seat %q has no bot token", cfg.Handle)
 	}
 	c, err := NewClient(ClientOptions{URL: t.cfg.URL, Token: cfg.Token, Now: t.now})
 	if err != nil {
-		return err
+		return identifiedSeat{}, err
 	}
 	// THE IDENTITY IS RESOLVED, never assumed from config. An id the
 	// engine guessed disables own-message suppression when it is wrong,
@@ -257,7 +296,7 @@ func (t *Transport) startSeat(ctx context.Context, cfg SeatConfig) error {
 	// for ever at one turn each.
 	me, err := c.Me(ctx)
 	if err != nil {
-		return fmt.Errorf("resolving identity: %w", err)
+		return identifiedSeat{}, fmt.Errorf("resolving identity: %w", err)
 	}
 	seat := Seat{Handle: cfg.Handle, Username: me.Username, UserID: me.ID}
 	if seat.Username == "" {
@@ -265,13 +304,17 @@ func (t *Transport) startSeat(ctx context.Context, cfg SeatConfig) error {
 		// configured name is the only one anybody can address.
 		seat.Username = cfg.Username
 	}
+	return identifiedSeat{seat: seat, client: c}, nil
+}
 
+// attach registers an identified seat and attaches its socket.
+func (t *Transport) attach(ctx context.Context, s identifiedSeat) error {
 	t.mu.Lock()
-	t.seats[cfg.Handle] = runningSeat{seat: seat, client: c}
+	t.seats[s.seat.Handle] = runningSeat(s)
 	t.mu.Unlock()
 
-	t.register(seat)
-	return t.fleet.Add(ctx, seat, c)
+	t.register(s.seat)
+	return t.fleet.Add(ctx, s.seat, s.client)
 }
 
 // register puts this seat's identities into the party registry.
@@ -337,37 +380,63 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 // bot: the typing cadence it enforces, and the Site URL it believes it is
 // served at.
 //
-// ONCE, AND AS NOBODY: the client config is the read a browser makes before
-// anybody signs in, so it needs no seat's session. It used to walk the seats
-// until one answered, which against an instance that does not answer spent
-// the client's whole retry budget once per seat — measured at forty seconds of
-// boot for a few seats against a refused connection — when the instance's
-// silence is the same answer whichever token asks.
+// THE NEXT SEAT'S TOKEN IS TRIED ONLY WHEN THE SERVER REFUSED THIS ONE'S
+// ([refusesToken]), because only that is a fact about a token. Every other
+// failure — nothing listening, a timeout, a server error — is a fact about
+// the SERVER, which the next token would only meet again after the client
+// had spent its whole retry budget once more: a seven-seat company booting
+// against an instance that was down spent seven budgets, a minute, here
+// before a seat had even begun to connect. What is read is best effort
+// either way, and the defaults stand without it.
 func (t *Transport) readInstance(ctx context.Context) {
-	c, err := NewClient(ClientOptions{URL: t.cfg.URL, Now: t.now})
-	if err != nil {
-		return
-	}
-	conf, err := c.ClientConfig(ctx)
-	if err != nil {
-		return
-	}
-	t.mu.Lock()
-	t.throttle = TypingThrottle(conf)
-	t.mu.Unlock()
+	for _, cfg := range t.cfg.Seats {
+		if cfg.Token == "" {
+			continue
+		}
+		c, err := NewClient(ClientOptions{URL: t.cfg.URL, Token: cfg.Token, Now: t.now})
+		if err != nil {
+			// The instance's URL, which every token shares.
+			return
+		}
+		conf, err := c.ClientConfig(ctx)
+		if refusesToken(err) {
+			continue
+		}
+		if err != nil {
+			log.WarnContext(ctx, "mattermost_instance_unread", "error", err.Error(),
+				"detail", "the server's typing cadence and Site URL could not be "+
+					"read, so indicators run at Mattermost's default cadence and a "+
+					"Site URL mismatch goes unreported until the next start")
+			return
+		}
+		t.mu.Lock()
+		t.throttle = TypingThrottle(conf)
+		t.mu.Unlock()
 
-	// THE SILENT FAILURE THIS EXISTS FOR: Mattermost accepts a websocket
-	// only from a browser whose Origin matches its Site URL, so a mismatch
-	// blinds every HUMAN in the workspace while the agents — which send no
-	// Origin the server checks the same way — keep working perfectly.
-	// Nothing else reports it.
-	if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
-		log.WarnContext(ctx, "mattermost_site_url_mismatch",
-			"configured", t.cfg.URL, "reported", reported,
-			"detail", "the server accepts a websocket only from an origin "+
-				"matching its own SiteURL, so browsers will fail to connect "+
-				"while agents keep working")
+		// THE SILENT FAILURE THIS EXISTS FOR: Mattermost accepts a
+		// websocket only from a browser whose Origin matches its Site
+		// URL, so a mismatch blinds every HUMAN in the workspace while
+		// the agents — which send no Origin the server checks the same
+		// way — keep working perfectly. Nothing else reports it.
+		if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
+			log.WarnContext(ctx, "mattermost_site_url_mismatch",
+				"configured", t.cfg.URL, "reported", reported,
+				"detail", "the server accepts a websocket only from an origin "+
+					"matching its own SiteURL, so browsers will fail to connect "+
+					"while agents keep working")
+		}
+		return
 	}
+}
+
+// refusesToken reports a failure that is the server refusing one bot's token
+// rather than the server failing: an unauthenticated or forbidden answer.
+func refusesToken(err error) bool {
+	switch Status(err) {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return true
+	}
+	return false
 }
 
 // Stop disconnects everything.
@@ -466,6 +535,9 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		rootSeen = rootSeen || isRoot
 		out.Messages = append(out.Messages, notify.Message{
 			SenderID: post.UserID,
+			// THE POST ID, which is what the trigger's `ts` is on this
+			// backend — see [notify.Message.ID].
+			ID: post.ID,
 			// NO NAME. A Mattermost post carries a user id and nothing
 			// else, so the party registry is the only thing that can
 			// turn one into a colleague — and a miss renders the raw
@@ -560,6 +632,13 @@ func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ st
 // where taking the indicator down is the one thing that cannot fail.
 func (t *Transport) ClearStatus(context.Context, string, string, string) bool { return true }
 
+// seatToken is the bot token a seat's transport authenticates with — and
+// therefore the one [SeatTokens] checks. Empty when the seat names a variable
+// that is unset.
+func seatToken(role *org.Role, lookup org.EnvLookup) string {
+	return envref.Resolve(role.Mattermost.BotToken, lookup)
+}
+
 // SeatsFrom builds the transport's seat list from an org.
 //
 // The USERNAME defaults to the handle, and both are needed downstream — so
@@ -574,7 +653,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		if role.IsHuman() || role.Mattermost.IsZero() {
 			continue
 		}
-		token := envref.Resolve(role.Mattermost.BotToken, lookup)
+		token := seatToken(role, lookup)
 		if token == "" {
 			// A seat whose ${VAR} did not resolve is skipped rather
 			// than started with an empty token, which would fail at

@@ -9,7 +9,7 @@
  * # A person is invited or created ON A SEAT, and only there
  *
  * Every person holds exactly one human seat for as long as they exist (the
- * engine refuses a person with none, ADR-0026), so the place a person comes
+ * engine refuses a person with none, ADR-0032), so the place a person comes
  * from is a vacant human seat: its card's menu on the org chart, the seat's
  * peek, and its page — each through [SeatHolding]'s three states (held,
  * invited, vacant) and the dialogs [SeatGestureDialog] opens. People & access
@@ -60,7 +60,7 @@ import {
   type SeatInvitation,
 } from "~/contract/identity.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
-import { loginKind, loginProblem } from "~/lib/login.ts";
+import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
@@ -331,25 +331,14 @@ export function pressLabel(
 }
 
 /**
- * What a credential the directory binds to no seat lacks, and who gives it.
+ * What a credential the directory binds to no seat lacks, and how it gets it.
  *
- * TWO DIFFERENT FACTS by whose login it is. A PERSON holds a human seat for as
- * long as they exist, so one with none was recorded before that held — a
- * fault an administrator mends (`person_without_seat` in the directory's
- * report). A service account or a Tier A token's session acting as itself is
- * ordinary, and binding its row to a human seat is what would add the seat's
- * work. Worded alike, the first read as a choice and the second as a fault.
+ * ONLY A CREDENTIAL IS EVER UNBOUND — a service account or a Tier A token's
+ * session acting as itself, which is ordinary — since a person holds a human
+ * seat for as long as they exist (ADR-0032). Binding its row to a human seat
+ * is what would add the seat's work.
  */
 export function UnboundRemedy({ login }: { login: string }) {
-  if (loginKind(login) === "person") {
-    return (
-      <>
-        Every person holds a human seat and you hold none — you were recorded before that held — so
-        ask whoever manages people to give you one: work the org chart hands to a seat reaches you
-        once they do.
-      </>
-    );
-  }
   return (
     <>
       Work the org chart hands to a seat reaches this credential once the directory binds its row to
@@ -1014,7 +1003,7 @@ export function CancelInvitation({
   onChanged,
 }: {
   row: Pick<SeatInvitation, "id" | "email" | "sealed"> & {
-    /** The seat it names, by handle — absent on one issued before every invitation named one. */
+    /** The seat it names, by handle. */
     seat?: string;
   };
   /** The seat's name as the chart says it, where the caller has it. */

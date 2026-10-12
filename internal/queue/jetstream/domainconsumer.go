@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/textcut"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -67,23 +68,34 @@ type DomainConsumer struct {
 	// handle cleared by a failed reset can be rebuilt without the caller
 	// knowing how one is configured.
 	want jetstream.ConsumerConfig
+
+	// pull is the consumer's standing pull (pullrequest.go): one inbox
+	// every fetch's request is answered on, and what it delivered that no
+	// fetch has taken. Made by the first fetch, dropped by a reset, whose
+	// consumer those deliveries belonged to, and released by [Close], whose
+	// consumer stays. Guarded by mu.
+	pull *puller
+	// closed is [DomainConsumer.Close] having run. Guarded by mu.
+	closed bool
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
-// node's applier before one is acknowledged, and it is THE COUNT BOUND ON A
-// PULL.
-//
-// The vendored client cannot bound one pull by both bytes and count, so the
-// applier pulls by bytes and the count has to live somewhere the broker
-// enforces it. This is that place: a pull hands over at most this many
-// records however many bytes it asked for, and [DomainConsumer.Fetch] returns
-// every one of them. The alternative — the applier taking a prefix of a
-// byte-bounded batch — left the remainder delivered and unacknowledged, so
-// the broker hit its own default cap of a thousand, handed over nothing more
-// for a thirty-second ack window, and then redelivered the same prefix.
+// node's applier before one is acknowledged.
 //
 // [statelog.FetchMessages] is the number, and it is the applier's transaction
-// budget: one pull is at most one transaction's worth of records in flight.
+// budget: one pull is at most one transaction's worth of records, and this
+// ceiling keeps it at most one transaction's worth IN FLIGHT. The pull carries
+// the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
+// the bound across pulls: records delivered and not yet acknowledged, because
+// their transaction has not committed, hold back the next pull rather than
+// piling up behind it.
+//
+// It used to be the ONLY count bound, because the client library could not
+// send one pull with both a count and a byte bound and the applier pulled by
+// bytes. Before that it was the applier taking a prefix of a byte-bounded
+// batch, which left the remainder delivered and unacknowledged, so the broker
+// hit its own default cap of a thousand, handed over nothing more for a
+// thirty-second ack window, and then redelivered the same prefix.
 const domainConsumerMaxAckPending = statelog.FetchMessages
 
 // domainConsumerAckWait is how long the broker waits for an acknowledgement
@@ -206,24 +218,20 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// [DomainConsumer.resumeAt] — see the doc comment for why the obvious
 	// create-or-update cannot do either job.
 	//
-	// THE PROVISIONING BUDGET AND ITS BREADCRUMB, because this is a
-	// replicated create on the boot path like every other one — and it does
-	// not come through [Queue.ensureDurableConsumer], whose create-or-
-	// read-back shape is wrong here (see above: an existing consumer is
-	// judged, not merely found). Without them the caller's context
-	// reached nats.go with no deadline and the client's five-second default
-	// decided a clustered boot, silently.
+	// A BREADCRUMB, and a provisioning budget on the create below, because
+	// this is a replicated create on the boot path like every other one —
+	// and it does not come through [Queue.ensureDurableConsumer], whose
+	// create-or-read-back shape is wrong here (see above: an existing
+	// consumer is judged, not merely found). Without them the caller's
+	// context reached nats.go with no deadline and the client's five-second
+	// default decided a clustered boot, silently.
 	//
-	// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the read-back
-	// below must not inherit a deadline this create may have spent.
-	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
-	defer cancel()
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.
 	//
 	// Both halves were wrong in the same way, at opposite ends: armed
 	// before the lookup while saying "created", and left armed across the
-	// read-back and the alignment after it. Either way the line names a
+	// read-back after it. Either way the line names a
 	// step this member is not on, which is the one thing it exists to get
 	// right.
 	//
@@ -239,9 +247,11 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	})
 
 	// THE LOOKUP IS SIZED AS A READ AND RE-ASKED, like its three siblings —
-	// see [Queue.askRead]. It shared the create's term, so a probe the
-	// metadata group never answered spent the whole clustered budget and
-	// left none of it for the create that would have settled the question.
+	// see [Queue.askRead] — on a ceiling of its own, and the create's budget
+	// starts only once it has returned. It shared the create's term, so a
+	// probe the metadata group never answered spent the whole clustered
+	// budget and left none of it for the create that would have settled the
+	// question.
 	cons, err := handle.lookup(ctx)
 	if jsprovision.Unanswered(ctx, err) {
 		// TOLD NOTHING, which is not "it is not there" — see
@@ -260,11 +270,28 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	}
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
+		// THE CREATE'S BUDGET IS DERIVED HERE, ONCE THE LOOKUP HAS
+		// RETURNED: the lookup and the create get separate deadlines, as
+		// at every other create site — see
+		// [Queue.createOrObserveStream]. Derived before the lookup, it
+		// ran while the lookup did, so an unanswered lookup spent up to
+		// its whole ceiling of the create's budget: on a solo broker,
+		// where the two are equal, an exhausted lookup handed the create
+		// a context that had already expired, the create never reached
+		// the broker, and the open failed over a consumer that "is not
+		// there"; on a fleet the create kept ninety seconds of its two
+		// minutes.
+		//
+		// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the
+		// read-back below must not inherit a deadline this create may
+		// have spent.
+		createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
+		defer cancel()
 		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
 		// gives: this consumer is placed by the same metadata group as
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
-		err = jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+		err = q.provisioning().Place(createCtx, func(ctx context.Context) error {
 			q.noteConsumerProposal()
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
@@ -303,13 +330,13 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// it.
 			err = fmt.Errorf("%w%s", err,
 				jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
-		case !jsprovision.Unplaceable(err):
+		case !jsprovision.Refused(err):
 			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
 			// the consumer this create met is one THIS NODE made on an
 			// earlier boot and has not been told about yet — the name
 			// carries the node id, so no peer can have made it.
 			//
-			// EVERY ERROR BUT AN UNPLACEABLE ONE, not just
+			// EVERY ERROR BUT A REFUSAL, not just
 			// ErrConsumerExists, because the create announces this in
 			// two shapes and the tidy one is the rarer. nats.go returns
 			// the existing consumer when the configs MATCH and
@@ -319,15 +346,17 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			// there all the same. That is the shape a clustered boot
 			// actually produces, and it is the one
 			// [Queue.ensureDurableConsumer] has always read back.
-			// Unplaceable is excluded for its own reason: nothing was
-			// placed, so there is nothing to become visible.
+			// A refusal is excluded for its own reason — see
+			// [jsprovision.Refused]: nothing was placed, and no race
+			// explains the answer, so there is nothing to become
+			// visible.
 			//
 			// Read it back and hold it to the checkpoint, which is the
 			// same rule the lookup's own found branch below applies: a
 			// consumer an earlier boot made is one whose position this
 			// node's rows may no longer agree with.
 			createErr := err
-			err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+			err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
 				var e error
 				cons, e = q.js.Consumer(ctx, stream, name)
 				return e
@@ -444,9 +473,9 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// dropped failed the reset when that expired rather than being asked
 	// again. Asking twice is safe — a delete that landed the first time is
 	// not-found the second, and not-found is the answer this wants.
-	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisionBudget())
+	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelDelete()
-	if err := jsprovision.Ask(deleteCtx, c.q.Clustered().AskTerm(),
+	if err := c.q.provisioning().Ask(deleteCtx,
 		func(ctx context.Context) error {
 			err := c.q.js.DeleteConsumer(ctx, c.stream, c.name)
 			if errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -458,8 +487,15 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 			c.name, c.stream, err)
 	}
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
-	// the handle must not go on naming one.
+	// the handle must not go on naming one — and what the standing pull
+	// holds was delivered by the consumer that is gone: the new one hands
+	// those records over again from the checkpoint, so they are dropped
+	// with the inbox rather than handed to the next fetch a second time.
 	c.cons = nil
+	if c.pull != nil {
+		c.pull.close()
+		c.pull = nil
+	}
 	// THROUGH [jsprovision.Place] like every other replicated create,
 	// which this one was not. A domain consumer is placed by the same
 	// metadata group as the durable consumers beside it, so it meets the
@@ -467,10 +503,10 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// is short of members, and a request the group never answers — and it
 	// met them with no budget at all, which is nats.go's undeclared
 	// five-second default on whatever context the applier happened to hold.
-	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
-	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
 			c.q.noteConsumerProposal()
 			var e error
@@ -515,10 +551,10 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	// THE SAME BUDGET AND THE SAME RE-ASK as Reset's own create: this is
 	// the identical call, reached when that one failed, so it faces the
 	// identical transient conditions.
-	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
-	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+	err := c.q.provisioning().Place(createCtx,
 		func(ctx context.Context) error {
 			c.q.noteConsumerProposal()
 			var e error
@@ -598,36 +634,12 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 		}
 	}
 	if drift == driftNone {
-		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer that
-		// is kept, because it is the count bound on every pull and a
-		// consumer created by an earlier build carries the broker's own
-		// default. A rebuilt one needs nothing: it was made from this
-		// build's configuration.
-		//
-		// ITS OWN BUDGET, derived here from the caller's context rather
-		// than taken from it or from what the read above left, because
-		// none of those is right for it. The per-create context may be the
-		// deadline that just expired — that is what puts the read-back
-		// path here at all, and handed it this call fails instantly on a
-		// consumer that was just found. The boot's has no deadline of its
-		// own, so it would reach nats.go under the client's five-second
-		// default, which is what every other replicated call on this path
-		// was fixed for: an UpdateConsumer is a write against the same
-		// metadata group as the create. And what a read leaves is sized
-		// for a read, not for a write.
-		//
-		// So the caller passes the context that bounds the BOOT and this
-		// owns the term, which is [jsprovision.Settle]'s arrangement for
-		// the same reason. The rebuild below takes the boot's context too,
-		// because [DomainConsumer.Reset] owns its terms the same way.
-		alignCtx, cancel := context.WithTimeout(ctx, c.q.provisionBudget())
-		defer cancel()
-		aligned, err := c.q.alignDomainConsumer(alignCtx, c.stream, cons, info.Config)
-		if err != nil {
-			return err
-		}
+		// KEPT AS IT IS: every consumer of this name was made from
+		// [domainConsumerConfig], so its in-flight ceiling and ack wait are
+		// already this build's. The rebuild below takes the boot's context,
+		// because [DomainConsumer.Reset] owns its terms.
 		c.mu.Lock()
-		c.cons = aligned
+		c.cons = cons
 		c.mu.Unlock()
 		return nil
 	}
@@ -709,12 +721,8 @@ func (c *DomainConsumer) afterFailedRebuild(ctx context.Context, drift consumerD
 		// WHICHEVER CONSUMER THE BROKER HOLDS UNDER THIS NAME, and the
 		// name carries the node id, so it is one of two: the old one, when
 		// the delete was refused, or the rebuilt one, when the create
-		// placed it before reporting failure. Neither gives a record away.
-		//
-		// NOT ALIGNED: its ceiling is raised by an UpdateConsumer, a write
-		// to the metadata group that has just refused this node one, and a
-		// ceiling left at an earlier build's default makes a pull smaller
-		// rather than wrong. The next open or reset makes it this build's.
+		// placed it before reporting failure. Neither gives a record away,
+		// and both were made from [domainConsumerConfig].
 		c.mu.Lock()
 		c.cons = held
 		c.mu.Unlock()
@@ -922,9 +930,10 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 	return cons, err
 }
 
-// askRead runs one metadata READ on a domain consumer's open: under
-// [Queue.lookupBudget] as its ceiling, re-issued by [jsprovision.Ask] while
-// nobody answers.
+// askRead runs one metadata READ on a state log's bring-up — its stream's
+// ceiling when the logs are sized, and everything a domain consumer's open
+// reads: under the lookup ceiling of [Queue.provisioning], re-issued by
+// [jsprovision.Timing.Read] while nobody answers.
 //
 // # Why a read on this path is not sized like the writes beside it
 //
@@ -941,34 +950,9 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 // what an earlier read or write left: each gets its own term, so no one of
 // them decides how long the next may take.
 func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) error {
-	readCtx, cancel := context.WithTimeout(ctx, q.lookupBudget())
+	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancel()
-	return jsprovision.Ask(readCtx, q.Clustered().AskTerm(), read, nil)
-}
-
-// alignDomainConsumer updates a kept consumer's updatable bounds to this
-// build's, leaving its position alone.
-//
-// It is handed the configuration the consumer REPORTED rather than building
-// one from this build's defaults, because the update carries every field: a
-// config built fresh would reset the start policy, which the broker refuses to
-// move and which is the checkpoint's to decide.
-func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
-	cons jetstream.Consumer, config jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-
-	if config.MaxAckPending == domainConsumerMaxAckPending &&
-		config.AckWait == domainConsumerAckWait {
-		return cons, nil
-	}
-	config.MaxAckPending = domainConsumerMaxAckPending
-	config.AckWait = domainConsumerAckWait
-	q.noteConsumerProposal()
-	updated, err := q.js.UpdateConsumer(ctx, stream, config)
-	if err != nil {
-		return nil, fmt.Errorf("raise the consumer's in-flight ceiling to %d: %w",
-			domainConsumerMaxAckPending, err)
-	}
-	return updated, nil
+	return q.provisioning().Read(readCtx, read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.
@@ -987,12 +971,27 @@ func domainConsumerName(stream, nodeID string) string {
 
 	readable := "statelog__" + safe(stream) + "__" + safe(nodeID)
 	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
+		// On a character boundary: a byte slice through a multi-byte
+		// node id or group name is a consumer name that is not valid
+		// UTF-8, which the broker stores mangled.
+		readable = textcut.Bytes(readable, max)
 	}
 	return readable + "__" + id
 }
 
-// Fetch implements [statelog.Fetcher].
+// Fetch implements [statelog.Fetcher]: the next burst of records, up to
+// maxMessages of them and, when maxBytes is positive, maxBytes of them,
+// waiting up to wait for the first.
+//
+// THROUGH THE CONSUMER'S STANDING PULL (pullrequest.go), never a pull of its
+// own. A request carries BOTH bounds and the server enforces both, so nothing
+// past either is delivered to one — see pullrequest.go for why the request is
+// made by hand, where the client library's byte-bounded fetch allocated
+// 32 MiB on every call. Every request is answered on the one inbox the handle
+// holds, so a record the server delivers to a request the client stopped
+// counting — under load the server's clock and the client's disagree about
+// when one ends — lands in the handle's buffer rather than on an inbox nobody
+// holds, where it waited out the thirty-second ack window.
 //
 // A message that cannot report its own sequence is DROPPED with its
 // acknowledgement withheld, rather than passed on with a zero: the sequence is
@@ -1000,69 +999,55 @@ func domainConsumerName(stream, nodeID string) string {
 // expectation, so a record delivered as sequence zero would move the cursor
 // backwards on every node that applied it.
 //
-// # Everything a pull delivered is returned
+// # It returns at the first burst, not at the end of the wait
 //
-// A byte-bounded pull cannot also be count-bounded by this client, and the
-// count is enforced by the consumer's own in-flight ceiling instead — see
-// [domainConsumerMaxAckPending]. So maxMessages is passed to the broker only
-// on the count-bounded path, and on the byte-bounded one the batch is drained
-// whole: a message the broker delivered and this call did not return is one it
-// holds against that ceiling and redelivers after the ack window, which is a
-// hole in the applier's run for thirty seconds.
+// A pull that is read until its request ENDS holds whatever reached it for the
+// rest of its wait — one record does not end a request — so a record appended
+// a millisecond into a half-second pull was applied half a second later, and a
+// barrier appended onto a quiet log sat in a pull nobody had finished
+// collecting, against a read budget it could exceed. So a fetch hands over
+// what has arrived as soon as the burst it belongs to is complete — the newest
+// delivery reports nothing pending behind it — or a bound is met, which is
+// what [statelog.Fetcher] asks for; the runner decides whether a partial run
+// is worth another fetch.
+//
+// # Everything the broker delivered is returned, by this call or a later one
+//
+// What a request delivers past what one call returns stays in the handle's
+// buffer, and the next call hands it over first. And a CONTEXT THAT ENDS
+// returns nothing and leaves what was delivered there: returned beside the
+// error, a stopping caller would drop records the broker holds in flight until
+// the ack window, while left, they reach the next reader on this handle at
+// once.
 func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	wait time.Duration) ([]statelog.Message, error) {
 
 	if maxMessages <= 0 {
 		return nil, nil
 	}
-	opts := []jetstream.FetchOpt{jetstream.FetchMaxWait(wait)}
-	var batch jetstream.MessageBatch
-	var err error
-	cons, err := c.consumerFor(ctx)
+	// THE STANDING PULL FIRST, which is what refuses a closed handle before
+	// anything is rebuilt for it; it sends nothing.
+	p, err := c.standing()
 	if err != nil {
 		return nil, err
 	}
-	if maxBytes > 0 {
-		batch, err = cons.FetchBytes(maxBytes, opts...)
-	} else {
-		batch, err = cons.Fetch(maxMessages, opts...)
+	// THE CONSUMER IS ENSURED BEFORE A REQUEST IS SENT, so a handle a failed
+	// reset cleared is rebuilt before a request is addressed to a name the
+	// broker does not hold — see [DomainConsumer.consumerFor].
+	if _, err = c.consumerFor(ctx); err != nil {
+		return nil, err
 	}
-	if err != nil {
+	msgs, err := p.fetch(ctx, maxMessages, max(maxBytes, 0), wait)
+	switch {
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	case err != nil:
 		return nil, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
 	}
-
-	// THE CONTEXT ENDS THE DRAIN, and until it did this function took a
-	// context and used it for nothing but its own return value.
-	//
-	// A batch closes when it is FULL or when `wait` expires — one record
-	// arriving does not end it — so a caller that wanted the records
-	// already in hand had no way to say so and paid the whole wait. The
-	// applier's [statelog.Runner] is exactly that caller: a barrier
-	// appended onto a quiet log sat in a batch nobody had finished
-	// collecting for five seconds, against a two second read budget, so
-	// every linearizable read on an idle company refused `behind`.
-	//
-	// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller
-	// deciding it has waited long enough, not a failure — the messages
-	// already taken are real, and the ones still in the batch are
-	// redelivered because they were never acknowledged.
-	var out []statelog.Message
-	msgs := batch.Messages()
-	for {
-		var msg jetstream.Msg
-		var open bool
-		select {
-		case msg, open = <-msgs:
-			if !open {
-				msg = nil
-			}
-		case <-ctx.Done():
-		}
-		if msg == nil {
-			break
-		}
-		meta, err := msg.Metadata()
-		if err != nil {
+	out := make([]statelog.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		meta, unreadable := msg.Metadata()
+		if unreadable != nil {
 			// NOT ACKNOWLEDGED. A message whose metadata is
 			// unreadable is one this node cannot place in the log,
 			// and acknowledging it would move the broker's floor
@@ -1072,15 +1057,55 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 		out = append(out, statelog.Message{
 			Seq:      meta.Sequence.Stream,
 			StoredAt: meta.Timestamp,
-			Payload:  msg.Data(),
-			Ack:      msg.Ack,
+			Payload:  msg.Data,
+			Ack:      func() error { return msg.Ack() },
 		})
 	}
-	if err := batch.Error(); err != nil && !errors.Is(err, context.Canceled) {
-		return out, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
-	}
-	return out, ctx.Err()
+	return out, nil
 }
+
+// standing is the handle's standing pull, made on first use.
+func (c *DomainConsumer) standing() (*puller, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, fmt.Errorf("jetstream: %s's handle was closed; open the "+
+			"consumer again to read it: %w", c.name, errHandleClosed)
+	}
+	if c.pull != nil {
+		return c.pull, nil
+	}
+	p, err := c.q.newPuller(c.stream, c.name)
+	if err != nil {
+		return nil, err
+	}
+	c.pull = p
+	return p, nil
+}
+
+// Close gives up this handle for good, leaving the consumer on the broker for
+// whoever opens it next — a stopped engine's successor in the same process,
+// on the same connection. Call it once nothing will fetch through the handle
+// again; a fetch after it is refused.
+//
+// WHAT THE HANDLE HOLDS IS HANDED BACK, not left: its standing pull's buffer,
+// and every record a request it left standing delivers from here (see
+// pullrequest.go's head). Left, those went to a handle nobody would read, and
+// the successor's own request — queued behind the abandoned one, since the
+// server serves them oldest first — waited out the ack window for a record
+// already on the log. Idempotent.
+func (c *DomainConsumer) Close() {
+	c.mu.Lock()
+	p := c.pull
+	c.pull, c.closed = nil, true
+	c.mu.Unlock()
+	if p != nil {
+		p.release()
+	}
+}
+
+// errHandleClosed is a fetch through a [DomainConsumer] that was closed.
+var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
 // not delivered, which is what tells a partially filled batch whether waiting
@@ -1216,7 +1241,7 @@ func domainGroupName(stream, group string) string {
 	id := hex.EncodeToString(sum[:6])
 	readable := safe(group) + "__" + safe(stream)
 	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
+		readable = textcut.Bytes(readable, max) // on a character boundary; see domainConsumerName
 	}
 	return readable + "__" + id
 }

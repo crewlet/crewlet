@@ -37,6 +37,19 @@
 // written beside it, which this replaces. Placing a card on a board used to be
 // one of them; it is `place_work_item` now, and its route an adapter over it.
 //
+// A PROJECT'S FILE BYTES are three more, for a different reason: a seat has
+// file tools, but a tool answers a model a page at a time, and a person's
+// upload or download STREAMS a gibibyte through one request. So
+// `/work/files/{project}/{path}` is decided on the project its path names by
+// the rows the file tools are ([authz.ActionFileRead], [authz.ActionFileWrite],
+// [authz.ActionFileRemove]), writes through the file tools' own writer, takes
+// its operation from the request's key and leaves the same record — and keeps
+// the pace it streams at, and the codes that are about the bytes rather than
+// the write (files.go). They were the API root's own routes once, taking an
+// `op_id` query parameter no other write here reads and mounted once from a
+// source taken when the API was wired, so a node handed its first company by
+// an apply served no file at all until it was restarted.
+//
 // # Authority is decided ONCE, and read identically everywhere
 //
 // Every route is mounted through [authz.Router] with a policy. Where the
@@ -84,6 +97,12 @@
 //   - 422 `invalid` — the domain refused an argument on its own rules, or a
 //     destructive verb's `?confirm=` does not name what it would destroy; the
 //     detail is its own sentence.
+//   - the byte routes keep the codes that are the BYTES' own and a file's as a
+//     resource with an ETag — `400 bad_path`, `bad_if_match` and
+//     `unreadable_body`, `404 no_project` and `no_file`, `409 upload_expired`,
+//     `412 version_moved`, `413 body_too_large`, `500 content_corrupt` and
+//     `503 content_unavailable` (files.go) — and answer everything else as
+//     above.
 //   - 200 / 202 / 503 — a write that was made answers the tool's own outcome:
 //     applied, pending with the position to read at, or unknown carrying the
 //     operation key a retry must reuse — and, where this node's operation
@@ -217,6 +236,12 @@ type Halves struct {
 	// PageStore is the knowledge base's writer, for the verbs no tool makes.
 	// Nil leaves the pages half unserved.
 	PageStore PageStore
+
+	// Objects is this node's object store, which a project's file BYTES
+	// stream through — the rows are Work's own file reader and writer. Nil,
+	// or a Work half holding no files, leaves the byte routes unserved: a
+	// company on a vendor's tracker, or a node running no object store.
+	Objects ObjectStore
 }
 
 // servesWork reports whether these halves hold the tracker's whole surface.
@@ -276,6 +301,21 @@ type Options struct {
 	// record the dispatch publishes for a tool ([operator.AuditGesture]):
 	// the node's own queue. REQUIRED, for [operator.Options.Audit]'s reason.
 	Audit operator.AuditPublisher
+
+	// PaceClock is the clock a file upload's and download's pace is
+	// measured on, and every read and write deadline it sets is taken from
+	// ([FilePace]). Nil takes time.Now.
+	//
+	// NOT a clock pinned to one instant, as a suite pins the one that
+	// stamps answers: the pace is a DURATION, the time spent inside a
+	// body's reads, and a clock that never moves would measure every read
+	// as taking none — the pace charged nothing, whatever it was meant to
+	// charge. Injectable so a suite can move it by exactly the time a fake
+	// client or store took, rather than sleep that long. And time.Now itself
+	// rather than one converted to UTC, since a converted time drops the
+	// monotonic reading, and a pace on the wall reading alone moves with
+	// every step the system clock takes.
+	PaceClock func() time.Time
 }
 
 // Dispatcher is the operator surface's dispatch, as this surface calls it.
@@ -291,6 +331,7 @@ type Service struct {
 	chart    authz.Chart
 	operator Dispatcher
 	audit    operator.AuditPublisher
+	pace     func() time.Time
 }
 
 // New builds the surface.
@@ -315,9 +356,13 @@ func New(opts Options) (*Service, error) {
 	if opts.Audit == nil {
 		return nil, operator.ErrNoAudit
 	}
+	pace := opts.PaceClock
+	if pace == nil {
+		pace = time.Now
+	}
 	return &Service{
 		halves: opts.Halves, chart: opts.Chart,
-		operator: opts.Operator, audit: opts.Audit,
+		operator: opts.Operator, audit: opts.Audit, pace: pace,
 	}, nil
 }
 
@@ -339,6 +384,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		}
 	}
 	s.workRoutes(mount)
+	s.fileRoutes(mount)
 	s.pageRoutes(mount)
 	return errors.Join(failures...)
 }
@@ -415,15 +461,24 @@ func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
 // person met it through the act route or their assistant — where the tool's
 // own gate refuses it — and was not when they met it here. Nobody resolved
 // is not recorded: there is nobody to name, and the guard's own trail counts
-// a refused credential.
+// a refused credential. Nor is a READ — a file's download, the one this
+// surface serves — for the dispatch's own reason: it records no proven read,
+// refused or not, so the same refusal met through a person's assistant left
+// no row.
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, p authz.Policy,
 	d authz.Decision) {
 
-	if _, how := iam.From(r.Context()); how == iam.Resolved {
+	if _, how := iam.From(r.Context()); how == iam.Resolved && !reads(r) {
 		operator.AuditRefusal(r.Context(), s.audit, types.TransportWork,
 			string(p.Action), "", d.Unknown())
 	}
 	operator.RefuseDecision(w, r, p.Action, d)
+}
+
+// reads reports whether a request only reads — the methods HTTP itself calls
+// safe, which the guard's cross-site rule reads the same way.
+func reads(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead
 }
 
 // decide takes one decision this surface makes after reading a row, and

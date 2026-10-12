@@ -33,6 +33,7 @@ import { COMPANY_KEY, type KeySource } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
+import { healthFrame } from "~/test/health.ts";
 
 export class InertWebSocket {
   static CONNECTING = 0;
@@ -65,7 +66,7 @@ export const json = (payload: unknown, status = 200, headers: Record<string, str
 export function company(): CompanyDocument {
   return {
     name: "Acme",
-    providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5" } } },
+    providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5-5" } } },
     roles: [
       { name: "CEO", handle: "ceo", goal: "Lead", manages: ["engineering"] },
       { name: "Designer", handle: "designer", goal: "Design" },
@@ -445,7 +446,7 @@ export function mountBuilder({
   location.hash = hash;
   engine.install();
   const store = new Store();
-  if (connected) store.applyHealth({ status: "ok" });
+  if (connected) store.applyHealth(healthFrame());
   const snapshot = org === undefined ? (connected ? {} : null) : org;
   if (snapshot) store.applyOrg(snapshot);
   const socket = new LiveSocket(store);
@@ -453,11 +454,14 @@ export function mountBuilder({
     Promise.resolve(what === "viewer" ? viewer() : query(what));
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ViewerProvider>
+      {/* WHO IS READING, which the frame supplies and the builder reads:
+          their grants, the units they lead, and whether the company document
+          is managed (ADR-0030). It answers through the `viewer` option. */}
+      <ViewerProvider>
+        <Router>
           {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
-        </ViewerProvider>
-      </Router>
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return { store, socket, view };

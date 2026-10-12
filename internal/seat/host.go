@@ -160,7 +160,7 @@ type Config struct {
 	//
 	// It runs on the sweep path and must not block: read a flag, do not
 	// query a store.
-	Ready func() bool
+	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
 	// and names what stopped it when the answer is no.
@@ -171,17 +171,16 @@ type Config struct {
 	// Ready is about work this node has not taken yet: a copy that is
 	// merely BEHIND catches up, so withholding claims is the whole remedy
 	// and dropping work in hand would be pure loss. This one is about work
-	// already in hand, and it fires only where that work would be WRONG —
-	// an applier halted at a record it cannot decode, an eviction whose
-	// peers are dropping everything this node writes, rows below the log's
-	// first surviving record with a hole nothing will fill. A seat left
-	// running on any of those answers its own tools out of a copy the fleet
-	// has abandoned.
+	// already in hand, and it fires only where this node cannot serve that
+	// work at all — in the engine, a node that can no longer say where the
+	// estate its seats read and write is served. A copy of the estate that
+	// is WRONG is not such a case: the node takes it out of service and its
+	// seats read the estate from another data node, which is the same
+	// answer a peer would give them.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.
-	// The node has bad ROWS, not a lost lease, and abandoning a turn
-	// mid-flight would cost more than the stale answer it is racing.
+	// Abandoning a turn mid-flight would cost more than finishing it.
 	//
 	// Nil keeps every seat, which is the single-node case and the case
 	// before a state log exists. It runs on the sweep path and, like
@@ -214,7 +213,7 @@ type Host struct {
 	owner   string
 	nodeID  string
 	seats   func() []placement.Seat
-	ready   func() bool
+	ready   func(ctx context.Context) bool
 	// serviceable is Config.Serviceable — whether held seats may stay.
 	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
@@ -261,9 +260,32 @@ type Host struct {
 	unmannedRoles map[placement.NodeRole]struct{}
 
 	nodeLease *coord.Lease
-	last      *SweepResult
-	running   bool
-	draining  bool
+
+	// presenceRenewedAt is when the last SUCCESSFUL claim of nodeLease was
+	// asked for — what [Host.HoldsPresence] measures, for the reason
+	// heldSeat.renewedAt gives: a lease this node can no longer renew is
+	// held only until its TTL runs out, whatever this node can see.
+	presenceRenewedAt time.Time
+
+	last     *SweepResult
+	running  bool
+	draining bool
+
+	// withdrawn is whether this node has stepped out of placement because it
+	// cannot serve its seats (see [Host.setWithdrawn]), as of the last sweep.
+	withdrawn bool
+
+	// placeable are the seats some live node may run, as of the last sweep:
+	// the company's seats less the unplaceable ones. The count this node
+	// advertises counts only its leases on these ([Host.placedCount]).
+	placeable map[string]struct{}
+
+	// resweep is the running sweep loop's ask for a pass before its next
+	// tick ([Host.Resweep]), buffered by one so an ask that finds one
+	// pending adds nothing to it. MADE BY EACH [Host.Start] and nil while
+	// the host is not running, so an ask made then is dropped rather than
+	// kept for a loop that does not exist yet.
+	resweep chan struct{}
 
 	// lastBeat is when the heartbeat goroutine last proved it was turning.
 	// It is what the watchdog reads; see [Host.Beat].
@@ -515,11 +537,19 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 //
 // Exported because every budget that races a lease has to be derived from the
 // lease it is racing, and the callers that derive one live in other packages:
-// the drain's give-back budget in [internal/node] and the watchdog threshold
-// in [internal/engine]. Written against the constant instead, each of them
+// the stop allowance a drain in [internal/node] begins through [WithinStop]
+// when its caller carries none, and the watchdog threshold in
+// [internal/engine]. Written against the constant instead, each of them
 // claimed in its own comment to follow the deployment's TTL while following
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
+
+// HeartbeatInterval is how often this host renews its leases — the EFFECTIVE interval
+// [New] resolved — and therefore how long a [Host.MayStart] refusal for want of
+// a fresh renew can last on a seat it still holds: the next renew is what
+// re-proves it. A caller waiting for MayStart to admit a seat again waits this
+// long, rather than re-asking on a clock of its own.
+func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
 
 // Held is the seats whose leases this node holds, sorted.
 //
@@ -648,13 +678,15 @@ func (h *Host) Start(ctx context.Context) {
 	h.lastBeat = h.now()
 	loopCtx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
+	asks := make(chan struct{}, 1)
+	h.resweep = asks
 	h.mu.Unlock()
 
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
 
 	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
-	h.wg.Go(func() { h.sweepLoop(loopCtx) })
+	h.wg.Go(func() { h.sweepLoop(loopCtx, asks) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }
@@ -697,6 +729,24 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 	log.InfoContext(ctx, "seat_host_resumed", "node", h.nodeID)
 }
 
+// HoldsPresence reports whether this node holds its presence lease now: it is
+// not draining, and its last successful claim of the lease was inside the
+// lease's TTL.
+//
+// THE RENEW'S AGE, NOT THE LEASE'S EXISTENCE. A store that stops answering
+// leaves the last lease in hand while the row behind it lapses, and from then
+// on every peer reads this node as gone: it is no longer in their divisor, and
+// the estate's router no longer asks it anything. What a successful claim at t
+// proves is the row through t+ttl, so that is how long this answers yes — the
+// same bound a seat's grace is held to ([heldSeat.renewedAt]). It is what a
+// readiness probe reads, because a node its fleet cannot see is not doing the
+// work it was started for, however healthy it looks from inside.
+func (h *Host) HoldsPresence() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.nodeLease != nil && !h.draining && h.now().Sub(h.presenceRenewedAt) < h.ttl
+}
+
 // Draining reports whether this node has stopped claiming.
 func (h *Host) Draining() bool {
 	h.mu.Lock()
@@ -712,6 +762,7 @@ func (h *Host) Stop(ctx context.Context) {
 		return
 	}
 	h.running = false
+	h.resweep = nil
 	cancel := h.cancel
 	h.cancel = nil
 	h.mu.Unlock()
@@ -721,19 +772,20 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	// A BUDGET OF ITS OWN, for the reason Node.Drain gives: Stop is reached
-	// on a shutdown path whose context is routinely already cancelled, and
-	// a give-back that inherits it releases nothing — every seat then sits
-	// dark for a full TTL instead of being taken over at once, and this
-	// node's presence lingers so peers keep reserving capacity for it.
+	// NOT THE CALLER'S CONTEXT, for the reason Node.Drain gives: Stop is
+	// reached on a shutdown path whose context is routinely already
+	// cancelled, and a give-back that inherits it releases nothing — every
+	// seat then sits dark for a full TTL instead of being taken over at
+	// once, and this node's presence lingers so peers keep reserving
+	// capacity for it.
 	//
-	// FROM THIS HOST'S TTL and not from [SeatLeaseTTL], for the reason
-	// [HeartbeatRatio] gives: a deployment that shortened its lease to ten
-	// seconds would otherwise spend fifteen giving the seats back, which
-	// is a budget strictly outside the lease it is racing.
-	releaseCtx, cancel2 := context.WithTimeout(
-		context.WithoutCancel(ctx), h.ttl/HeartbeatRatio)
-	defer cancel2()
+	// ON THE STOP'S ONE ALLOWANCE instead ([WithinStop]): the engine's, when
+	// its stop is what reached here, or one begun from THIS HOST'S TTL —
+	// never [SeatLeaseTTL], for the reason [HeartbeatRatio] gives: a
+	// deployment that shortened its lease to ten seconds would otherwise
+	// spend fifteen giving the seats back, an allowance strictly outside the
+	// lease it is racing. Every give-back below is a [StopStep] of it.
+	releaseCtx := WithinStop(context.WithoutCancel(ctx), h.ttl)
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)
 
@@ -753,15 +805,16 @@ func (h *Host) Stop(ctx context.Context) {
 	log.InfoContext(ctx, "seat_host_stopped", "node", h.nodeID)
 }
 
-// ReleaseAll hands every seat back — each one the moment IT goes idle.
+// ReleaseAll hands every seat back, all at once.
 //
 // Concurrently, not one after another, and the difference is the whole point
-// of a graceful drain. A voluntary release waits for that seat's in-flight
-// turn under a bounded timeout; run in sequence, a node holding a dozen
-// seats pays that timeout a dozen times over, and the eleventh seat stays
-// dark for the whole procession even though it went idle first. Released
-// together, each seat leaves as soon as its own turn finishes and the drain
-// costs one timeout rather than N.
+// of a graceful drain. A seat's teardown takes time of its own — its MCP
+// children's shutdown ladder, its last memory flush — so in sequence a node
+// holding a dozen seats pays it a dozen times over, and the eleventh seat
+// stays dark for the whole procession. Released together, the drain costs the
+// slowest teardown rather than the sum, and the give-backs, which share a
+// stop's one allowance ([StopBudget]), are charged once for the time they
+// overlap.
 //
 // Deliberately uncapped, unlike claiming. The claim-rate limit is sized by
 // the cost of an MCP SPAWN on the node taking a seat on; letting go costs a
@@ -849,12 +902,27 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 				"Teardown is retried every heartbeat")
 		return false
 	}
-	released, err := h.backend.Release(ctx, entry.lease.Resource, h.owner, entry.lease.Epoch)
+	// THE GIVE-BACK IS ONE STEP OF A STOP, when a stop is what released the
+	// seat ([StopStep]); the teardown above is not, because a teardown that
+	// cannot be proven keeps the lease, and cutting it short for time would
+	// keep it for a TTL.
+	stepCtx, done := StopStep(ctx)
+	defer done()
+	released, err := h.backend.Release(stepCtx, entry.lease.Resource, h.owner, entry.lease.Epoch)
 	if err != nil {
 		// The seat IS torn down locally; the row simply lapses on its own.
 		// Nothing here is worth failing a drain.
 		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
 		return false
+	}
+	if released {
+		// THE COUNT THIS NODE ADVERTISES, corrected now rather than at the
+		// next heartbeat: a peer with room decides from the fleet's counts
+		// whether anything is free ([Host.fleetHoldsEverySeat]), and while
+		// this node's row still counted the seat it gave back, every peer
+		// read the fleet as full and the seat sat unclaimed. A no-op while
+		// draining, which drops presence instead.
+		h.renewNodePresence(stepCtx)
 	}
 	return released
 }
@@ -935,6 +1003,21 @@ func (h *Host) notifyAcquire(ctx context.Context, seat placement.Seat, lease coo
 		return nil
 	}
 	return callHook("on_acquire", seat.Handle, func() error { return h.hooks.OnAcquire(ctx, seat, lease) })
+}
+
+// notifyEstablished reports a seat established. A panic in the hook is logged
+// and contained, like every hook's: the seat is already serving, and the
+// sweep that established it is what keeps every other seat on this node.
+func (h *Host) notifyEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease) {
+	if h.hooks == nil {
+		return
+	}
+	if err := callHook("on_established", seat.Handle, func() error {
+		h.hooks.OnEstablished(ctx, seat, lease)
+		return nil
+	}); err != nil {
+		log.ErrorContext(ctx, "seat_established_hook_failed", "seat", seat.Handle, "error", err)
+	}
 }
 
 // notifyRelease runs the teardown hook, letting the caller see what

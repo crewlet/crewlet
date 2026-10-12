@@ -113,7 +113,7 @@ export function Work({
               sentence, rather than offered and refused. */}
           {(mine.data?.asked_of_me.length ?? 0) > 0 && (
             <Card padding="none">
-              <Card.Header count={mine.data?.totals?.asked_of_me.total}>
+              <Card.Header count={mine.data?.totals.asked_of_me.total}>
                 <Card.Title as="h3">Waiting on {self ? "your" : "their"} answer</Card.Title>
               </Card.Header>
               <HoldWrites reason={self ? null : `Asked of ${seat.name} — only they can answer it.`}>
@@ -131,7 +131,7 @@ export function Work({
           <TaskBlock
             title={self ? "What you mean to do first" : "What they mean to do first"}
             hint={self ? "Your own order, as you set it." : "Their own order, as they set it."}
-            total={mine.data?.totals?.priorities}
+            total={mine.data?.totals.priorities}
             rows={mine.data?.priorities ?? []}
             now={now}
             chrome={chrome}
@@ -144,7 +144,7 @@ export function Work({
                 ? "Tasks you are named on without owning."
                 : "Tasks they are named on without owning."
             }
-            total={mine.data?.totals?.collaborating}
+            total={mine.data?.totals.collaborating}
             rows={mine.data?.collaborating ?? []}
             now={now}
             chrome={chrome}

@@ -12,15 +12,14 @@ import (
 
 // TestReadyIs503WhileTheEstateCannotAnswerAtTheFloor.
 //
-// A node's SQL copy is derived from a trimmed log. A consumer whose position
-// falls below the stream's first sequence is CLAMPED UPWARD with no error at
-// all and then reports itself caught up over a hole — so such a node answers
-// every question confidently, out of rows that are missing records for good.
-// The engine already refuses to admit a seat to a node in that state; this is
-// the same question asked for TRAFFIC, so the node that will not take a seat
-// also stops being sent work to do with one. A webhook delivered there, or a
-// board rendered from it, is an answer somebody acts on: "there is no such
-// work item" is how a duplicate gets filed.
+// WHATEVER THE ESTATE SEAM REFUSES TAKES THE NODE OUT OF ROTATION, under the
+// one stable code, and its answering again puts it back. On a running node the
+// seam is the engine's own: whether this node can still answer from a sound
+// copy of the estate — its own, or one its router can name — which is the
+// question that decides whether it keeps its seats, asked for TRAFFIC. A
+// webhook delivered to a node that can answer from no copy, or a board
+// rendered there, is an answer somebody acts on: "there is no such work item"
+// is how a duplicate gets filed.
 func TestReadyIs503WhileTheEstateCannotAnswerAtTheFloor(t *testing.T) {
 	t.Parallel()
 	var established atomic.Bool

@@ -54,13 +54,23 @@ func runSuite(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	db, err := store.Open(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
+	db, err := store.OpenNode(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "api test: store.Open:", err)
+		fmt.Fprintln(os.Stderr, "api test: store.OpenNode:", err)
 		return 2
 	}
 	defer func() { _ = db.Close() }()
 	sharedEvents = db.Events()
+
+	// THE BINARY'S OWN DASHBOARD, crawled once — see [embeddedDashboard].
+	// After the shared log, which the app's history reads are wired to.
+	dashboard, err := api.New(withRequired(api.Options{}))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "api test: api.New over the embedded dashboard:", err)
+		return 2
+	}
+	defer dashboard.Stop()
+	embeddedDashboard = embedded{app: dashboard, crawl: crawl(dashboard)}
 	return m.Run()
 }
 
@@ -77,10 +87,21 @@ type fakeRuntime struct {
 	// fleetReads counts every Fleet call, so a probe that must not scan the
 	// fleet can be shown not to.
 	fleetReads atomic.Int32
+	// snapshotReads counts every Snapshot call, which on a real engine reads
+	// the config posture off the coordination plane, so a read that wants
+	// only this node's seats can be shown not to make one.
+	snapshotReads atomic.Int32
 }
 
-func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
-func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
+func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
+	f.snapshotReads.Add(1)
+	return f.state
+}
+
+func (f *fakeRuntime) Tools() []api.ToolInfo { return f.tools }
+
+// Seats answers from the same state Snapshot does, as ShuttingDown does.
+func (f *fakeRuntime) Seats() []string { return f.state.Seats }
 
 func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
 	f.fleetReads.Add(1)
@@ -130,7 +151,7 @@ func active(t *testing.T) func() (*config.Company, *org.Organization) {
 // is about.
 func newApp(t *testing.T, opts api.Options) *api.App {
 	t.Helper()
-	a, err := api.New(withRequired(t, opts))
+	a, err := api.New(withRequired(opts))
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
@@ -146,8 +167,10 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 // build their own bootstrap and say what they present.
 const fixtureToken = "fixture-token-long-enough-to-pass"
 
-func withRequired(t *testing.T, opts api.Options) api.Options {
-	t.Helper()
+// withRequired is opts with every required dependency it leaves unset filled
+// with an inert one — newApp's half that needs no test, so TestMain can build
+// the app the suite's dashboard cases share.
+func withRequired(opts api.Options) api.Options {
 	if opts.Bootstrap == nil {
 		// ONLY THE BOOTSTRAP THIS HELPER CREATED gets the fixture
 		// credential. A case that supplies its own is saying what its
@@ -164,7 +187,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		opts.Runtime = &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}
 	}
 	if opts.Sources.Company == nil {
-		opts.Sources.Company = companySource(t, nil)
+		// NO ACTIVE REVISION, which needs no test to build: there is no
+		// document whose org could fail.
+		opts.Sources.Company = func() (*config.Company, *org.Organization) { return nil, nil }
 	}
 	if opts.Sources.Chart == nil {
 		// A CHART THAT CAN ANSWER NOTHING, and says so. A fixture that
@@ -178,11 +203,8 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		// record a login names states its own.
 		opts.Sources.Holders = nobodyHolds{}
 	}
-	if opts.EventLog == nil {
-		opts.EventLog = sharedEvents
-	}
 	if opts.Sources.Events == nil {
-		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, opts.EventLog)
+		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, sharedEvents)
 	}
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
@@ -224,6 +246,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	}
 	if opts.Capacity == nil {
 		opts.Capacity = &fakeStateLog{}
+	}
+	if opts.FleetBroker == nil {
+		opts.FleetBroker = &fakeFleetBroker{}
 	}
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
@@ -267,10 +292,10 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup",
+		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
 		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
@@ -279,7 +304,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	}
 	// And the counterfactual: a complete set builds. Without it a refusal
 	// that named every field for any input would pass the case above.
-	a, err := api.New(withRequired(t, api.Options{}))
+	a, err := api.New(withRequired(api.Options{}))
 	if err != nil {
 		t.Fatalf("a complete set was refused: %v", err)
 	}

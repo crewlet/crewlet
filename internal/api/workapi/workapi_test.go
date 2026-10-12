@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -129,6 +130,29 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
 			}, http.MethodPost, "/work/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}, "9"},
+		// AN ESTATE NO DATA NODE SERVED clears when one serves again, so it
+		// is this node's undecided hint — never the `500` it answered while
+		// the router's refusal wrapped nothing the tools' rule knew. On a
+		// read this surface takes, a read a tool takes, a write a tool
+		// makes and a write this surface makes without one.
+		{"a read this surface takes that no data node served",
+			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a read a tool takes that no data node served",
+			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a write a tool makes that no data node served",
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a write this surface makes that no data node served",
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -741,7 +765,9 @@ func TestARemarkIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
 
 // ---- the surface as mounted --------------------------------------------- //
 
-// EVERY ROUTE THIS SURFACE MOUNTS IS GUARDED, and it mounts exactly these.
+// EVERY ROUTE THIS SURFACE MOUNTS IS GUARDED, and it mounts exactly these —
+// the one read among them, a project file's download, included, since it
+// streams what the board's `state:read` discloses.
 //
 // Guarded is what a route IS on this engine; the exemption list is the whole
 // of what is not. A write surface landing on it would file work with no
@@ -760,7 +786,9 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 	want := []string{
 		"DELETE /pages/{id}",
 		"DELETE /pages/{id}/comments/{cid}",
+		"DELETE /work/files/{project}/{path...}",
 		"DELETE /work/items/{key}",
+		"GET /work/files/{project}/{path...}",
 		"PATCH /pages/{id}/comments/{cid}",
 		"PATCH /work/items/{key}",
 		"PATCH /work/items/{key}/comments/{cid}",
@@ -781,6 +809,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"POST /work/views",
 		"PUT /pages/{id}",
 		"PUT /work/catalogue",
+		"PUT /work/files/{project}/{path...}",
 		"PUT /work/people/{handle}/inbox",
 		"PUT /work/people/{handle}/pins",
 		"PUT /work/people/{handle}/priorities",
@@ -793,7 +822,8 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 	for _, pattern := range got {
 		_, path, _ := strings.Cut(pattern, " ")
 		path = strings.NewReplacer("{key}", "ENG-1", "{id}", "p-1",
-			"{cid}", "c-1", "{handle}", "ana").Replace(path)
+			"{cid}", "c-1", "{handle}", "ana", "{project}", "ENG",
+			"{path...}", "reports/q3.csv").Replace(path)
 		if auth.Unguarded(path) {
 			t.Errorf("%s is exempt from the guard, so a write surface is "+
 				"reachable with no credential", pattern)

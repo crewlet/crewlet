@@ -233,8 +233,8 @@ export interface SnoozePreset {
  * ONLY THE ONES THE ENGINE WILL TAKE. The write refuses a snooze further ahead
  * than `max_snooze_ahead` (the person answer serves it), so a preset past it
  * is a button that is refused every time it is pressed — it is not offered.
- * An answer that does not carry the bound (an older node) offers them all and
- * the engine remains the judge.
+ * Until the person answer has been read there is no bound, so every preset is
+ * offered and the engine remains the judge.
  */
 export function snoozePresets(
   now: number,

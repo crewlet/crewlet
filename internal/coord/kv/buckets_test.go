@@ -61,14 +61,20 @@ func TestEveryBucketHasALifetimeClass(t *testing.T) {
 		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
 		"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
 		"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-		"sixteen": 16, "seventeen": 17, "eighteen": 18,
+		"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+		"twenty": 20, "twenty-one": 21, "twenty-two": 22, "twenty-three": 23,
+		"twenty-four": 24, "twenty-five": 25,
 	}
 	// ADJACENT AND PLURAL. "two of those in one bucket" is prose about a
 	// pair, not a count of the estate, and a looser match measures the
 	// English rather than the number.
-	counts := regexp.MustCompile(`(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen) buckets\b`)
+	//
+	// THE VOCABULARY RUNS PAST THE COUNT, so the number a comment states
+	// today is itself one the gate reads: a list that stopped at the count
+	// would pass the next comment written one bucket later unread.
+	counts := regexp.MustCompile(`(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-(?:one|two|three|four|five))?) buckets\b`)
 	for _, m := range counts.FindAllString(text, -1) {
-		word := strings.ToLower(regexp.MustCompile(`(?i)^\w+`).FindString(m))
+		word := strings.ToLower(regexp.MustCompile(`(?i)^[\w-]+`).FindString(m))
 		n, known := words[word]
 		if !known {
 			continue
@@ -101,9 +107,9 @@ func section(text, start, end string) (string, bool) {
 // and the reason the line exists at all: create-else-observe cannot apply a
 // changed retention, so a node configured for one age against a bucket a peer
 // made at another RUNS AT THE PEER'S — silently, in every direction that
-// matters. A claim bucket adopted at five minutes under a node configured for
-// fifteen expires a claim ten minutes before its caller believes it does, and
-// nothing about the write, the read or the caller says so.
+// matters. A ledger bucket adopted at a peer's shorter age forgets a
+// completion a redelivery can still reach, and nothing about the write, the
+// read or the caller says so.
 //
 // Both halves are asserted because they are two different failures: the age in
 // force coming back as the one this node ASKED for would make every mismatch
@@ -111,11 +117,8 @@ func section(text, start, end string) (string, bool) {
 // this package removed everywhere else — decided by boot order, by the node
 // that came up last.
 func TestAnAdoptedBucketKeepsItsOwnAgeAndReportsIt(t *testing.T) {
-	nc := embeddedNATS(t)
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
+	t.Parallel()
+	js := jsOf(embeddedNATS(t))
 	name := fmt.Sprintf("adopt%d", bucketSeq.Add(1))
 	const made, wanted = time.Minute, 5 * time.Minute
 

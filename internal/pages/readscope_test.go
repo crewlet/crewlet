@@ -30,7 +30,7 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 	paths ...string) *pages.Reader {
 
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO pages_log_deferred
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)
@@ -51,7 +51,9 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 	}
 	authority, err := statelog.NewReader(statelog.ReaderDeps{
 		Domain: pages.Domain{},
-		DB:     r.db.Replicated(),
+		Spec:   pages.Domain{}.Stream(),
+		Mode:   statelog.ModeNormal,
+		DB:     r.db,
 		Waiter: r.waiter,
 		Health: func() statelog.Health {
 			at := r.waiter.Committed()
@@ -70,7 +72,7 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 	if err != nil {
 		r.t.Fatalf("read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: authority})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db.Reader(), Log: authority})
 	if err != nil {
 		r.t.Fatalf("pages reader: %v", err)
 	}

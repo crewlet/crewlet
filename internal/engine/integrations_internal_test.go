@@ -88,6 +88,47 @@ func TestAPassWithNoSinkToSealIntoIsAFault(t *testing.T) {
 	}
 }
 
+// capturingPass records what the loop handed it.
+type capturingPass struct {
+	kind integration.Kind
+	in   setup.PassInput
+}
+
+func (p *capturingPass) Kind() integration.Kind  { return p.kind }
+func (*capturingPass) Needs() *setup.Requirement { return nil }
+
+func (p *capturingPass) Run(_ context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	p.in = in
+	return nil, nil
+}
+
+// THE LOOP HANDS A PASS THE VENDORS' ADDRESS AND THE KEY IT IS READ FROM.
+//
+// A pass with no address reports `ingress_blocked` naming the setting to fill
+// in, and only the engine knows which one that is: behind a public listener it
+// is `api.public.external_url`, which every vendor used to name as
+// `api.external_url` — a key that was set, that nothing building a vendor URL
+// reads, on a deployment whose webhooks are served only on the other socket.
+// So the key travels beside the address, from the same Tier A block.
+func TestTheLoopHandsAPassTheVendorsAddressAndItsKey(t *testing.T) {
+	t.Parallel()
+	pass := &capturingPass{kind: integration.KindDatadog}
+	e := sealingNode(t)
+	e.epoch.current.Store(&Company{})
+	e.webhookBase, e.webhookBaseKey = "https://hooks.example.com", "api.public.external_url"
+	c := &passConverger{pass: pass, engine: e}
+
+	if _, err := c.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if pass.in.WebhookBase != e.webhookBase {
+		t.Errorf("the pass was handed the address %q, want %q", pass.in.WebhookBase, e.webhookBase)
+	}
+	if pass.in.WebhookBaseKey != e.webhookBaseKey {
+		t.Errorf("the pass was handed the key %q, want %q", pass.in.WebhookBaseKey, e.webhookBaseKey)
+	}
+}
+
 // AND THE KIND IT REPORTS IS THE PASS'S OWN, which is what keys every status
 // row the loop writes.
 func TestTheConvergerReportsThePassesKind(t *testing.T) {

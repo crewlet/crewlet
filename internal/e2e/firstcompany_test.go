@@ -36,7 +36,7 @@ import (
 //
 // # Why the first session is the token's and not a person's
 //
-// Every person holds a human seat for as long as they are here (ADR-0026), and
+// Every person holds a human seat for as long as they are here (ADR-0032), and
 // a node with no company has no seat to give anybody — so the session that
 // creates the company is the deployment's own Tier A token, exchanged for a
 // cookie, and the first PERSON arrives once the company declares the seat they

@@ -54,18 +54,16 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
  * `engine.GateClientWait`, held EXACTLY by
  * `internal/api.TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould`.
  *
- * The command line waits it too: the engine bounds a gesture from its first
- * record to its last answer at `engine.GateBudget` — one gate record per
- * identity-claiming log, two five-second resolutions each, at a margin of
- * three, so ninety seconds for this build's three logs — and a client waits one
- * more resolution at that margin for the judgement before the first record and
- * the round trip around the gesture. Waiting past the node's own bound is what
+ * ONE MINUTE, and the command line waits it too: the engine answers one
+ * gesture within `engine.GateAnswerBudget` — fifty seconds: twenty to judge it
+ * and thirty to write every log, all of them at once — and a client waits the
+ * request's round trip beyond that. Waiting past the node's own bound is what
  * makes its answer — every log's outcome — reach the operator rather than a
  * client timeout that knows none of it. The default thirty seconds gave up on a
  * gesture the node went on to finish.
  *
- * HELD EXACTLY, not merely above the budget, because the budget is counted
- * from the register: a copy that was only larger went on passing the day a new
- * identity log raised the budget past it.
+ * HELD EXACTLY, not merely above the budget, because a copy that was only
+ * larger goes on passing the day the engine's bound grows past it — the
+ * engine states the wait once and this is that statement copied.
  */
-export const GATE_REQUEST_TIMEOUT_MS = 105_000;
+export const GATE_REQUEST_TIMEOUT_MS = 60_000;

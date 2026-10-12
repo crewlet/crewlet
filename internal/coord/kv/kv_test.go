@@ -16,13 +16,34 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/period"
 )
+
+// jsOf is a JetStream client over nc in the API these tests' own brokers
+// speak: they are started raw, with no domain, so a client addresses the
+// account's own JetStream.
+func jsOf(nc *nats.Conn) jetstream.JetStream {
+	js, err := jsapi.Account().Client(nc)
+	if err != nil {
+		panic(err)
+	}
+	return js
+}
 
 // embeddedNATS starts a nats-server inside the test process with no listener,
 // the same topology internal/queue/jetstream boots for a solo node. Nothing
 // outside this process can reach it, and it dies with the test.
 func embeddedNATS(t *testing.T) *nats.Conn {
+	t.Helper()
+	_, nc := embeddedServer(t)
+	return nc
+}
+
+// embeddedServer is [embeddedNATS] with the server beside the connection, for
+// a case that reads what the broker itself counts.
+func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
@@ -49,7 +70,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		t.Fatalf("connect to embedded server: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	return nc
+	return ns, nc
 }
 
 // bucketSeq gives every store its own set of buckets.
@@ -57,8 +78,14 @@ var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 	t.Helper()
+	return openStoreVia(t, jsOf(nc), ttl)
+}
+
+// openStoreVia is [openStore] over a client in any API.
+func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *Store {
+	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), nc, Config{TTL: ttl, BucketPrefix: prefix})
+	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -75,18 +102,43 @@ func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 // honour rather than quietly shortening it. The suite's ShortTTL and churnTTL
 // leases are honoured by the deadline the record carries, judged against the
 // STORE's clock (Store.storeNow), never the test process's. The duty cases
-// are the exception the suite names: they claim at coord.MaxDutyTTL, far past
-// this bucket's age, and are honoured by the duty bucket, whose ceiling is the
-// contract's rather than this configuration's.
+// are the exception the suite names: they claim a duty and a caller's class at
+// coord.MaxDutyTTL, far past this bucket's age, and both are honoured by the
+// duty bucket, whose ceiling is the contract's rather than this
+// configuration's.
 //
 // And there is no coordtest.Advancer: a real broker's clock is its own and
 // cannot be moved, which is exactly the case the hook was made optional for.
 // So harness.lapse falls back to a real sleep of ShortTTL + margin — 150 ms
 // per lapsing case, overlapped because the suite runs its cases in parallel.
 func TestContract(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		return openStore(t, nc, coordtest.LongTTL)
+	})
+}
+
+// TestSharedContract runs the shared cases over three handles on one
+// single-member broker — the easy case, since every read is answered by the
+// one copy there is. shared_cluster_test.go is the one that means something:
+// the same cases with the handles on three members of a cluster.
+func TestSharedContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+		out := make([]coord.Backend, 3)
+		for i := range out {
+			s, err := Open(t.Context(), jsOf(nc), Config{
+				TTL: coordtest.LongTTL, BucketPrefix: prefix,
+			})
+			if err != nil {
+				t.Fatalf("Open handle %d: %v", i, err)
+			}
+			out[i] = s
+		}
+		return out
 	})
 }
 
@@ -188,7 +240,7 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	dotted := coord.ClassSeat.Resource("alice.smith")
 	plain := coord.ClassSeat.Resource("alice")
 	for _, r := range []string{dotted, plain} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %q: %v", r, err)
@@ -248,7 +300,7 @@ func TestConfigIsValidated(t *testing.T) {
 		{"too many replicas", Config{TTL: time.Minute, Replicas: 9}},
 	}
 	for _, c := range cases {
-		if _, err := Open(context.Background(), nc, c.cfg); err == nil {
+		if _, err := Open(context.Background(), jsOf(nc), c.cfg); err == nil {
 			t.Fatalf("Open with %s was accepted", c.name)
 		}
 	}
@@ -265,7 +317,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 
 	// The refusal is an ERROR, not a (nil, nil) refusal: nobody else holds
 	// the seat, the caller asked for something the bucket cannot promise.
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
 	if err == nil {
 		t.Fatalf("TryAcquire with a TTL above the bucket's = (%v, nil), want an error", lease)
 	}
@@ -279,7 +331,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 		t.Fatalf("Renew with a TTL above the bucket's = %v", err)
 	}
 	// Exactly the configured TTL is the normal case and must be accepted.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
 		t.Fatalf("TryAcquire at exactly the bucket TTL: %v", err)
 	}
 }
@@ -294,7 +346,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	const ttl = time.Second
 	s := openStore(t, nc, ttl)
 
-	first, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	first, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl, Preferred: "node-a",
 	})
 	if err != nil || first == nil {
@@ -324,7 +376,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	}
 
 	// The peer's claim lands through Create, on a key the broker removed.
-	taken, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
+	taken, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
 	if err != nil || taken == nil {
 		t.Fatalf("takeover after a server-side expiry = (%v, %v)", taken, err)
 	}
@@ -354,7 +406,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("claim = (%v, %v)", lease, err)
 	}
@@ -384,12 +436,12 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 	// An older peer holds a seat. A presence registration must still land —
 	// membership is not work, and a newer node invisible in the membership
 	// read makes every peer divide the seats by a fleet that excludes it.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "old:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("old claim: %v", err)
 	}
-	presence, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
+	presence, _, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute, Protocol: coord.ProtocolVersion, Ungated: true,
 		Meta: map[string]any{"roles": []any{"seats"}},
 	})
@@ -407,54 +459,16 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 
 // TestFleetContract runs the shared-state suite against the real broker.
 //
-// The retentions are the suite's, not production's: every case reasons about
-// a window or a claim it names both sides of, and a bucket sized for the
-// production ledger's seven days would make a "this has lapsed" case wait
-// seven days. What the broker is being certified for is the SEMANTICS — an
-// atomic increment, a Create that only one caller wins, a Put whose revision
-// is the epoch — and those do not vary with the retention.
+// The retentions are the suite's ([openFleetVia]): what the broker is being
+// certified for is the SEMANTICS — an atomic increment, a Create that only one
+// caller wins, a Put whose revision is the epoch — and those do not vary with
+// the retention.
 func TestFleetContract(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
-	coordtest.RunFleet(t, func(t *testing.T, ages coordtest.FleetAges) coord.Fleet {
-		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		store, err := OpenFleet(context.Background(), nc, FleetConfig{
-			BucketPrefix: prefix,
-			// THE AGES THE CASE ASKED FOR go to the buckets the suite
-			// reasons about; the rest are above the broker's 100 ms
-			// floor and far longer than a case takes, so nothing lapses
-			// under a case that did not ask it to.
-			ClaimTTL:           ages.Claim,
-			SetupOnceRetention: ages.Setup,
-			RateWindow:         time.Minute,
-			LedgerRetention:    10 * time.Minute,
-			FireRetention:      10 * time.Minute,
-			FollowRetention:    10 * time.Minute,
-			CooldownMax:        time.Hour,
-			BudgetRetention:    time.Hour,
-			StatusFreshness:    10 * time.Minute,
-		})
-		if err != nil {
-			t.Fatalf("OpenFleet: %v", err)
-		}
-		return store
+	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
+		return openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	})
-}
-
-// payloadFleet opens a fleet store whose config bucket a case can reach.
-func payloadFleet(t *testing.T) *FleetStore {
-	t.Helper()
-	store, err := OpenFleet(t.Context(), embeddedNATS(t), FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
-		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    fmt.Sprintf("f%d", bucketSeq.Add(1)),
-	})
-	if err != nil {
-		t.Fatalf("OpenFleet: %v", err)
-	}
-	return store
 }
 
 // THE BODY RIDES THE POINTER AS THE JSON IT IS.
@@ -463,19 +477,24 @@ func payloadFleet(t *testing.T) *FleetStore {
 // envelope whose ciphertext is base64 already, so every body would cross the
 // wire encoded twice and a third larger than it is. The contract suite cannot
 // see the record, only what Payload hands back, so the WIRE SHAPE is asserted
-// here: the pointer's own record carries the body as an object.
+// here: the pointer's own record carries the body as an object, beside the
+// origin the contract requires.
 //
 // Mutation: carry the payload as []byte in activationRecord and the field is a
 // string.
 func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 	t.Parallel()
-	store := payloadFleet(t)
+	store := openFleet(t, embeddedNATS(t))
 	body := `{"__encrypted__":"enc:v1:k1:q8+/Zm9vYmFy=="}`
 	if _, err := store.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-1", Payload: []byte(body), At: time.Now()}); err != nil {
+		RevisionID: "rev-1", Payload: []byte(body), At: time.Now(),
+		Origin: coord.RevisionOrigin{
+			Author: "maya", AuthorKind: iam.ActorOperator, Source: "api", CreatedAt: time.Now(),
+		},
+	}); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
-	entry, err := store.config.Get(t.Context(), activationKey)
+	entry, err := store.get(t.Context(), store.config, activationKey)
 	if err != nil {
 		t.Fatalf("read the pointer: %v", err)
 	}
@@ -500,7 +519,7 @@ func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 // Mutation: answer a bodiless pointer as not found and the first half fails.
 func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
 	t.Parallel()
-	store := payloadFleet(t)
+	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
 	raw, err := json.Marshal(map[string]any{"revision_id": "rev-1", "at": time.Now().UTC()})
 	if err != nil {
@@ -527,15 +546,17 @@ func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
 // comes back as an auth failure blamed on the vendor. "I could not read it"
 // has to be louder than "there is none".
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    prefix,
+		FollowRetention: time.Minute, RebaseRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		CustodyRetention: time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     prefix,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -653,38 +674,39 @@ func subjectMatches(filter, subject string) bool {
 // always correct: a filter that did not narrow would return the same leases
 // and simply move everything else over the wire to get there.
 func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 	ctx := context.Background()
 
-	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler", "move:task-1"} {
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %s: %v", r, err)
 		}
 	}
-	if _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: time.Minute, Ungated: true,
 	}); err != nil {
 		t.Fatalf("claim presence: %v", err)
 	}
 
-	count := func(b *leaderBucket, class coord.Class) int {
+	count := func(kv jetstream.KeyValue, class coord.Class) int {
 		t.Helper()
 		n := 0
-		if err := s.eachUnder(ctx, b, class, "the "+string(class)+" records",
+		if err := s.eachUnder(ctx, kv, class, "the "+string(class)+" records",
 			func(jetstream.KeyValueEntry) error { n++; return nil }); err != nil {
 			t.Fatalf("walk %s: %v", class, err)
 		}
 		return n
 	}
 
-	// Five resources across three classes, each in the lease bucket its
+	// Six resources across four classes, each in the lease bucket its
 	// class is written to: seats and presence in the seat lease bucket, the
-	// duty in the duty bucket. The epochs bucket holds all five whichever
-	// lease bucket the lease itself is in, which is what keeps a duty's
-	// counter monotonic across the move between them.
+	// duty and the caller's walk claim in the duty bucket. The epochs bucket
+	// holds all six whichever lease bucket the lease itself is in, which is
+	// what keeps a counter monotonic across a move between them.
 	for _, c := range []struct {
 		lane  *lane
 		class coord.Class
@@ -693,6 +715,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		{s.leases, coord.ClassSeat, 3},
 		{s.leases, coord.ClassNode, 1},
 		{s.duties, coord.ClassWorker, 1},
+		{s.duties, coord.Class("move"), 1},
 	} {
 		if got := count(c.lane.kv, c.class); got != c.want {
 			t.Errorf("the %s lease walk was handed %d records for the %d it wanted; "+
@@ -706,12 +729,15 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		}
 	}
 
-	// AND THE SEAT LEASE BUCKET CARRIES NO DUTY OF THIS BUILD'S, which is
-	// the other half of what keeps the membership read cheap: a class the
-	// bucket does not hold is a bucket the read never opens at all.
-	if got := count(s.leases.kv, coord.ClassWorker); got != 0 {
-		t.Errorf("the seat lease bucket holds %d duty records; this build writes "+
-			"every duty it claims to the duty bucket", got)
+	// AND THE SEAT LEASE BUCKET CARRIES NOTHING BUT SEATS AND PRESENCE,
+	// which is the other half of what keeps the membership read cheap: a
+	// class the bucket does not hold is a bucket the read never opens at
+	// all, and a write the gate's view of it never takes in.
+	for _, class := range []coord.Class{coord.ClassWorker, coord.Class("move")} {
+		if got := count(s.leases.kv, class); got != 0 {
+			t.Errorf("the seat lease bucket holds %d %s records; this build writes "+
+				"every lease outside seats and presence to the duty bucket", got, class)
+		}
 	}
 
 	// And the answers are still right, which is the half a narrowing bug
@@ -745,7 +771,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	const inForce = 90 * time.Second
-	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
@@ -756,7 +782,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
 	// holding possibly-different Tier A files actually do.
-	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
 	}
@@ -767,7 +793,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	}
 
 	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
-	status, err := statusOf(context.Background(), second.leases.kv)
+	status, err := second.leases.kv.Status(context.Background())
 	if err != nil {
 		t.Fatalf("read the lease bucket's status: %v", err)
 	}
@@ -802,13 +828,13 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
 	// deployment or an early cluster actually has.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
 	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
 	// one replica, and no node rewrites them.
-	_, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
 			"coordination and reported itself healthy — the leases, the " +
@@ -829,7 +855,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
 	// node against a replicated fleet's buckets is not locked out.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
 	}
@@ -843,10 +869,10 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 // then, and the newer refusal is still true, so a clear that ignored which
 // stamp it saw would hide a scope that is refusing right now.
 func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
 	w := testWindows()
-	day := []period.Period{period.Day}
 	stamp := func() coord.Tally {
 		t.Helper()
 		tally, err := store.tally(ctx, coord.OrgScope, w)
@@ -855,17 +881,22 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 		}
 		return tally
 	}
-
-	if err := store.stampRefusal(ctx, coord.OrgScope, day, coord.Tally{}.Roll(w), w); err != nil {
-		t.Fatalf("stampRefusal: %v", err)
+	refuse := func() {
+		t.Helper()
+		got, err := store.Charge(ctx, coord.ChargeRequest{
+			Seat: coord.AgentScope("x"), Tokens: 10, Windows: w, OrgCaps: coord.Caps{period.Day: 5},
+		})
+		if err != nil || got.OK {
+			t.Fatalf("Charge = (%+v, %v), want the company refusing", got, err)
+		}
 	}
+
+	refuse()
 	seen := stamp()
 	// A distinct instant, so the two stamps cannot compare equal by
 	// landing in the same clock tick.
 	time.Sleep(2 * time.Millisecond)
-	if err := store.stampRefusal(ctx, coord.OrgScope, day, seen, w); err != nil {
-		t.Fatalf("stampRefusal: %v", err)
-	}
+	refuse()
 	newer := stamp()
 	if !newer.Slots[0].RefusedAt.After(seen.Slots[0].RefusedAt) {
 		t.Fatalf("setup: the second stamp %v is not after the first %v",
@@ -893,9 +924,15 @@ func testWindows() coord.Windows {
 // orgSpent is the org's day, week and month spend at testWindows.
 func orgSpent(t *testing.T, store *FleetStore) [3]int {
 	t.Helper()
-	u, err := store.Used(t.Context(), coord.OrgScope, testWindows())
+	return spentBy(t, store, coord.OrgScope)
+}
+
+// spentBy is one scope's day, week and month spend at testWindows.
+func spentBy(t *testing.T, store *FleetStore, scope string) [3]int {
+	t.Helper()
+	u, err := store.Used(t.Context(), scope, testWindows())
 	if err != nil {
-		t.Fatalf("Used: %v", err)
+		t.Fatalf("Used(%s): %v", scope, err)
 	}
 	return [3]int{u.Windows[0].Used, u.Windows[1].Used, u.Windows[2].Used}
 }
@@ -908,6 +945,7 @@ func orgSpent(t *testing.T, store *FleetStore) [3]int {
 // it could not read. A dead context is the one unreachable store a test can
 // make on demand; the answer it gets must carry the error and no refusal.
 func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -926,92 +964,155 @@ func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 	}
 }
 
-// A CHARGE WHOSE CALLER HANGS UP STILL UNWINDS THE COMPANY'S HALF.
+// A CHARGE WHOSE SEAT WRITE FAILS KEEPS THE ROUND ON THE COMPANY.
 //
-// The org is written before the seat, and a seat write that fails is undone by
-// taking the org's tokens back off. The failure being undone is often the
-// caller's own cancellation, and an unwind that inherited that dead context
-// failed with it: the company was billed for a round that never ran, and kept
-// refusing early until its windows turned over.
-func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
-	store := openFleet(t, embeddedNATS(t))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets.client = hangUpAfterWriting{
-		clientBucket: store.budgets.client, key: encodeKey(coord.OrgScope), hangUp: cancel,
-	}
-
-	if got, err := store.Charge(ctx, coord.ChargeRequest{
-		Seat: "agent:x", Tokens: 10, Windows: testWindows(),
-		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
-	}); err == nil {
-		t.Fatalf("Charge = %+v, want the seat's write to fail on the cancelled context", got)
-	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a charge that failed, want nothing: "+
-			"the unwind ran on the cancelled context and left the company billed", used)
-	}
-}
-
-// A POST-CHARGE IS ALL OR NOTHING, exactly as a charge is.
-//
-// Two keys and no transaction, so the property is built rather than given: the
-// org is written first and taken back when the seat's write fails. Without the
-// compensation a collected coding run whose second write failed would leave the
-// company billed for tokens the seat's own counter never saw, and the caller —
-// which retries — would bill the org again.
-func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
+// The company is written before the seat, and the round was billed before
+// either: a charge is handed tokens a model call has already spent. So when
+// the seat's write fails after the company's landed, the company's record of
+// the round is true and stays — the answer is an error, naming the partial,
+// and the round stops as an outage. The compensation this replaced took the
+// company's half back, and since nothing that charges asks again, the billed
+// round then sat on neither counter and the next round was admitted against
+// room it had used.
+func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets.client = hangUpAfterWriting{
-		clientBucket: store.budgets.client, key: encodeKey(coord.OrgScope), hangUp: cancel,
-	}
+	store.budgets = failWriting{KeyValue: store.budgets, key: encodeKey(seat)}
 
-	if got, err := store.PostCharge(ctx, seat, 10, testWindows()); err == nil {
-		t.Fatalf("PostCharge = %+v, want the seat's write to fail on the cancelled context", got)
+	got, err := store.Charge(t.Context(), coord.ChargeRequest{
+		Seat: seat, Tokens: 10, Windows: testWindows(),
+		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
+	})
+	var partial *coord.SeatUncountedError
+	if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+		t.Fatalf("Charge = (%+v, %v), want an error naming the 10 tokens the seat "+
+			"%s is missing", got, err, seat)
 	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a post-charge that failed, want "+
-			"nothing: the unwind ran on the cancelled context and left the company "+
-			"billed for a run its seat never recorded", used)
+	if got.OK || got.RefusedScope != "" {
+		t.Fatalf("Charge = %+v: a failed write reported as a decision", got)
+	}
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v, want the 10 the round was billed in every "+
+			"window: the company's record of a spent round was taken back", used)
+	}
+	if used := spentBy(t, store, seat); used != [3]int{0, 0, 0} {
+		t.Errorf("the seat's day/week/month = %v, want nothing: the fault did not stop "+
+			"its write", used)
 	}
 }
 
-// AN UNWIND TAKES A CHARGE BACK FROM THE WINDOW IT WAS COUNTED IN.
+// THE SEAT'S HALF OUTLIVES A CALLER WHO HANGS UP AFTER THE COMPANY'S.
 //
-// The seat's write can fail after midnight has passed and a peer has rolled
-// the org's day. What the refused round spent belongs to the day that is over;
-// taking it off the new day would hand that day credit, and a floor at zero
-// would hide it only until the day's first real charge.
-func TestAnUnwindLeavesAWindowThatHasRolledOnAlone(t *testing.T) {
+// The company is written first, and from the moment its write lands the round
+// is half recorded. The caller's context dying between the two writes is
+// ordinary — a turn cancelled, a node draining — and the round was spent
+// whatever the caller does next. Left on that context the seat's write failed
+// with it, and the seat's own ceiling judged a round less than it had spent
+// for the rest of the window, only because somebody stopped listening. So
+// every way a charge or a post-charge reaches the seat after the company's
+// write lands finishes on a context of its own, and answers what it decided:
+// a refusal by either scope, an admission, or the post-charge's record.
+func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
+	t.Parallel()
+	seat := coord.AgentScope("x")
+	charge := func(orgCap, seatCap int) func(context.Context, *FleetStore) (coord.Spend, error) {
+		return func(ctx context.Context, store *FleetStore) (coord.Spend, error) {
+			return store.Charge(ctx, coord.ChargeRequest{
+				Seat: seat, Tokens: 10, Windows: testWindows(),
+				OrgCaps:  coord.Caps{period.Day: orgCap},
+				SeatCaps: coord.Caps{period.Day: seatCap},
+			})
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, *FleetStore) (coord.Spend, error)
+		want func(coord.Spend) bool
+	}{
+		{"a charge the company refuses", charge(5, 100), func(got coord.Spend) bool {
+			return !got.OK && got.RefusedScope == "org" && got.RefusedUsed == 10
+		}},
+		{"a charge the seat refuses", charge(100, 5), func(got coord.Spend) bool {
+			return !got.OK && got.RefusedScope == "agent" && got.RefusedUsed == 10
+		}},
+		{"a charge both admit", charge(100, 100), func(got coord.Spend) bool {
+			return got.OK && got.Agent.In(period.Day).Used == 10
+		}},
+		{"a post-charge", func(ctx context.Context, store *FleetStore) (coord.Spend, error) {
+			return store.PostCharge(ctx, seat, 10, testWindows())
+		}, func(got coord.Spend) bool {
+			return got.OK && got.Agent.In(period.Day).Used == 10
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := openFleet(t, embeddedNATS(t))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store.budgets = hangUpAfterWriting{
+				KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+			}
+
+			got, err := tc.call(ctx, store)
+			if err != nil || !tc.want(got) {
+				t.Fatalf("answer = (%+v, %v), want what the counters decided: a caller "+
+					"hanging up after the company's write is not an outage", got, err)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("the caller never hung up: the fault was not injected")
+			}
+			for _, scope := range []string{coord.OrgScope, seat} {
+				if used := spentBy(t, store, scope); used != [3]int{10, 10, 10} {
+					t.Errorf("%s day/week/month = %v, want the 10 the round spent in "+
+						"every window: its write ran on the caller's cancelled context",
+						scope, used)
+				}
+			}
+		})
+	}
+}
+
+// A POST-CHARGE WHOSE SEAT WRITE FAILS KEEPS ITS SPEND ON THE COMPANY, AND THE
+// SEAT'S HALF CAN BE FINISHED ALONE.
+//
+// The spend already happened (a collected coding run, an auxiliary call), so
+// the company's record of it is true when its write lands and the seat's then
+// fails. The compensation this replaced took it back so a caller that retried
+// would not count the company twice — but an auxiliary call is never offered
+// again, and a coding run only when its resume fails, so in the common case
+// the company lost the spend for good. Kept, the partial is named, and the one
+// caller that does offer the spend again finishes the seat's half alone.
+func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
-	ctx := t.Context()
-	today := testWindows()
-	tomorrow := coord.WindowsAt(today[0].End, time.UTC)
+	seat := coord.AgentScope("x")
+	healthy := store.budgets
+	store.budgets = failWriting{KeyValue: healthy, key: encodeKey(seat)}
 
-	charged, fits, err := store.bump(ctx, coord.OrgScope, 40, today, nil)
-	if err != nil || !fits {
-		t.Fatalf("bump = (%v, %v)", fits, err)
+	got, err := store.PostCharge(t.Context(), seat, 10, testWindows())
+	var partial *coord.SeatUncountedError
+	if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+		t.Fatalf("PostCharge = (%+v, %v), want an error naming the 10 tokens the seat "+
+			"%s is missing", got, err, seat)
 	}
-	// A peer's charge crosses midnight before the unwind lands.
-	if _, _, err := store.bump(ctx, coord.OrgScope, 25, tomorrow, nil); err != nil {
-		t.Fatalf("bump tomorrow: %v", err)
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's write failed, want the 10 "+
+			"the company was billed: its half was taken back", used)
 	}
-	store.unwindOrg(ctx, 40, charged)
 
-	u, err := store.Used(ctx, coord.OrgScope, tomorrow)
+	// The seat's half, finished alone: the company is not counted twice.
+	store.budgets = healthy
+	u, err := store.PostChargeSeat(t.Context(), seat, partial.Tokens, testWindows())
 	if err != nil {
-		t.Fatalf("Used: %v", err)
+		t.Fatalf("PostChargeSeat: %v", err)
 	}
-	if got := u.Windows[0].Used; got != 25 {
-		t.Errorf("tomorrow's day = %d, want the 25 charged in it: the unwind took "+
-			"yesterday's round off a window it was never counted in", got)
+	if day := u.Windows[0].Used; day != 10 {
+		t.Errorf("the seat's day = %d after its half was finished, want 10", day)
 	}
-	// The week and the month did not roll, so the round comes off them.
-	if got := u.Windows[2].Used; got != 25 {
-		t.Errorf("the month = %d, want 25: the unwound round is still counted", got)
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's half was finished, want "+
+			"still 10: finishing the seat counted the company again", used)
 	}
 }
 
@@ -1023,24 +1124,32 @@ func TestAnUnwindLeavesAWindowThatHasRolledOnAlone(t *testing.T) {
 // and the scope went on telling every dashboard it was refusing charges while
 // it had just admitted one, until the next admitted charge on a live context.
 func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
+	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	w := testWindows()
-	day := []period.Period{period.Day}
-	for _, scope := range []string{coord.OrgScope, seat} {
-		if err := store.stampRefusal(t.Context(), scope, day, coord.Tally{}.Roll(w), w); err != nil {
-			t.Fatalf("stampRefusal(%s): %v", scope, err)
+	// A refusal on each scope, at ceilings of 5: the company's, then the
+	// seat's while the company's ceiling has room.
+	for _, caps := range []struct{ org, seat coord.Caps }{
+		{coord.Caps{period.Day: 5}, nil},
+		{coord.Caps{period.Day: 100}, coord.Caps{period.Day: 5}},
+	} {
+		if got, err := store.Charge(t.Context(), coord.ChargeRequest{
+			Seat: seat, Tokens: 10, Windows: w, OrgCaps: caps.org, SeatCaps: caps.seat,
+		}); err != nil || got.OK {
+			t.Fatalf("setup Charge = (%+v, %v), want a refusal", got, err)
 		}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	// The SEAT's write is the last one before the clears, so a hang-up
-	// there leaves both counters written and both clears to make.
-	store.budgets.client = hangUpAfterWriting{
-		clientBucket: store.budgets.client, key: encodeKey(seat), hangUp: cancel,
+	// The SEAT's write is the last one before the company's clear, so a
+	// hang-up there leaves both counters written and the clear to make.
+	store.budgets = hangUpAfterWriting{
+		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
 	}
 
+	// The ceilings raised, which is what gives a refusing scope room again.
 	if got, err := store.Charge(ctx, coord.ChargeRequest{
 		Seat: seat, Tokens: 10, Windows: w,
 		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
@@ -1061,14 +1170,21 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 
 // THE WINDOWED COUNTERS AGE, AND THE AGE IS THE CONFIGURED ONE.
 //
-// A counter bucket with no age would keep a record for every seat that ever
-// ran, for the life of the deployment. This one reaps a record nobody has
-// charged for longer than the longest window — here a bucket built with a
-// short retention, so the case can watch it happen.
+// A windowed counter nobody has charged for longer than the bucket's retention
+// ages out, so a seat that stopped running does not keep a record for the
+// life of the deployment — here a bucket built with a short retention, so the
+// case can watch it happen.
 func TestAnUnchargedCounterAgesOut(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	store := openFleetWithTTL(t, nc, 500*time.Millisecond)
-	ctx := t.Context()
+	// BOUNDED, so a listing that never ends fails this case by name rather
+	// than the package's timeout. This is the case that found one: a listing
+	// whose counters aged out between its consumer's creation and its first
+	// delivery waited for an end marker no delivery would bring, for nine
+	// minutes and forty-two seconds (see [passOver]).
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
 	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
@@ -1126,13 +1242,14 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 // reach inside one rather than run the contract suite over it.
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    fmt.Sprintf("f%d", bucketSeq.Add(1)),
+		FollowRetention: time.Minute, RebaseRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		CustodyRetention: time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -1140,24 +1257,52 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	return store
 }
 
-// hangUpAfterWriting is the budgets bucket's client handle with one fault
-// injected: the moment one key is written, the caller's context is cancelled,
-// the way a caller hanging up between the org's write and the seat's makes the
-// second fail.
-//
-// UPDATE IS THE ONE WRITE TO WRAP, because a create here is a conditional
-// publish at revision zero through it (see [leaderBucket.Create]) — so a
-// create and an increment of the key both land on it.
+// hangUpAfterWriting is the budgets bucket with one fault injected: the moment
+// one key is written, the caller's context is cancelled, the way a caller
+// hanging up between the org's write and the seat's makes the second fail.
 type hangUpAfterWriting struct {
-	clientBucket
+	jetstream.KeyValue
 	key    string
 	hangUp context.CancelFunc
 }
 
-func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
-	rev, err := k.clientBucket.Update(ctx, key, value, revision)
+func (k hangUpAfterWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	rev, err := k.KeyValue.Create(ctx, key, value, opts...)
 	if err == nil && key == k.key {
 		k.hangUp()
 	}
 	return rev, err
+}
+
+func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	rev, err := k.KeyValue.Update(ctx, key, value, revision)
+	if err == nil && key == k.key {
+		k.hangUp()
+	}
+	return rev, err
+}
+
+// failWriting is a counter bucket whose broker refuses every write to one key,
+// with an error that is not a lost race — so the write fails once rather than
+// being retried, the way a broker that is unreachable or out of storage fails
+// it.
+type failWriting struct {
+	jetstream.KeyValue
+	key string
+}
+
+var errWriteRefused = errors.New("nats: the broker refused the write (injected)")
+
+func (k failWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Create(ctx, key, value, opts...)
+}
+
+func (k failWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Update(ctx, key, value, revision)
 }

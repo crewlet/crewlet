@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,8 +57,11 @@ import (
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [SeatPauses] a person set, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
-// the state log trims against, and the [SetupClaims] that spend a setup
-// callback exactly once. The list above is the migration, not the estate.
+// the state log trims against, the [Rebases] a retried unit of work inherits
+// its instant from, the [ObjectStores] backend the fleet's files are in, the
+// [Custody] of a stateless node's event batches, and the [Markers] sweep that
+// keeps every removal from being read again for ever. The list above is the
+// migration, not the estate.
 //
 // The sign-in throttle is deliberately NOT here. Its curve was once shared
 // through a bucket of its own, so a guessing run a load balancer rotated
@@ -79,6 +83,9 @@ import (
 // KV backend can actually enforce — see internal/coord/kv's package doc for
 // the measurement — so each is fixed when the bucket is created and a caller
 // asking for something longer has to be refused rather than quietly clamped.
+// The two exceptions are the claim TTLs, [ClaimTTL] and [SetupOnceRetention]:
+// what a caller hands [Claims.Claim], carried as a deadline in the claim's own
+// record and bounded by the claims bucket's age, [MaxClaimTTL].
 //
 // They live here, beside the contract, so there is ONE place to read what a
 // fleet retains. Each is sized from the cadence of the subsystem that reads
@@ -103,12 +110,30 @@ const (
 	// minutes later vanishes into a claim nothing will clear.
 	ClaimTTL = 5 * time.Minute
 
+	// MaxClaimTTL is the longest TTL a [Claims] claim may ask for, and so
+	// the claims bucket's age: a backend that expires a claim by its
+	// bucket can only keep one for as long as the bucket keeps records, and
+	// each claim shorter than that lapses at its own deadline. A claim
+	// asking for more is refused with [ErrTTLTooLong] rather than clamped,
+	// because a clamped dedupe window lets through the very duplicate it
+	// was sized to stop.
+	//
+	// THIRTY MINUTES, set by the longest claim anybody takes: the
+	// Mattermost socket's (mattermost.ClaimTTL), which must outlive the
+	// window a reconnecting seat replays — mattermost.MaxBackfill, fifteen
+	// minutes — plus the reconnect backoff ceiling and clock margin, and is
+	// twice the window. This package cannot import that one, so its own
+	// tests hold the two together. Longer costs only records nobody reads
+	// again: every claim key names one delivery.
+	MaxClaimTTL = 30 * time.Minute
+
 	// SetupOnceRetention is how long a spent setup-callback state is
-	// remembered, and therefore how long the state a setup flow mints may
-	// be valid for: the record is what stops a second presentation of the
-	// same state, so a token that outlived it would be replayable while
-	// its signature still validates. internal/api/setupapi's manifestTTL
-	// IS this constant for that reason.
+	// remembered — the TTL a setup flow takes its [Claims] claim with — and
+	// therefore how long the state a setup flow mints may be valid for: the
+	// record is what stops a second presentation of the same state, so a
+	// token that outlived it would be replayable while its signature still
+	// validates. internal/api/setupapi's manifestTTL IS this constant for
+	// that reason.
 	//
 	// Fifteen minutes is the span of the task it covers — a browser round
 	// trip to GitHub and two clicks — and it is bounded from above by a
@@ -118,11 +143,12 @@ const (
 	// dead, and the failure they would see names the code rather than the
 	// wait.
 	//
-	// Its own bucket rather than a long claim against [ClaimTTL]'s: the
-	// horizon is three times that one, and a claim taken for longer than
-	// the bucket it lands in does not last longer — it lapses with the
-	// bucket, silently, which is exactly the bug this constant exists to
-	// end.
+	// An ordinary claim at its own TTL rather than a bucket of its own: a
+	// claim carries its deadline in its record, so a horizon three times
+	// [ClaimTTL]'s shares the claims bucket with it, and [MaxClaimTTL] is
+	// the only bound it has to stay under — coordtest's retention guard
+	// holds it there, because a claim asking for more is an error, and the
+	// setup flow fails closed on every error.
 	SetupOnceRetention = 15 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
@@ -142,6 +168,23 @@ const (
 	// to the redelivery horizon must not silently move the scheduler's
 	// floor with it.
 	FireRetention = 7 * 24 * time.Hour
+
+	// RebaseRetention is how long a recorded rebase is kept — see
+	// [Rebases] — and so the bucket's age.
+	//
+	// THE OPERATION LEDGER'S OWN RETENTION (statelog.OpsRetention), which
+	// is a day past the horizon a rebase is inherited within
+	// (statelog.MintHorizon). An attempt inherits a recorded instant only
+	// while it lies within that horizon of the attempt's own clock, and the
+	// bucket's age is counted from the write, which is no earlier than the
+	// instant it records — so a record the bucket has aged out is one the
+	// rule would have replaced anyway. Shorter would forget an instant a
+	// retry still has to inherit, and the retry would mint anew and write
+	// again whatever the attempt before it wrote; longer keeps a record per
+	// rebased unit of work that nothing can ever read. This package cannot
+	// import the state log, so coordtest's retention guard holds the two
+	// together.
+	RebaseRetention = 30 * 24 * time.Hour
 
 	// CooldownMax is the longest credential cooldown anything sets, and
 	// therefore the bucket's age. A cooldown carries its own end instant,
@@ -168,6 +211,23 @@ const (
 	// early would re-arm a company mid-month, and one that aged out late
 	// costs a record nobody reads.
 	BudgetRetention = 32 * 24 * time.Hour
+
+	// CustodyRetention is how long the record of which data node keeps a
+	// batch of a stateless node's event records lasts — see [Custody] —
+	// and so the bucket's age.
+	//
+	// A DAY PAST THE EVENT LOG'S OWN RETENTION (store.EventRetention). A
+	// node that wrote a batch and never learned whether it kept it asks
+	// this record later — at its next pass, or at boot after a crash — and
+	// a record aged out while the batch's rows were still in the log would
+	// answer that nobody keeps it, so the node would keep a second copy of
+	// a batch another node already holds. The rows go at the event log's
+	// retention, so a record that outlives them by a day — the sweep's
+	// slack — is never asked about a batch it no longer describes. Longer
+	// keeps a record per batch nobody can ask about. This package cannot
+	// import the store, so coordtest's retention guard holds the two
+	// together.
+	CustodyRetention = 32 * 24 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -215,6 +275,33 @@ const (
 	// StatusFreshness is a multiple of it and a package that imported the
 	// configplane for one constant would invert the dependency.
 	ReconcileInterval = 15 * time.Second
+
+	// MarkerRetention is how long the record that a key was REMOVED — a
+	// delete or purge marker — stays in a store that never ages its
+	// records, before [Markers.SweepMarkers] removes it.
+	//
+	// NOT A CORRECTNESS BOUND, and that is established rather than hoped:
+	// every reader of a backend that keeps markers asks what the key holds
+	// NOW before it trusts one — a listing reads a marker its pass
+	// delivered again from the stream leader, and a create re-reads the key
+	// before conditioning on one — so a marker swept the instant after it
+	// was written changes no answer. The contract suite sweeps with a
+	// cutoff in the future and holds every other answer to what it was.
+	//
+	// What the horizon decides is how long a removal stays VISIBLE, against
+	// what that costs. Every marker still held is one leader read on each
+	// listing whose pass delivers it, so a listing pays for the records
+	// removed in the last horizon plus one sweep interval. And a marker is
+	// the store's only trace that a key was removed rather than never
+	// written, so it has to outlive every operation that could still be
+	// acting on what it read before the removal: a listing runs inside the
+	// tick that takes it, every read-decide-write on these records runs
+	// under a claim, and no claim outlives [MaxDutyTTL]. Hence three hours —
+	// every operation in flight when a key was removed has finished before
+	// its marker goes, and a listing re-reads at most the removals of the
+	// last three hours and a quarter, where without the sweep it re-read
+	// every removal the deployment had ever made.
+	MarkerRetention = MaxDutyTTL
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
@@ -235,69 +322,58 @@ type Counter interface {
 	Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error)
 }
 
-// Claims is the fleet's first-claim-wins registry behind webhook
-// deduplication.
+// Claims is the fleet's first-claim-wins registry with a TTL: behind webhook
+// deduplication, the change feed's wake dedupe, the chat socket's delivery
+// claim and a setup flow's one-shot callback state.
 //
-// # A claim expires with its BUCKET
+// # A claim carries its own deadline
 //
-// There is no per-claim TTL here, and the absence is the contract rather than
-// an omission. A claim lapses because the record's bucket is [ClaimTTL] old
-// and the store reaps it — the same mechanism as every other retention in
-// this package — so the deadline is the store's and no node compares its own
-// clock to a peer's. A KV cannot offer anything else: a per-key TTL there is
-// create-only and an update clears it (see internal/coord/kv's package doc for
-// the measurement), which is why the parameter this once took was honoured by
-// the twin and validated-then-ignored by the backend a fleet runs on. The
-// suite could not see the divergence, because no case ever travelled past a
-// deadline — and the live consequence was a fifteen-minute claim taken
-// against a five-minute bucket, lapsing ten minutes before its caller thought
-// it did.
+// A claim lapses at the deadline its RECORD carries — the `now` its writer
+// passed plus the `ttl` it asked for — judged against the `now` the NEXT
+// caller passes, so a lapsed claim is taken over by whoever asks next and no
+// node compares its own clock to the store's reaping. It cannot be a per-key
+// TTL in the store: a KV's is create-only and an update clears it (see
+// internal/coord/kv's package doc for the measurement), which is why a ttl
+// argument this once took was validated and then ignored by the backend a
+// fleet runs on, and a fifteen-minute claim taken against a five-minute bucket
+// lapsed ten minutes before its caller thought it did. The suite could not see
+// that, because no case ever travelled past a deadline; its claim cases travel
+// the clock now. The bucket's age is the CEILING, [MaxClaimTTL], and a claim
+// asking for longer is an error rather than a record the store reaps early.
 //
-// A caller that needs a different horizon therefore needs a different bucket,
-// not a different argument: [SetupClaims] is that, and it is the whole reason
-// it exists.
+// The POLARITY belongs to the caller rather than to this store: webhook
+// dedupe fails open because a suppressed push is a wake nobody notices, while
+// a setup flow's callback state is an AUTHORIZATION check and its caller fails
+// closed — a registry that could not answer has not said the state is
+// unspent, and the cost of refusing is one more click.
 //
-// The `now` these verbs take is the instant a record is MADE AT, never a
-// deadline: it is what the record carries, and it is what a store with no
-// clock of its own — the in-process twin — measures the bucket's age from. A
-// store that has one reaps on that instead, which is why a caller may not
-// infer from a travelled clock that a record has gone.
+// The `now` a claim takes is the instant its record is MADE AT, and the
+// instant an earlier record's deadline is judged against — never a deadline
+// itself. A store's own reaping at [MaxClaimTTL] only ever removes a record
+// whose deadline has already passed, so no caller may infer from a travelled
+// clock that a record has gone, only that it no longer holds anybody off.
 type Claims interface {
-	// Claim records key and reports whether THIS caller was first. It
-	// lapses [ClaimTTL] after it is written, by the bucket's own expiry.
+	// Claim records key and reports whether THIS caller was first.
 	//
 	// FAILS OPEN — an error yields (false, err) and the caller must
 	// PROCESS the delivery. A third-party app's push suppressed because the
 	// store blinked is a wake that never happens, and nothing else will
 	// notice; a duplicated wake is a turn the completion ledger collapses.
 	//
+	// The claim lapses at now+ttl, judged against the `now` the NEXT
+	// caller passes, so two callers sharing one key share one window
+	// whatever else the store keeps. A ttl beyond [MaxClaimTTL] — or beyond
+	// a backend's own ceiling where that is shorter — is an error wrapping
+	// [ErrTTLTooLong], never a silent clamp.
+	//
 	// An empty key is an ERROR rather than (false, nil): a caller that
 	// named nothing has not lost a race to anybody, and answering "somebody
 	// else took it" would drop the delivery.
-	Claim(ctx context.Context, key string, now time.Time) (bool, error)
+	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
 	// is not suppressed by the first attempt's own record.
 	Release(ctx context.Context, key string) error
-}
-
-// SetupClaims is the fleet's one-shot registry behind a setup flow's callback
-// state.
-//
-// The same first-claim-wins mechanism as [Claims] on a bucket of its own,
-// because the horizon is a different one — [SetupOnceRetention] rather than
-// [ClaimTTL] — and a horizon is a property of the bucket here.
-//
-// The POLARITY is the other difference, and it belongs to the caller rather
-// than to this store: webhook dedupe fails open because a suppressed push is
-// a wake nobody notices, while a callback state is an AUTHORIZATION check and
-// its caller fails closed — a registry that could not answer has not said the
-// state is unspent, and the cost of refusing is one more click.
-type SetupClaims interface {
-	// ClaimSetup records key and reports whether THIS caller was first. It
-	// lapses [SetupOnceRetention] after it is written, by the bucket's own
-	// expiry, and an empty key is an error for [Claims.Claim]'s reason.
-	ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error)
 }
 
 // Ledger is the fleet's record of work already done, behind the
@@ -366,17 +442,19 @@ type Activation struct {
 // had a different author on every node and the audit screen's answer depended
 // on which node served it.
 //
-// ADDITIVE ON THE WIRE, and both directions are ordinary. A build that does
-// not know a field decodes a pointer carrying it and ignores it; this build
-// reads a pointer that lacks one as that field's zero, which the adopting
-// node records as NOT RECORDED rather than inventing an author.
+// REQUIRED: every writer knows who it is, how it made the revision and when,
+// and [RevisionOrigin.Check] is what both backends hold an activation to, so
+// no pointer reaches a peer naming nobody and no adopting node has an author
+// to invent or a "not recorded" to render.
 //
 // The kind is internal/iam's [iam.ActorKind] — the one vocabulary every
-// durable author column in the engine writes — and an unknown kind off the
-// wire stays the value it is ([iam.ActorKind.Valid] false) rather than being
-// mapped onto a kind that exists. Importing iam costs this package nothing:
-// it is a leaf holding values only, so a backend carrying the word pulls in
-// no store, no hasher and no client.
+// durable author column in the engine writes, the engine's own writes
+// included ([iam.ActorSystem]) — and an unknown kind off the wire stays the
+// value it is ([iam.ActorKind.Valid] false) rather than being mapped onto a
+// kind that exists. Importing iam costs this package nothing: it is a leaf
+// holding values only, so a backend carrying the word pulls in no store, no
+// hasher and no client, where the store's own kind type would have made every
+// backend import the store to carry a word.
 //
 // The PARENT is deliberately not here. It names a revision the adopting node
 // may never have held — a node that joined after it was superseded — and the
@@ -405,6 +483,35 @@ type RevisionOrigin struct {
 	CreatedAt time.Time
 }
 
+// ErrIncompleteOrigin reports an activation whose origin leaves out what a
+// peer adopting the revision records: the author's kind, the source or the
+// creation instant. The author's NAME may be empty — its kind still says what
+// sort of party wrote it — but nothing else may.
+var ErrIncompleteOrigin = errors.New("coord: an activation needs its revision's origin")
+
+// Check reports whether the origin carries everything a peer records, as an
+// error wrapping [ErrIncompleteOrigin] naming each field that is missing.
+//
+// THE BACKEND ENFORCES IT, both of them, so the rule cannot be one a caller
+// forgot: a pointer that named nobody would put a revision on every peer with
+// no author and no source, which is the guess the origin exists to remove.
+func (o RevisionOrigin) Check() error {
+	var missing []string
+	if o.AuthorKind == "" {
+		missing = append(missing, "AuthorKind")
+	}
+	if o.Source == "" {
+		missing = append(missing, "Source")
+	}
+	if o.CreatedAt.IsZero() {
+		missing = append(missing, "CreatedAt")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing %s", ErrIncompleteOrigin, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // MaxApplyErrorLength bounds the failure text a node publishes.
 //
 // A wrapped error chain from a failed apply is a sentence or two; a driver's
@@ -425,30 +532,45 @@ const MaxApplyErrorLength = 2000
 //
 // # Why the pointer forces its instants forward
 //
-// Because the instant is how a node tells WHICH OF TWO ACTIVATIONS IS NEWER,
+// Because two readers decide WHICH OF TWO ACTIVATIONS IS NEWER by this instant,
 // and that answer has to follow the order the pointer took them in rather than
-// the clocks of the nodes that asked. A booting node republishes its locally
-// active revision only when that revision's `activated_at` is LATER than the
-// pointer's, and the reconciler holds a node's own copy to the pointer by
-// revision and instant together (re-activating an unchanged revision is the
-// credential-rotation gesture). The instant is the activating node's own
+// the clocks of the nodes that asked. The instant is the activating node's own
 // clock, so an operator whose node runs a few seconds behind the one that
 // activated last, a node republishing the `activated_at` it holds, and two
 // activations inside one millisecond each put an instant on the pointer no
-// later than the one it replaced — and a node holding the replaced revision
-// read its own copy as the newer and published it back over the fleet's.
+// later than the one it replaced. Each reader then got it wrong its own way:
+//
+//   - EVERY ROW DERIVED FROM A CONFIGURATION is stamped with it
+//     (configplane.ActivationStamp) — the tracker's projects and the
+//     knowledge base's containers — and a row refuses a stamp older than its
+//     own, so that a node applying an older configuration late cannot walk a
+//     newer one's values back. An activation whose instant was no later than
+//     the stamps already on those rows was applied to neither, silently,
+//     until some later activation happened to carry a later clock.
+//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes its
+//     locally active revision only when that revision's `activated_at` is
+//     LATER than the pointer's, and the reconciler holds a node's own copy to
+//     the pointer by revision and instant together (re-activating an
+//     unchanged revision is the credential-rotation gesture). A node holding
+//     the replaced revision read its own copy as the newer and published it
+//     back over the fleet's.
 //
 // Decided INSIDE the compare-and-set that replaces the pointer, against the
 // pointer it replaces, so two activations racing each other cannot both be
 // told the same instant: whichever lands second is compared with the first.
 //
-// # In milliseconds
+// # At the stamp's resolution
 //
-// Compared in Unix MILLISECONDS, which is coarser than every place the instant
-// is kept — the pointer's nanoseconds and the node store's microseconds — so a
-// later activation is still later once a node has stored its copy and read it
-// back. The zero instant — no previous activation — leaves the request as it
-// is.
+// Compared in Unix MILLISECONDS, the resolution configplane.ActivationStamp
+// stamps at, because an instant later by a few microseconds is the SAME stamp
+// and every guard lets an equal stamp through — a finer forward step here
+// would still hand those rows an activation they refuse to tell apart from the
+// last. It is also coarser than every place the instant is kept — the
+// pointer's nanoseconds and the node store's microseconds — so a later
+// activation is still later once a node has stored its copy and read it back.
+// configplane.TestTheActivationPointersForwardRuleIsLaterInStamps holds the two
+// resolutions together. The zero instant — no previous activation — leaves the
+// request as it is.
 func ActivationAt(requested, previous time.Time) time.Time {
 	if previous.IsZero() || requested.UnixMilli() > previous.UnixMilli() {
 		return requested.UTC()
@@ -519,8 +641,8 @@ type ActivationRequest struct {
 	// the credential it was written through, its source and when it was
 	// made — carried with the pointer for the reason Summary is: every node
 	// that adopts the revision keeps its own copy of it, and that copy has
-	// to say who wrote it. Every writer has one; a zero origin publishes a
-	// pointer every peer records as "author not recorded".
+	// to say who wrote it. Every writer has one, and an activation whose
+	// origin fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.
@@ -807,6 +929,78 @@ type Fires interface {
 	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
 }
 
+// Custody decides which data node keeps each batch of a stateless node's event
+// records (ADR-0025).
+//
+// # Why the whole company has to agree on it
+//
+// A node without `data` keeps no event log of its own, so it publishes its
+// records in batches onto one durable topic and the data nodes take them from
+// one fleet-wide group, each writing what it takes into its own log. A group
+// delivers a batch whose acknowledgement was lost AGAIN, to whichever member
+// asks next — so without a decision a batch can land in two logs, and every
+// figure derived from a node's own log counts it twice: the usage domain sums
+// each node's day, so a stateless node's spend would be billed once per data
+// node that happened to write it.
+//
+// # Create-only, written AFTER the rows, and the loser deletes
+//
+// A data node writes a batch into its own log first and claims it second:
+// whoever creates the key keeps the batch, and any other node that wrote it
+// deletes its copy. The other order — claim, then write — leaves a claimant
+// that died between the two holding a batch nobody wrote. In this order the
+// worst a crash leaves is a written copy whose claim is unknown, which the
+// node settles the same way on its next pass, and a batch is acknowledged only
+// once its keeper is decided, so the group keeps offering it until then.
+type Custody interface {
+	// ClaimCustody records node as the keeper of batch unless a keeper is
+	// already recorded, and answers the keeper: node itself, or the node
+	// that claimed first. An error is the third answer — the store could
+	// not say — and the caller must neither keep nor delete its copy on
+	// it.
+	ClaimCustody(ctx context.Context, batch, node string) (string, error)
+}
+
+// Rebases is the fleet's record of the instant a unit of work's derived
+// operation ids are minted at, for the work whose own start is too old for the
+// operation ledger to vouch for.
+//
+// A derived id carries the instant its work began, so a retry reproduces it;
+// an attempt that finds that instant past the state log's horizon mints at its
+// own instant instead (statelog.MintAt) and records it HERE, keyed by the seed
+// the ids are derived from — the work key, or the run where the turn has none.
+// Every later attempt at the same work reads it back and inherits it: a crash
+// re-run of a dispatched turn, a failed resume retried, the next half of a
+// turn a coding run parked. Each of those can run on another node — a crash
+// re-run lands wherever the seat's delivery is taken next, a resume on the
+// seat's next owner — so the record has to be the fleet's: on the node's own
+// database the successor found nothing, minted anew, and wrote a second copy
+// of every write the attempt before it made.
+//
+// A READ AND A CONDITIONAL WRITE, with the value typed. The rule deciding the
+// instant is the state log's, applied by the caller between the two, and the
+// condition is what makes two attempts racing on one seed agree: the loser's
+// write is refused, it reads the winner's instant, and the rule then keeps it.
+//
+// Retention is the bucket's age, [RebaseRetention].
+type Rebases interface {
+	// Rebase reads the instant recorded for seed and the version it was
+	// read at: the zero instant and version 0 where nothing is recorded.
+	//
+	// RAISES rather than answering "nothing", because "nothing" sends the
+	// caller to mint at its own instant — which, for a retry of an attempt
+	// that did record one, is a second copy of that attempt's every write.
+	Rebase(ctx context.Context, seed string) (time.Time, uint64, error)
+
+	// RecordRebase writes at as seed's instant, conditional on version:
+	// version 0 writes only where nothing is recorded, any other only
+	// where that version still holds. False is a LOST RACE — another
+	// attempt recorded first, or moved it since — and the caller reads
+	// again and re-decides, because the instant it would have replaced
+	// may be one it now has to inherit.
+	RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error)
+}
+
 // Record is one stored value with the version it was read at.
 //
 // The version is an OPAQUE token: pass back exactly what a read handed you.
@@ -1080,19 +1274,25 @@ type MailboxRecord struct {
 	//
 	// THE ID RATHER THAN THE HANDLE, because the mailbox this record is
 	// about is named by the id: a registry keyed on a handle could not
-	// build the subject it is registering, and a rename would leave one
-	// record for a mailbox that is still live and another for a seat that
-	// already has one.
+	// build the subject it is registering, and the same handle under a
+	// renamed organisation is another seat with another mailbox
+	// (ADR-0013), which a handle-keyed registry would fold into one record.
 	Seat uuid.UUID
 
-	// Handle is what the seat answered to when this record was last
-	// written, and it is a LABEL rather than an identity: it is what a
-	// person reading the registry, or a retirement log line, needs in
-	// order to know whose mailbox is being retired. Nothing resolves by
-	// it, and a rename leaves it stale until the next registration.
+	// Handle is what the seat answers to, and it is a LABEL rather than an
+	// identity: it is what a person reading the registry, or a retirement
+	// log line, needs in order to know whose mailbox is being retired.
+	// NOTHING RESOLVES BY IT — the runs a retirement ends, the lease it
+	// claims and the subscriptions it deletes are all found by Seat —
+	// because it can be EMPTY: a record a sweep registered from the
+	// broker's listing alone, for a seat neither the roster nor the
+	// registry still names, has no handle anybody can supply. The first
+	// registration or sweep that finds the seat in the roster again writes
+	// it, and the handle a seat's id is derived from never changes, so a
+	// written label never goes stale.
 	Handle string
 
-	// AbsentSince is when a sweep first found the handle missing from the
+	// AbsentSince is when a sweep first found the seat missing from the
 	// active revision. Zero while the seat is in it.
 	AbsentSince time.Time
 
@@ -1165,17 +1365,44 @@ type Mailboxes interface {
 	DeleteMailbox(ctx context.Context, seat uuid.UUID, version uint64) (bool, error)
 }
 
+// Markers is the one piece of housekeeping the shared state asks of its
+// caller: removing the record that a key was removed.
+//
+// # Why a store that forgets on its own still needs it
+//
+// A KV backend removes a key by appending a delete or purge MARKER, and a
+// bucket the broker ages takes the marker with everything else when it ages
+// out. The families above that no clock may reap — the runs, the channels,
+// the mailboxes, the secrets, the budgets, the integration statuses, the
+// positions register — keep every marker for the life of the deployment, and
+// each one is a leader read on every listing that meets it (internal/coord/kv
+// walk.go says why a marker is read again rather than trusted). So the
+// markers are swept, as a DECISION under the maintenance duty, for the reason
+// the channels are: a bucket's age cannot express which records may go.
+//
+// # It changes no answer
+//
+// That is the contract, and the suite holds it: sweep every marker, and every
+// read, listing, create and conditional write answers exactly as before. A
+// backend that keeps no marker at all — the memory twin deletes the entry —
+// satisfies it by sweeping nothing.
+type Markers interface {
+	// SweepMarkers removes every marker written before cutoff from the
+	// record families no clock ages, reporting how many went. A failure
+	// part-way reports the markers already removed beside the error.
+	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
 // One interface at the CONSTRUCTION seam and a narrow one at each call site:
 // the webhook edge takes a Claims and nothing else, the valve takes a Counter,
-// a turn's meter takes the two verbs of [Budgets] it calls. A consumer that
+// a turn's meter takes the verbs of [Budgets] it calls. A consumer that
 // could reach the whole store would eventually use it.
 type Fleet interface {
 	Counter
 	Claims
-	SetupClaims
 	Ledger
 	Cooldowns
 	Budgets
@@ -1183,16 +1410,58 @@ type Fleet interface {
 	Channels
 	Follows
 	Fires
+	Rebases
 	SandboxRuns
 	Secrets
 	Integrations
 	Mailboxes
+	ObjectStores
 	SeatPauses
 	PositionRegister
 	HoldRegister
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+	Markers
+	Custody
+}
+
+// ObjectStores is what the whole fleet has to agree on about the object store
+// (ADR-0026): which backend its files are in, and what its collector last
+// found.
+//
+// # The backend is the fleet's, and recorded once
+//
+// Every node reads and writes files through the backend its own Tier A names,
+// and two nodes naming different ones split the company's files between them
+// with nothing failing — each side's uploads read back on that side alone,
+// and the collector running on one side deletes nothing the other wrote. So
+// the first node to open the store records which backend it is, create-only
+// and with no age, and every node after compares its own against it and
+// refuses to boot on a mismatch.
+//
+// # Nothing else, and no lock
+//
+// A deletion from the store takes no lock (ADR-0027): an object is stored
+// under a key minted for its one upload and named by that upload's write
+// alone, so no writer is ever re-using an object the collector could be
+// deleting.
+type ObjectStores interface {
+	// AgreeObjectBackend records identity as the fleet's object backend
+	// unless one is recorded, and answers the recorded one: identity
+	// itself, or what the first node recorded. An error is UNKNOWN — the
+	// caller must not open a backend it could not check.
+	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
+
+	// RecordObjectCollection stores what the collector last found, an
+	// opaque value its owner (internal/engine) encodes, replacing the last
+	// one: the duty moves between nodes, and every node's status surface
+	// reads the latest report whoever wrote it.
+	RecordObjectCollection(ctx context.Context, value []byte) error
+
+	// ObjectCollection reads the last report, false when none was ever
+	// written.
+	ObjectCollection(ctx context.Context) ([]byte, bool, error)
 }
 
 // Follows is which chat threads each seat is following.
@@ -1258,20 +1527,4 @@ type Follows interface {
 	// re-assert loses by a nanosecond — and the next mention re-follows
 	// through the ordinary path.
 	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
-
-	// FollowIfAbsent records a follow only where none exists, reporting
-	// whether this call created it.
-	//
-	// THE ONE-TIME HANDOFF'S WRITE — see internal/notify/followsync — and
-	// create-only is what makes it safe to run while inbound chat is live.
-	// A plain Follow would overwrite whatever the fleet already holds: a
-	// stale local row landing on top of a fresh mention downgrades the
-	// reason an operator reads, and one whose fleet copy was unfollowed
-	// after the move began would be resurrected by a node that booted late.
-	//
-	// It is also what makes two nodes handing off at once correct with
-	// nothing agreed between them: both hold their own local table, the
-	// keys overlap, exactly one create wins, and the loser removes its own
-	// row having learned the fleet already has the record.
-	FollowIfAbsent(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) (bool, error)
 }

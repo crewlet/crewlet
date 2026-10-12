@@ -213,7 +213,7 @@ func rawBody(ev types.ExternalNotification) string {
 // Webhook sources re-emit unchanged state on every event — a code host sends
 // the whole pull-request description each time a label moves — and rendering N
 // identical copies buries the one actionable line and pollutes the merged text
-// the learning filters embed.
+// the turn's relevance judgements embed and read.
 //
 // SAME SENDER and byte-identical, both required. The later copy still renders,
 // in the digest or in full as the latest, so nothing is lost; and two
@@ -240,7 +240,10 @@ func laterDuplicates(prompt Prompt, ordered []constituent) map[int]bool {
 
 // mergedSalient is the sender-attributed raw text of the whole conversation.
 //
-// What the learning workers embed, so it carries the same supersede rule the
+// What the turn it wakes is judged against: the engine's turn ask
+// (prefetch.Request.Ask) is a notification's subject and this, so the turn's
+// one vector embeds it and the memory filter, the knowledge-query writer and
+// the episode summary read it. So it carries the same supersede rule the
 // digest does — a body the source superseded contributes nothing here either.
 // It is a POINTER because the field distinguishes nil from empty: a merge
 // always produces a salient body, even an empty one, and letting it read as

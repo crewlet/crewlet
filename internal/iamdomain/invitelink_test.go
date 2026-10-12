@@ -216,7 +216,7 @@ func TestARedemptionCarriesOnlyThePasswordItsInviteeChose(t *testing.T) {
 
 // AN INVITATION BINDS ONLY A HUMAN SEAT NOBODY HOLDS, decided when it is issued
 // — and it binds one: the person it creates holds a seat from the moment they
-// exist (ADR-0026).
+// exist (ADR-0032).
 //
 // Each refusal is one the person the link is sent to could do nothing about: no
 // seat at all, a seat nobody created, an agent's seat — a person bound to one
@@ -224,7 +224,7 @@ func TestARedemptionCarriesOnlyThePasswordItsInviteeChose(t *testing.T) {
 // seat another open invitation is on its way to. What it records is the seat's
 // handle, which is its identity.
 //
-// Mutation: drop the seat requirement and the seatless invitation is issued;
+// Mutation: drop the seat requirement and the invitation naming none is issued;
 // drop the kind check and the agent seat is; drop the holder check and the
 // held seat is; drop the open-invitation check and the invited seat is.
 func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
@@ -295,12 +295,13 @@ func TestAnInvitationBindsOnlyAHumanSeatNobodyHolds(t *testing.T) {
 
 // A REDEMPTION BINDS THE SEAT ITS INVITATION NAMED, and nothing else.
 //
-// A redemption naming another seat, or none, asks for something the invitation
-// did not offer and is refused as the link's refusal ([iamdomain.ErrRefused]),
-// publishing nothing.
+// A redemption naming another seat asks for something the invitation did not
+// offer and is refused as the link's refusal ([iamdomain.ErrRefused]),
+// publishing nothing. One naming none is a call formed wrong, which
+// [TestARedemptionNamingNoSeatIsItsCallersFault] holds.
 //
 // Mutation: drop the seat comparison from the person record's basis and the
-// redemption naming no seat spends the link without the binding.
+// redemption naming another seat spends the link onto a seat it never offered.
 func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -318,12 +319,10 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 		t.Errorf("the row names seat %q, want platform-lead", row.Seat)
 	}
 
-	for _, other := range []string{"", "other-seat"} {
-		if _, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
-			other); !errors.Is(err, iamdomain.ErrRefused) {
-			t.Errorf("a redemption binding %q, where the invitation binds "+
-				"platform-lead, was not refused (%v)", other, err)
-		}
+	if _, err := redeemAs(t, rig, issued, "lead@example.com", issued.Secret,
+		"other-seat"); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("a redemption binding other-seat, where the invitation binds "+
+			"platform-lead, was not refused (%v)", err)
 	}
 	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 0 {
 		t.Errorf("refused redemptions left rows behind: %v", rows)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -141,9 +142,9 @@ func TestTheQueryVectorReachesEveryParticipant(t *testing.T) {
 // EACH MODE FUSES EXACTLY THE RANKERS IT NAMES.
 //
 // Hybrid is both lists by reciprocal rank fusion; keyword is the words alone;
-// semantic is meaning alone. A participant on an older build runs both halves
-// whatever it is asked — so the coordinator, not the participant, is what
-// keeps a keyword search from quietly becoming a hybrid one.
+// semantic is meaning alone. What goes into the answer is the coordinator's
+// decision rather than a participant's — so even a slice carrying both halves
+// whatever it was asked cannot turn a keyword search into a hybrid one.
 func TestEachModeFusesExactlyTheRankersItNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -156,8 +157,8 @@ func TestEachModeFusesExactlyTheRankersItNames(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			t.Parallel()
-			// BOTH HALVES IN EVERY SLICE, as an older participant
-			// that ignores Methods would send them.
+			// BOTH HALVES IN EVERY SLICE, whatever the query asked
+			// for, so only the coordinator's own filter decides.
 			local := &recordingScan{slice: bothHalves("n1", search.Everything())}
 			fan := &search.FanOut{Self: "n1", Local: local,
 				Vectors: search.NewQueryVectors(newProvider().read)}
@@ -265,6 +266,85 @@ func TestAProbeWithAProviderDegradesNothing(t *testing.T) {
 	}
 	if got := p.embed.calls.Load(); got != 0 {
 		t.Errorf("the probe made %d provider calls, want none", got)
+	}
+}
+
+// A QUERY PAST THE BOUND IS REFUSED BEFORE ANYTHING RUNS — no scan, no scatter
+// to the peers and no provider call for its vector — and one at the bound, or
+// one carried there by whitespace a searcher never reads, is a search.
+//
+// The fan-out is the one path every native search of either kind takes, from
+// whichever surface or peer it came, so a surface that forgot the rule cannot
+// put a pasted thread in front of the ranker or the provider.
+func TestAQueryPastTheBoundIsRefusedBeforeAnythingRuns(t *testing.T) {
+	t.Parallel()
+	p := newProvider()
+	local := &recordingScan{slice: bothHalves("n1", search.Everything())}
+	fan := &search.FanOut{Self: "n1", Local: local, Vectors: search.NewQueryVectors(p.read)}
+
+	long := strings.Repeat("z", knowledge.MaxQueryBytes+1)
+	if _, err := fan.Search(t.Context(), search.FanQuery{Text: long, Limit: 10}); !errors.Is(err, knowledge.ErrQueryTooLong) {
+		t.Fatalf("a %d-byte query answered %v, want ErrQueryTooLong", len(long), err)
+	}
+	if n := len(local.queries()); n != 0 || p.embed.calls.Load() != 0 {
+		t.Fatalf("a refused query still ran: %d scans, %d provider calls", n, p.embed.calls.Load())
+	}
+
+	for _, at := range []string{
+		strings.Repeat("z", knowledge.MaxQueryBytes),
+		"  \n" + strings.Repeat("z", knowledge.MaxQueryBytes) + "\t ",
+	} {
+		answer, err := fan.Search(t.Context(), search.FanQuery{Text: at, Limit: 10})
+		if err != nil || answer.Served != knowledge.ModeHybrid {
+			t.Fatalf("a query at the bound answered %q, %v — want a hybrid search", answer.Served, err)
+		}
+	}
+}
+
+// A QUERY PAST A NARROW MODEL'S OWN BOUND IS EMBEDDED WHOLE, never by its
+// opening and never refused for its length.
+//
+// Every documented model takes five times [knowledge.MaxQueryBytes] in one
+// input, but a local model stated with a 256-token window does not, and a
+// query past it used to be refused by the provider's own bound — read as the
+// provider failing, so every longer query on that company quietly ranked by
+// its words alone. Represented by its opening it would rank the answers to the
+// first half of the question instead.
+func TestAQueryPastANarrowModelsBoundIsEmbeddedWhole(t *testing.T) {
+	t.Parallel()
+	p := newProvider()
+	p.embed.SetLimits(embeddings.Limits{InputBytes: 64, BatchInputs: 16, BatchBytes: 4096})
+	local := &recordingScan{slice: bothHalves("n1", search.Everything())}
+	fan := &search.FanOut{Self: "n1", Local: local, Vectors: search.NewQueryVectors(p.read)}
+
+	words := make([]string, 0, 40)
+	for i := range cap(words) {
+		words = append(words, fmt.Sprintf("term%02d", i))
+	}
+	query := strings.Join(words, " ")
+	answer, err := fan.Search(t.Context(), search.FanQuery{Text: query, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.Served != knowledge.ModeHybrid || answer.Degraded != knowledge.NotDegraded {
+		t.Fatalf("a %d-byte query on a 64-byte model served %q degraded %q, want hybrid",
+			len(query), answer.Served, answer.Degraded)
+	}
+	requests := p.embed.Requests()
+	if len(requests) != 1 || len(requests[0]) < 2 {
+		t.Fatalf("the query went out as %d requests, want ONE carrying every piece: %q",
+			len(requests), requests)
+	}
+	if sent := strings.Join(requests[0], " "); sent != query {
+		t.Fatalf("the pieces sent are not the whole query:\n got %q\nwant %q", sent, query)
+	}
+	asked := local.queries()
+	want, err := embeddings.EmbedWhole(t.Context(), p.embed.Fake, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || len(asked[0].Vector) == 0 || !slices.Equal(asked[0].Vector, pack(want)) {
+		t.Fatal("the scan was not handed the pooled vector of the whole query")
 	}
 }
 
@@ -530,7 +610,7 @@ func TestASearchRanksByMeaningOverWhatTheDutyEmbedded(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	h.drain()
-	x := search.NewIndexerOver(h.db, []search.LexicalSource{search.TaskSource{}})
+	x := search.NewIndexerOver(h.db, h.db.Replicated().Reader(), []search.LexicalSource{search.TaskSource{}})
 	indexAll(t, x)
 
 	fan := &search.FanOut{Self: "n1", Local: search.NodeScanner{Index: x},

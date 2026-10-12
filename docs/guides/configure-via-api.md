@@ -333,7 +333,9 @@ team](../reference/api-endpoints.md#a-lead-edits-their-own-team). A seat or a
 unit outside their team, and a name the company does not have, is refused
 `403` at its own address before the body is read, in the same words either
 way. The whole document (`GET /config`) stays `config:read`'s, so a lead edits
-through the entity routes rather than a `GET` and `PUT` of `/config`.
+through the entity routes rather than a `GET` and `PUT` of `/config`. While
+the document is [managed by another system](#when-another-system-manages-the-document),
+a lead's edit is refused `403 config_managed` like everybody else's.
 
 ## Read paths
 
@@ -369,6 +371,68 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 
 ---
 
+## When another system manages the document
+
+Everything above is a person driving the API. When something else is the
+source of the company — a GitOps pipeline applying `company.yaml` from a
+repository, or external tooling such as a Kubernetes operator rendering it from
+custom resources — that system runs exactly these requests with its own token,
+and it replaces whatever is active each time it reconciles. A person's edit
+made in between lasts until then, and nothing says it was lost.
+
+Give the managing system its own token and name it as the document's only
+writer in every node's Tier A:
+
+```yaml
+api:
+  auth:
+    tokens:
+      - id: gitops
+        token: "${CREWLET_API_TOKEN_GITOPS}"
+        grants: [config:read, config:write]
+      - id: founder
+        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        grants: [state:read, config:read, config:write, secrets:write, people:manage]
+    company_writers: [gitops]
+```
+
+The list names a credential rather than granting one: the pipeline's token
+still needs `config:write`, as every write of the document does, and the list
+is asked only once that grant has admitted it.
+
+The pipeline keeps writing as above, with `Authorization: Bearer
+$CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
+person's reload in between is a `409` it re-reads rather than one it
+overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
+and is refused a change. That is every credential the list does not name, the
+ones holding `config:write` included: a person signed in to the dashboard, a
+machine token acting as its owner, and a [lead editing their own
+team](#a-lead-editing-their-own-team), whose edit is exactly the one the
+pipeline's next reconcile would overwrite:
+
+```bash
+curl -X PATCH $CREWLET_URL/config -H "$AUTH" \
+  -H "Content-Type: application/merge-patch+json" -H "X-Summary: a tweak" \
+  -d '{"mission":"ship it"}'
+# 403 {"error":"config_managed","managed_by":["gitops"],"detail":"…","hint":"…"}
+```
+
+The dashboard shows the document as managed by `gitops`: the org builder opens
+read-only and every control that writes the document is disabled with that
+sentence. What stays open is the break-glass for a leaked credential, which the
+managing system cannot know about — write the new value and re-publish the
+unchanged document:
+
+```bash
+printf %s "$NEW_VALUE" | curl -X PUT $CREWLET_URL/secrets/GITLAB_TOKEN -H "$AUTH" --data-binary @-
+curl -X POST $CREWLET_URL/config/reload -H "$AUTH" -H "X-Summary: rotate the leaked GitLab token"
+```
+
+The full list of what is refused and what stays open, and why, is in
+[Managed configuration](../concepts/configuration.md#managed-configuration).
+
+---
+
 ## Common error responses
 
 Every `400` about the document carries `problems`, the failures located and
@@ -386,6 +450,7 @@ classified, beside the `detail` that renders them.
 | `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `403` | `unauthorized` | The credential holds neither the grant the route takes nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
+| `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
 | `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `config:write` is told: a lead is refused `403` as for one outside their team |

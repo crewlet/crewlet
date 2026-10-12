@@ -138,8 +138,8 @@ test("a path inside a refusal takes the message's ink, and one in prose does not
   expect(screen.getByText("integrations.jira").className).toContain("crewlet-inline-code--inherit");
   unmount();
 
-  render(<span>{marked("see integrations.jira.project for the key")}</span>);
-  expect(screen.getByText("integrations.jira.project").className).not.toContain(
+  render(<span>{marked("see integrations.jira.webhook_secret for the key")}</span>);
+  expect(screen.getByText("integrations.jira.webhook_secret").className).not.toContain(
     "crewlet-inline-code--inherit",
   );
 });
@@ -186,8 +186,8 @@ describe("a path through map keys", () => {
   // may be lost at the end is the dash, never the path.
   test("a dash run straight onto a path does not lose the path", () => {
     expect(paths(`check ${hyphenated}- then retry`)).toEqual([hyphenated]);
-    expect(paths("see integrations.jira.project-key- for the key")).toEqual([
-      "integrations.jira.project-key",
+    expect(paths("see roles[0].mcp_env.jira-cloud- for the key")).toEqual([
+      "roles[0].mcp_env.jira-cloud",
     ]);
   });
 
@@ -214,8 +214,8 @@ describe("a refusal as a field's error line", () => {
   });
 
   test("a refusal is the problems, marked up", () => {
-    render(<span>{withProblems("integrations.jira.project_key: required value missing")}</span>);
-    expect(screen.getByText("integrations.jira.project_key").tagName).toBe("CODE");
+    render(<span>{withProblems("integrations.jira.webhook_secret: required value missing")}</span>);
+    expect(screen.getByText("integrations.jira.webhook_secret").tagName).toBe("CODE");
     expect(screen.getByText(/required value missing/)).toBeTruthy();
   });
 });

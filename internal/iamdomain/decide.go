@@ -112,7 +112,7 @@ func (e *ErrTaken) Error() string {
 // in no unit, led by nobody and reached by no contact route, so every rule the
 // org chart decides — who leads them, whose queue their work lands in — had
 // nothing to say about them. A SERVICE ACCOUNT's seat stays optional: it acts
-// as itself, and binds a seat only to act as one. ADR-0026 is the decision.
+// as itself, and binds a seat only to act as one. ADR-0032 is the decision.
 //
 // # What it may confer, and on whose authority
 //
@@ -289,7 +289,7 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 		found bool
 		row   ResetRow
 	)
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		person, err := heldPerson(ctx, tx, personID,
 			"the first password link its create issued")
 		switch {
@@ -479,11 +479,6 @@ func (in Creation) validate(now time.Time) error {
 // the invitation being redeemed holds it already, and an older open
 // invitation a restore left on the same seat must not deadlock both.
 //
-// AN INVITATION ISSUED BEFORE EVERY INVITATION BOUND A SEAT is unredeemable,
-// refused as the link's own refusal ([ErrRefused]) rather than as a missing
-// field ([ErrSeatRequired]): the invitee did not leave anything out, and the
-// remedy is a new invitation onto a seat.
-//
 // # A link redeemed is a link used
 //
 // A retry the framework answers from the ledger ([statelog.Result.Collapsed])
@@ -599,19 +594,19 @@ func (in Redemption) validate() error {
 			"was issued to, and this redemption names none", ErrNotFindable)
 	case in.InvitationSecret == "":
 		// REFUSED rather than invalid: it is what a link without its
-		// secret, or an invitation issued before links carried one,
-		// comes to, and its remedy is the one every way a link stops
-		// working has — ask for a new one.
+		// secret comes to, and its remedy is the one every way a link
+		// stops working has — ask for a new one.
 		return fmt.Errorf("%w: redeeming invitation %s needs the secret its "+
 			"link carries beside the id — the id alone is in every snapshot "+
 			"and proxy log, and opens nothing", ErrRefused, in.Invitation)
 	case in.Seat == "":
-		// THE LINK'S REFUSAL, never [ErrSeatRequired]: an invitation that
-		// binds no seat was issued before every person held one, and the
-		// invitee left nothing out — what they need is a new invitation.
-		return fmt.Errorf("%w: invitation %s binds no seat — it was issued "+
-			"before every person held a human seat, so it creates nobody; "+
-			"ask whoever sent it for a new one", ErrRefused, in.Invitation)
+		// A CALLER'S FAULT, never the invitee's: every invitation holds a
+		// seat ([Writer.Invite]), and the surface redeeming one hands on the
+		// seat it read off the invitation. [ErrSeatRequired] would ask the
+		// invitee for a field their form does not have.
+		return fmt.Errorf("%w: redeeming invitation %s binds the human seat "+
+			"the invitation holds, and this redemption names none",
+			ErrInvalid, in.Invitation)
 	case in.Password.Method != MethodPassword || in.Password.ID == "" ||
 		in.Password.Verifier == "":
 		return fmt.Errorf("%w: a redemption carries the password the invitee "+
@@ -1058,9 +1053,7 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	// THE SEAT IS THE INVITATION'S, and exactly it: one the invitation
 	// did not carry would be a redemption asking for more than was
 	// offered, and one it carried and the enrolment dropped would spend
-	// the link without the binding its issuer decided on. An invitation
-	// that carries none was issued before every person held a seat, and
-	// [Redemption.validate] refused it before anything was read.
+	// the link without the binding its issuer decided on.
 	if e.seat != invitation.Seat {
 		return "", fmt.Errorf("%w: invitation %s binds seat %q, and the "+
 			"redemption names %q — a redemption binds what was offered and "+
@@ -1118,7 +1111,7 @@ var ErrInvalid = errors.New("iamdomain: a value is outside the bounds this estat
 // value 400 still does — and is its own sentinel so a surface can name the
 // field and the remedy (`seat_required`): a person holds a human seat for as
 // long as they are here, which is moved to another seat or freed by removing
-// them, never cleared. ADR-0026 is the decision.
+// them, never cleared. ADR-0032 is the decision.
 var ErrSeatRequired = fmt.Errorf("%w: a person holds a human seat for as long "+
 	"as they are here — name one", ErrInvalid)
 
@@ -1163,13 +1156,12 @@ var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 // # A person's seat is moved, never cleared
 //
 // A PERSON holds a human seat for as long as they are here ([ErrSeatRequired],
-// ADR-0026), so an edit clearing a person's seat is refused — decided on the
+// ADR-0032), so an edit clearing a person's seat is refused — decided on the
 // KIND THE SNAPSHOT HOLDS, never on one the caller states, and before the
 // no-op arm, so the rule does not depend on what the person holds now. Their
 // seat is freed by MOVING them to another, or by removing them. A SERVICE
 // ACCOUNT may be unbound: it acts as itself, and holds a seat only to act as
-// one. A person recorded before every person held a seat may still be renamed
-// with their binding left alone; binding them is a move like any other.
+// one.
 //
 // # Decided in the record's own snapshot
 //
@@ -1195,11 +1187,10 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 	case in.Login != nil && *in.Login == "":
 		// A LOGIN IS NEVER CLEARED, only changed: every principal holds
 		// one — it is the name a person signs in and is listed under, and
-		// the name a service account's changes, or those of a person
-		// recorded before every person held a seat, are recorded under —
-		// so a principal with none would be recorded as nobody, and a
-		// machine enrolled under `token:<id>` silently unbound from its
-		// Tier A token.
+		// the name an unbound service account's changes are recorded
+		// under — so a principal with none would be recorded as nobody,
+		// and a machine enrolled under `token:<id>` silently unbound from
+		// its Tier A token.
 		return statelog.Result{}, fmt.Errorf("%w: a login is never cleared, "+
 			"only changed — every principal holds one, and it is the name "+
 			"their changes are recorded under", ErrInvalidLogin)
@@ -1242,10 +1233,9 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			return nil, err
 		}
 		if seat != nil && *seat == "" && kind == iam.KindPerson {
-			// BEFORE THE NO-OP ARM, so the answer is the rule and not
-			// whatever the person happens to hold: a legacy seatless
-			// person asked to be unbound is told the same thing as
-			// everybody else.
+			// ON THE KIND THIS SNAPSHOT HOLDS, and before anything else
+			// is formed: the rule is about what the row IS, never about
+			// what the caller says it is.
 			return nil, fmt.Errorf("%w: %s is a person, and a person's seat "+
 				"is moved to another human seat or freed by removing them — "+
 				"never cleared", ErrSeatRequired, in.PersonID)
@@ -1414,7 +1404,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 		}
 		generation = current + 1
 		rec.Mutation, err = EncodeInvalidation(Invalidation{
-			V: DocumentVersion, Generation: generation,
+			V: GateRecordVersion, Generation: generation,
 			By: w.Actor,
 		})
 		return err
@@ -1513,7 +1503,7 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		if err != nil {
 			return nil, err
 		}
-		return EncodeRemoval(Removal{V: DocumentVersion, Released: held})
+		return EncodeRemoval(Removal{V: GateRecordVersion, Released: held})
 	}
 	return w.publishDirectory(ctx, OpRemove, personID, opID, reason, scopeOf,
 		decide)
@@ -2405,7 +2395,7 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 //
 // Every invitation names a seat ([InviteMint.Seat], [ErrSeatRequired]) — a
 // HUMAN seat the chart holds and nobody holds — because the person it creates
-// holds one from the moment they exist (ADR-0026), and redeeming it binds them
+// holds one from the moment they exist (ADR-0032), and redeeming it binds them
 // to that seat in the redemption's own record. The chart is read before
 // anything is published, advisorily ([Writer.humanSeat]), and the directory in
 // the record's own snapshot; the redemption's record asks the directory again.
@@ -2601,7 +2591,7 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 	in InviteMint, applied bool) (time.Time, error) {
 
 	expires := in.ExpiresAt
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		return w.issuedBefore(ctx, tx, id, blind, seat, in, &expires)
 	})
 	switch {
@@ -2725,19 +2715,15 @@ type InviteIssued struct {
 // itself, because the one gesture that would need it — redeeming the
 // invitation holding the value — does not ask at all: a redemption is held to
 // the PEOPLE's rows alone ([Writer.enrol]), so a second open invitation a
-// build before invitations held their seats left on the same seat cannot
-// deadlock both links. Every other caller is taking a value somebody else's
+// restore or a retained record left on the same seat cannot deadlock both
+// links. Every other caller is taking a value somebody else's
 // invitation may hold.
 //
 // # Open is one predicate
 //
-// Not redeemed, not aged out, and naming a seat ([openInvitation]) — the
-// predicate the listing reads an invitation as outstanding by and the
-// redemption's own refusals mirror ([InvitationRow.Spent]). An invitation that
-// names no seat was issued before every invitation did and is redeemable by
-// nobody ([Redemption.validate]), so it holds nothing either: holding an
-// address with a link that can never be redeemed refused every new invitation
-// to it for the rest of its week, for nothing.
+// Not redeemed and not aged out ([openInvitation]) — the predicate the listing
+// reads an invitation as outstanding by and the redemption's own refusals
+// mirror ([InvitationRow.Spent]).
 //
 // THE COLUMN IS CHOSEN HERE, by a switch, as [taken] chooses its own — never
 // from a caller's string.
@@ -2780,10 +2766,9 @@ func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value strin
 }
 
 // openInvitation is THE predicate an invitation is outstanding by, over
-// `iam_invites` and one bound instant: not redeemed, not aged out — a zero
-// expiry included, which no writer forms — and naming a seat. See
-// [heldByInvitation].
-const openInvitation = `redeemed_at = 0 AND expires_at > ? AND seat_id <> ''`
+// `iam_invites` and one bound instant: not redeemed, and not aged out — a zero
+// expiry included, which no writer forms. See [heldByInvitation].
+const openInvitation = `redeemed_at = 0 AND expires_at > ?`
 
 // InviteMint is what issuing an invitation needs.
 type InviteMint struct {

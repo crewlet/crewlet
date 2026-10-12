@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +22,8 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -53,6 +56,7 @@ func capacityFixture(t *testing.T, id string, mode statelog.MaintenanceMode) (
 // refuses — and must be withdrawn again before the refusal returns, or a node
 // that correctly declined to start would block every later operation for ever.
 func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeNormal)
 
@@ -107,6 +111,7 @@ func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 // publishing into a fleet mid-window on the one failure that most plausibly
 // accompanies one.
 func TestAnUnreadableOperationIsNotAnAbsentOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeNormal)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable")}
@@ -129,6 +134,7 @@ func TestAnUnreadableOperationIsNotAnAbsentOne(t *testing.T) {
 // TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges: the two halves
 // are exclusive, and each is the other's evidence.
 func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	streams := []string{"CREWLET_TRACKER_LOG"}
 
@@ -175,6 +181,7 @@ func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) 
 // the request it is retiring. An ack that did not carry its mode would let a
 // maintenance-mode node's restart satisfy the barrier.
 func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeSeal)
 
@@ -221,6 +228,7 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 // them looks like a satisfied barrier from a distance and each would confirm
 // an operation whose request may still be outstanding.
 func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T) {
+	t.Parallel()
 	op := coord.MaintenanceOperation{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1", Attempt: 2,
 		Participants:      []string{"node-1", "node-2"},
@@ -288,6 +296,7 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 
 // TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement.
 func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testing.T) {
+	t.Parallel()
 	op := coord.MaintenanceOperation{
 		OperationID: "op-1", Attempt: 1,
 		Participants:      []string{"node-1", "node-2"},
@@ -363,12 +372,8 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 
 	// AND THE RETENTION REPORT SAYS IT, which is the banner `crewlet
 	// retention status` leads with while the window holds the fleet.
-	r := &retention{fleet: fleet, state: &stateLog{
-		order: []string{"tracker"},
-		domains: map[string]*runningDomain{
-			"tracker": {domain: tracker.Domain{}},
-		},
-	}}
+	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
+		&runningLog{domain: tracker.Domain{}, spec: tracker.Domain{}.Stream()})}
 	row := r.openMaintenance(ctx)
 	if row == nil {
 		t.Fatal("the report shows no window while one is open")
@@ -384,6 +389,7 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 // An empty baseline compares unequal to every later acknowledgement, so a
 // participant baselined at one satisfies the seal without ever restarting.
 func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	op := coord.MaintenanceOperation{
@@ -434,6 +440,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 // which is about whose position pins the trim. A node evicted from that is
 // still a machine that can run a publisher.
 func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
 	backend := coordmem.New()
@@ -445,7 +452,7 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.TryAcquire(ctx, coord.NodeResource("node-holding-a-lease"),
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-holding-a-lease"),
 		coord.AcquireOptions{Owner: "node-holding-a-lease:boot-1", TTL: time.Minute,
 			Preferred: "node-holding-a-lease"}); err != nil {
 		t.Fatal(err)
@@ -470,6 +477,7 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 // participant set read from a store that failed is a set with nodes silently
 // missing, and every one of them is a machine that may be publishing.
 func TestAnUnreadablePositionRegisterRefusesRatherThanShrinkingTheSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
@@ -480,10 +488,35 @@ func TestAnUnreadablePositionRegisterRefusesRatherThanShrinkingTheSet(t *testing
 	}
 }
 
+// blindPresence is a lease store that cannot list the presence leases.
+type blindPresence struct{ coord.Backend }
+
+func (b blindPresence) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	if class == coord.ClassNode {
+		return nil, errors.New("coordination timed out")
+	}
+	return b.Backend.ListLive(ctx, class)
+}
+
+// AN UNREADABLE PRESENCE LISTING REFUSES RATHER THAN SHRINKING THE SET, for the
+// register's reason: every presence it could not read names a node that may be
+// publishing the estate's records, or a broker member holding a request.
+func TestAnUnreadablePresenceListingRefusesRatherThanShrinkingTheSet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	e.backends.Coord = blindPresence{Backend: coordmem.New()}
+	if _, err := e.capacityParticipants(ctx); err == nil {
+		t.Fatal("the participant set was formed without the presence leases it " +
+			"could not list — every node missing from it may be publishing")
+	}
+}
+
 // TestAnAdmissionBlocksTakingTheExclusion is the coordinator's half of the
 // handshake: a node that slipped between the check and its own start left a
 // durable record, and that record is what a silence could never be.
 func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	if err := fleet.PutAdmission(ctx, coord.Admission{
@@ -515,6 +548,7 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 // gesture (a log created larger than its budget allows is the common case), so
 // the line is drawn at the usage and nowhere else.
 func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	current := jetstream.LogStats{Bytes: 5 << 30, MaxBytes: 8 << 30}
@@ -567,6 +601,7 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 // reserve is still measured against its whole ceiling, and the target the
 // refusal names is exact: it opens, and a byte less does not.
 func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 15 << 30, MaxBytes: 32 << 30}
 	const target = 16 << 30 // a sixteenth of it is the reserve: 15 GiB left
@@ -618,12 +653,13 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 // Tier A refuses an explicit ceiling below its field's floor; the capacity
 // verb was the one way round it. And the floor differs by log: the verb held
 // every log to a gibibyte, calling it the floor Tier A enforces, while Tier A
-// takes the org chart's and the identity estate's down to 64 MiB — so a
+// takes the identity estate's and the usage log's down to 64 MiB — so a
 // target Tier A would accept on either was refused with a reason that was not
 // true of it. The floor each case expects is read from Tier A's own
 // validation of the field, not from the register the verb reads, so the two
 // cannot agree by sharing a mistake.
 func TestATargetUnderTheFloorIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
 	keys := streamKeys(t)
@@ -704,6 +740,7 @@ var unstatedRoom = jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUn
 // number the node could read before any of them. So the room is decided with
 // the usage, and only where it is stated.
 func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 30, MaxBytes: 4 << 30}
 	room := jetstream.StorageBudget{Limit: 10 << 30, Committed: 8 << 30,
@@ -759,6 +796,7 @@ func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
 // make a mismatch unreadable — nobody could tell an unapplied request from a
 // changed mind.
 func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
@@ -799,6 +837,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 // SECOND window on a stream that may already have one — and the loser of that
 // race is an exclusion nobody can find.
 func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	flaky := &blindFleet{fleetStore: fleet, openFailures: 2}
@@ -824,6 +863,7 @@ func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *te
 
 // TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow.
 func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, openFailures: 99}
@@ -845,6 +885,7 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 // names them: if the two disagreed, a reanchor would refuse naming nobody, or
 // permit while naming someone.
 func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
+	t.Parallel()
 	rows := []coord.NodePositions{
 		{NodeID: "self", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 4, AppliedThrough: 900},
@@ -981,11 +1022,9 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	domain := tracker.Domain{}
 	e.backends.Queue = host
-	e.core.Store(&core{log: &stateLog{
-		order:   []string{domain.Name()},
-		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
-		volume:  t.TempDir(),
-	}})
+	s := &stateLog{volume: t.TempDir()}
+	runsLogs(s, &runningLog{domain: domain, spec: domain.Stream()})
+	e.core.Store(&core{log: s})
 	return e, fleet, domain.Stream().Name
 }
 
@@ -996,6 +1035,7 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 // is the same stream a target of zero would have produced, which this verb
 // already refuses by name, reached from the opposite-looking input.
 func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet, stream := capacityNode(t, budgetHost{room: unstatedRoom})
 
@@ -1027,6 +1067,7 @@ func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
 // tell them anything more. The journal record stays `issued` either way, which
 // is why even this half says to abandon rather than to walk away.
 func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, stream := capacityNode(t, budgetHost{room: jetstream.StorageBudget{
 		Limit: 8 << 30, Committed: 7 << 30, Source: jetstream.BudgetServerStore}})
@@ -1076,6 +1117,7 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 // fleet has to seal to retire. An external broker whose account states no
 // limit is the same case — "the limit is -1" is not a sentence.
 func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, host := range map[string]budgetHost{
 		"a budget that cannot be read":  {err: errors.New("no responders")},
@@ -1095,4 +1137,187 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// WHO TAKES PART IN A CAPACITY SEAL IS DECIDED BY THE ESTATE AND BY THE
+// BROKER, asked apart. The seal's proof is that every broker process restarted
+// and every publisher was admitted, so a live node takes part when it holds the
+// estate — every data node does, whatever its broker — or when its broker is a
+// member (it queues requests) — and when its presence does not say what its
+// broker is, or what its roles are, because leaving out a node that may be a
+// member or a publisher could pass a seal it should hold. A leaf or a client
+// of an external cluster that holds no data does neither.
+func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
+	backend := coordmem.New()
+	e.backends.Coord = backend
+	for id, meta := range map[string]map[string]any{
+		"data-member":      {"roles": []string{"data", "seats"}, "broker": "member"},
+		"data-client":      {"roles": []string{"data"}, "broker": "client"},
+		"data-client-idle": {"roles": []string{"data"}, "broker": "client"},
+		"dataless-member":  {"roles": []string{"seats"}, "broker": "member"},
+		"an-older-build":   {"roles": []string{"seats"}},
+		"a-newer-kind":     {"roles": []string{"seats"}, "broker": "observer"},
+		"stateless-leaf":   {"roles": []string{"seats"}, "broker": "leaf"},
+		"stateless-client": {"roles": []string{"seats"}, "broker": "client"},
+		"estate-on-a-leaf": {"roles": []string{"data"}, "broker": "leaf"},
+		"unreadable-roles": {"roles": "every one", "broker": "client"},
+	} {
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":boot-1", TTL: time.Minute, Meta: meta,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := e.capacityParticipants(ctx)
+	if err != nil {
+		t.Fatalf("capacityParticipants: %v", err)
+	}
+	want := []string{"a-newer-kind", "an-older-build", "data-client", "data-client-idle",
+		"data-member", "dataless-member", "estate-on-a-leaf", "node-coordinator",
+		"unreadable-roles"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("participants = %v, want %v", got, want)
+	}
+
+	// AND A NODE THAT HOLDS NO DATA ADMITS NOTHING, whatever its broker: it
+	// publishes to no state log, and an admission it wrote would be a
+	// publisher a capacity operation waited on for ever.
+	for _, broker := range []placement.BrokerKind{placement.BrokerLeaf, placement.BrokerMember} {
+		stateless, _ := capacityFixture(t, "agent-1", statelog.ModeNormal)
+		stateless.backends.Fleet = fleet
+		stateless.profile = placement.NodeProfile{
+			ID: "agent-1", Roles: placement.Roles(placement.RoleSeats), Broker: broker,
+		}
+		if err := stateless.admit(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+			t.Fatalf("admit: %v", err)
+		}
+	}
+	admissions, err := fleet.Admissions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(admissions) != 0 {
+		t.Fatalf("a node that publishes to no state log recorded %+v", admissions)
+	}
+}
+
+// TestADatalessMemberMustAcknowledgeASeal: a broker member that holds no data
+// is a participant, and restarted into seal mode it acknowledges — so the seal
+// holds once it has, and not before.
+//
+// Tier A refuses a broker member without `data`, so this node's own
+// configuration never produces the pairing — but [Engine.capacityParticipants]
+// reads every OTHER node's presence, not this node's configuration, and a
+// presence advertising one is a participant it cannot rule out, so it is
+// waited for. The profile is built here to certify the engine's half of the
+// handshake against that presence. Left out of the participants, its broker
+// could still hold a queued request to resize the log after the seal passed;
+// named but unable to acknowledge, it would wedge every seal for ever.
+//
+// ITS PARTICIPATION IS FOUND FROM WHAT A SEAL-MODE NODE LEAVES BEHIND, never
+// from a lease the case writes for it: such a node has no position and no
+// admission, so the presence its seat host renews — in every mode, claiming no
+// seat — is the one record there is. Each node here boots that host exactly as
+// the engine does, behind the engine's own claim gate.
+func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	coordinator, fleet := capacityFixture(t, "data-a", statelog.ModeSeal)
+	backend := coordmem.New()
+	coordinator.backends.Coord = backend
+	profiles := map[string]placement.NodeProfile{
+		"data-a": {ID: "data-a", Roles: placement.Roles(placement.RoleData, placement.RoleSeats),
+			Broker: placement.BrokerMember},
+		"broker-1": {ID: "broker-1", Roles: placement.Roles(placement.RoleSeats),
+			Broker: placement.BrokerMember},
+		"agent-1": {ID: "agent-1", Roles: placement.Roles(placement.RoleSeats),
+			Broker: placement.BrokerLeaf},
+	}
+	coordinator.profile = profiles["data-a"]
+	nodes := map[string]*Engine{"data-a": coordinator}
+	for _, id := range []string{"broker-1", "agent-1"} {
+		node, _ := capacityFixture(t, id, statelog.ModeSeal)
+		node.backends.Fleet = fleet
+		node.profile = profiles[id]
+		nodes[id] = node
+	}
+	for id, node := range nodes {
+		if held := bootSeatHost(t, node, backend); len(held) != 0 {
+			t.Fatalf("%s booted into seal mode holding %v", id, held)
+		}
+	}
+	participants, err := coordinator.capacityParticipants(ctx)
+	if err != nil {
+		t.Fatalf("capacityParticipants: %v", err)
+	}
+	if want := []string{"broker-1", "data-a"}; !slices.Equal(participants, want) {
+		t.Fatalf("participants = %v, want %v: a member that holds no data holds "+
+			"queued requests all the same, and a leaf holds none", participants, want)
+	}
+	op := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1", TargetMaxBytes: 1 << 33,
+		Phase: coord.PhaseBaselined, Attempt: 1, Participants: participants,
+		WriteIncarnations: map[string]string{"data-a": "data-a:old", "broker-1": "broker-1:old"},
+		EnteredAt:         time.Now().UTC(), By: "ops-3",
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+
+	// EVERY NODE RESTARTS INTO SEAL MODE, each acknowledging as its own
+	// profile says it must — the leaf included, which must write nothing.
+	coordinator.acknowledge(ctx, []string{op.Stream})
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := barrierEvidence(op, acks); held {
+		t.Fatal("the seal held before the dataless member restarted into seal mode")
+	}
+	for _, id := range []string{"broker-1", "agent-1"} {
+		nodes[id].acknowledge(ctx, []string{op.Stream})
+	}
+	acks, err = fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ack := range acks {
+		if ack.NodeID == "agent-1" {
+			t.Errorf("a leaf that holds no data acknowledged: its broker queues " +
+				"nothing and it is no participant, so the record is noise at best")
+		}
+	}
+	held, incarnations := barrierEvidence(op, acks)
+	if !held {
+		t.Fatalf("the seal does not hold with every participant restarted into "+
+			"seal mode: the dataless member never acknowledged (acks: %+v)", acks)
+	}
+	if incarnations["broker-1"] != "broker-1:boot-1" {
+		t.Errorf("the dataless member's evidence is %q, want the incarnation it "+
+			"restarted as", incarnations["broker-1"])
+	}
+}
+
+// bootSeatHost runs a node's seat host as the engine builds it — its profile
+// advertised, behind the engine's own claim gate — over a company of two
+// seats, and reports what the first sweep claimed. What it leaves in the lease
+// store is what that node's boot leaves.
+func bootSeatHost(t *testing.T, e *Engine, backend coord.Backend) []string {
+	t.Helper()
+	host, err := seat.New(seat.Config{
+		Backend: backend, Owner: e.incarnation, NodeID: e.id, Profile: e.profile,
+		Seats: func() []placement.Seat {
+			return []placement.Seat{{Handle: "ceo"}, {Handle: "cto"}}
+		},
+		Ready: e.seatsAdmitted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Start(t.Context())
+	t.Cleanup(func() { host.Stop(context.WithoutCancel(t.Context())) })
+	return host.Held()
 }

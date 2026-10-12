@@ -143,7 +143,7 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 // transport's answer is the only one there is.
 func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 	t.Parallel()
-	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"}, fixtureExternalBase)
+	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"}, fixtureWebhookBase)
 	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]

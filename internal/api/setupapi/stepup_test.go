@@ -37,7 +37,7 @@ func (m *recordingMux) Handle(pattern string, h http.Handler) {
 // same line without being listed here.
 func TestConnectingAnIntegrationAsksForARecentProof(t *testing.T) {
 	t.Parallel()
-	svc := newService(t, setupapi.Options{ExternalBase: fixtureExternalBase,
+	svc := newService(t, setupapi.Options{WebhookBase: fixtureWebhookBase,
 		Now: func() time.Time { return pinned }})
 	mux := &recordingMux{ServeMux: http.NewServeMux()}
 	if err := svc.Routes(mux); err != nil {

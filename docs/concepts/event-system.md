@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and it is **required**: left empty they live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds on every node whatever its `node.roles` and whether or not it has a company yet, because every node runs the engine's core from boot — the **org chart** and the **identity estate** on state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). |
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member — a solo node included — it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot — the **identity estate** among the state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf — an embedded node without `data`, joining the members over `stream.leaf.urls` — runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -36,6 +36,10 @@ crewlet.agent.{seat-id}.control      # Sandbox starts and completions. Separate,
                                      #   completion riding the inbox would be
                                      #   parked behind the very busy state it
                                      #   exists to clear
+crewlet.agent.{seat-id}.reflect      # A finished turn, put in front of post-turn
+                                     #   reflection on the node HOLDING the
+                                     #   seat, whose store is the one its
+                                     #   memory is written to and carried from
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it
@@ -48,9 +52,8 @@ crewlet.notifications.inbound        # Inbound webhooks from external systems.
                                      #   call on the node already running it
 crewlet.events.{type}                # What the engine records about itself:
                                      #   the event store's listener, the live
-                                     #   projection and reflection's
-                                     #   turn_completed group read it. Nothing
-                                     #   routes work from here (see Routing)
+                                     #   projection read it. Nothing routes
+                                     #   work from here (see Routing)
 
 # Control plane. Best-effort nudges: losing one costs a poll interval, never a
 # revision, because the authoritative path polls the activation pointer
@@ -93,13 +96,13 @@ What the engine relies on, and where each behaviour is enforced (`internal/queue
 
 **A durable consumer, created detached.** `EnsureSubscription` creates a seat's consumer with explicit acks and nothing attached, positioned at `DeliverAll` — about a millisecond, which is what makes it affordable for every node to create the mailbox behind every seat in the company at boot. Never at "latest": such a consumer exists and still discards everything published before something first attaches to it, which is the whole failure this call prevents.
 
-**Every durable subscription can be listed.** `ListSubscriptions` answers which subscriptions the broker holds under a topic pattern, attached or not and whichever node created them, as the exact topic and group each was created with. It is how a mailbox is found after everything that knew its name has forgotten it (see [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat)). On JetStream a durable consumer's name is a lossy rewrite of that pair plus a digest, so each consumer also records the pair in its metadata, written on every `EnsureSubscription`, and that pair is listed only when it derives the consumer's own name, because a caller acts on the pair and a pair naming another subscription would send it to delete the wrong one; a consumer created before that is listed under the pair its name proves, and one whose name cannot prove it (a group containing a dot, a space or a wildcard, or a name long enough to be truncated) is logged as `jetstream_subscription_unnamed` and left out. Only streams the engine provisions (`CREWLET_*`) are searched, so another application's consumers on a shared account are never listed.
+**Every durable subscription can be listed.** `ListSubscriptions` answers which subscriptions the broker holds under a topic pattern, attached or not and whichever node created them, as the exact topic and group each was created with. It is how a mailbox is found after everything that knew its name has forgotten it (see [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat)). On JetStream a durable consumer's name is a lossy rewrite of that pair plus a digest, so each consumer also records the pair in its metadata, written when `EnsureSubscription` creates it, and that pair is listed only when it derives the consumer's own name, because a caller acts on the pair and a pair naming another subscription would send it to delete the wrong one; a durable consumer whose metadata does not derive its own name is logged as `jetstream_subscription_unnamed` and left out. Only streams the engine provisions (`CREWLET_*`) are searched, so another application's consumers on a shared account are never listed.
 
 **Three outcomes, not two.** A handler acks, naks, or **defers**:
 
 - **Ack** — done. It is the zero value, so the quiet path is the safe one.
-- **Nak** — the handler failed. Redelivered after a one-second spacing that doubles on each further failure, up to 30 seconds, because an immediately-redelivered failure spins the loop at full speed against whatever is broken while a flat spacing spends all 25 attempts inside half a minute. The doubling spreads the delivery budget over about ten minutes, so a benched provider credential, a vendor rate-limit window or a restarting database is outlasted rather than dead-lettered; a failure that outlives that window is not transient, and holding a seat's mailbox behind it is worse than the dead-letter copy. The in-memory twin redelivers immediately by design: it models ordering and the budget, not the clock.
-- **Defer** — *this process has lost the right to do this work*. The message goes back with an immediate Nak — about a millisecond, where letting the ack timer expire would park a seat's mail for the whole ack window on every lease movement — and the consumer **quiesces itself**, since continuing to fetch would hand it more work it has equally lost the right to do. **It costs one delivery, exactly as a Nak does, on every backend**: no broker here has a "give this back without counting it", so what keeps a healthy event alive across handoffs is a budget sized for them (25 rather than the 10 a free-handoff broker would need), never a handoff that is free. The in-memory twin spends one too — it used to return a deferred batch untouched, which modelled a broker nobody runs and left the one conformance case about handoff cost running against the twin alone. Never a republish: a republished event is a new message at the stream's tail, and both the [completion ledger](seat-ownership.md#the-completion-ledger)'s idempotency and the batch layer's aging key on the identity a Nak preserves.
+- **Nak** — the handler failed. Redelivered after a one-second spacing that doubles on each further failure, up to 30 seconds, because an immediately-redelivered failure spins the loop at full speed against whatever is broken while a flat spacing spends all 25 attempts inside half a minute. The doubling spreads the delivery budget over about ten minutes, so a benched provider credential, a vendor rate-limit window or a restarting database is outlasted rather than dead-lettered; a failure that outlives that window is not transient, and holding a seat's mailbox behind it is worse than the dead-letter copy. **A failure comes back behind the mail that was waiting when it failed**: the broker serves never-delivered messages while the backoff runs, so a newer message of the same conversation is handled first. That is the contract on both backends, and one conformance case holds both to it. The in-memory twin models the backoff virtually — the failure goes to the back of the mailbox, with no timer — so it keeps its inline, deterministic dispatch while certifying the order production gives; it used to replay a failure at the head, and every engine test run on it certified an order the shipped broker never produced.
+- **Defer** — *this process has lost the right to do this work*. The message goes back with an immediate Nak — about a millisecond, where letting the ack timer expire would park a seat's mail for the whole ack window on every lease movement — **at the head**, because the broker serves a redelivery before new mail, and the consumer **quiesces itself**, since continuing to fetch would hand it more work it has equally lost the right to do. **It costs one delivery, exactly as a Nak does, on every backend**: no broker here has a "give this back without counting it", so what keeps a healthy event alive across handoffs is a budget sized for them (25 rather than the 10 a free-handoff broker would need), never a handoff that is free. The in-memory twin spends one too — it used to return a deferred batch untouched, which modelled a broker nobody runs and left the one conformance case about handoff cost running against the twin alone. Never a republish: a republished event is a new message at the stream's tail, and both the [completion ledger](seat-ownership.md#the-completion-ledger)'s idempotency and the batch layer's aging key on the identity a Nak preserves.
 
 **The ack clock is real.** A fetched-unacked message stays invisible to every other consumer of that subscription for `ackWait` — **30 minutes**, sized for a wait behind a running turn plus one worst-case turn. It is a backstop rather than the handoff path: a seat that loses its lease defers explicitly and its successor sees the message in about a millisecond, where waiting the clock out would cost half an hour.
 
@@ -109,7 +112,7 @@ What the engine relies on, and where each behaviour is enforced (`internal/queue
 
 **Two numbers, because one cannot answer both questions.** A partition's messages sit at different counts as a matter of course: a conversation whose earlier message has been handed back a dozen times keeps collecting fresh replies, and each of those arrives with a whole budget. So a handler is told the **partition's** headroom — the smallest of its messages', which is what "will handing this batch back dead-letter something" asks, since one outcome covers them all — *and* **each message's own**, which is what a handler deciding about one particular event has to read. Reading the first where the second is meant bounds a caller by the worst message it happens to be batched with; reading the second where the first is meant hands a batch back believing it costs nothing. Both are part of the contract rather than one backend's courtesy: both backends state the per-message counts, in the contract's convention rather than in their own (the two brokers count deliveries and redeliveries respectively), the contract itself folds the partition's from them so no backend can fold it differently, and the conformance suite certifies both — including a partition deliberately built at mixed counts. The engine's one caller today is the [mid-run clarification](code-sandbox.md#mid-run-clarification-crewlet-ask) answer route, which reads *the reply's own* headroom and stops offering it to a parked coding run while deliveries are still left, rather than handing it back until the broker dead-letters it.
 
-**Order within a conversation comes from event timestamps, not from the broker.** A redelivered message returns *behind* never-delivered ones. Nothing above the queue may assume otherwise, which is why the batch layer sorts by the events' own timestamps.
+**The two returns keep different places, and that is the choice a handler makes.** A failure (Nak) returns *behind* never-delivered messages; a hand-back (Defer) returns at the head. So a handler whose message must keep its place — because a later message of its conversation would otherwise be taken for it — does not Nak: it defers, when what failed is the node or its store rather than the message, or it settles the message durably and retries the work itself. The engine does both: a pause or a budget park the queue refused, and a parked coding run's answer that could not be recorded, are deferred, and an answer that *was* recorded is retried by the sandbox coordinator rather than redelivered (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-crewlet-ask)). **Within one handler call**, order comes from the events' own timestamps rather than from how the drain was assembled, which is why the batch layer sorts by them; nothing orders two calls.
 
 ---
 
@@ -123,7 +126,7 @@ Work reaches a seat by being **published straight to its inbox subject** by what
 
 A producer reads the organization from the epoch current when it handles the event (`Engine.Company`), never from a snapshot captured earlier, so an applied revision (including a seat-kind flip) re-routes from the next event on.
 
-**Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle, a role name or an agent id to a seat, and a seat to its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
+**Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle or an agent id to a seat — never a display name, which two seats may share — and a seat to its id, which names its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox(seat id)`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
 
 ### A seat's mailbox exists before the seat is running
 
@@ -162,6 +165,10 @@ flowchart TD
 
 **`SubscribeBatch`** (the `EventQueue` contract; both implementations) does steps 1 to 4: after the first message arrives it drains everything immediately available, plus anything arriving within the `queue.BatchOptions` linger window of the first message, up to its batch cap, partitions by a caller-supplied key, invokes the handler **once per partition** (sequentially, so per-agent serialization is unchanged), and acknowledges a partition's messages only after its handler returns. A failing partition negatively-acknowledges exactly its own messages (normal redelivery / DLQ policy per message) without blocking or replaying other conversations from the same drain. A pause taken *during* collection (`PauseDelivery`, or a hold on this seat's inbox) NAKs the whole drain back rather than flushing it past the pause: the point of pausing a seat's inbox is that no turn starts, and a batch collected a moment earlier would start one. One that lands *between* partitions — a deferral the loop has just applied, a hold, a drain pause, a detach — stops the drain the same way, and the partitions it never dispatched go back through the same budget check: **being drained is the delivery**, so the rest of a stopped drain costs one delivery each exactly as the partition that stopped it does. There is no cheaper way back for a message a consumer changed its mind about.
 
+**A failed turn does not hold its conversation back.** A failing partition's redelivery waits out a backoff — one second, doubling to thirty — and nothing waits with it: a newer event on the same conversation that arrives meanwhile is drained without it and runs first, in a turn of its own, and the failed event follows in a later turn. Event timestamps order the events *within* one partition, whatever order the broker returned them in; they cannot reorder two turns. Holding the newer events back instead would stall the conversation for the whole backoff and hand a poison event's failure to the healthy ones held behind it, since a partition succeeds or fails as a unit.
+
+**And the failed one is not answered twice.** In a chat thread the newer message's turn reads the thread at its start and sees the failed message there, still waiting — and answers the thread as it stands, that message included. So the turn reports the waiting messages its thread block showed it (somebody else's, after the seat's own last reply, before the message that woke it; never one a bound dropped), and when it completes they are written to the [completion ledger](seat-ownership.md#the-completion-ledger) beside its own triggers, keyed on each message's identity on its chat backend. When the failed message comes round it is dropped as worked — `TurnTriggerSkipped` says a later turn answered it in its thread — instead of producing a duplicate, out-of-order reply. The ledger is the fleet's, so the drop holds on whichever node the redelivery reaches. A message no later turn was shown — a top-level message has no thread block — is still owed its turn, and gets it.
+
 **The ack budget.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn — so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. That clock is real: `ackWait` is 30 minutes, and collection plus one handler run must fit inside it — which is why the linger is capped at 60 s. The number lives once, as `queue.MaxLingerSeconds`: the contract clamps to it on every read so programmatic construction cannot bypass it, and config validation refuses an out-of-range value at load from that same constant, so an operator is told rather than silently cut. A drain whose partitions together outlast the window is not lost, it is **redelivered**: the tail comes back, each redelivery spends one unit of the 25-delivery budget, and the [completion ledger](seat-ownership.md#the-completion-ledger) plus the same-id dedupe are what make that a redelivery rather than a second turn (`TurnTriggerSkipped` is emitted precisely so it is not invisible). What is never substituted is a republish: it would be a *new* message at the stream's tail, and both the ledger's idempotency and the batch layer's aging key on the identity a NAK preserves. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
 
 **Partition keys** (`notify.Prompt.PartitionKey`, namespaced by source) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`, and the engine's own tracker on the task's **id** (`work:task:<id>`) — never its key, because a key is an address two tasks can share (a counter restored beside newer work mints numbers they already hold) and a cross-project move changes, and keyed on it two tasks' wakes merged into one digest and a moved task's thread started over. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field; a human firing four rapid top-level DM messages is one batch, and a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001`: a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else (`task_assigned`, A2A wakes, notifications without a derivable conversation) keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
@@ -170,17 +177,19 @@ flowchart TD
 
 For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task's id are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
 
-On the wire of an inbound notification the partition key rides the payload field `partition_key` and the identity rides `conversation_identity`, both stamped by the producer. A reader of the identity never falls back to the partition: every producer stamps both, so an event naming only a partition is one nothing writes. Everywhere else `conversation_key` is the **identity**, because that is what a turn's events are tagged with in the event store, and the one event whose subject is a batch spells it `partition_key` too (below).
+A notification the engine's own tracker or knowledge base raised also carries `trigger_position` — where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain — a tracker list or item, a page or a listing of pages — on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
 
-**Busy agents queue; parked agents requeue.** A delivery that finds its agent mid-turn does not fail, and nothing has to make it wait: a seat's attachment dispatches one partition at a time from a single goroutine, so the next partition is not fetched until the running one's handler returns, and the per-node concurrency gate holds anything past `node.max_concurrent` in this process rather than handing it back. The handler therefore holds the delivery for a full turn, which is what JetStream's ack window (30 minutes) is sized for: a wait plus a worst-case turn. A delivery that finds the seat HELD by a detached sandbox job (`sandbox.Coordinator.SeatHeldBySandbox`, potentially hours) is requeued and acked instead, so nothing is held against the ack window. A job that stopped to ask a person something holds nothing — the seat has to be able to receive that answer — so those deliveries run as usual, each one offered to the parked run's answer match before it becomes a turn — and one the run is still owed, because this node matched it and could not resume, is NAK'd back to the broker rather than worked, so it returns spaced by the queue's own backoff instead of circling the inbox — until the message is within five deliveries of its budget, at which point what is left is kept for the ordinary route rather than spent on a run that cannot be resumed anywhere (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-crewlet-ask)). While the company configures no model provider at all (an empty `providers.llm`, which is a valid company), the handler pauses the seat's inbox first and then requeues, and the apply that adds a provider lifts the pause so the held work runs (see [A Company With No Model Provider](configuration.md#a-company-with-no-model-provider)). Neither path consumes-and-drops, and neither pushes a healthy event toward the dead-letter topic.
+On the wire of an inbound notification the partition key rides the payload field `partition_key` and the identity rides `conversation_identity`, each read only from its own field: a notification that names a partition and no identity names no conversation. The partition is spelled as the one event whose subject is a batch spells it (`partition_key`, below), because everywhere else `conversation_key` is the **identity** — that is what a turn's events are tagged with in the event store.
 
-> **Known gap: the sandbox park spins.** Nothing takes a pause hold for the sandbox park, so its requeued copies land back on a topic the seat is still consuming and are re-parked immediately: a seat parked on a long run republishes and acks in a loop for the length of the run. Nothing loses work (the same-id dedupe and the completion ledger hold), but the loop is real. The fix is the shape the no-provider park already has: a pause taken at the park, and a release driven by the condition clearing, here the run settling. The two halves have to land together, because a pause without a release leaves a seat deaf until the process restarts.
+**Busy agents queue; held agents wait on the broker.** A delivery that finds its agent mid-turn does not fail, and nothing has to make it wait: a seat's attachment dispatches one partition at a time from a single goroutine, so the next partition is not fetched until the running one's handler returns, and the per-node concurrency gate holds anything past `node.max_concurrent` in this process rather than handing it back. The handler therefore holds the delivery for a full turn, which is what JetStream's ack window (30 minutes) is sized for: a wait plus a worst-case turn. A seat HELD by a detached sandbox job (`sandbox.Coordinator.SeatHeldBySandbox`, potentially hours) is not handed its mail at all: the sandbox coordinator holds the seat's inbox (the `sandbox` hold) from the moment a launch opens the run's row, before the turn that launched it can return — including a run a node recovers when it takes the seat, whose hold is taken before the mailbox is attached — and lifts it the moment the last run stops holding it, by settling or by parking on a question. Held, the consumer fetches nothing, so the mail waits on the broker with its order and its delivery count intact, nothing is held against the ack window, and nothing runs while it waits. A delivery that reaches a held seat anyway — it raced the hold, or the hold was refused — asks for the hold again and is **deferred**, keeping its place at the head of the inbox at the cost of one of its deliveries. A held seat receives nothing, a person's answer to another of its runs included — that is the rule, not a side effect of the hold: an agent busy with a coding job takes up nothing else until the job is done, and a second run resumed beside it would put two of the seat's turns in flight at once. That answer, a chat reply or an answer by turn, waits with the rest of the mail and is the first thing the seat is offered when the job settles or parks. A job that stopped to ask a person something holds nothing — the seat has to be able to receive that answer — so those deliveries run as usual, each one offered to the parked run's answer match before it becomes a turn. The first reply posted after the question is **recorded on the run** and acked, and the run's resume is the sandbox coordinator's from there — retried on its own schedule, with the seat's inbox held under the same `sandbox` hold so its later mail is worked after the resume rather than beside it. From then on the reply reaches the seat **once**, whatever becomes of the run. Left behind by a node that stopped after claiming it for its resume and before its turn took it, it is given back to the run by the seat's next holder — which finds the claim as it takes the seat — and the run resumed with it. Let go of after its attempts, ended before a turn could take it (on the inline attempt as on a retry), or left behind that way once its revivals are spent, it is handed back to the seat's inbox as the ordinary message it is, through an outbox on the run's own row, because the store will not delete a run still holding a reply no turn took; a reply a resumed turn took is that turn's and is neither revived nor handed back, and the store will do neither. Its original delivery is recorded as worked in the completion ledger the moment it leaves the run — when a turn takes it, on either route, and before a reply is let go of — so the original coming round afterwards, from a node that stopped before acknowledging it (a turn that took a reply inline holds its delivery for the whole turn), is dropped rather than worked as a second message. Only a reply that could not be *recorded* (the coordination store failed) goes back to the broker, and it is **deferred** rather than NAK'd, so it keeps its place ahead of the person's next message — until the message is within five deliveries of its budget, at which point what is left is kept for the ordinary route (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-crewlet-ask)). While the company configures no model provider at all (an empty `providers.llm`, which is a valid company), the handler pauses the seat's inbox first and then requeues, and the apply that adds a provider lifts the pause so the held work runs (see [A Company With No Model Provider](configuration.md#a-company-with-no-model-provider)). Neither path consumes-and-drops, and neither pushes a healthy event toward the dead-letter topic.
+
+**A held seat costs nothing while it waits.** It used to cost a great deal: a held seat's deliveries were *parked* — requeued onto the inbox they had just been fetched from, then acked — and nothing stopped the consumer, so each copy was the next thing it fetched. For the length of a run, every message waiting on the seat went round a fetch, a screening, an answer-match store read, a replicated publish (and the event-store write its publish listener makes) and an ack, at whatever rate the broker would serve. The hold replaced the park: the condition that makes the seat wait (a run holding it) is the coordinator's own count, so the hold is taken and lifted at the transitions that move it, and the in-memory twin and JetStream both certify that a held seat's mail is neither delivered nor republished until the run stops holding it.
 
 **Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per seat — keyed by the seat's agent id, derived from its handle: the node's own start and every apply both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
 
 **A removed seat's subscriptions are retired, not kept.** `DeleteSubscription`'s caller is the maintenance duty: once a seat has been absent from the active revision for 24 hours, its coding runs are ended and its inbox and its sandbox control subscription are deleted together with the mail they still hold. The walk that creates inboxes records each seat in the coordination store first, because a removed handle is gone from the org the names are derived from and the retirement's stamps have to live somewhere; each sweep also lists the seat mailboxes the broker holds, so one that escaped that record is still found. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
-**The digest trigger.** A multi-event partition is merged by `internal/notify`'s coalescer into ONE notification: a chronological digest of the earlier messages, then the **latest** constituent's full enriched body — so the per-source scaffolding (triage rules, `## Get Full Context`) renders exactly once and points at the most recent state. Two noise filters apply in the digest: per-source supersede rules (`notify.Prompt.DigestBody` — Jira `issue_updated` bodies, stale full descriptions whose current state the Jira prompt never renders anyway, collapse to their event lead) and a source-agnostic **same-sender duplicate dedupe** — a constituent whose effective body is byte-identical to a later message from the same sender collapses to a marker, so a third-party app that re-emits unchanged state does not bury the one actionable line. It is the backstop rather than the first line of defence: where a third-party app has a supersede rule the rule fires first (a code host's lifecycle events collapse to their lead there, never reaching this), and what reaches the dedupe is the case no rule anticipated. Two different people each saying "+1" are two facts and both survive. Comments and messages always keep their text. The merged event carries every constituent in `messages` (sender, salient body, metadata, per-message recon flag — full fidelity for the [learning workers](agent-learning.md), which observe **each distinct sender**), a conservative event-level recon merge and an equally conservative delivery-obligation merge (one direct ask inside a burst of broadcasts is still somebody waiting), the max-depth constituent's delegation bookkeeping (batching cannot launder the depth cap), and the FIRST constituent's trace context — the same event the merged ask leads with, because a span cannot have two parents and rooting the turn under the message the rest are replies to is what makes the trace readable. The other constituents are already recorded as the turn's interactions. Same-id duplicate deliveries (an at-least-once edge the requeue machinery itself can produce) are dropped at the handler before any merging. If a partition cannot be merged (a malformed constituent), the engine degrades to per-event dispatch — the tail is requeued as independent inbox messages FIRST, then the first event runs in the current ack scope — so a requeue failure aborts before any turn ran and a completed turn is never replayed by a later event's failure; partially-requeued copies collapse via the same-id dedupe on redelivery. A `NotificationsCoalesced` telemetry event records each merge for the dashboard / event store, naming the PARTITION that merged rather than the conversation it belongs to — on its own field, `partition_key`, which the event store promotes to a tag of that name. It is the only stored event that carries a partition, and it does not spell it `conversation_key`: that tag is the identity on every event a turn publishes, so one tag meaning the batch on this row would mix the batches a seat's wakes arrived in into a query for "what did this seat do on that thread".
+**The digest trigger.** A multi-event partition is merged by `internal/notify`'s coalescer into ONE notification: a chronological digest of the earlier messages, then the **latest** constituent's full enriched body — so the per-source scaffolding (triage rules, `## Get Full Context`) renders exactly once and points at the most recent state. Two noise filters apply in the digest: per-source supersede rules (`notify.Prompt.DigestBody` — Jira `issue_updated` bodies, stale full descriptions whose current state the Jira prompt never renders anyway, collapse to their event lead) and a source-agnostic **same-sender duplicate dedupe** — a constituent whose effective body is byte-identical to a later message from the same sender collapses to a marker, so a third-party app that re-emits unchanged state does not bury the one actionable line. It is the backstop rather than the first line of defence: where a third-party app has a supersede rule the rule fires first (a code host's lifecycle events collapse to their lead there, never reaching this), and what reaches the dedupe is the case no rule anticipated. Two different people each saying "+1" are two facts and both survive. Comments and messages always keep their text. The merged event carries every constituent in `messages` (sender, salient body, metadata, per-message recon flag — full fidelity for the [learning workers](agent-learning.md), which observe **each distinct sender**), a conservative event-level recon merge and an equally conservative delivery-obligation merge (one direct ask inside a burst of broadcasts is still somebody waiting), the max-depth constituent's delegation bookkeeping (batching cannot launder the depth cap), and the FIRST constituent's trace context — the same event the merged ask leads with, because a span cannot have two parents and rooting the turn under the message the rest are replies to is what makes the trace readable. The other constituents are already recorded as the turn's interactions. Same-id duplicate deliveries (an at-least-once edge the requeue machinery itself can produce) are dropped at the handler before any merging. If a partition cannot be merged (a malformed constituent), the engine degrades to per-event dispatch — the tail is requeued as independent inbox messages FIRST, then the first event runs in the current ack scope — so a requeue failure aborts before any turn ran and a completed turn is never replayed by a later event's failure; partially-requeued copies collapse via the same-id dedupe on redelivery. A `NotificationsCoalesced` telemetry event records each merge for the dashboard / event store, naming the PARTITION that merged rather than the conversation it belongs to — on its own field, `partition_key`, which the event store promotes to a tag of that name. It is the only event that carries a partition, and it does not spell it `conversation_key`, which is the conversation identity on every other event a turn publishes: one promoted tag meaning the identity there and the batch here would make a query for "what did this seat do on that thread" silently mix in the batches its wakes arrived in.
 
 **Two knobs** (Tier B, hot-reloadable — see the [configuration reference](../getting-started/configuration.md)):
 
@@ -256,9 +265,14 @@ agent_spawned, agent_terminated
 #       lifecycle here: work's own record is the tracker's history
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
-sandbox_run_completed, sandbox_run_failed
+sandbox_run_completed
+sandbox_run_failed         # a run lost, once: published under an id and an
+                           # instant its ending recorded on the run's row, so
+                           # the node that finishes an ending another decided
+                           # repeats the same event (the store keys on it)
 sandbox_run_answered       # what an answer to a parked run's question became
-                           # (resumed | not_awaiting | gone), by which route
+                           # (resumed | not_awaiting | gone | declined), by
+                           # which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake
                            # (sandbox_answer_given), which is not stored and
@@ -284,7 +298,11 @@ notification_skipped       # dropped notification with reason (traceability)
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
-                           # worked, emitted precisely so it is not invisible
+                           # worked, emitted precisely so it is not invisible —
+                           # or a trigger whose turn was ABANDONED rather than
+                           # redelivered (it panicked, wrote outside the engine
+                           # before breaking, or its model declined), with the
+                           # reason
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
@@ -348,7 +366,26 @@ agent_turn_steered         # what became of a person's note to this running
                            # steered_by_kind, operator_id and sent_at: the
                            # note itself crossed an ephemeral scatter, so
                            # this row is its only durable record
-agent_phase_started, agent_phase_completed
+agent_phase_started
+agent_phase_completed      # one phase's durable record: prompts, response,
+                           # tool calls, and `rounds[]` — each provider call's
+                           # timing, tokens and `stop_reason` (end, tool_use,
+                           # max_tokens, refusal, context_exceeded, paused;
+                           # absent where the backend reported none). A
+                           # failed phase carries `error_kind` — a provider
+                           # kind, the stop reason that ended it, or
+                           # budget_exhausted — and a phase whose model
+                           # DECLINED carries `refusal` {category,
+                           # explanation} beside `error_kind: refusal`
+auxiliary_spend            # what the seat's auxiliary model cost for one key —
+                           # stage (turn, reflection, background, operator),
+                           # purpose, seat or person, turn, model, provider
+                           # entry, company day — coalesced over one flush of
+                           # the node's ledger: calls, failed_calls, tokens,
+                           # first call's start and last call's end. No
+                           # prompt, no response, no `failed` key. STORED AND
+                           # NOT FED: it never takes a row of the activity
+                           # feed, and it moves no seat's state
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
@@ -374,10 +411,9 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # thinking blocks, or the prose rendering of them,
                            # never both) and its tool-call arguments — and the
                            # tool-definition array both providers bill as
-                           # input. The keys are system_chars / user_chars and
-                           # say chars because they always have — frozen by
-                           # ADR-0006, since a renamed key reads back as 0 on
-                           # every stored row. A separate row rather than a
+                           # input, under system_bytes / user_bytes /
+                           # message_bytes / tool_bytes and tool_count. A
+                           # separate row rather than a
                            # derivation: the prompts themselves are on
                            # agent_phase_completed, and measuring them there
                            # means hauling every phase payload back
@@ -430,8 +466,14 @@ statelog_record_unverifiable    # a state-log record signed under a key this
 statelog_record_tampered        # a record whose signature fails under a key
                                 # this node holds; the applier stopped
 
-# webhook: no event type; the receiver writes the delivery's row itself,
-#          with the provider's exact bytes as the payload
+# webhook: inbound_delivery — one delivery presented to one seat, counted
+#          once across the fleet, from a webhook route or a Mattermost
+#          socket. The ONE type whose rows do not carry its name: each is
+#          filed under the delivery's own label (webhook:<event>,
+#          forge:<event>, socket:posted) with the provider's exact bytes as
+#          the payload, because that is what an operator matches against
+#          their provider's console. Published rather than written, so a
+#          stateless node's socket reaches a data node through custody
 ```
 
 **Categorised, and published by nothing in this build.** The category map also
@@ -444,26 +486,20 @@ work item — a tracker record whose wakes are the tracker's own (`asked`,
 writes through, which is why the `decision` category exists to filter on at
 all.
 
-They are what is left of a longer list. The eleven types that described an
-engine-owned task object, a role edited in place, a message the engine sent
-itself and a document it wrote (`agent_reassigned`, `role_updated`, the five
-`task_*`, `message_sent`, `a2a_message_delivered`, `document_created` and
-`document_updated`) were retired from the registry together with the live-state
-branches that read them, and the `communication` and `knowledge` categories
-left with the last type each held. The envelope still decodes every one of
-those names losslessly, because a node of an earlier build keeps publishing
-them through a rolling upgrade and rows already written are read back for as
-long as retention keeps them; none may be registered or categorised again.
-
 **Excluded from the store**, each with a stated CAUSE as well as a reason:
 `agent_turn_progress` (an intermediate state whose finished record is
 `agent_phase_completed`), `agent_spawned` and `agent_terminated` (placement —
 a fact about scheduling rather than about the company, which the live seat
 state answers), `budget_meters` (a periodic snapshot of the fleet's shared
 token counters, every capped calendar window with its engine-computed state,
-published by every node on a fixed tick, which the next report supersedes; the
-live projection reads it), `raw_webhook` (the delivery is already a row), the
-two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
+published by every node on a fixed tick and at once when a window first turns
+work away on it, which the next report supersedes; the live projection reads
+it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its
+edge publishes beside it), `custody_batch` (a carrier rather than an event: the
+data node that keeps a batch writes each event inside it as the row it is),
+`reflection_due` (the wake that puts a finished turn in front of reflection on
+the seat's holder: the turn is already `turn_completed`, and what reflecting on
+it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`),
 `sandbox_answer_given` (the wake an answer by turn puts on the seat's inbox:
 what the answer became is `sandbox_run_answered`, and that a person gave it is
@@ -524,6 +560,24 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
+**Stored, not fed.** One type is a row like every other and is kept out of the
+activity feed: `auxiliary_spend`, which is accounting rather than activity. The
+feed is a ring of the whole company's last few hundred events — every node's is
+fed by a fleet-wide broadcast — and a turn writes several of these beside its
+own phases, a compaction a burst, so in the feed they would push out the turns
+and failures a reader is watching. The class is declared beside the category
+map in `internal/events` and asked by every read of the feed's rows: the live
+projection, its startup seed, and every view a reader scrolls on from the feed
+— the dashboard's event log pages and its axis, the Live strip, a seat's latest
+events — which ask `events` and `event_series` with `feed_only`, so a bar never
+counts and a page never lists a row the feed would not hold. The row is still
+in `GET /events` without it, a turn's history and a trace.
+
+Every node applies `feed_only` to its own rows — its page and its bars alike —
+by its own copy of that class, and the rows a related-agent page pulls in by
+trace id are held to it too, since a turn's trace holds every one of its
+accounting records.
+
 ---
 
 ## Event Schema
@@ -580,13 +634,12 @@ node's record, and to say where the work it describes ran. That is also why the
 backup audit record names no node of its own: the route publishes from the node
 that took the copy, so the envelope already says whose disk it is on.
 
-`node` is absent on an event from a build predating the field, and on one
-published through a queue client built without a node, which only a test
-harness builds. Like every envelope field it is additive:
-an older node decodes it as an unknown key, keeps it verbatim and writes it back
-out, so the origin survives a round trip through the half of a rolling upgrade
-that has never heard of it. No payload may declare a field named `node` — the
-envelope owns the key and drops a colliding one.
+`node` is absent only on an event published through a queue client built
+without a node, which only a test harness builds. Like every envelope field it
+is additive: a build that predates a field decodes it as an unknown key, keeps
+it verbatim and writes it back out, which is what lets a successor add one. No
+payload may declare a field named `node` — the envelope owns the key and drops
+a colliding one.
 
 `Data` is the typed half: each registered event type is a Go type with its
 own fields and its own `Summary()` ("who did what", in a person's words) and
@@ -604,12 +657,19 @@ Each node's event store holds what **that node** published and nothing else
 (see [Publish Listeners](#publish-listeners)), so no one store is the
 company's history. A read of turn-level detail — `events`, `event`,
 `event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
-and the integrations' delivery counts — is answered by **every live node at
-query time** (`internal/eventfan`, ADR-0021). The same scatter seeds the live
-projection when a node starts: its feed, its 24-hour spend window (the
-`phase_tokens` question, cut to the asker's window so every node answers the
-same one) and each seat's last turn, so a restarted node's screens show the
-company rather than the part of it this node published:
+the integrations' delivery counts and what became of those deliveries (the
+`notification_outcomes` question: each node's dropped and merged
+notifications per third-party app, counted over the window the delivery
+counts name) — is answered by **every live node at query time**
+(`internal/eventfan`, ADR-0021). The same scatter seeds the live
+projection when a node starts. It seeds the feed and each seat's last turn,
+so a restarted node's screens show the company rather than the part of it
+this node published, and the 24-hour spend window (the `phase_tokens`
+question, cut to the asker's window and floored at the asker's instant, so
+every node answers the same one) behind the
+[`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
+the Overview and Spend screens read the replicated `usage` domain's company
+days instead. Every one of these reads crosses the fleet the same way:
 
 ```mermaid
 sequenceDiagram
@@ -641,25 +701,70 @@ sequenceDiagram
   budget, a build speaking another protocol version, a reply it could not
   read, or its own read failing. A short answer that did not say so would
   read exactly like a quiet company.
-- **A question is asked in the lowest protocol version that answers it.**
-  An older build ignores a filter it does not know and would answer a wider
-  question than was asked, merged in as though it matched; so a listing
-  narrowed by a newer filter (`channel_id`, `seat`, `suspended`, `failed`), a
-  page of turns in a window of two instants (an older build reads only whole
-  days back from its own clock), the company's `phases` and a window's phase
-  spend narrowed to one seat — by the seat's id, where an older build narrowed
-  by a role name two unit seats can share and would answer every seat's — and
-  the event axis, whose failed split an older build never sends — goes out in
-  the version that introduced it, and a node on the older build refuses by
-  version and is named. Everything else is still answered by the whole fleet
-  during a rolling upgrade.
+- **Every node speaks one protocol version, and only that one.** Each
+  question carries the version its asker speaks, and a node answers only a
+  question in its own; one on any other build refuses by version and is
+  named in the coverage, whatever it holds. No node is asked to answer
+  around a field it cannot read — a filter it would drop, answering a wider
+  question than was asked; a count it would never send, summed as zero; or
+  the asker's instant (below), which it would ignore and answer as of its own
+  clock — so nothing that comes back has to be re-cut or corrected for the
+  build that sent it. A fleet half way through an upgrade answers its history
+  from the nodes on the asker's build, and says so. A question narrowed to one seat — a
+  listing, the company's `phases` and a window's phase spend among them — names
+  it by the seat's id, never by a role name two seats in different units can
+  share and every node would answer for both.
+- **Every question is asked at one instant.** The asker reads its clock once
+  per question and sends the instant with it, and every node floors the
+  30-day history at that instant rather than at its own clock — the events
+  page and its trace siblings, one event, a trace, a turn, the phases, the
+  axis, a page of turns and the spend window alike. One node's part of an
+  answer is read at that instant throughout, so a turn's count is never
+  floored a moment later than the rows it counts. Floored at each node's own
+  clock, a fleet's answer would be a union of horizons, and a node answering
+  late would drop what it held at the edge. The instant is read to the
+  **microsecond**, the store's own resolution: finer, the store's floor and
+  the window the asker pins round apart, and a row at the floor's own
+  microsecond is counted by one read of an answer and missing from the
+  listing beside it. A question that carries no instant is refused rather than
+  answered as of the node's own clock.
+- **A stateless node's row can sit on two data nodes for a moment.** A node
+  without `data` hands its events to one data node in
+  [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) batches, and a batch whose claim failed is
+  written by a second keeper before the first has learned it is not its own —
+  so until the first settles it (a pass a minute, and longer while that node
+  cannot reach the coordination store) both stores hold the same rows. A merge
+  of rows holds such a row once, by its `(timestamp, id)` — a listing, a
+  trace's or a turn's rows, the spend window's records. Every count holds it
+  once too — the axis's bars, totals, failed share and category counts, a
+  trace's and a turn's total, a page of turns' tokens, phases and duration, and
+  the outcome counts: each node counts the rows it **keeps** and names, by
+  identity, the rows of a batch it has written and not settled, with whatever
+  that count adds them in by; when any node names one, the asker asks every
+  node which of those it keeps (`kept`) and adds each named row once —
+  unless a node that keeps it, the batch's keeper, counted it already. That
+  second question is asked only while a batch is in flight, so a fleet with no
+  stateless node never asks it.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
-  visits every row once; a histogram's window is pinned to the asker's clock
-  so every node cuts the same bars before they are summed; and a list of
+  visits every row once; a histogram's window is cut at the asker's instant
+  by every node alike — a window the 30-day history clips down to the bucket
+  the horizon falls in, its first bar counting only what lies above the
+  horizon — so every node cuts the same bars before they are summed, and only
+  then does the asker drop that partial first bar, so the axis shown begins
+  at the first whole bucket inside the history, every bar of it exact; the outcome
+  counts are summed over a window whose both edges the asker names — a
+  count over a named window, never one taken from a page of the newest
+  events, whose span is its own — with every row counted once (above); and a list of
   turns is two scatters — every node's page, then every node's share of
   exactly the turns listed — so a turn resumed on another node after a
-  restart is one row folded from both halves, not two half-turns.
+  restart is one row folded from both halves, not two half-turns. A turn is
+  paged where a node's page lists it — the earliest such start, which every
+  node says of its own share — rather than where it began, which for a turn
+  whose earliest half fails the page's filter is a position no page reaches — and within one microsecond by the turn's id, so
+  the order is total. The cursor is that position and that id, opaque to the
+  caller, so a walk of the pages lists every turn once, two that start at one
+  microsecond either side of a page's cut included.
 - **A departed node's detail is gone.** Nothing replicates it: a node that has
   left the fleet cannot be asked, and its turns, phases and events leave with
   it. The **aggregates** do not — spend, turn counts and page reads are the
@@ -719,7 +824,7 @@ the span above. A turn does not republish its trigger's span id as its own;
 that made every event in a turn look like the same span and collapsed the
 dashboard's tree onto the wake that started it.
 
-**When notifications are dropped** (own message, not following thread, rate limit), a `NotificationSkipped` event is emitted with the skip reason — visible in the trace so you can see why a webhook didn't reach an agent.
+**When a delivery addressed to somebody is dropped** — its payload cannot be read, its source was disconnected, nothing parses its source, its parser refuses the payload, no seat matches its recipient, the routing gate refuses it, or the rate valve is shut — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. Its `reason` is always one of a fixed set of phrases, so a reader can match it exactly; what the gate said about this particular delivery — the parser's error, for a payload its parser refused — is in `detail`, beside it. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.
 
 The dashboard groups events by `trace_id` into collapsible trace trees. See [Deployment — Tracing](../guides/deployment.md#tracing) for OTLP export configuration.
 

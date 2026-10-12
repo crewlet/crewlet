@@ -21,6 +21,8 @@
  *  - WHO FILES HERE HAS FOUR STATES, and "needs config:read" is said
  *    only to a reader who does not hold it — never to one whose read of
  *    the company document is merely in flight.
+ *  - A PHRASE PAST THE ENGINE'S SEARCH BOUND IS NOT ASKED, and the screen says
+ *    why where the results would be.
  */
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -31,6 +33,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -142,6 +145,21 @@ test("a partial fan-out is a callout naming the node that did not answer", async
   await waitFor(() => expect(screen.getByText(/This search is partial/)).toBeTruthy());
   expect(screen.getByText(/21 of the corpus's buckets went unsearched/)).toBeTruthy();
   expect(screen.getByText("node-2")).toBeTruthy();
+});
+
+// NOT SENT, because the engine refuses it rather than cutting it — and a
+// refusal drawn as a failed search reads as a company with nothing written
+// down. The probe still runs: it searches nothing.
+test("a phrase past the search bound is not asked, and the screen says why", async () => {
+  location.hash = `#/knowledge?q=${"p".repeat(SEARCH_QUERY_MAX + 1)}&mode=keyword`;
+  const asked = mount(ran);
+  expect(
+    await screen.findByText(
+      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+    ),
+  ).toBeTruthy();
+  expect(asked.filter((a) => a.what === "knowledge" && a.params.q !== "")).toEqual([]);
+  expect(screen.queryByText("Provisioner runbook")).toBeNull();
 });
 
 test("a complete search draws no partial callout", async () => {

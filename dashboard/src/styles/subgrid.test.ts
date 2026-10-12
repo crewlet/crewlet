@@ -1,8 +1,6 @@
 // @vitest-environment node
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import { sheetRules } from "../test/sheets.ts";
 
 /**
  * A SUBGRID ITEM'S OWN PADDING COMES OUT OF THE TRACKS IT SPANS.
@@ -44,8 +42,6 @@ import { expect, test } from "vitest";
  * and another appeared.
  */
 
-const STYLES = fileURLToPath(new URL(".", import.meta.url));
-
 /**
  * Which grid owns each padded subgrid's tracks.
  *
@@ -62,34 +58,14 @@ const OWNERS: Record<string, string> = {
   ".config-diff-line": ".config-diff",
 };
 
-/** Every rule in every sheet, as `[selector, declarations]`. */
+/**
+ * Every rule in every sheet, as `[selector, declarations]` — the shared walk
+ * (`test/sheets.ts`), which this file's own copy was the first to get right
+ * about a rule inside an at-rule: the phone list's track set is declared in
+ * exactly that position.
+ */
 function rules(): [string, string][] {
-  const out: [string, string][] = [];
-  for (const file of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
-    const bare = readFileSync(join(STYLES, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    // SPLIT ON THE CLOSING BRACE, for the reason `sticky.test.ts` gives at the
-    // same idiom: a regex that matches whole rules has to consume the `}` that
-    // precedes one to anchor on it, which leaves the next rule without one and
-    // silently reports every other rule.
-    for (const chunk of bare.split("}")) {
-      const at = chunk.lastIndexOf("{");
-      if (at < 0) continue;
-      // FROM THE BRACE BEFORE IT, not from the start of the chunk. A rule
-      // inside an at-rule shares its chunk with that at-rule's own prelude, so
-      // taking everything before the brace reads the selector as
-      // `@media (max-width: 860px) { .work-rows` — which every scan of this
-      // shape then discards as an at-rule. The phone list is declared in
-      // exactly that position and had exactly this bug, so a gate that could
-      // not see it would have certified one breakpoint of two.
-      const selector = chunk
-        .slice(chunk.lastIndexOf("{", at - 1) + 1, at)
-        .trim()
-        .replace(/\s+/g, " ");
-      if (!selector || selector.startsWith("@")) continue;
-      out.push([selector, chunk.slice(at + 1)]);
-    }
-  }
-  return out;
+  return sheetRules().map((r) => [r.selector, r.body]);
 }
 
 /** The top-level terms of a value, so `minmax(0, 1fr)` stays one term. */

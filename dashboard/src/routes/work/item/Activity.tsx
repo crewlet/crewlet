@@ -56,6 +56,7 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { renderMarkdown, plainText } from "~/lib/markdown.ts";
 import {
   fmtCount,
@@ -504,6 +505,7 @@ function CommentRow({
         <SeatAvatar
           name={name}
           kind={person?.kind === "human" ? "human" : "agent"}
+          avatar={person?.avatar}
           size={28}
           decorative
         />
@@ -572,7 +574,6 @@ const PHASE_WORD: Record<string, string> = {
   review: "Review",
   sandbox: "Coding run",
   subagent: "Workers",
-  plan: "Plan",
   judge: "Judge",
   onboarding: "Onboarding",
   auxiliary: "Auxiliary",
@@ -628,7 +629,13 @@ export function TurnCard({
   return (
     <li className="task-entry" data-kind="turn">
       <span className="task-entry-avatar">
-        <SeatAvatar name={name} kind={kind} size={28} decorative />
+        <SeatAvatar
+          name={name}
+          kind={kind}
+          avatar={chrome.seatAvatar?.(turn.seat)}
+          size={28}
+          decorative
+        />
       </span>
       <article className="task-turn" aria-label={turn.ordinal ? `Turn ${turn.ordinal}` : "A turn"}>
         <header className="task-turn-head">
@@ -664,15 +671,16 @@ export function TurnCard({
           </time>
         </header>
         <div className="task-turn-body">
-          {/* A TURN AN OLDER BUILD RECORDED CARRIES NO ACCOUNT, and says so
-              in one quiet line: a card per turn repeating the reason in full
-              body text read as the turn's content. The reason is the title. */}
+          {/* A TURN NO SEGMENT WROTE AN ACCOUNT FOR (it failed, or parked,
+              before one was written) says so in one quiet line: a card per
+              turn repeating the reason in full body text read as the turn's
+              content. The reason is the title. */}
           {turn.summary ? (
             <p className="task-turn-summary">{turn.summary}</p>
           ) : (
             <p
               className="task-turn-nosummary"
-              title="Recorded before a turn's own account was kept. The trace has the detail while the event history holds it."
+              title="This turn failed or parked before it wrote an account of itself. The trace has the detail while the event history holds it."
             >
               No summary recorded — see the trace
             </p>
@@ -730,7 +738,7 @@ function LiveRow({
 }) {
   const handle = row.handle ?? "";
   const name = chrome.seatName?.(handle) ?? handle;
-  const turn = row.turn?.turn_id ?? row.live_call?.turn_id ?? "";
+  const turn = turnIdOf(row);
   const doing = doingWords(row);
   const since = Date.parse(row.turn?.started_at ?? row.live_call?.started_at ?? "");
   // THE PROFILE CARD'S CLOCK (`fmtElapsed`), seconds under a minute: the
@@ -740,11 +748,18 @@ function LiveRow({
   return (
     <li className="task-entry" data-kind="live">
       <span className="task-entry-avatar">
-        <SeatAvatar name={name} kind="agent" size={28} ring={ringOf(activityOf(row))} decorative />
+        <SeatAvatar
+          name={name}
+          kind="agent"
+          avatar={chrome.seatAvatar?.(handle)}
+          size={28}
+          ring={ringOf(activityOf(row))}
+          decorative
+        />
       </span>
       <a
         className="task-live"
-        href={turn ? href(["live", "turns", turn]) : href(["live"])}
+        href={turn ? watchHref(turn) : href(["live"])}
         aria-label={`${name} is on turn ${ordinal} of ${item.key} — watch live`}
       >
         <span className="task-live-dot" aria-hidden="true" />
@@ -806,6 +821,7 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
                 name={chrome.seatName?.(r.handle) ?? r.handle}
                 handle={r.handle}
                 kind={chrome.seatKind?.(r.handle)}
+                avatar={chrome.seatAvatar?.(r.handle)}
               />
               <span className="spacer" />
               {/* WHETHER IT ASKED IS ITS OWN MARK, never a tint on the reason:

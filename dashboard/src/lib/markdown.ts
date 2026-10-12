@@ -30,13 +30,18 @@
  * in one is untrusted input, and an allowlist is the only form of this check
  * that is safe by construction rather than by exhaustive denial.
  *
- * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections]) without
- * rendering anything, for a surface that needs the document's OUTLINE and its
- * source both — a phase prompt, tens of kilobytes with no structure but its
- * headings, which its screen folds on those headings and then renders one
- * section at a time. A walk that rendered as it split could hand back neither.
- * It shares this file's [HEADING] and [FENCE] rather than restating them; see
- * its own note.
+ * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections],
+ * [headingLines]) without rendering anything, for a surface that needs the
+ * document's OUTLINE and its source both — a phase prompt, tens of kilobytes,
+ * which its screen outlines (by its builder's section map where it has one,
+ * see `promptmap.ts`) and then renders one section at a time. A walk that
+ * rendered as it split could hand back neither. Both share this file's
+ * [HEADING] and [FENCE] through one walk rather than restating them; see its
+ * own note.
+ *
+ * AND IT READS TWO KINDS OF AUTHOR ([RenderOptions]): a document's — soft line
+ * wraps, headings that are sections — and a model's, whose every newline is a
+ * break and whose headings are lines of one transcript item.
  */
 
 import { createElement, type ReactNode } from "react";
@@ -393,13 +398,10 @@ export interface Section {
  * than normalising them the way [parseBlocks] does.
  */
 export function splitSections(source: string): Section[] {
-  const lines = readLines(source ?? "");
   const out: Section[] = [];
   let level = 0;
   let title = "";
   let body: Line[] = [];
-  // The fence marker currently open, or "" outside one.
-  let fence = "";
 
   const close = () => {
     const text = joinLines(trimBlankLines(body));
@@ -411,34 +413,91 @@ export function splitSections(source: string): Section[] {
     out.push({ level, title, body: text });
   };
 
-  for (const line of lines) {
-    // A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
-    // `split(/^#/m)`: `# install deps` inside a shell sample is a comment,
-    // and a tool catalogue is full of them.
-    if (fence !== "") {
-      if (closesFence(line.text, fence)) fence = "";
-      body.push(line);
-      continue;
-    }
-    const opened = FENCE.exec(line.text);
-    if (opened) {
-      fence = opened[1] ?? "```";
-      body.push(line);
-      continue;
-    }
-    const heading = HEADING.exec(line.text);
+  for (const { line, heading } of walkLines(source ?? "")) {
     if (!heading) {
       body.push(line);
       continue;
     }
     close();
-    level = (heading[1] ?? "#").length;
-    // Closing hashes are decoration, not content — the same rule
-    // [parseBlocks] applies to the same line.
-    title = (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim();
+    level = heading.level;
+    title = heading.title;
   }
   close();
   return out;
+}
+
+/** One ATX heading line, and where its line starts in the document. */
+export interface HeadingLine {
+  /** The index of the line's first character in the source (UTF-16). */
+  at: number;
+  /** 1–6. */
+  level: number;
+  /** The heading's own text, inline markup and all. */
+  title: string;
+}
+
+/**
+ * Every heading line of a document, in order, with the offset its line starts
+ * at — what [splitSections] splits on, for a caller that has to cut the SOURCE
+ * at those lines rather than receive it regrouped. A phase prompt's reader is
+ * the one: its outline sizes every section in bytes that must add up to the
+ * document, so a section is a slice running from its heading line to the next,
+ * blank lines and all — which [splitSections], trimming them, cannot hand back.
+ *
+ * THE SAME WALK as [splitSections] ([walkLines]), so the two can never
+ * disagree about which lines are headings — the fence above all.
+ */
+export function headingLines(source: string): HeadingLine[] {
+  const out: HeadingLine[] = [];
+  for (const { at, heading } of walkLines(source ?? "")) {
+    if (heading) out.push({ at, ...heading });
+  }
+  return out;
+}
+
+/**
+ * A document's lines, each with its offset and — outside a fenced block — the
+ * heading it is, if it is one.
+ *
+ * A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
+ * `split(/^#/m)`: `# install deps` inside a shell sample is a comment, and a
+ * tool catalogue is full of them. ONE walk for both readers of a document's
+ * headings, so the fence rule is written once.
+ */
+function* walkLines(
+  source: string,
+): Generator<{ line: Line; at: number; heading: { level: number; title: string } | null }> {
+  // The fence marker currently open, or "" outside one.
+  let fence = "";
+  let at = 0;
+  for (const line of readLines(source)) {
+    const start = at;
+    at += line.text.length + line.eol.length;
+    if (fence !== "") {
+      if (closesFence(line.text, fence)) fence = "";
+      yield { line, at: start, heading: null };
+      continue;
+    }
+    const opened = FENCE.exec(line.text);
+    if (opened) {
+      fence = opened[1] ?? "```";
+      yield { line, at: start, heading: null };
+      continue;
+    }
+    const heading = HEADING.exec(line.text);
+    yield {
+      line,
+      at: start,
+      heading: heading
+        ? {
+            level: (heading[1] ?? "#").length,
+            // Closing hashes are decoration, not content — the same rule
+            // [parseBlocks] applies to the same line.
+            title: (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim(),
+          }
+        : null,
+    };
+  }
 }
 
 /** One section, and the sections nested under it. */
@@ -553,26 +612,180 @@ export const UnbrokenCode = 32;
  * Wikipedia URL needs — and also what stopped a refused
  * `[label](javascript:alert(1))` from rendering its closing bracket as a stray
  * character beside the label.
+ *
+ * EMPHASIS FOLLOWS COMMONMARK'S DELIMITER-RUN RULES, and it did not: a `*` or
+ * `_` opened wherever it stood and closed at the next one. Most documents
+ * never noticed. A model's words and a prompt do, because they are full of
+ * snake_case names nobody fenced — `submit_work`, `result_summary`, a tool
+ * catalogue line `- list_mcp_server_tools: …` — and the old rule turned
+ * "call submit_work with the result_summary" into "call submit" + italic "work
+ * with the result" + "summary", eating both underscores, in the one reader
+ * whose job is showing what a model was told. So, as the spec has it (W is
+ * whitespace or either end of the text, P is punctuation or a symbol):
+ *
+ *  - a run OPENS only when LEFT-FLANKING — not followed by W, and either not
+ *    followed by P or preceded by W or P — and CLOSES only when
+ *    RIGHT-FLANKING, the mirror image; so `*foo *` is not emphasis;
+ *  - an UNDERSCORE run also opens only after W or P and closes only before W
+ *    or P, so one inside a word is a letter of it: `snake_case_name` stays
+ *    itself, while `_word_` and `__init__` are still emphasis;
+ *  - an ASTERISK inside a word still works both ways, as CommonMark says:
+ *    `foo*bar*` is emphasis, and so is `2*3 and 4*5` — arithmetic that means
+ *    to stay literal goes in a code span.
+ *
+ * Every rule is a lookaround, which is why the walk ([inlineMatches]) runs the
+ * pattern over the WHOLE text from a moving index rather than over what is
+ * left after each construct. Sliced, a run right after a construct was judged
+ * against the start of the text instead of its real neighbour — the same
+ * answer today only because every construct happens to end in punctuation,
+ * which is a coincidence of the grammar rather than a rule a new construct
+ * would know to keep.
+ *
+ * NAMED GROUPS, so what a match is reads by name rather than by a position
+ * that every new alternative renumbers.
  */
-const INLINE =
-  /(`+)([\s\S]*?)\1|!\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)|\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)|<((?:https?:|mailto:)[^>\s]+)>|(\*\*|__)([\s\S]+?)\8|(\*|_)([^\s][\s\S]*?)\10|(~~)([\s\S]+?)\12/;
+// The classes the flanking rules are written in. NOT_WP is whatever is
+// neither whitespace nor punctuation — a letter, a digit, a mark.
+const NOT_WP = String.raw`[^\s\p{P}\p{S}]`;
+const WP = String.raw`[\s\p{P}\p{S}]`;
+const PUNCT = String.raw`[\p{P}\p{S}]`;
+/** `d` as a left-flanking run: after W or P and before anything but W, or after anything else and before neither. */
+const leftFlanking = (d: string) =>
+  String.raw`(?:(?<!${NOT_WP})${d}(?!\s|$)|(?<=${NOT_WP})${d}(?!${WP}|$))`;
+/** `d` as a right-flanking run — the mirror image of [leftFlanking]. */
+const rightFlanking = (d: string) =>
+  String.raw`(?:(?<=${NOT_WP})${d}|(?<=${PUNCT})${d}(?!${NOT_WP}))`;
+/** An underscore run that may open: after W or P, before anything but W. */
+const underOpens = (d: string) => String.raw`(?<!${NOT_WP})${d}(?!\s|$)`;
+/** An underscore run that may close: after anything but W, before W or P. */
+const underCloses = (d: string) => String.raw`(?<!\s)${d}(?!${NOT_WP})`;
+/** A link or image destination, captured as `name`. */
+const destination = (name: string) =>
+  String.raw`(?<${name}>(?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)`;
+
+const INLINE_SOURCE = [
+  String.raw`(?<tick>\x60+)(?<code>[\s\S]*?)\k<tick>`,
+  String.raw`!\[(?<alt>[^\]]*)\]\(` + destination("src"),
+  String.raw`\[(?<label>[^\]]*)\]\(` + destination("href"),
+  String.raw`<(?<auto>(?:https?:|mailto:)[^>\s]+)>`,
+  // A strong run closes on a `**` no third asterisk follows, so `***both***`
+  // is strong around emphasis rather than strong around `*both` and a stray.
+  leftFlanking(String.raw`\*\*`) +
+    String.raw`(?<strong>[\s\S]+?)` +
+    rightFlanking(String.raw`\*\*(?!\*)`),
+  underOpens("__") + String.raw`(?<strongUnder>[\s\S]+?)` + underCloses("__"),
+  leftFlanking(String.raw`\*`) + String.raw`(?<em>[\s\S]+?)` + rightFlanking(String.raw`\*`),
+  underOpens("_") + String.raw`(?<emUnder>[\s\S]+?)` + underCloses("_"),
+  String.raw`~~(?<del>[\s\S]+?)~~`,
+].join("|");
+
+/** What one inline construct captured, by name. */
+interface InlineGroups {
+  tick?: string;
+  code?: string;
+  alt?: string;
+  src?: string;
+  label?: string;
+  href?: string;
+  auto?: string;
+  strong?: string;
+  strongUnder?: string;
+  em?: string;
+  emUnder?: string;
+  del?: string;
+}
+
+/** One inline construct: where it starts and ends in the text, and what it captured. */
+interface InlineMatch {
+  index: number;
+  end: number;
+  groups: InlineGroups;
+}
+
+/**
+ * Every inline construct of `text`, in order — THE ONE WALK both [renderInline]
+ * and [inlineText] read, so the two can never disagree about where a construct
+ * begins.
+ *
+ * A fresh pattern per walk: the walk is re-entered for a construct's own
+ * content before the outer one has finished, and a shared `g` pattern carries
+ * its position in `lastIndex`.
+ */
+function* inlineMatches(text: string): Generator<InlineMatch> {
+  const pattern = new RegExp(INLINE_SOURCE, "gu");
+  for (let m = pattern.exec(text); m !== null; m = pattern.exec(text)) {
+    yield { index: m.index, end: m.index + m[0].length, groups: (m.groups ?? {}) as InlineGroups };
+  }
+}
+
+/**
+ * How a renderer reads what a document's author did not mark up.
+ *
+ * TWO READERS WRITE MARKDOWN WITH DIFFERENT HABITS, and the defaults are the
+ * document's. A page, a description or a comment is a DOCUMENT: a newline
+ * inside a paragraph is a soft wrap somebody typed to keep a source line
+ * short, and a heading opens a section of it. A MODEL'S WORDS — a round's
+ * speech and thinking, a coding run's report, a prompt the engine built for a
+ * model — are neither. A model writes one fact per line and means each line,
+ * and a "## Summary" in the middle of a transcript is emphasis inside one item
+ * of the page, not a section of it.
+ */
+export interface RenderOptions {
+  /**
+   * `soft` (the default): a newline inside a paragraph is a space, and only
+   * two trailing spaces or a backslash break the line — CommonMark's rule.
+   * `hard`: every newline is a line break, which is what a model's single
+   * newlines are; read as soft, a list of facts collapsed into a run-on line.
+   */
+  breaks?: "soft" | "hard";
+  /**
+   * `sections` (the default): a heading line is an `h2`–`h6`. `text`: a
+   * heading line is a styled block that is NOT a heading element
+   * (`.md-heading`), for content that is a transcript item rather than a
+   * section of the page — the same reason a tool row's disclosure takes
+   * `headingLevel="none"`. A model's "## Summary" put an `h2` into the turn
+   * page's outline, between the page's own sections.
+   */
+  headings?: "sections" | "text";
+  /**
+   * Give each top-level heading the id [outline] points at, for a page with
+   * an "On this page" list. Nothing to address under `headings: "text"`.
+   */
+  anchors?: boolean;
+}
+
+/** What the inline walk needs of [RenderOptions], and one thing only it does. */
+export interface InlineOptions extends Pick<RenderOptions, "breaks"> {
+  /**
+   * `anchor` (the default): a link is a link. `text`: a link is its label and
+   * an autolink its address, as plain text — for a run drawn INSIDE a control,
+   * a listbox option or a picker's entry, whose children are presentational
+   * to assistive tech, so a link there is unreachable as itself, and whose
+   * click a link would steal to navigate instead of choosing the row.
+   */
+  links?: "anchor" | "text";
+}
 
 /** Render one run of inline markdown to React nodes. */
-export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
+export function renderInline(
+  text: string,
+  keyPrefix = "i",
+  options: InlineOptions = {},
+): ReactNode[] {
   const out: ReactNode[] = [];
-  let rest = text;
+  let at = 0;
   let n = 0;
+  const hard = options.breaks === "hard";
 
-  while (rest.length > 0) {
-    const m = INLINE.exec(rest);
-    if (!m || m.index === undefined) break;
-    if (m.index > 0) out.push(hardBreaks(rest.slice(0, m.index), `${keyPrefix}-t${n++}`));
+  for (const { index, end, groups: g } of inlineMatches(text)) {
+    if (index > at) out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard));
     const key = `${keyPrefix}-${n++}`;
+    at = end;
 
-    if (m[1] !== undefined) {
+    if (g.tick !== undefined) {
       // A code span loses ONE leading and trailing space, which is how
       // CommonMark lets a span start with a backtick of its own.
-      const code = (m[2] ?? "").replace(/^ | $/g, "");
+      const code = (g.code ?? "").replace(/^ | $/g, "");
       // A SHORT SPAN IS ONE TOKEN to a reader: `nimbus jobs wait --node <n>`
       // split at a space reads as two commands, and the break always lands on
       // the flag. Up to [UnbrokenCode] characters it is kept on one line; a
@@ -585,34 +798,37 @@ export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
           code,
         ),
       );
-    } else if (m[3] !== undefined || m[4] !== undefined) {
-      const src = safeHref(m[4] ?? "");
+    } else if (g.src !== undefined) {
+      const src = safeHref(g.src);
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
         src
-          ? createElement("img", { key, src, alt: m[3] ?? "", loading: "lazy" })
-          : createElement("span", { key }, m[3] ?? ""),
+          ? createElement("img", { key, src, alt: g.alt ?? "", loading: "lazy" })
+          : createElement("span", { key }, g.alt ?? ""),
       );
-    } else if (m[5] !== undefined || m[6] !== undefined) {
-      const href = safeHref(m[6] ?? "");
-      const label = m[5] ?? "";
+    } else if (g.href !== undefined) {
+      const href = options.links === "text" ? null : safeHref(g.href);
+      const label = g.label ?? "";
       out.push(
-        href ? anchor(key, href, renderInline(label, key)) : createElement("span", { key }, label),
+        href
+          ? anchor(key, href, renderInline(label, key, options))
+          : createElement("span", { key }, renderInline(label, key, options)),
       );
-    } else if (m[7] !== undefined) {
-      const href = safeHref(m[7]);
-      out.push(href ? anchor(key, href, [m[7]]) : createElement("span", { key }, m[7]));
-    } else if (m[9] !== undefined) {
-      out.push(createElement("strong", { key }, renderInline(m[9], key)));
-    } else if (m[11] !== undefined) {
-      out.push(createElement("em", { key }, renderInline(m[11], key)));
-    } else if (m[13] !== undefined) {
-      out.push(createElement("del", { key }, renderInline(m[13], key)));
+    } else if (g.auto !== undefined) {
+      const href = options.links === "text" ? null : safeHref(g.auto);
+      out.push(href ? anchor(key, href, [g.auto]) : createElement("span", { key }, g.auto));
+    } else if (g.strong !== undefined || g.strongUnder !== undefined) {
+      const inner = g.strong ?? g.strongUnder ?? "";
+      out.push(createElement("strong", { key }, renderInline(inner, key, options)));
+    } else if (g.em !== undefined || g.emUnder !== undefined) {
+      const inner = g.em ?? g.emUnder ?? "";
+      out.push(createElement("em", { key }, renderInline(inner, key, options)));
+    } else if (g.del !== undefined) {
+      out.push(createElement("del", { key }, renderInline(g.del, key, options)));
     }
-    rest = rest.slice(m.index + m[0].length);
   }
-  if (rest.length > 0) out.push(hardBreaks(rest, `${keyPrefix}-t${n}`));
+  if (at < text.length) out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard));
   return out;
 }
 
@@ -639,10 +855,12 @@ function anchor(key: string, href: string, children: ReactNode[]): ReactNode {
  *
  * Every other newline inside a paragraph is a SOFT break and renders as a
  * space, which is the one rule that makes a hand-wrapped paragraph read as a
- * paragraph rather than as a column of short lines.
+ * paragraph rather than as a column of short lines — unless the reader asked
+ * for `breaks: "hard"`, where every newline is a break and the two markers
+ * that ask for one are consumed with it rather than left as stray characters.
  */
-function hardBreaks(text: string, key: string): ReactNode {
-  const parts = text.split(/(?:  +|\\)\n/);
+function breakLines(text: string, key: string, hard: boolean): ReactNode {
+  const parts = text.split(hard ? /(?:  +|\\)?\n/ : /(?:  +|\\)\n/);
   if (parts.length === 1) return createElement("span", { key }, soften(text));
   const nodes: ReactNode[] = [];
   parts.forEach((part, i) => {
@@ -658,19 +876,35 @@ function soften(text: string): string {
 
 // --- block rendering -------------------------------------------------------
 
-function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
+function renderBlock(
+  block: Block,
+  key: string,
+  options: RenderOptions,
+  anchor?: string,
+): ReactNode {
   switch (block.kind) {
     case "heading":
+      // NOT A SECTION when the reader said so: a transcript item's heading is
+      // emphasis inside the item, and an `h2` there joins the PAGE's outline.
+      // A `p` rather than a `div`, because it is a line of text and a reader
+      // that lists paragraphs should find it.
+      if (options.headings === "text") {
+        return createElement(
+          "p",
+          { key, className: "md-heading" },
+          renderInline(block.text, key, options),
+        );
+      }
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
       // it, and a body emitting a second h1 makes two documents claim the
       // same level to a screen reader.
       return createElement(
         `h${Math.min(6, block.level + 1)}`,
         anchor ? { key, id: anchor } : { key },
-        renderInline(block.text, key),
+        renderInline(block.text, key, options),
       );
     case "paragraph":
-      return createElement("p", { key }, renderInline(block.text, key));
+      return createElement("p", { key }, renderInline(block.text, key, options));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
       // `md-task-body`. It was `code plain`, which is two names this
@@ -693,7 +927,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
       return createElement(
         "blockquote",
         { key },
-        block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`)),
+        block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`, options)),
       );
     case "rule":
       return createElement("hr", { key });
@@ -730,11 +964,11 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
             // rendered to the RIGHT of the line it belongs under rather than
             // beneath it.
             item.checked === null
-              ? item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`))
+              ? item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`, options))
               : createElement(
                   "div",
                   { key: `${key}-${i}-body`, className: "md-task-body" },
-                  item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`)),
+                  item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`, options)),
                 ),
           ),
         ),
@@ -756,7 +990,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
                 createElement(
                   "th",
                   { key: i, style: { textAlign: block.align[i] ?? "left" } },
-                  renderInline(cell, `${key}-h${i}`),
+                  renderInline(cell, `${key}-h${i}`, options),
                 ),
               ),
             ),
@@ -772,7 +1006,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
                   createElement(
                     "td",
                     { key: c, style: { textAlign: block.align[c] ?? "left" } },
-                    renderInline(cell, `${key}-${r}-${c}`),
+                    renderInline(cell, `${key}-${r}-${c}`, options),
                   ),
                 ),
               ),
@@ -788,16 +1022,28 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
  *
  * Returns React nodes, never a string and never HTML: there is no
  * `dangerouslySetInnerHTML` on this path, so no input can introduce an
- * element this file did not construct.
+ * element this file did not construct — whichever [RenderOptions] are set,
+ * since they choose between elements this file builds and nothing else.
  */
-export function renderMarkdown(source: string, options?: { anchors?: boolean }): ReactNode[] {
+export function renderMarkdown(source: string, options: RenderOptions = {}): ReactNode[] {
   const blocks = parseBlocks(source ?? "");
-  if (!options?.anchors) return blocks.map((block, i) => renderBlock(block, `b${i}`));
+  if (!options.anchors || options.headings === "text") {
+    return blocks.map((block, i) => renderBlock(block, `b${i}`, options));
+  }
   // THE SAME WALK [outline] TAKES, so a heading's id and the entry pointing at
   // it are one computation and cannot disagree.
   const ids = anchorIds(blocks);
-  return blocks.map((block, i) => renderBlock(block, `b${i}`, ids.get(i)));
+  return blocks.map((block, i) => renderBlock(block, `b${i}`, options, ids.get(i)));
 }
+
+/**
+ * How a MODEL'S WORDS are rendered: a round's speech and thinking, a coding
+ * run's report. Every newline is the line break the model meant, and a heading
+ * is emphasis inside one transcript item rather than a section of the page —
+ * see [RenderOptions]. One constant, so the transcript's every block of a
+ * model's prose reads by one rule.
+ */
+export const MODEL_WORDS: RenderOptions = { breaks: "hard", headings: "text" };
 
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {
@@ -856,7 +1102,7 @@ function anchorIds(blocks: Block[]): Map<number, string> {
 /**
  * One run of inline markdown as the text it renders to.
  *
- * THE SAME [INLINE] ALTERNATION AS [renderInline], deliberately. What a code
+ * THE SAME WALK AS [renderInline] ([inlineMatches]), deliberately. What a code
  * span is, where a destination ends and which emphasis run closes which are
  * decisions this file has already made once; a second set of them for the text
  * case is the drift `textcut` and `whsec` each record in their own package docs.
@@ -865,38 +1111,32 @@ function anchorIds(blocks: Block[]): Map<number, string> {
  */
 function inlineText(text: string): string {
   const out: string[] = [];
-  let rest = text;
+  let at = 0;
 
-  while (rest.length > 0) {
-    const m = INLINE.exec(rest);
-    if (!m || m.index === undefined) break;
-    if (m.index > 0) out.push(rest.slice(0, m.index));
+  for (const { index, end, groups: g } of inlineMatches(text)) {
+    if (index > at) out.push(text.slice(at, index));
+    at = end;
 
-    if (m[1] !== undefined) {
+    if (g.tick !== undefined) {
       // A code span's own content, minus the one padding space CommonMark lets
       // a span carry so it can start with a backtick.
-      out.push((m[2] ?? "").replace(/^ | $/g, ""));
-    } else if (m[3] !== undefined || m[4] !== undefined) {
+      out.push((g.code ?? "").replace(/^ | $/g, ""));
+    } else if (g.src !== undefined) {
       // AN IMAGE IS ITS ALT TEXT, which is what alt text is for. One with no alt
       // contributes nothing rather than a filename nobody wrote.
-      out.push(m[3] ?? "");
-    } else if (m[5] !== undefined || m[6] !== undefined) {
+      out.push(g.alt ?? "");
+    } else if (g.href !== undefined) {
       // A LINK IS ITS LABEL, never its destination: the label is the sentence
       // somebody wrote, and a URL in a one-line cell spends the whole line.
-      out.push(inlineText(m[5] ?? ""));
-    } else if (m[7] !== undefined) {
+      out.push(inlineText(g.label ?? ""));
+    } else if (g.auto !== undefined) {
       // An autolink has no label, so the URL IS the text it renders to.
-      out.push(m[7]);
-    } else if (m[9] !== undefined) {
-      out.push(inlineText(m[9]));
-    } else if (m[11] !== undefined) {
-      out.push(inlineText(m[11]));
-    } else if (m[13] !== undefined) {
-      out.push(inlineText(m[13]));
+      out.push(g.auto);
+    } else {
+      out.push(inlineText(g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? ""));
     }
-    rest = rest.slice(m.index + m[0].length);
   }
-  if (rest.length > 0) out.push(rest);
+  if (at < text.length) out.push(text.slice(at));
   return out.join("");
 }
 

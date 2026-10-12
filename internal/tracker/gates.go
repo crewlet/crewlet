@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
@@ -76,7 +75,7 @@ import (
 // than wired, and [pages.Fence] never had one, so the two fences now answer the
 // same question the same way.
 type Fence struct {
-	db     *store.DB
+	db     store.ReplicatedReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -107,7 +106,7 @@ type Fence struct {
 }
 
 // NewFence builds the write fence for one node.
-func NewFence(db *store.DB, nodeID string) *Fence {
+func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -120,7 +119,7 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // a call to the estate an eviction has already established is silent.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
-	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position FROM tracker_evictions
 			WHERE node_id = ? AND log_stream = ?`,
@@ -193,11 +192,11 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // same gate again, and burns its whole round budget to a conflict a model
 // reads as a colleague editing the same object.
 type Gates struct {
-	db *store.DB
+	db store.ReplicatedReader
 }
 
 // NewGates builds the gate reader for one node.
-func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
+func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at a position applies nowhere, and the
 // gate that answers for it, by the rule [statelog.Gates] states — which the
@@ -212,19 +211,24 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 
 	var reason statelog.Reason
 	var gated bool
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
 		// marker holds the task for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`
 		// is the answer that stays true. The applier's opposite order
-		// decides only which gate a drop is COUNTED under. Every kind the
-		// marker gates ([ObjectKind.GatedByPurge]) — a turn charged to a
-		// purged task as well as the task — is keyed on the task's id.
-		if ObjectKind(subj.Kind).GatedByPurge() {
+		// decides only which gate a drop is COUNTED under.
+		//
+		// AND OVER THE SAME SUBJECTS, by asking the one function the
+		// applier asks: a task's own and its turns'. This read used to
+		// spell its own test — the task's subject alone — so a turn
+		// that landed after its task's purge was dropped `deleted` by
+		// every applier and reported ungated here, and its writer was
+		// told the store had broken the ledger contract.
+		if taskID, ok := markedTask(subj); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
-				subj.ID).Scan(&author)
+				taskID).Scan(&author)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 			case err != nil:
@@ -265,6 +269,75 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		return "", false, err
 	}
 	return reason, gated, nil
+}
+
+// markedTask is the task whose deletion marker gates a record on subj, and
+// false for a subject no task's marker covers.
+//
+// # Two subjects, because two kinds of record are ABOUT a task
+//
+// The task's own, and its TURNS': a turn's subject is the task it spent on
+// ([TurnSubject]), and it is the record a purge races most often — a seat's
+// turn records its spend when it ENDS, which is after whatever the turn did,
+// its own task's purge included. Ungated, a turn landing after its task's
+// purge would reach an apply with no row to add to, which is a malformed
+// record there and stops the log on every node.
+//
+// # One function, asked by both sides of the gate
+//
+// [Applier.Gated] drops what this covers and [Gates.GatedAt] reports why, and
+// [statelog.Gates] holds the two to one answer — so the set is stated once.
+// It was two tests that looked alike, the applier's naming both kinds and the
+// reader's only the task, and every turn the marker dropped resolved as a
+// record applied without its ledger row: a contract violation reported to
+// the writer, counted under `error` rather than `deleted`.
+//
+// FROM THE SUBJECT ALONE, because the reader is handed nothing else — so
+// whatever a record names in its payload cannot decide whether a marker
+// holds it.
+func markedTask(subj statelog.Subject) (string, bool) {
+	if ObjectKind(subj.Kind).GatedByPurge() {
+		return subj.ID, true
+	}
+	return "", false
+}
+
+// GateRecordVersion is the SHAPE version every gate-installing record's
+// payload carries, FOR EVER.
+//
+// # Why this one number never moves
+//
+// A record whose version this build does not know is normally RETAINED and
+// applied later by a build that does. That is exactly wrong for a gate: a node
+// that deferred an eviction would leave its own gate table empty and go on
+// applying every record the evicted node appends, and there is no inverse that
+// repairs it. So an un-decodable gate record STOPS that build's applier
+// instead — and a stop takes a node out of the fleet until it is upgraded, so
+// no mere change of SHAPE may cost one. That is what pinning this at one buys:
+// a gate record's shape can only ever grow by addition, never by reshaping,
+// for the life of the deployment, and an older build reads every one of them.
+//
+// # What does move, and why a stop is then the right answer
+//
+// A change to what a gate's APPLY does is not a change of shape, and no older
+// build can honour it: applied the old way it leaves rows every newer node
+// does not hold, and deferred it is the licence described above. So such a
+// record is written at a RECORD version above every build that predates the
+// change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
+// — and the framework halts that build at it, while every record written
+// before it keeps the rule it was applied by. The halt needs the older build
+// to know the record for a gate, and it does, because [Domain.InstallsGate] is answered from the envelope: an
+// eviction by its kind and a purge by its op. That is also why a changed gate
+// is NOT given a new kind or a new op: one an older build does not know is not
+// a gate to it, so at a raised version it would be deferred — the licence
+// above — and at this one it would reach its dispatch as a failure retried in
+// place for ever rather than a stop.
+const GateRecordVersion = 1
+
+// purgeMutation is a purge's payload.
+type purgeMutation struct {
+	V      int    `json:"v"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
@@ -348,6 +421,12 @@ func purgeWake(task Task, collision bool, reason, actor string, leads Leads) *No
 	}
 }
 
+// maxPurgeKey is the longest task key a purge's notice is measured against: a
+// project key of at most ten characters (the config's container-key grammar,
+// `[A-Z][A-Z0-9]{1,9}`), a dash, and a sequence number of up to nineteen
+// digits — the most an int64 has.
+const maxPurgeKey = 10 + 1 + 19
+
 // purgeExcerpt is the line the lead reads.
 //
 // IT NAMES THE KEY AND NOT THE TITLE. A purge destroys the content; an
@@ -359,9 +438,11 @@ func purgeWake(task Task, collision bool, reason, actor string, leads Leads) *No
 // ([ItemNamed]): the key then names a task that was NOT purged, and a lead
 // told "ENG-7 was purged" opens ENG-7 to find it still there.
 //
-// The REASON is the operator's own sentence and is kept, cut to fit: it is
-// why they did it, and a record of an irreversible act with no reason on it is
-// the shape nobody can audit afterwards.
+// The REASON is the operator's own sentence and is kept WHOLE: it is why they
+// did it, and a record of an irreversible act with a reason cut off half way
+// is the shape nobody can audit afterwards. A reason too long for the line is
+// refused by [Writer.PurgeTask] before anything is destroyed, so this never
+// has to choose what to drop.
 func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 	out := ItemNamed(task.ID, task.Key, collision) + " was purged"
 	if actor != "" {
@@ -371,7 +452,7 @@ func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 	if reason = strings.TrimSpace(reason); reason != "" {
 		out += ": " + reason
 	}
-	return textcut.Within(out, MaxExcerpt)
+	return out
 }
 
 // PurgeTask destroys a task and every row it produced.
@@ -380,6 +461,10 @@ func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 // without the confirmation present at that moment. A purge interrupted is a
 // purge that did not happen, and re-running it is the operator's own gesture
 // rather than a repair somebody's cron performs on their behalf.
+//
+// A task already purged is refused with [ErrNoTask], naming the purge: a retry
+// of the purge that did it is answered by its own operation id with that
+// purge's outcome, and any other purge of it has nothing left to destroy.
 func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string) (WriteResult, error) {
 	switch {
 	case id == "":
@@ -396,8 +481,35 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			"a task, because nothing else can be asked to confirm it",
 			w.ActorKind)
 	}
+	// THE REASON FITS ITS NOTICE OR THE PURGE IS REFUSED, before anything
+	// is decided: the lead is told in one line carrying the reason whole,
+	// and an irreversible act audited by half a sentence is worse than an
+	// operator asked to say it shorter. Judged against the LONGEST LINE this
+	// purge could write — the longest key a project mints, on a task whose
+	// key another task claimed first, so the line names it by its id with the
+	// key beside it ([ItemNamed]) — so the answer cannot depend on the task's
+	// own key or on whether it collides, which only the decide reads. Measured
+	// on the common key alone, a collided task's line overflowed the notice
+	// the check had just cleared, and the purge failed inside its decide.
+	worst := Task{ID: id, Key: strings.Repeat("K", maxPurgeKey)}
+	if line := purgeExcerpt(worst, true, reason, w.Actor); len(line) > MaxExcerpt {
+		return WriteResult{}, fmt.Errorf("%w: a purge's reason is carried whole on the "+
+			"one line its project's lead is told, and that line holds %d bytes; this "+
+			"reason makes it %d — say it in fewer words", ErrInvalid, MaxExcerpt, len(line))
+	}
 	subject := TaskSubject(id)
-	scope := ScopeSet{Subject: true, Container: project}
+	// EVERY TASK ITS APPLY WRITES, not the purged task alone: the apply
+	// rewrites its dependents, the blockers that list it, the tasks relating
+	// to it or referencing it, and its subtree ([purgeReach]), and a scope
+	// that named only the task let a record deferred under any of them be
+	// overtaken by the purge on the node that deferred it. AND EVERY KEY IT
+	// HOLDS, which the apply releases and hands on ([keyTerm]): named by
+	// the task alone, a purge overtook a retained create of a duplicate and
+	// handed the key to a different task on that node than on every other.
+	scope, err := w.scopeForPurge(ctx, id, project)
+	if err != nil {
+		return WriteResult{}, err
+	}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
 		Subject: wire(subject),
@@ -410,20 +522,53 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				// A SECOND PURGE OF ONE TASK IS TOLD IT IS GONE, rather
-				// than to come back to it — see [absentTask].
-				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
+				// A TASK ALREADY PURGED IS FINAL, never "not on this
+				// node": that refusal is the one the CALLER retries — the
+				// estate's router hands it back as the holder gave it —
+				// and every node that holds the marker would say it
+				// again. A retry of the SAME purge never reaches here —
+				// its ledger row answers it with the first outcome
+				// before anything is decided.
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"there is nothing left to purge: its deletion marker is "+
+						"the account of it that survives")
+			}
+			// THE PROJECT THE CALLER NAMED IS A PRECONDITION — see
+			// [stillIn]. The purge was licensed on that project, and its
+			// scope names it: filed under a container the task is not in,
+			// a deferral on its real project would not hold the purge
+			// back.
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
+			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS PURGE,
+			// checked against the rows it decides on: a dependent, a
+			// relation or a child that arrived since the scope was read
+			// is one the apply will write.
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			reach, err := readPurgeReach(ctx, tx, id)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := scope.coversReach(reach); err != nil {
+				return statelog.Decision{}, err
+			}
+			// AND THE KEYS IT HANDS ON, which a move landing since the
+			// scope was read has changed: the task is back in the project
+			// the caller named, under a key the request never probed.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := scope.coversKeys(keysOf(current)); err != nil {
+				return statelog.Decision{}, err
 			}
 			collision, err := keyHeldByAnother(ctx, tx, current.Key, current.ID)
 			if err != nil {
 				return statelog.Decision{}, fmt.Errorf("tracker: read whether "+
 					"key %s opens task %s: %w", current.Key, current.ID, err)
 			}
-			decision, err := w.decide(ctx, tx, stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
-				V      int    `json:"v"`
-				Reason string `json:"reason,omitempty"`
-			}{V: DocumentVersion, Reason: reason}, purgeWake(current, collision,
-				reason, w.Actor, w.Leads), at)
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPurge, ChangePurged, scope, opID,
+				purgeMutation{V: GateRecordVersion, Reason: reason},
+				purgeWake(current, collision, reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -500,7 +645,7 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		},
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(ctx, tx, stamp, subject, OpEviction, "", scope, opID, Eviction{
-				V: DocumentVersion, NodeID: nodeID,
+				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)
 		},

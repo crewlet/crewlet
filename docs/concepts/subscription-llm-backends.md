@@ -201,12 +201,51 @@ it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
 entry for an agent-mode run — the run *is* the executor — and the seat's
 `llm_sandbox` only for `run_sandbox` work.
 
+**The run names the model exactly as the entry's text calls do.** An
+entry's `model` is written in its CLI's own grammar, and an agent-mode
+run — like every text call the same entry makes for the reviewer, a
+worker, the auxiliary model, the round-cap judge or a fallback — hands it
+to the CLI as written (its `${VAR}` resolved, through the profile's
+`model_args`). For `opencode` that grammar is `<provider>/<model>`, split
+at the first slash, so one value serves both:
+
+```yaml
+providers:
+  llm:
+    oc:
+      type: cli-agent
+      model: anthropic/claude-sonnet-5     # or openrouter/anthropic/claude-sonnet-5
+      cli:
+        agent: opencode
+        mode: agent
+        run_in: e2b                    # or empty: providers.sandbox.default_run_in
+        env:
+          ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"   # the key of the provider the model names
+```
+
+The key of the provider the model names goes in `cli.env`, and it
+travels into a box in any cell, a remote one included, like a headless
+token — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode).
+An `opencode auth login` signs that provider in too, but only in a local
+cell (`run_in: direct` or `container`): the login is a file on the engine
+host, and the files never follow a run to a remote box.
+
 An agent-mode run is a **detached coding run** and reuses that machinery
 whole: the executor phase suspends, the run's state goes on a durable row
 in the [coordination store](coordination.md), the completion poll collects
 it, and the *same turn* resumes — possibly in another process on another
 node, days later. Nothing about that is new for agent mode; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
+
+**The engine's correctives do not reach an agent-mode run.** The rounds
+are the CLI's own, so the engine's tool loop never sees one end in prose
+and cannot ask the model again: a run whose model writes its report as
+text instead of calling `submit_work` over the bridge comes back with no
+submission, and the phase is rescued as `incomplete` straight away. In
+text mode the same reply is a round the engine's loop re-prompts, naming
+`submit_work`, up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
+What an agent-mode run has instead is its brief, which tells it the run
+ends with that call.
 
 #### The tool bridge
 
@@ -233,7 +272,9 @@ coding agent with none of the seat's tools cannot answer anybody, cannot
 touch a ticket and cannot submit its work. The URL has to reach a
 listener, so the node also needs `api.port`: a node that binds none
 (`api.port: 0`) refuses agent mode by naming `api.port`, rather than
-handing a box an endpoint nothing answers.
+handing a box an endpoint nothing answers. With `api.public.port` set the
+bridge is served on that public listener and nowhere else, so the URL
+names it.
 
 > **In a fleet, that URL must address the node itself, not a load
 > balancer in front of several.** A
@@ -258,6 +299,21 @@ Every bridged call is appended to the run's own durable row, bounded at
 resume has: the process collecting a run may not be the one that launched
 it, and without it a restart mid-run would leave the reviewer judging a
 turn whose entire tool log is gone.
+
+Each append also carries what the run's bridged calls have cost the engine so
+far — the auxiliary rewrites the seat's tools asked for and the workers the CLI
+delegated to — because those calls happen after the part of the turn that
+launched the run has ended and charged what it spent. The part of the turn that
+resumes from the run pays them to the turn's [work
+item](../guides/work-tracker.md#spend-is-on-the-task), beside the run's own
+tokens. Each call is recorded under the run it was made for — the bridge
+session is given the run's name before its box exists — so a call still in
+flight when the turn launches its next run (a delegated worker outliving the
+CLI that asked for it) is dropped rather than landing on the next run's record,
+where that run's resume would pay for it as its own. A late call that finishes
+after its run was collected but before any next run is recorded on its own run
+and is not paid: the resume paid what the run's record held when it was
+collected, so the task can fall short of the turn's cost and never exceed it.
 
 #### Code work inside the run
 
@@ -626,11 +682,22 @@ rides in the prompt:
    `Completion.ToolCalls`.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
-a bare object, `arguments` as a JSON string, and `message` / `content` /
-`text` / `response` as synonyms. When nothing parses, the whole reply
-becomes assistant content with no tool calls, and the tool loop's
-existing `tool_choice="required"` corrective re-prompt takes over. A
-malformed reply costs a round; it never crashes a turn.
+a bare object, `arguments` as a JSON string, one call object written
+without its list, `null` for no calls, and `message` / `content` /
+`text` / `response` as synonyms. It is strict in the other direction: a
+call list it can read no call from — strings for entries, nameless
+objects, a string or a number where the list belongs — makes the reply
+not an envelope at all, because reading it as one would report a model
+that asked for no tools when it asked for some. When nothing parses, the whole reply
+becomes assistant content with no tool calls, and in every phase that
+has to end in a call the tool loop's corrective re-prompt takes over —
+the finishing corrective naming the phase's submission. A request never
+forces a call, so there is one contract and it is the permissive one —
+"use an empty `tool_calls` list when no tool is needed" — on every phase
+and on `crewlet llm doctor`'s smoke test alike, which therefore certifies
+the shape a seat actually sends: the tool offered, the instruction naming
+it, and nothing demanding the call. A malformed reply costs a round; it
+never crashes a turn.
 
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a
@@ -725,12 +792,15 @@ as an answer of nothing rather than dressing it as an outage:
 
 - **The round is charged.** An empty answer costs tokens, and it used to
   be the one outcome that spent them without ever reaching a budget.
-- **The tool loop asks again, once.** A round that produced neither prose
-  nor a tool call gets one corrective re-prompt naming what went wrong.
-  One and not two: unlike a declined tool call, a second identical nudge
-  is just the same prompt against the same model. A phase that required a
-  tool call gets that corrective instead — `call one of these tools` is
-  the better instruction and already covers it.
+- **The tool loop asks again.** In every phase that finishes by a call —
+  the executor, the reviewer, onboarding, a worker — the round gets the
+  finishing corrective naming the phase's submission, up to twice in a
+  row on one allowance with a round that answered in prose: there, a
+  round without the call ends the phase only into its rescue, so a
+  second identical send is worth its round. A loop that does not finish
+  by a call gets a single corrective naming what went wrong instead:
+  there a prose answer is a legitimate finish, whatever the model writes
+  next is the result, and there is no rescue for a second nudge to beat.
 - **It is counted.** `empty_answer_rounds` on the phase record is the
   number of rounds that reached nobody. A seat whose model habitually
   answers nothing shows up there, and in `crewlet llm doctor`, which
@@ -828,19 +898,26 @@ entirely — `crewlet llm login -from-host` says so after it runs.
 for a deployment where the engine runs as a different user than the one
 that logged the CLI in.
 
-`crewlet llm doctor` looks for a host login too, so "no login" on a
+`crewlet llm doctor` looks for a host login too, so "no sign-in" on a
 machine where the CLI plainly works explains itself:
 
 ```
 credentials   : none on disk
-host login    : .claude/.credentials.json (not adopted)
+host login    : /home/you/.claude/.credentials.json (not adopted)
+token env     : unset
+sign-in       : none
 problems:
-  - no login of its own, but this machine has one at
-    ~/.claude/.credentials.json — adopt it with
+  - no sign-in for "default": no credential files in
+    /var/lib/crewlet/llm-cli/default/credentials, and nothing in the
+    environment the CLI is given authenticates it — this machine has
+    a login at /home/you/.claude/.credentials.json: adopt it with
     `crewlet llm login default -from-host`, or mint a headless
     CLAUDE_CODE_OAUTH_TOKEN with `-capture-token` (preferred: no
     shared refresh token)
 ```
+
+How `doctor` decides what the `sign-in` line says is under [Operating
+it](#how-doctor-judges-a-sign-in).
 
 ### 1. Broker the vendor's own login (any CLI)
 
@@ -975,6 +1052,57 @@ already has. A host that has been running holds the fresher refresh token, and
 restoring a boot-time blob over it is how a fleet logs itself out; `crewlet
 llm logout <KEY>` first if you mean to replace it.
 
+### 5. A provider key in `cli.env` (hermes, pi, opencode)
+
+`hermes`, `pi` and `opencode` each front many model providers and read each
+provider's key from its own variable — `OPENROUTER_API_KEY`,
+`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY` and so on — so their profiles name no
+single `api_key_env`. Their key goes in `cli.env` instead, as a `${VAR}`,
+with `auth.mode` left at `subscription`:
+
+```yaml
+providers:
+  llm:
+    herm:
+      type: cli-agent
+      model: anthropic/claude-sonnet-4
+      cli:
+        agent: hermes
+        env:
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+```
+
+Their profiles declare `env_sign_in`, which is what makes `doctor` and
+`crewlet llm list` count a **credential-named** variable in `cli.env` as a
+sign-in (`sign-in : cli.env sets OPENROUTER_API_KEY`) and report one whose
+`${VAR}` resolved to nothing. A name is credential-named when one of its
+parts — the name cut at every character that is not a letter or a digit,
+compared ignoring case — is `KEY`, `KEYS`, `APIKEY`, `ACCESSKEY`,
+`SECRETKEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`,
+`CREDENTIALS`, `AUTH`, `OAUTH` or `PAT`. So `OPENROUTER_API_KEY` and
+`GH_TOKEN` are, and `HERMES_MAX_TOKENS` and `OPENAI_BASE_URL` are not: a
+count of model tokens is configuration. It is the same rule that refuses a
+credential in a profile's `passthrough_env` or `env`
+([below](#configuration-reference)). `doctor` counts the name, not whether
+the provider accepts the key: the smoke test is what proves that — and for a
+model served by an endpoint that takes no key, an answered smoke test is what
+clears the "no sign-in" problem.
+
+**On an `opencode` entry the key also goes into a coding box**, the way a
+headless token does, so it works in a remote cell; the rest of `cli.env`
+is not carried there. That is `opencode`'s alone: [agent mode](#agent-mode)
+and code-sandbox work both need a coding-agent runner for the entry's own
+CLI, and `hermes` and `pi` have none. A cli-agent entry's model is written
+for its own CLI and its sign-in is that CLI's, so a `run_sandbox` launch on
+one needs that CLI as the seat's coding agent
+(`role.sandbox.coding_agent: opencode`), and any other pairing is
+[refused](code-sandbox.md#failure-modes). A `hermes` or `pi` seat that runs
+code points `role.llm_sandbox` at an API entry instead. A key given in the
+seat's `role.sandbox.env` is counted by the remote-box check as well. A CLI
+that does not read its key from the environment — `kimi-code` reads its
+metered key only from `config.toml` in the credential directory — does not
+declare `env_sign_in`, and a key in its `cli.env` is not counted.
+
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them
@@ -996,14 +1124,14 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. |
-| `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. |
+| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. |
+| `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
 | `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to 1, and an 8.8 KB vendor system prompt replaced by the seat's own. Reports no token counts on its stream, so they are estimated. |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. |
-| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `cli.env`, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). |
+| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release
@@ -1021,8 +1149,10 @@ cli:
 ```
 
 Lists replace wholesale (position matters in an argv). Overrides are
-validated against the profile model, so a typo fails `crewlet validate`
-rather than an agent's first turn. `crewlet llm doctor` prints the CLI
+validated against the profile model, so a typo is refused by `crewlet
+validate` and by every API write of the configuration — `PUT` and `PATCH
+/config`, a per-entity write, a revert — rather than by an agent's first
+turn or by every node's apply after the API had already activated it. `crewlet llm doctor` prints the CLI
 version the built-in profile was written against next to the version you
 actually have.
 
@@ -1091,6 +1221,54 @@ answer would read fine without it, and a spent plan would arrive as a
 bare exit 1 that no marker could classify, so the seat would never fall
 through to its metered key.
 
+### Profile fields
+
+Every field a profile has, and therefore every key `cli.overrides` accepts.
+A key not in this table is refused by name. Every mapping field
+(`config_env`, `env`, `usage`, `stdin_login`, `system_prompt_file`) merges
+key by key; lists and single values replace wholesale.
+
+| Field | What it is |
+|---|---|
+| `binary` | The executable, looked up on `PATH` unless it is a path. |
+| `written_for` | The CLI version the profile was written against, printed by `doctor` beside the one installed. |
+| `version_args` | The argv of the version probe. |
+| `complete_args` | The argv of one completion, before the model and the prompt. |
+| `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
+| `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
+| `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
+| `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
+| `system_prompt_file` | `{name, template}`: the file a `{file}` channel writes, and the text around `{system}`. |
+| `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
+| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. |
+| `text_paths` | Where the answer is in a `json`/`jsonl` document. |
+| `event_type_path` | Where a `jsonl` line names its event kind. |
+| `text_events` | The event kinds whose text is the answer. |
+| `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
+| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. |
+| `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home. |
+| `env` | Fixed child environment. Never a credential, and never `token_env` or `api_key_env`. |
+| `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
+| `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
+| `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
+| `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
+| `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
+| `credential_paths` | The login files, relative to the seat home. |
+| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
+| `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
+| `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
+| `status_args` | The command reporting who the CLI is logged in as. |
+| `logout_args` | The command revoking the login. |
+| `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the CLI has one. |
+| `limit_markers` | Sentences recognising a spent plan — see above. |
+| `auth_markers` | Sentences recognising an expired login. |
+| `marker_scope` | Where markers match: `answer-and-stderr` (default) or `stderr`. |
+| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`. |
+| `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
+| `local_tools_note` | Why a `vendor-default` stance is one. |
+| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. |
+
 ---
 
 ## Configuration reference
@@ -1100,7 +1278,8 @@ providers:
   llm:
     subscription:
       type: cli-agent
-      model: sonnet                    # passed to the CLI's --model
+      model: sonnet                    # passed to the CLI's --model, in its own grammar:
+                                       # opencode takes <provider>/<model>
       cli:
         agent: claude-code             # or codex | gemini-cli | opencode
                                        #    | muse-code | kimi-code
@@ -1128,12 +1307,13 @@ providers:
           token: "${MY_OAUTH_TOKEN}"   # else the profile's own token var
           credential_bundle: "${MY_BUNDLE}"  # else CREWLET_LLM_CLI_<KEY>_CREDENTIALS
 
-        overrides: {}                  # any CLIAgentProfile field
+        overrides: {}                  # any field under Profile fields
 ```
 
 **`timeout_seconds` is separate from the entry's own
 `timeout_seconds`** because the transports are not comparable: that one
-is an HTTP client timeout (default 120 s), while this covers a process
+bounds an HTTP attempt (default 600 s; a streamed call's silence rather
+than its length), while this covers a process
 launch — a Node runtime costs seconds before the first byte — plus the
 model call and the CLI's internal retries. On breach the process *group*
 is terminated (so the runtime's helpers go too) and the call is reported
@@ -1151,8 +1331,56 @@ purpose: a backend that silently picked up a stray `ANTHROPIC_API_KEY`
 would bill the metered account while you believed you were on a flat-rate
 plan.
 
-**A profile's `passthrough_env` may not name a credential**, and the
-engine refuses one that does. Everything listed there is forwarded from
+**Every credential an entry configures has to reach the CLI, or a write
+keeping it is refused.** The engine puts a credential only into a variable
+the profile names for it — `api_key_env` for a key, `token_env` for a
+headless token — so each of these would run with the credential unused:
+
+| Written | Refused because | Instead |
+|---|---|---|
+| `auth.mode: api-key` on a CLI whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `cli.env` under its provider's own variable ([above](#5-a-provider-key-in-clienv-hermes-pi-opencode)). `kimi-code`: put the key in the credential directory's `config.toml` — `crewlet llm login`, or a [credential bundle](#4-move-a-login-onto-another-host). A build of the CLI that does read a key variable: name it with `cli.overrides.api_key_env` |
+| `auth.mode: api-key` with no `api_keys` | there is no key to put in the variable | add one, e.g. `api_keys: ["${ANTHROPIC_API_KEY}"]` |
+| `api_keys` under `subscription` or `inherit-env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
+| more than one `api_keys` value | an entry holds one login and rotates nothing | one key per entry; another key on an entry of its own in the seat's fallback chain |
+| `auth.token` on a CLI whose profile names no `token_env` (every built-in profile but `claude-code`) | the CLI mints no headless token | remove it |
+| `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
+| `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `cli.env` or a login |
+| the profile's `token_env` or `api_key_env` in `cli.env` | `cli.auth` owns those: whether a value there reaches the CLI depends on `auth.mode` and on whether a credential resolves from the secret store or the engine's environment, which the document cannot show | `auth.token`, or `api_keys` with `auth.mode: api-key` |
+
+Each is checked against the profile with `cli.overrides` merged in, and each
+refusal names the field and the route to take. They are **admission** rules:
+every write path — `crewlet validate`, a `PUT` or `PATCH` of the config, a
+setup write, a revert — refuses a document that breaks one, while a revision
+being *applied* that breaks one is applied and warned about, because the
+entry still runs (signed in by whatever the CLI does read) and refusing it
+there would take a node off the fleet's configuration during a rolling
+upgrade. A profile that cannot drive its CLI at all — an override typo, a
+missing `binary`, no `model_args` carrying `{model}` — is different: no
+node can build it, so it is refused at apply too.
+
+**A model has to be one the CLI can read, or a write naming it is
+refused.** `opencode` reads its model as `<provider>/<model>` and splits it
+at the first slash, so a model with nothing before or after that slash —
+`claude-sonnet-5`, `anthropic/` — names no model at all, and every call the
+entry makes, an agent-mode run included, fails inside the CLI with its own
+"Model not found". Name the provider as the CLI spells it:
+`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`
+(`opencode models` lists them). It is judged on the value the CLI is
+handed — the model rendered through `model_args`, a joined
+`--model={model}` read past its `=` — and a `${VAR}` model is not judged,
+since its value is the secret store's and the environment's. The grammar is
+a profile declaration, `model_names_provider`, so there are two ways past
+it when a CLI release relaxes it: `cli.overrides.model_names_provider:
+false`, or a `model_args` override that writes the provider into the flag
+itself (`["--model", "anthropic/{model}"]`), which makes a bare model whole.
+This too is an **admission** rule, for its own reason: the entry builds and
+the CLI starts, and the grammar is a vendor fact that moves between releases
+— a newer build, or a newer peer, may know it better — so a revision being
+applied is warned about rather than refused.
+
+**A profile's `passthrough_env` may not name a
+[credential](#5-a-provider-key-in-clienv-hermes-pi-opencode)** — an admission
+rule like the ones above. Everything listed there is forwarded from
 the engine's own environment *before* `auth.mode` is consulted, so a key
 named there would reach every seat whatever the mode says — the same
 metered-bill-on-a-flat-rate-plan failure the mode exists to prevent. Use
@@ -1160,6 +1388,16 @@ it for genuine non-secret configuration (`GOOGLE_CLOUD_PROJECT`, a
 region); a CLI's key belongs in `api_key_env` or `token_env`, and
 `auth.mode: inherit-env` is the deliberate way to let the host's value
 through.
+
+**Nor may a profile's `env`**, for the same reason and one more:
+`cli.overrides` is neither `${VAR}`-resolved nor redacted, so a key written
+there would sit in the stored revision in plain text and come back on every
+config read. A credential the CLI needs goes in `cli.env`, which is both, or
+through `cli.auth`. `env` may not name the profile's `token_env` or
+`api_key_env` either, whatever they are called: `cli.auth` owns those, and
+`cli.env` and `cli.auth` are both layered over `env`, so whether a value
+there reached the CLI would turn on the mode and the secret store rather
+than on anything the profile says.
 
 ---
 
@@ -1248,7 +1486,7 @@ providers:
       cli: { agent: claude-code }
     metered:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
 roles:
@@ -1302,7 +1540,7 @@ providers:
     # The proxy speaks the Anthropic Messages API.
     subscription-proxy:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       base_url: "${LLM_PROXY_URL}"      # e.g. http://127.0.0.1:8317
       api_keys: ["${LLM_PROXY_KEY}"]    # the proxy's OWN inbound key
 
@@ -1329,6 +1567,15 @@ because each backend sends its vendor's native one:
 | `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
 | `openai`, `openai-compatible` | `Authorization: Bearer` — and nothing else from the engine's environment. The SDK would add `OpenAI-Organization`, `OpenAI-Project` and every `OPENAI_CUSTOM_HEADERS` line from the process it runs in; the backend undoes each, so a proxy never receives headers an operator exported for some other tool. The OpenAI embeddings provider builds its client the same way |
 
+**The request is shaped for the model the entry names.** An `anthropic`
+entry sends what its Claude model accepts — adaptive thinking and an effort
+level on the current generation, never a temperature there — read from the
+[Claude model table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling).
+A proxy that answers to its own alias (`model: sonnet`) rather than a Claude
+id is shaped as the current generation; if that alias is an older model,
+name it with `claude_model: claude-haiku-4-5` (or whichever it is), or the
+fields only newer models take will be refused through the proxy.
+
 The `api_keys` value is the credential for **the proxy**, not for the
 vendor: the vendor login lives inside the proxy. Rotation, cooldowns and
 the fleet-shared credential bench all apply to that inbound key as they
@@ -1350,10 +1597,13 @@ you:
   one process serving every seat, so whatever session, cache or history
   it keeps is shared across your whole company — that is the proxy's
   design to answer, not Crewlet's.
-- **`crewlet llm` does not see it.** `list`, `doctor`, `login` and the
+- **`crewlet llm` sees only the HTTP half of it.** `list`, `login` and the
   rest build `cli-agent` providers only, so there is no login state to
-  report and no smoke test to run. Keeping the proxy authenticated is a
-  separate operational job.
+  report and keeping the proxy authenticated is a separate operational
+  job. `doctor` does examine an `anthropic` entry pointed at a proxy — it
+  sends one real round and certifies a tool call comes back — but a proxy
+  rarely serves `/v1/models`, so the model check reads *not served* there,
+  and an `openai` entry is not examined at all.
 - **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
   that turns "Usage limit reached" into a retryable `rate_limit` is the
   CLI backend's. Over HTTP you get whatever status the proxy returns, and
@@ -1390,15 +1640,15 @@ key you were issued. That is just an endpoint.
 ## Operating it
 
 ```bash
-crewlet llm list                      # providers, agent, model, login state
-crewlet llm doctor                    # verify all of them, end to end
-crewlet llm doctor default -no-smoke # skip the real completion
+crewlet llm list                      # providers, agent, model, sign-in
+crewlet llm doctor                    # verify them all, anthropic entries too
+crewlet llm doctor default -no-smoke # skip the real completions
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
 
 `doctor` is the command that matters. It checks the binary is on `PATH`,
-runs its version probe, reports whether a login is present, says whether
+runs its version probe, reports how it is signed in, says whether
 token counts will be real or estimated — and then runs **three real
 completions**: a smoke test with a real tool, because a profile can look
 perfect and still not produce a parseable tool call; a **shell probe**,
@@ -1418,6 +1668,7 @@ written for   : Claude Code CLI 2.x (`claude --version`)
 state dir     : /var/lib/crewlet/llm-cli/subscription
 credentials   : present
 token env     : set
+sign-in       : credential files in /var/lib/crewlet/llm-cli/subscription/credentials; headless token in CLAUDE_CODE_OAUTH_TOKEN
 token usage   : reported by CLI
 smoke test    : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused
@@ -1447,6 +1698,32 @@ seat's tools cannot answer anybody, touch a ticket or submit its work.
 A text-mode entry reports neither, rather than reporting that it would
 not work in a mode it is not in.
 
+### How `doctor` judges a sign-in
+
+The `sign-in` line names every route that authenticates the CLI, read off
+the environment the CLI is actually given, after `auth.mode` has set and
+removed what it does — never off the configuration beside it. So a token
+that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
+`SIGN-IN` column is the first route the line names, so the two commands
+cannot disagree. The routes are credential files in the entry's directory,
+a headless token, an API key under `api-key`, a token or key forwarded under
+`inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
+variable in `cli.env` on a CLI that reads its key from its environment.
+
+`${VAR}` references, and the variables `inherit-env` forwards, are resolved
+in the process running `crewlet llm` — the secret store first, then *that
+shell's* environment — so run it with the engine's environment to get the
+engine's answer.
+
+When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
+problem, naming first a route you configured whose `${VAR}` resolved to
+nothing. One case is not a fault: a CLI pointed at an endpoint that takes no
+key (a `hermes` or `pi` entry aimed at a local server through `cli.env`), or
+one holding a key in a configuration file of its own. The configuration
+cannot tell that from a missing key, so the smoke test decides: when it is
+answered, the problem is dropped and the `sign-in` line says the CLI
+authenticates some way the engine does not hand it.
+
 A profile that says `denied` while the shell ran is a problem naming the
 installed version, because the vendor's switch is not taking effect on
 it; a `vendor-default` profile whose shell ran is a problem stating the
@@ -1458,6 +1735,38 @@ One caveat worth stating plainly: `doctor` spends three real completions.
 On a subscription that is a few thousand tokens of your plan's allowance,
 which is why `-no-smoke` exists for a scripted health check that runs
 often — it skips all three and says so on each line.
+
+**The metered key behind it is examined too.** A role written
+`llm: [subscription, default]` falls through to an `anthropic` entry
+exactly when the plan is spent, which is the worst moment to learn that
+entry is refused on every call. So `doctor` reports on every `anthropic`
+entry beside the `cli-agent` ones:
+
+```
+provider      : default
+type          : anthropic
+model         : claude-sonnet-5-5
+profile       : claude-sonnet-5-5
+endpoint      : https://api.anthropic.com
+keys          : 1 (3f9a0c1b2d4e)
+request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, reasoning before a tool change shed
+models api    : served — Claude Sonnet 5.5 (claude-sonnet-5-5), max_tokens 128000, input …
+smoke test    : ok — called crewlet_smoke (streamed), 1204 in / 61 out
+problems      : none
+```
+
+The **request** line is what a phase sends, read from the [Claude model
+table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+— on a model that binds its thinking to the tools it was written under, that
+includes [shedding the reasoning from before a tool change](turn-engine.md#the-conversation-only-grows);
+the **models api** line is the vendor's own record of the model, and any
+disagreement between the two is listed under **drift** — a *problem* when
+it puts a field the model refuses on every call, a *note* when the table is
+only more cautious than the model. The **smoke test** is one round in a
+phase's shape (no tool choice forced, effort `low`), billed to the entry's
+key, and `-no-smoke` skips it; the Models API read bills nothing and runs
+either way. The full rules are in the [CLI
+reference](../reference/cli.md#crewlet-llm).
 
 ---
 
@@ -1471,15 +1780,24 @@ often — it skips all three and says so on each line.
   bridge URL a box can dial. `crewlet llm doctor` checks all of it —
   see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
-  [code sandbox](code-sandbox.md), two ways. On any backend including
-  remote E2B, the headless token travels: `crewlet llm login <key>
-  -capture-token` and Claude Code in the box bills your plan. For a CLI
-  that mints no such token — Codex, Gemini CLI, Kimi Code, Hermes and Pi
-  among them — use
-  a [local cell](code-sandbox.md#local-sandboxes) — `providers.sandbox.local`
-  plus `run_in: direct` or `container` — where the coding agent runs on
-  the engine host and reads the login directly. The credential *files* never travel to a remote box: they
-  carry a refresh token whose rotation is shared fleet state.
+  [code sandbox](code-sandbox.md), on its own CLI only: code work on a
+  cli-agent entry needs that CLI as the seat's coding agent, and only
+  `claude-code` and `opencode` have one (an `opencode` entry takes
+  `role.sandbox.coding_agent: opencode`). On any backend including remote
+  E2B, what travels into the box is the environment that signs the CLI in:
+  a headless token (`crewlet llm login <key> -capture-token`, and Claude
+  Code in the box bills your plan), an `api-key` entry's key, what
+  `inherit-env` forwards, and `opencode`'s
+  [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode). The
+  credential *files* never travel to a remote box: they carry a refresh
+  token whose rotation is shared fleet state. So a `claude-code` entry with
+  no headless token, or an `opencode` entry signed in only by
+  `opencode auth login`, needs a
+  [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
+  plus `run_in: direct` or `container`), where the coding agent runs on the
+  engine host and reads the login directly. Any other CLI — Codex, Gemini
+  CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at an API
+  entry; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.

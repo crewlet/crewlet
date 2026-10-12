@@ -2,9 +2,12 @@
  * "Daily tokens by phase": one column per company day, stacked into the
  * engine's bands — by default its FOUR phase bands (`tokens.PhaseBand`:
  * execute and a coding run are Execute, review is Review, delegated workers
- * are Workers, the learning workers, the judge and onboarding are Auxiliary),
- * or split by model, provider, seat, unit or worker, where the engine names
- * the top four and folds the rest into one residual band.
+ * are Workers, and Auxiliary is everything that is not the turn's own work:
+ * every call to the seat's auxiliary model — the turn-start context, every
+ * compaction rewrite, the reflection workers, the background learning passes,
+ * a person's answered question — the round-cap judge and the first-turn
+ * onboarding), or split by model, provider, seat, unit or worker, where the
+ * engine names the top four and folds the rest into one residual band.
  *
  * THE BUCKETING IS THE ENGINE'S. The usage domain holds whole company days and
  * the browser holds none of them, so an axis folded here would be a guess;

@@ -15,14 +15,13 @@ defaults; existing fields are never removed or repurposed.
 **A rename is a removal.** The JSON key is the field's identity on the wire, so
 changing one deletes a field and adds another in the same stroke — the older
 half of a rolling upgrade stops finding what it reads, and every row already
-written keeps a key nothing reads any more. That holds when the *name* is what
-was wrong rather than the meaning: `prompt.size` measures bytes under keys that
-say `system_chars` / `user_chars`, and the keys stay, because a key is an
-identifier and not an assertion. What gets corrected instead is everything that
-is not a peer contract — the Go identifier, the doc comment, the dashboard's
-label, the published docs. Adding a second key for the same value is the
-mirror-image mistake: one fact with two identities, and this ADR means the
-first one can never be removed.
+written keeps a key nothing reads any more. That binds from the first build a
+successor runs beside, and it holds when the *name* is what was wrong rather
+than the meaning: a key is an identifier and not an assertion, so what gets
+corrected is everything that is not a peer contract — the Go identifier, the
+doc comment, the dashboard's label, the published docs. Adding a second key for
+the same value is the mirror-image mistake: one fact with two identities, and
+this ADR means the first one can never be removed.
 
 A consumer does not ignore what it does not recognise, it **preserves** it. An
 event type this build has no payload for still decodes into the envelope, keeps

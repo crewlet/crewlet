@@ -30,6 +30,7 @@ func TestTheLiveStatusesAreTheRunRecordsWords(t *testing.T) {
 		livestate.SandboxRunning:   sandbox.StatusRunning,
 		livestate.SandboxAwaiting:  sandbox.StatusAwaiting,
 		livestate.SandboxReseed:    sandbox.StatusReseed,
+		livestate.SandboxAnswered:  sandbox.StatusAnswered,
 	}
 	for live, record := range pairs {
 		if string(live) != record {

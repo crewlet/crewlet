@@ -107,7 +107,9 @@ func callTool(name string, args map[string]any, in, out int) *llm.Completion {
 	}
 }
 
-// meter is a shared token counter that records every charge it actually saw.
+// meter is a shared token counter that records every charge it is handed —
+// a refused one included, as the fleet's counter records it: a meter is
+// handed tokens a model call has already spent (toolloop.BudgetMeter).
 type meter struct {
 	mu      sync.Mutex
 	charges []int
@@ -126,11 +128,12 @@ func (m *meter) spend(tokens int) (toolloop.SpendOutcome, error) {
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuse {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: m.total, Limit: m.total}, nil
-	}
 	m.charges = append(m.charges, tokens)
 	m.total += tokens
+	if m.refuse {
+		// Refused at the ceiling it already stood at, and counted past it.
+		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: m.total, Limit: m.total - tokens}, nil
+	}
 	return toolloop.SpendOutcome{OK: true, Scope: "org", Used: m.total}, nil
 }
 
@@ -145,6 +148,19 @@ type countingMeter struct{ m *meter }
 
 func (c countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	return c.m.spend(tokens)
+}
+
+// Refused holds a refusal once one has been answered, as the engine's meter
+// does: a meter that refuses every charge refuses every later one too, so
+// once it has said no it says so before the next call is made.
+func (c countingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	c.m.mu.Lock()
+	defer c.m.mu.Unlock()
+	if !c.m.refuse || len(c.m.charges) == 0 {
+		return toolloop.SpendOutcome{}, false
+	}
+	last := c.m.charges[len(c.m.charges)-1]
+	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: c.m.total, Limit: c.m.total - last}, true
 }
 
 // publisher captures the batch summary event.
@@ -588,7 +604,7 @@ func TestAChildWithNoDiscoveryStaysFrozen(t *testing.T) {
 	// A catalogue is rendered only for a child that can act on it: listing
 	// tools to a worker with no activate is an invitation to call a name it
 	// was never offered.
-	if strings.Contains(res.SystemPrompt, "## Available tools") {
+	if strings.Contains(res.SystemPrompt.Text, "## Available tools") {
 		t.Error("a frozen child was shown a catalogue it cannot use")
 	}
 }
@@ -601,10 +617,10 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	cfg.Discovery = discovery
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "## Available tools") {
-		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "## Available tools") {
+		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt.Text)
 	}
-	if !strings.Contains(res.SystemPrompt, "research") {
+	if !strings.Contains(res.SystemPrompt.Text, "research") {
 		t.Error("the catalogue does not name the MCP server the child may discover")
 	}
 	// The CATALOGUE section only: the preamble legitimately says "do not
@@ -613,7 +629,7 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	// The CATALOGUE SECTION ONLY: it is followed by the preamble, which
 	// legitimately says "do not delegate further", and matching to the end
 	// of the prompt would read that prohibition as an advertisement.
-	catalogue := res.SystemPrompt[strings.Index(res.SystemPrompt, "## Available tools"):]
+	catalogue := res.SystemPrompt.Text[strings.Index(res.SystemPrompt.Text, "## Available tools"):]
 	catalogue, _, _ = strings.Cut(catalogue, "You are a short-lived worker")
 	for _, denied := range []string{"slack_post", subagent.ToolName} {
 		if strings.Contains(catalogue, denied) {
@@ -638,16 +654,16 @@ func TestSkillsCoverWhatTheChildMayLaterActivate(t *testing.T) {
 	cfg.Skills = skillFor{tool: "web_search", key: "research-etiquette"}
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "research-etiquette") {
-		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "research-etiquette") {
+		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt.Text)
 	}
 
 	// The counterfactual: a skill for a tool the grant refuses stays out,
 	// so this is scope and not "every skill in the registry".
 	cfg.Skills = skillFor{tool: "slack_post", key: "posting-etiquette"}
 	res = one(t, cfg, request("read_file"))
-	if strings.Contains(res.SystemPrompt, "posting-etiquette") {
-		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt)
+	if strings.Contains(res.SystemPrompt.Text, "posting-etiquette") {
+		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt.Text)
 	}
 }
 
@@ -782,7 +798,7 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	if len(res.Executions) != 1 {
 		t.Errorf("the tool the child ran is missing: %+v", res.Executions)
 	}
-	if res.SystemPrompt == "" || res.UserPrompt == "" {
+	if res.SystemPrompt.Text == "" || res.UserPrompt.Text == "" {
 		t.Error("a cut-off child left no prompt record for the phase event")
 	}
 }
@@ -899,8 +915,11 @@ func TestTheSliceIsAFractionOfTheParentsRemaining(t *testing.T) {
 	if !res.Failed() || res.Status != subagent.StatusBudget {
 		t.Fatalf("the slice did not stop the child: %+v", res)
 	}
-	if m.sum() != 150 {
-		t.Errorf("the parent counter was charged %d, want only the round that fit (150)", m.sum())
+	// BOTH ROUNDS, the one the slice refused included: it was billed before
+	// the slice could judge it, and a slice that refused before the parent's
+	// counter was asked kept it off the seat's and the company's counters.
+	if m.sum() != 250 {
+		t.Errorf("the parent counter was charged %d, want both rounds the child spent (250)", m.sum())
 	}
 
 	// The counterfactual: a parent with no per-seat cap imposes none on its
@@ -939,11 +958,16 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// A per-child wrapper would have let all three spend 150 — 450 against
-	// a configured slice of 200, which is the fan-out cost being invisible
-	// until the org budget is gone.
-	if m.sum() > 200 {
-		t.Fatalf("the batch charged %d against a 200-token slice", m.sum())
+	// Every round a child made was spent before anything judged it, so each
+	// is on the parent's counter — however many were made: the three run
+	// at once, and a child that starts once the slice is spent makes none
+	// (see TestAWorkerStartedOnASpentSliceMakesNoCall). What the shared
+	// slice decides is how many get past it: a per-child wrapper would
+	// have let all three finish.
+	if calls := p.count(); calls < 2 || m.sum() != 150*calls {
+		t.Fatalf("the parent counter holds %d after %d rounds of 150, want every round "+
+			"that was made, and at least the one that fitted and the one that did not",
+			m.sum(), calls)
 	}
 	var ok int
 	for _, r := range results {
@@ -1076,8 +1100,13 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	close(release)
 	results := <-done
 
-	if m.sum() > 100 {
-		t.Fatalf("charged %d against a 100-token slice", m.sum())
+	// Every round a child made is on the parent's counter. How many were
+	// made depends on how many children passed the slice's standing check
+	// before the rounds ahead of them were recorded on it — at least the one
+	// that fitted and the one that crossed it, and none after.
+	if calls := p.count(); calls < 2 || m.sum() != 60*calls {
+		t.Fatalf("the parent counter holds %d after %d rounds of 60, want every round "+
+			"that was made", m.sum(), calls)
 	}
 	var ok int
 	for _, r := range results {
@@ -1087,6 +1116,112 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	}
 	if ok != 1 {
 		t.Errorf("%d of 8 children fitted a one-child slice", ok)
+	}
+}
+
+// A WORKER THAT STARTS ON A SPENT SLICE MAKES NO CALL.
+//
+// Every round is recorded on the slice, refused or not, and its cap is fixed
+// for the call, so once a round takes it to its cap every later charge is
+// refused, whatever its size. A worker started after that — in a later wave,
+// or waiting on max_parallel — used to send its whole first request (its
+// prompt, its tools, its dependencies' answers), which the vendor billed and
+// the slice then refused. It is stopped before the call now, on the slice, and
+// says so.
+func TestAWorkerStartedOnASpentSliceMakesNoCall(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	m := &meter{}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 100, 50), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{m}
+	cfg.ParentRemaining = 1000 // slice = 200: one 150-token worker fits, the next spends it
+	cfg.Limits.MinTokensPerTask = 0
+	cfg.Limits.MaxParallel = 1
+
+	// A first wave of one, which fits; then a wave of two that queue on
+	// max_parallel, so whichever runs second starts on the slice the first
+	// spent. Which of the two that is, the scheduler decides.
+	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
+		{ID: "a", Prompt: "a", SystemPrompt: "s"},
+		{ID: "b", Prompt: "b", SystemPrompt: "s", After: []string{"a"}},
+		{ID: "c", Prompt: "c", SystemPrompt: "s", After: []string{"a"}},
+	}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := p.count(); got != 2 {
+		t.Errorf("the model was called %d times, want 2: the worker that started on a "+
+			"spent slice paid for a call the slice was certain to refuse", got)
+	}
+	if m.sum() != 300 {
+		t.Errorf("the parent counter holds %d, want the two rounds that were made", m.sum())
+	}
+	byID := map[string]subagent.Result{}
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+	if r := byID["a"]; r.Failed() {
+		t.Fatalf("the worker that fitted did not finish: %+v", r)
+	}
+	rounds := map[int]int{}
+	for _, id := range []string{"b", "c"} {
+		r := byID[id]
+		if r.Status != subagent.StatusBudget {
+			t.Errorf("worker %s = %+v, want it stopped on the slice", id, r)
+		}
+		rounds[r.Rounds]++
+	}
+	if rounds[1] != 1 || rounds[0] != 1 {
+		t.Errorf("rounds made by the second wave = %v, want one worker that crossed the "+
+			"slice in its round and one that started on the spent slice and made none", rounds)
+	}
+}
+
+// standingMeter is a seat's counter holding a refusal it already answered, as
+// the engine's meter does once a window it charged is full.
+type standingMeter struct{ countingMeter }
+
+func (s standingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	return toolloop.SpendOutcome{OK: false, Scope: "agent", Used: 120, Limit: 100}, true
+}
+
+// A REFUSAL THE SEAT ALREADY HOLDS STOPS EVERY WORKER BEFORE ITS CALL.
+//
+// The seat's counter refused a round — the parent's own, or a sibling's — and
+// its refused round is counted, so every later charge in that window is
+// refused whatever its size. A worker still to make its first round, or its
+// next one, used to make it, be billed, and be refused. And it is the SEAT's
+// refusal that is reported, never the worker's slice.
+func TestAWorkerStopsOnTheSeatsStandingRefusal(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	m := &meter{}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = standingMeter{countingMeter{m}}
+	cfg.ParentRemaining = 1000 // a slice with room: only the seat's refusal stands
+	cfg.Limits.MinTokensPerTask = 0
+
+	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
+		{Prompt: "a", SystemPrompt: "s"},
+		{Prompt: "b", SystemPrompt: "s"},
+	}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := p.count(); got != 0 {
+		t.Errorf("the model was called %d times on a seat whose refusal already stood", got)
+	}
+	for _, r := range results {
+		if r.Status != subagent.StatusFailed || !strings.Contains(r.Error, "agent") {
+			t.Errorf("a worker stopped by the seat's refusal = %+v, want failed naming the "+
+				"seat's budget rather than its own slice", r)
+		}
 	}
 }
 
@@ -1113,15 +1248,16 @@ func TestAnOrgRefusalIsNotBlamedOnTheChildsSlice(t *testing.T) {
 	}
 }
 
-func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
+func TestARoundTheParentRefusedKeepsItsShareOfTheSlice(t *testing.T) {
 	t.Parallel()
-	// A refusal is DEFINITE: nothing was charged. Keeping the reservation
-	// would shrink the slice for every sibling over a charge that never
-	// happened — which is the opposite polarity from an unreachable
-	// counter, where the charge may well have landed.
+	// A refusal is not a charge that never happened. The round was billed
+	// before the parent's counter judged it, so the counter records it and
+	// the slice keeps it: handing the reservation back left a sibling the
+	// room the refused round had already spent, and a sibling's round that
+	// "fitted" on top of it was paid for out of nothing.
 	//
-	// Observable only through a sibling: the second child fits the slice
-	// exactly when the first child's refused reservation came back.
+	// Observable only through a sibling: the second child would fit the
+	// slice exactly when the first child's refused round came back.
 	w := newWorld(t)
 	m := &meter{}
 	var once sync.Once
@@ -1142,22 +1278,49 @@ func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var ok, failed int
+	var byParent, bySlice int
 	for _, r := range results {
-		if r.Failed() {
-			failed++
-			if r.Status == subagent.StatusBudget {
-				t.Errorf("the survivor was refused by the slice, not the org: %+v", r)
-			}
-			continue
+		switch {
+		case !r.Failed():
+			t.Errorf("a child finished on a slice its refused sibling had already spent: %+v", r)
+		case r.Status == subagent.StatusBudget:
+			bySlice++
+		default:
+			byParent++
 		}
-		ok++
 	}
-	if ok != 1 || failed != 1 {
-		t.Fatalf("ok=%d failed=%d, want 1 and 1: %+v", ok, failed, results)
+	if byParent != 1 || bySlice != 1 {
+		t.Fatalf("refused by the parent=%d, by the slice=%d, want 1 and 1: %+v",
+			byParent, bySlice, results)
+	}
+	if m.sum() != 20 {
+		t.Errorf("the parent counter was charged %d, want both 10-token rounds", m.sum())
+	}
+}
+
+func TestAParentRefusalOutranksTheSlicesOwn(t *testing.T) {
+	t.Parallel()
+	// A round both the slice and the company refuse is the company's
+	// refusal. A slice is a share of the seat's room, and a worker reported
+	// as out of its slice sends an operator to a delegation limit while the
+	// company is out of tokens — the same outermost-first rule the counter
+	// follows between the company and the seat.
+	w := newWorld(t)
+	m := &meter{refuse: true}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{m}
+	cfg.ParentRemaining = 25 // slice = 5, so the 10-token round fits neither
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if !res.Failed() || res.Status == subagent.StatusBudget {
+		t.Errorf("a round the company refused was reported as the worker's own slice: %+v", res)
 	}
 	if m.sum() != 10 {
-		t.Errorf("the parent counter was charged %d, want 10", m.sum())
+		t.Errorf("the parent counter was charged %d, want the refused round's 10", m.sum())
 	}
 }
 
@@ -1288,7 +1451,7 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 			if r.Status != subagent.StatusNeverStarted || !r.Failed() || r.TimedOut() {
 				t.Errorf("a queued worker was not reported as never started: %+v", r)
 			}
-			if r.Rounds != 0 || r.SystemPrompt != "" {
+			if r.Rounds != 0 || r.SystemPrompt.Text != "" {
 				t.Errorf("a child that never started left a record of running: %+v", r)
 			}
 		}
@@ -1341,8 +1504,10 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 	if unreachable != 1 || budget != 1 {
 		t.Fatalf("unreachable=%d budget=%d, want 1 and 1: %+v", unreachable, budget, results)
 	}
-	if m.sum() != 0 {
-		t.Errorf("the parent counter was charged %d by a batch that never got through", m.sum())
+	// The round the slice refused still reached the parent's counter: it
+	// was spent. The one whose charge errored is the counter's to know.
+	if m.sum() != 60 {
+		t.Errorf("the parent counter was charged %d, want the 60 the slice refused", m.sum())
 	}
 }
 
@@ -1708,8 +1873,8 @@ func TestATemplateSuppliesThePersonaAndTheAnswerShape(t *testing.T) {
 	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
 		{ID: "a", Worker: "auditor", Prompt: "check the deploy"},
 	}})
-	if !strings.Contains(res.SystemPrompt, "meticulous auditor") {
-		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "meticulous auditor") {
+		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt.Text)
 	}
 	if res.Status != subagent.StatusOK {
 		t.Fatalf("status = %q: %+v", res.Status, res)
@@ -1883,6 +2048,64 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 	}
 }
 
+// A DEPENDENT'S USER MESSAGE CARRIES ITS OUTLINE: the preamble, one section per
+// answer it was given, and its own task — tiling the text exactly, which is
+// pinned byte for byte here because the outline must never change what the
+// worker is sent.
+func TestADependentsPromptIsOutlinedAroundTheAnswersItWasGiven(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		switch body := userText(req); {
+		case strings.Contains(body, "gather A"):
+			return answer("A says yes — ✅", 1, 1), nil
+		case strings.Contains(body, "gather B"):
+			return answer("B says no", 1, 1), nil
+		}
+		return answer("they disagree", 1, 1), nil
+	}}
+	results := run(t, baseConfig(t, w, p), subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", SystemPrompt: "s", Prompt: "gather A"},
+		{ID: "b", SystemPrompt: "s", Prompt: "gather B"},
+		{ID: "synth", SystemPrompt: "s", Prompt: "reconcile them\n\n## Output\none line", After: []string{"a", "b"}},
+	}})
+	user := results[2].UserPrompt
+	const want = "## Results you were given\n\n" +
+		"These are the answers from the tasks this one waited for. They are the input to your work.\n" +
+		"\n### a\n{\"result\":\"A says yes — ✅\"}\n" +
+		"\n### b\n{\"result\":\"B says no\"}\n" +
+		"\n---\n\n" +
+		"reconcile them\n\n## Output\none line"
+	if user.Text != want {
+		t.Fatalf("user message =\n%q\nwant\n%q", user.Text, want)
+	}
+	if !user.Valid() {
+		t.Fatalf("the outline does not tile the message: %+v", user.Sections)
+	}
+	var keys, titles []string
+	for _, s := range user.Sections {
+		keys, titles = append(keys, s.Key), append(titles, s.Title)
+	}
+	if !slices.Equal(keys, []string{"dependencies", "dependency_1", "dependency_2", "task"}) ||
+		!slices.Equal(titles, []string{"Results you were given", "a", "b", "Task"}) {
+		t.Errorf("sections = %v %v", keys, titles)
+	}
+	// The task's own "## Output" stays inside the task.
+	if last := user.Sections[len(user.Sections)-1]; !strings.Contains(
+		user.Text[len(user.Text)-last.Bytes:], "## Output") {
+		t.Errorf("the task's own heading escaped its section: %+v", user.Sections)
+	}
+	// A task with nothing to wait for is all task.
+	if first := results[0].UserPrompt; first.Text != "gather A" || len(first.Sections) != 1 ||
+		first.Sections[0].Key != "task" {
+		t.Errorf("an independent task's message = %+v", first)
+	}
+	// And the system prompt's outline travels with it.
+	if !results[2].SystemPrompt.Valid() || len(results[2].SystemPrompt.Sections) == 0 {
+		t.Errorf("the worker's system prompt has no outline: %+v", results[2].SystemPrompt.Sections)
+	}
+}
+
 // A TASK WHOSE INPUT NEVER ARRIVED IS SKIPPED, not run on nothing. Feeding a
 // dependent a missing answer produces a confident wrong one.
 func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
@@ -1918,9 +2141,16 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 	if results[2].Status != subagent.StatusOK {
 		t.Errorf("an unrelated task was skipped too: %+v", results[2])
 	}
-	// The skipped task never reached a model: two of the three did.
-	if p.count() != 2 {
-		t.Errorf("%d model calls, want 2 — a skipped task must cost nothing", p.count())
+	// The skipped task never reached a model. The other two did: `unrelated`
+	// once, and `gather` three times — its prose was not a submission, so
+	// the loop asked it twice more to finish before it ended `no_result`.
+	if p.count() != 4 {
+		t.Errorf("%d model calls, want 4 — a skipped task must cost nothing", p.count())
+	}
+	for _, req := range p.seen {
+		if strings.Contains(userText(req), "reconcile") {
+			t.Error("the skipped dependent reached a model")
+		}
 	}
 }
 
@@ -1981,9 +2211,46 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 		t.Errorf("an answer was synthesised: %+v", res.Output)
 	}
 	// The prose is still handed back: rounds the parent paid for are worth
-	// reading even when the last step was skipped.
-	if res.Text != "here is my thinking, at length" {
-		t.Errorf("the worker's prose was discarded: %q", res.Text)
+	// reading even when the last step was skipped. ONCE — the answer the
+	// worker gave its task, and not the two copies the finishing
+	// correctives drew out, which answered "call the tool" instead and
+	// would hand the parent the same report three times.
+	if n := strings.Count(res.Text, "here is my thinking, at length"); n != 1 {
+		t.Errorf("the worker's prose appears %d times, want once: %q", n, res.Text)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3 — one answer plus the two correctives' bound", res.Rounds)
+	}
+}
+
+// A WORKER THAT WROTE ITS ANSWER AS TEXT IS ASKED TO SUBMIT IT, rather than
+// handed back as `no_result`. Its loop finishes by `submit_result`, so prose is
+// not a finish there however complete it reads — and a parent whose worker
+// answered in the wrong channel would otherwise re-run the whole task.
+func TestAWorkerThatWroteItsAnswerAsTextIsAskedToSubmitIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			return say("```json\n{\"result\":\"the incident was a bad deploy\"}\n```", 1, 1), nil
+		}
+		return answer("the incident was a bad deploy", 1, 1), nil
+	}}
+	res := one(t, baseConfig(t, w, p), request())
+	if res.Status != subagent.StatusOK || res.Output["result"] != "the incident was a bad deploy" {
+		t.Fatalf("status = %q output = %+v, want the submitted answer", res.Status, res.Output)
+	}
+	if p.count() != 2 || res.Rounds != 2 {
+		t.Fatalf("%d model calls over %d rounds, want 2", p.count(), res.Rounds)
+	}
+	second := p.seen[1].Messages
+	if last := second[len(second)-1]; last.Role != llm.RoleUser ||
+		!strings.Contains(last.Content, "`"+subagent.SubmitTool+"`") {
+		t.Errorf("the second round opened on %+v, want the corrective naming %s",
+			last, subagent.SubmitTool)
+	}
+	if len(res.Narration) == 0 || !res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want the prose round marked declined", res.Narration)
 	}
 }
 
@@ -2431,6 +2698,10 @@ func (b blockingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOut
 	return b.inner.Spend(ctx, tokens)
 }
 
+func (b blockingMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	return b.inner.Refused(ctx)
+}
+
 // errOnceMeter fails the FIRST charge and serves the rest, so a test can put a
 // store blip in the middle of a batch.
 type errOnceMeter struct {
@@ -2447,8 +2718,20 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 	return e.inner.Spend(ctx, tokens)
 }
 
+func (e errOnceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	return e.inner.Refused(ctx)
+}
+
 // refuseOnceMeter refuses the FIRST charge and serves the rest, so a test can
-// watch what a definite refusal does to a shared reservation.
+// watch what a definite refusal does to a shared reservation. The refused
+// round is recorded on the inner counter like every other, as the fleet's
+// counter records one.
+//
+// It holds NO standing refusal ([refuseOnceMeter.Refused]), which is the one
+// way a real meter can refuse a charge and admit the next: the refusing window
+// turned over in between, which ends what the refusal made certain. Holding
+// one, every later worker would stop on the parent's refusal before its call,
+// and the slice's own record of the refused round would never be tested.
 type refuseOnceMeter struct {
 	inner toolloop.BudgetMeter
 	once  *sync.Once
@@ -2457,10 +2740,15 @@ type refuseOnceMeter struct {
 func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	var refused bool
 	r.once.Do(func() { refused = true })
-	if refused {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: 0, Limit: 0}, nil
+	got, err := r.inner.Spend(ctx, tokens)
+	if err != nil || !refused {
+		return got, err
 	}
-	return r.inner.Spend(ctx, tokens)
+	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: got.Used, Limit: got.Used - tokens}, nil
+}
+
+func (r refuseOnceMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+	return toolloop.SpendOutcome{}, false
 }
 
 // skillFor is a one-skill catalogue that fires only when its tool is in
@@ -2538,7 +2826,7 @@ func TestEveryChildIsReportedOnce(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("one worker produced %d telemetry calls", len(seen))
 	}
-	if seen[0].SystemPrompt == "" || seen[0].UserPrompt == "" {
+	if seen[0].SystemPrompt.Text == "" || seen[0].UserPrompt.Text == "" {
 		t.Error("the reported result carries no prompts, so a dashboard shows an empty phase")
 	}
 }
@@ -2603,11 +2891,8 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 //
 // The Result carries Executions and Narration keyed on the SAME round number,
 // which is the whole contract a consumer interleaves them on. Publishing the
-// executions alone left every delegated worker's card as bare tool rows with
-// nothing that asked for them, and pushed the worker's reasoning into the
-// dashboard's pre-narration fallback — where it renders under a heading
-// claiming the record predates rounds being kept apart, which is false: it is
-// what this build publishes for every worker.
+// executions alone would leave every delegated worker's card as bare tool rows
+// with nothing that asked for them, and the worker's reasoning nowhere on it.
 func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

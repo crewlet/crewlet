@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
@@ -89,10 +90,7 @@ func TestTheHeartbeatLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	r := &retention{

@@ -78,6 +78,12 @@ type AgentRunRequest struct {
 	// loop would execute against; see the package rule above.
 	Surface *tools.Surface
 
+	// Spend is what the calls Surface serves cost the engine, counted
+	// apart from this segment because they happen after it — see
+	// [BridgedSpend]. The launcher records its running total with every
+	// bridged call, for the segment that resumes from the run to pay.
+	Spend *BridgedSpend
+
 	// Round is the turn iteration this executor is, so the run's record and
 	// the resumed phase agree about which round they are in.
 	Round int
@@ -103,10 +109,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return calls(surface) },
+			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit,
+	// ITS OWN METER: every call this surface serves is the CLI's, made
+	// over the bridge after this segment has suspended and charged what it
+	// spent — see [BridgedSpend].
+	bridged := NewBridgedSpend()
+	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
 		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -114,6 +124,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	surface = built
 
 	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
+	// AND ASKED AGAIN once the brief exists, before anything is on the
+	// record: assembling it rewrites the prior rounds' payloads past their
+	// budgets with the seat's auxiliary model, charged to the same counters,
+	// and the rewrite can be what fills the window. Asked only at the top of
+	// the phase, that run was launched and paid for whole past the ceiling.
+	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
 	// will: a native pass publishes it from inside runPhase, which agent
 	// mode does not enter, and the resume's own record deliberately carries
@@ -131,8 +149,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface, roundCaps{})
 
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
-		Brief:   system + "\n\n" + user,
+		Brief:   system.Text + "\n\n" + user.Text,
 		Surface: surface,
+		Spend:   bridged,
 		Round:   round,
 	}); err != nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("launching the agent-mode executor: %w", err)
@@ -184,18 +203,21 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record, rather than having a delivery inferred from the prose
 // the CLI happened to end with.
-func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
-	answer string, bridged []ledger.Call,
+//
+// `history` is the turn's closed rounds, which its submission's citations read
+// beside the run's own calls — see [turn.Record].
+func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
+	state execstate.State, answer string, bridged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return bridged },
+			func() []ledger.Call { return turn.Record(history, bridged) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,
+	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, state.Round, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -223,10 +245,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 //
 // This used to hand `finishWork` a zero [toolloop.Result] while holding the
 // whole record in `bridged`, so the published event carried no response, no
-// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: with
-// nothing in the ledger and nothing in the joined response there is no
-// transcript to fall back on, and the "composing its first round" placeholder
-// is gated on a phase being live, which a completed one is not. An operator
+// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: it
+// draws a phase from its rounds, a record with nothing in its ledger has none
+// to draw, and the "composing its first round" placeholder is gated on a phase
+// being live, which a completed one is not. An operator
 // saw a decision word and a blank card for a run that made real tool calls.
 //
 // ONE ROUND, and that is not a stand-in for a number the engine failed to

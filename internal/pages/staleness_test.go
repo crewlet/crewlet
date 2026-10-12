@@ -24,13 +24,13 @@ import (
 func TestEveryPageReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	behind, err := statelogtest.LocalReaderBehind(pages.Domain{}, r.db.Replicated(),
+	behind, err := statelogtest.LocalReaderBehind(pages.Domain{}, r.db,
 		statelog.Position{Stream: pages.Domain{}.Stream().Name, Generation: 1, Seq: 1},
 		100_000)
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: behind})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db.Reader(), Log: behind})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}
@@ -91,6 +91,9 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Deploy Runbook", Body: "first body"})
+	// A NODE BEHIND ITS OWN LOG from here on: the save lands on the log and
+	// this node does not apply it, which is the state the floor is for.
+	r.holdApplier()
 	saved, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
 		pages.Save{BaseVersion: 1, Body: ptr("second body")})
 	if err != nil {
@@ -102,11 +105,11 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	// A READER THAT CAN WAIT, over the harness's own waiter — the one
 	// [newRoundTrip] builds is already at its position and never blocks,
 	// which would make "not yet applied" indistinguishable from applied.
-	waiting, err := statelogtest.LocalReaderOver(pages.Domain{}, r.db.Replicated(), r.waiter)
+	waiting, err := statelogtest.LocalReaderOver(pages.Domain{}, r.db, r.waiter)
 	if err != nil {
 		t.Fatalf("waiting read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: waiting})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db.Reader(), Log: waiting})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}

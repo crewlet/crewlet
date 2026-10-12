@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // The applier's own guards, over a real replicated estate.
@@ -24,7 +26,7 @@ import (
 
 type harness struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.ReplicatedHandle
 	applier *pages.Applier
 	seq     uint64
 
@@ -37,19 +39,15 @@ type harness struct {
 
 func newHarness(t *testing.T, skills pages.SkillDetector) *harness {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
 	return &harness{
 		t: t, db: db, applier: pages.NewApplier("node-a", skills, nil),
-		maxVariables: db.Replicated().Caps().MaxVariables,
+		maxVariables: db.Caps().MaxVariables,
 	}
 }
 
@@ -86,7 +84,7 @@ func (h *harness) applyAt(rec pages.MutationRecord, seq uint64) (
 		Payload:  body,
 		StoredAt: brokerAt,
 	}
-	err = h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	err = h.db.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		reason, gated, gErr := h.applier.Gated(h.t.Context(), tx, record)
 		if gErr != nil {
 			return gErr
@@ -109,7 +107,7 @@ func (h *harness) applyAt(rec pages.MutationRecord, seq uint64) (
 func (h *harness) count(table string) int {
 	h.t.Helper()
 	var n int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM `+table).Scan(&n)
 	}); err != nil {
@@ -122,7 +120,7 @@ func (h *harness) count(table string) int {
 func (h *harness) column(query string, args ...any) []string {
 	h.t.Helper()
 	var out []string
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(h.t.Context(), query, args...)
 		if err != nil {
 			return err
@@ -145,7 +143,7 @@ func (h *harness) column(query string, args ...any) []string {
 func (h *harness) scalar(query string, args ...any) string {
 	h.t.Helper()
 	var out sql.NullString
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&out)
 	}); err != nil {
 		return ""
@@ -318,7 +316,7 @@ func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	h := newHarness(t, nil)
 	evict := record(pages.EvictionSubject("node-b"), pages.OpEviction, "op-evict",
 		pages.Eviction{
-			V: pages.DocumentVersion, NodeID: "node-b", EvictedBy: "ops",
+			V: pages.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
 			EvictedAt: brokerAt,
 		}, pages.ScopeSet{Subject: true})
 	if _, _, err := h.apply(evict); err != nil {
@@ -339,7 +337,7 @@ func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	// eviction's whole history survives a replay.
 	readmit := record(pages.EvictionSubject("node-b"), pages.OpEviction,
 		"op-readmit", pages.Eviction{
-			V: pages.DocumentVersion, NodeID: "node-b", EvictedBy: "ops",
+			V: pages.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
 			EvictedAt: brokerAt, Readmitted: true,
 		}, pages.ScopeSet{Subject: true})
 	if _, _, err := h.apply(readmit); err != nil {
@@ -766,5 +764,29 @@ func TestARedeliveredSaveWritesNoSecondRevision(t *testing.T) {
 	}
 	if got := h.count("pages_revisions"); got != 3 {
 		t.Errorf("%d revisions after a genuine third save, want 3", got)
+	}
+}
+
+// A KIND NOBODY DECLARED FAULTS THE APPLY, rather than applying as nothing: the
+// dispatch has no case for it, and the applier's unconditional return after the
+// switch is what makes a writer's undeclared kind visible. It is not a gate,
+// and nothing is written.
+func TestAKindNobodyDeclaredFaults(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	rec := create("p-1", "ENG", "Runbook", "body")
+	rec.Subject.Kind = "nonesuch"
+	rec.OpID = "nonesuch-1"
+
+	_, gate, err := h.apply(rec)
+	if gate != "" {
+		t.Fatalf("a kind nobody declared was GATED as %q, which drops it knowingly; "+
+			"a writer's undeclared kind must fault", gate)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nonesuch") {
+		t.Fatalf("applying a kind nobody declared = %v, want a fault naming the kind", err)
+	}
+	if got := h.count("pages_heads"); got != 0 {
+		t.Errorf("the estate holds %d page(s) after a record that faulted", got)
 	}
 }

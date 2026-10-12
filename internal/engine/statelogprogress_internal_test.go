@@ -206,7 +206,7 @@ func TestACancelledApplierIsNotAHaltedOne(t *testing.T) {
 // HEALTH READ.
 //
 // The request path — every session validated, every seat a bound credential
-// acts as — compares [runningDomain.Lag] against [statelog.StallGrace], and
+// acts as — compares [runningLog.Lag] against [statelog.StallGrace], and
 // the lag was a backlog over a drain rate alone. That rate is measured over
 // apply time and nothing re-measures it while no batch runs, so an applier
 // that wedged with five records outstanding kept reading as a fraction of a
@@ -218,12 +218,12 @@ func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
-	var d runningDomain
+	var d runningLog
 	// Five records behind at the rate this applier last drained at: a
 	// fraction of a second, and the figure a wedge leaves standing.
 	d.lagNanos.Store(int64(lagDurationOf(105, 100, 20)))
 	d.progress.observe(at, seen(100, false), true)
-	d.progress.observe(at.Add(PositionHeartbeat), seen(100, false), true)
+	d.progress.observe(at.Add(statelog.PositionHeartbeat), seen(100, false), true)
 
 	if got := d.lagAt(at.Add(statelog.StallGrace - time.Second)); got > statelog.StallGrace {
 		t.Errorf("lag %s inside the grace: a node behind for less than it "+
@@ -253,7 +253,7 @@ func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 func TestACaughtUpNodeCarriesNoFrozenLag(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	var d runningDomain
+	var d runningLog
 	d.progress.observe(at, seen(100, false), false)
 	if got := d.lagAt(at.Add(statelog.StallGrace * 3)); got != 0 {
 		t.Errorf("a caught-up node reads %s behind after a quiet spell", got)
@@ -300,7 +300,7 @@ func TestAnUnreadableLogKeepsTheLastBacklogAnswer(t *testing.T) {
 	var p progress
 	p.observe(at, seen(100, false), true)
 	for beat := range 8 {
-		p.observe(at.Add(time.Duration(beat+1)*PositionHeartbeat), seen(100, false),
+		p.observe(at.Add(time.Duration(beat+1)*statelog.PositionHeartbeat), seen(100, false),
 			backlogOf(jetstream.LogStats{}, unreadable, 100, p.owed()))
 	}
 	if got := p.frozenFor(at.Add(statelog.StallGrace + time.Second)); got <= statelog.StallGrace {
@@ -336,16 +336,16 @@ func seen(seq uint64, deferred bool) coord.DomainPosition {
 func TestAHeldRecordIsNotAWedge(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	var d runningDomain
+	var d runningLog
 	checkpoint := uint64(100)
 	for beat := range 12 {
 		pos := coord.DomainPosition{
 			Seq: checkpoint, AppliedThrough: 99, Deferred: 1,
 		}
-		d.progress.observe(at.Add(time.Duration(beat)*PositionHeartbeat), pos, true)
+		d.progress.observe(at.Add(time.Duration(beat)*statelog.PositionHeartbeat), pos, true)
 		checkpoint += 3
 	}
-	end := at.Add(11 * PositionHeartbeat)
+	end := at.Add(11 * statelog.PositionHeartbeat)
 	if end.Sub(at) <= statelog.StallGrace {
 		t.Fatalf("the looks span %s, inside the %s grace: the case proves nothing",
 			end.Sub(at), statelog.StallGrace)

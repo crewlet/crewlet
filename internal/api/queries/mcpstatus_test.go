@@ -45,15 +45,16 @@ mcp_servers:
       Authorization: Bearer literal-linear-secret
 `
 
-// presentNode puts one node on the lease table with the heartbeat a node
-// publishes, or — with no status — one whose heartbeat carried none.
+// presentNode puts one node on the lease table with the heartbeat it
+// publishes, or — with no status — the placement half alone, which is what a
+// beat whose status hook overran its budget carries.
 func presentNode(t *testing.T, backend coord.Backend, id string, status *coord.NodeStatus) {
 	t.Helper()
 	meta := map[string]any{"roles": []string{"seats"}}
 	if status != nil {
 		meta[coord.StatusKey] = status.Meta()
 	}
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
 		Owner: id + ":1", TTL: time.Minute, Meta: meta,
 	}); err != nil {
 		t.Fatal(err)
@@ -69,9 +70,9 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	return queries.Sources{Coord: backend, Company: companySource(t, cfg)}
 }
 
-// mcpFleet is two upgraded nodes and one older one: github started on both
-// upgraded nodes and failed for one seat on node-b; docs started on node-a
-// alone; linear started nowhere.
+// mcpFleet is two reporting nodes and one whose last heartbeat carried no
+// status: github started on both reporting nodes and failed for one seat on
+// node-b; docs started on node-a alone; linear started nowhere.
 //
 // A NODE REPORTS THE FAILING SEAT BY ITS ID, and the answer names it by its
 // handle.
@@ -159,10 +160,11 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 	}
 }
 
-// A NODE THAT PUBLISHED NO STATUS HAS CELLS THAT ARE UNKNOWN, NEVER ZERO. A row
-// of zeros under its name would read as "started nothing here" — the confident
-// zero the fleet answer is written to avoid. A node that published a status
-// naming no server DID say: it started none.
+// A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. Its last heartbeat carried no
+// status (the status hook overran the beat), and a row of zeros under its name
+// would read as "started nothing here" — the confident zero the fleet answer is
+// written to avoid. A node that published a status naming no server DID say:
+// it started none.
 func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	t.Parallel()
 	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
@@ -190,6 +192,25 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 		if row.State != queries.MCPNotStarted {
 			t.Errorf("%s = %s beside a node that reported starting nothing, want not_started",
 				row.Name, row.State)
+		}
+	}
+}
+
+// A PUBLISHED STATUS WITH NO SERVERS IS "STARTED NONE", not "did not say": a
+// node reports what it started beside every status it publishes, so a status
+// carrying no rows is a node that started nothing — a reported column, and a
+// server nobody started is `not_started` rather than unknown.
+func TestAStatusWithNoServersStartedNone(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{InFlight: 1})
+	got := askMCPStatus(t, mcpSources(t, backend))
+	if want := []queries.MCPStatusNode{{ID: "node-a", Reported: true}}; !slices.Equal(got.Nodes, want) {
+		t.Fatalf("nodes = %+v, want %+v", got.Nodes, want)
+	}
+	for _, row := range got.Servers {
+		if row.State != queries.MCPNotStarted {
+			t.Errorf("%s = %s on a node that started none, want not_started", row.Name, row.State)
 		}
 	}
 }

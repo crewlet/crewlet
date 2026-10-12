@@ -313,7 +313,7 @@ var samInvited = iamdomain.SeatInvitation{
 	CreatedAt: pinned.Add(-time.Hour), ExpiresAt: pinned.Add(6 * 24 * time.Hour),
 }
 
-// AN INVITED SEAT CANNOT BE TAKEN OUT OF THE COMPANY (ADR-0026).
+// AN INVITED SEAT CANNOT BE TAKEN OUT OF THE COMPANY (ADR-0032).
 //
 // A person holds a human seat for as long as they exist, so every invitation
 // names the seat its redemption binds and HOLDS it, as it holds its address.

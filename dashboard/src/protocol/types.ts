@@ -21,23 +21,28 @@
  *    silence over a store it never reached.
  */
 
+import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
+import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import type { StopReason } from "../contract/stops.ts";
 import type {
   IntegrationsAnswer,
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
-import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
+import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
 import type {
   LinkedFromStatus,
@@ -132,13 +137,9 @@ export interface EventRecord {
   failed?: boolean;
   /**
    * The unit of work this row's run was an attempt at — see `adr/0017`.
-   *
-   * OFF THE PROMOTED COLUMN server-side, and it is the one promoted value that
-   * is not a copy of a tag: migration `0029` backfilled the column from
-   * `turn_id`, which is where the work key lived before the split, and
-   * deliberately left the stored payloads and tags blobs alone. So a reader
-   * going through `payload.work_key` answers nothing for every turn written
-   * before the split, while this field answers for all of them.
+   * Off the promoted column server-side. Absent on an event no run published,
+   * and on one from a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
 }
@@ -183,16 +184,16 @@ export interface ErrorInfo {
 
 /** One tool the model called, as the phase event records it. */
 export interface ToolExecution {
-  name?: string;
-  tool?: string;
-  /** The round this call belongs to. THE ordering key — see `roundsOf`. */
-  round?: number;
-  arguments?: unknown;
-  args?: unknown;
-  result?: unknown;
-  output?: unknown;
+  name: string;
+  /** The round this call belongs to. THE ordering key — see `rounds()`. */
+  round: number;
+  arguments: unknown;
+  /** What the tool returned — or, on a failed call, what it failed with. */
+  result: string;
+  /** False on a call that failed. */
+  success: boolean;
+  /** Present only on a failed call, repeating its `result`. */
   error?: string;
-  failed?: boolean;
   /** When the call was handed to the tool (RFC 3339, UTC), and how long it
    *  took. Both absent on a row nothing timed. */
   started_at?: string;
@@ -203,10 +204,37 @@ export interface ToolExecution {
   server?: string;
 }
 
+/**
+ * One part of a prompt as the builder that wrote it marked it out
+ * (`types.PromptSection`): a stable snake_case key, the title a reader sees,
+ * and how many UTF-8 BYTES of the prompt it spans.
+ *
+ * A prompt's sections TILE it exactly, in order: their bytes add up to the
+ * prompt's length in UTF-8, every boundary falls between two characters, and a
+ * headed span starts with its own heading line. A reader that finds a map
+ * breaking any of that derives the outline from the headings instead
+ * (`lib/promptmap.ts`), because a map that does not tile would mis-slice.
+ */
+export interface PromptSection {
+  key: string;
+  title: string;
+  bytes: number;
+  /**
+   * The span begins with its own heading line, whose text is `title` — what
+   * the builder's `Heading` writes. False or absent for a part that opens
+   * with no heading of its own (a `Lead`: a persona, a task, a trigger's
+   * text), whose first line may still be a heading somebody else wrote and
+   * the span QUOTES. The engine writes it only when true.
+   */
+  headed?: boolean;
+}
+
 /** One message of the prompt a phase was given. */
 export interface PromptMessage {
   role?: string;
   content?: string;
+  /** This message's own section map; absent from an engine that wrote none. */
+  sections?: PromptSection[] | null;
 }
 
 /**
@@ -227,6 +255,14 @@ export interface RoundNarration {
   round?: number;
   reasoning?: string;
   content?: string;
+  /**
+   * The model answered this round in prose and called no tool, in a phase
+   * that had to end in a tool call (a submission tool, or a required call).
+   * Absent means false. A later round means the engine asked again; a
+   * declined last round of a settled phase means it ended without its
+   * submission.
+   */
+  declined?: boolean;
 }
 
 /** One round of a phase's tool loop, as the engine timed it (`types.PhaseRound`). */
@@ -241,6 +277,12 @@ export interface PhaseRound {
   cache_read_tokens: number;
   cache_write_tokens: number;
   tool_calls: number;
+  /**
+   * Why the model stopped writing this round's response. Absent where its
+   * backend reported none — "not reported", never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
+   * `paused` each END the phase; see `contract/stops.ts`.
+   */
+  stop_reason?: StopReason;
 }
 
 /** The tool call a phase is running right now (`types.RunningCall`). */
@@ -318,8 +360,8 @@ export interface LiveCall {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   phase: string;
@@ -391,6 +433,34 @@ export interface LiveCall {
   updated_at: string;
   /** When the call began. Unlike `updated_at`, it never moves. */
   started_at?: string;
+  /**
+   * The version of the copy this call holds of each heavy field
+   * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
+   * when its version moved; the store fills in the rest from what it holds.
+   * Always present, on every surface that carries a call.
+   */
+  versions: CallVersions;
+}
+
+/** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
+export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
+
+/** The `live_call{agent_id}` answer: one seat's call in flight, whole, or
+ *  null — asked and answered by the seat's AGENT ID, the key every overlay is
+ *  merged by, never by its name, which two seats may share. */
+export interface LiveCallAnswer {
+  agent_id: string;
+  /** The handle the seat answers to — a label, never what the answer is
+   *  paired by. */
+  handle: string;
+  live_call: LiveCall | null;
+  /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
+   *  present beside a null call too. The answer can reach the tab after a push
+   *  that was generated later, so one behind what the store has applied is
+   *  dropped when the slot has since been cleared or taken by another call,
+   *  and otherwise brings only the heavy fields it holds at a newer version
+   *  (`Store.applyLiveCall`). */
+  live_call_seq: number;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or
@@ -411,10 +481,12 @@ export interface BudgetWindow {
   /** The ceiling, ABSENT where nothing caps the window — never 0. The live
    *  push lists capped windows only, so there it is always present. */
   limit?: number;
-  /** When the window last turned a charge away, in UTC; absent while it has
-   *  not. The gate's own record, kept in the shared counter beside the spend,
-   *  so every node reports the same one; it clears on the scope's next
-   *  admitted charge or when the window turns over. */
+  /** When the window last turned a call away, in UTC; absent while it has
+   *  not: a charge it refused, or work turned away unsent because the window
+   *  was already full (a turn's next call, a parked delivery, a person's
+   *  question, a reflection pass). The gate's own record, kept in the shared
+   *  counter beside the spend, so every node reports the same one; it clears
+   *  on the scope's next admitted charge or when the window turns over. */
   refused_at?: string;
   /** The engine's judgement of the window. The client computes none. */
   state: BudgetState;
@@ -439,6 +511,17 @@ export interface Overlay {
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
+  /** Orders the `live_call` slot across calls and across a clear: the engine's
+   *  own monotonic sequence read when the seat's call last changed — set,
+   *  folded, frozen or cleared to null — carried on every surface the call is,
+   *  a null call included. A tab records the newest it has applied per seat,
+   *  and a push or an answer whose sequence is behind it changes the slot only
+   *  where the slot is still that same call — and then only by a heavy field
+   *  at a newer version — so a `live_call` answer that a clearing or newer-call
+   *  push overtook on the wire cannot put an older call back on screen. Reset
+   *  from each snapshot; comparable only within one node's projection, the
+   *  only one a socket reads between snapshots. */
+  live_call_seq?: number;
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
   /** The turn the seat is on, or null when it is on none. Always present, for
@@ -491,7 +574,7 @@ export interface SandboxEntry {
   sandbox_id: string;
   task: string;
   /** The run record's own word: `launching`, `running`,
-   *  `awaiting_clarification` or `reseed`. */
+   *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
   question?: string;
@@ -505,7 +588,7 @@ export interface SandboxEntry {
 }
 
 /**
- * The five statuses a run record can hold.
+ * The six statuses a run record can hold.
  *
  * THERE IS NO `done` OR `failed` HERE, and that is the engine's shape rather
  * than an omission: a run's record is DELETED once the run settles and its box
@@ -515,7 +598,7 @@ export interface SandboxEntry {
  * reason — never on this row.
  */
 export type SandboxStatus =
-  "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
+  "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
 export interface SandboxRun {
@@ -523,11 +606,11 @@ export interface SandboxRun {
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. Empty on a row an older build wrote, and on
-   *  a run the live projection knows of before its durable row is read. */
+   *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
+   *  before its durable row is read. */
   launch_id?: string;
-  /** The unit of work behind that run. Absent on a row written before the
-   *  identities were split. */
+  /** The unit of work behind that run. Absent on a turn with no ledgerable
+   *  trigger, and on a live entry whose durable row has not been read yet. */
   work_key?: string;
   agent_handle: string;
   role: string;
@@ -637,6 +720,11 @@ export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
   agent_id: string;
+  /** A PERSON's row rather than a seat's: what the auxiliary model spent for
+   *  the human seat `handle` names — a question answered on the operator
+   *  surface, or a background pass of a unit they lead. No `agent_id`, and on
+   *  a named window no `turns`. */
+  person?: boolean;
   by_phase: Record<string, Bucket>;
   /** How many of the seat's turns ENDED in the window, and how many failed —
    *  on a named window only. The live window holds phase records and cannot
@@ -732,9 +820,21 @@ export interface SeriesBand extends Bucket {
   handle?: string;
   /** How many seats spent in a UNIT band over the window. */
   seats?: number;
+  /**
+   * A UNIT band split by the seats that spent in it, biggest first, summing to
+   * the band. Absent on every other grouping and on the residual row.
+   */
+  parts?: SeriesPart[];
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
   folded: number;
+}
+
+/** One seat's share of a unit band (`tokens.GroupPart`). */
+export interface SeriesPart extends Bucket {
+  /** The seat as `group: seat` keys its band: its handle, else its role. */
+  group: string;
+  handle?: string;
 }
 
 export interface SeriesPoint extends Bucket {
@@ -794,7 +894,10 @@ export interface EventBar {
  */
 export interface EventSeries {
   bucket: "minute" | "hour" | "day";
-  /** The window COVERED, snapped outward to whole buckets. */
+  /** The window COVERED, snapped outward to whole buckets — and never below
+   *  the first whole bucket inside the engine's 30-day history, so a window
+   *  the history clips starts later than it was asked to, and one lying wholly
+   *  below that bucket comes back empty (`since` equal to `until`, no bars). */
   since: string;
   until: string;
   /** Every bucket in the window, INCLUDING the empty ones. */
@@ -917,14 +1020,27 @@ export interface ConfigRole {
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
   contact?: Record<string, string>;
   availability?: string;
+  /**
+   * How an agent seat is drawn: a Crewlet character and a colour, each
+   * optional, an absent one the first of its list in `contract/avatar.ts`.
+   * Agent seats only; the engine refuses it on a human seat.
+   */
+  avatar?: { character?: string; color?: string; [key: string]: unknown };
   /** Server name to variable name to a `${VAR}` reference or the mask. */
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   integrations?: ConfigRoleIntegrations;
-  /** A root seat's own tracker project; a seat inside a unit takes its unit's. Guarded. */
+  /**
+   * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
+   * itself and never under `integrations:`; a unit member takes its unit's.
+   * Guarded.
+   */
   project?: string;
-  /** A root seat's own knowledge container, as [project]. Guarded. */
+  /**
+   * The knowledge container a root-level seat writes in, beside `project`.
+   * Guarded.
+   */
   space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
@@ -943,7 +1059,11 @@ export type HumanContactKey =
   | "github_login"
   | "gitlab_username";
 
-/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
+/**
+ * A seat's own integration blocks, as `config.RoleIntegrations` writes them:
+ * the chat apps it speaks as and the GitHub App it acts as. Its project and
+ * space are not here — they are [ConfigRole]'s own `project` and `space`.
+ */
 export interface ConfigRoleIntegrations {
   github?: {
     tier?: string;
@@ -1146,6 +1266,12 @@ export interface OrgSeat {
    * reader without `config:read`.
    */
   tool_sources?: string[];
+  /**
+   * The Crewlet character and the colour this agent seat is drawn as, as
+   * the engine resolved them: its defaults are already filled in. Absent on
+   * a human seat, which is drawn as the person it is.
+   */
+  avatar?: { character: string; color: string };
 }
 
 /**
@@ -1183,10 +1309,10 @@ export interface OrgUnit {
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
- * `derived` is optional because an engine older than the field serves the
- * projection without it. A screen reading one without `derived` has the
- * authored tree and nothing else: it may show what the document says, and it
- * must not reconstruct what the engine would conclude from it.
+ * `derived` is absent only on `{}`, a node running no company, and comes from
+ * the same document as the tree beside it in the same call, so the two pair
+ * by construction. A screen never reconstructs what it says from the
+ * authored tree: `lib/seats.ts` lays it over the tree as the authority.
  */
 export interface OrgProjection {
   name?: string;
@@ -1443,6 +1569,12 @@ export interface ScheduleRunsAnswer {
 export interface FleetNode {
   id: string;
   roles: string[];
+  /**
+   * How the node's broker takes part in the fleet's — derived from its own
+   * `stream` block, never from its roles. `unknown` for a node advertising a
+   * kind this build does not know (a newer build's).
+   */
+  broker: BrokerKind | string;
   labels?: Record<string, string> | null;
   /** The lease's fencing token — node id plus a per-process suffix. */
   owner?: string;
@@ -1488,6 +1620,95 @@ export interface FleetNode {
   started_at?: string;
   posture?: string;
 }
+
+/**
+ * The fleet answer's object-store block — `queries.FleetObjects`.
+ *
+ * THE ENGINE'S OWN RENDERING IS THIS SCREEN'S FIXTURE: the card's suite reads
+ * `internal/api/testdata/objects_answer.json`, which the Go renderer writes,
+ * so a field renamed on either side fails a test until the other follows it.
+ */
+
+/** One of [OBJECTS_STATES]. */
+export type ObjectsState = (typeof OBJECTS_STATES)[number];
+
+/** One collection pass: what the store held, and what no row named any more. */
+export interface ObjectCollect {
+  at: string;
+  /** Listed the whole store and judged every object old enough to judge. */
+  completed: boolean;
+  listed: number;
+  /** Past the day's grace, and so judged. */
+  aged: number;
+  deleted: number;
+  referenced: number;
+  /** Uploads begun more than a day ago and never finished, abandoned. */
+  abandoned: number;
+  /** Why the pass stopped judging; absent when it ran in full. Its counts stand either way. */
+  skipped?: string;
+  /** What kept the pass from abandoning unfinished uploads; the collection stands. */
+  sweep_error?: string;
+  error?: string;
+}
+
+/** One file whose bytes the store cannot give back. */
+export interface ObjectMissingFile {
+  /** The object the file's row names. */
+  object: string;
+  /** The file, as `PROJECT/path`. */
+  named_by: string;
+  /** The store holds it with the wrong bytes, rather than not at all. */
+  damaged?: boolean;
+}
+
+/** What an audit that ran to its end found. */
+export interface ObjectFindings {
+  at: string;
+  /** Over an estate that was complete; when false the counts are floors. */
+  completed: boolean;
+  referenced: number;
+  missing: number;
+  damaged: number;
+  /** The first hundred files that cannot be read; `missing` + `damaged` is the whole count. */
+  missing_files?: ObjectMissingFile[];
+}
+
+/** The last audit attempt: every object a row names, asked of the store. */
+export interface ObjectAudit {
+  at: string;
+  /** Asked about every named object, over an estate that was complete. */
+  completed: boolean;
+  referenced: number;
+  missing: number;
+  damaged: number;
+  error?: string;
+  /**
+   * What the last audit to run to its end found — this attempt, or the one
+   * before it when this one failed. Absent before any has.
+   */
+  found?: ObjectFindings;
+}
+
+/** The collector's last report, every field but the passes present. */
+export interface ReportedObjects {
+  state: "reported";
+  /** `nats`, or `s3:<endpoint>/<bucket>/<prefix>` — the store the fleet agreed on. */
+  backend: string;
+  /** The data node that ran the passes. */
+  node: string;
+  /** Absent until a pass of that kind has ended. */
+  collect?: ObjectCollect;
+  audit?: ObjectAudit;
+}
+
+/**
+ * Where the company's files are kept, and what the collector last found.
+ *
+ * THREE STATES NAMED APART rather than folded into an empty report: a store
+ * that would not give the record up, a fleet whose collector has not reported
+ * yet, and a report.
+ */
+export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | ReportedObjects;
 
 /**
  * The state log's retention document, as `crewlet retention status --json` and
@@ -1787,11 +2008,9 @@ export interface FleetSeatLease {
   expires_in?: number;
   /**
    * Since when `node` has held it: the tenure's start (RFC 3339, UTC, the
-   * coordination store's clock), which a renewal does not move. Absent for a
-   * lease written by a build older than the stamp — its start was never
-   * recorded, and absent is not "now".
+   * coordination store's clock), which a renewal does not move.
    */
-  acquired_at?: string;
+  acquired_at: string;
 }
 
 export interface FleetDutyLease {
@@ -1809,6 +2028,8 @@ export interface FleetAnswer {
   this_node: string;
   /** The epoch every node is meant to converge on. A number, not an id. */
   target_epoch: number;
+  /** Where the company's files are kept; absent where the node reads no record. */
+  objects?: FleetObjects;
 }
 
 // ---------------------------------------------------------------------------
@@ -2274,6 +2495,38 @@ export interface WorkView {
   count_refused?: string;
 }
 
+/** One file kept in a project, as a listing draws it — everything but the
+ *  key of the object holding its bytes, which only a download reads. */
+export interface WorkFile {
+  project: string;
+  path: string;
+  content_type?: string;
+  hash?: string;
+  size: number;
+  /** What `If-Match` takes back, as the download's ETag carries it. */
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_by?: string;
+  updated_at: string;
+  /** Set on a removed file, which only a listing asking for them returns. */
+  removed_by?: string;
+  removed_at?: string;
+}
+
+export interface WorkFilesAnswer {
+  project: string;
+  files: WorkFile[];
+  /** The path to pass as `after` for the next page; absent on the last. */
+  next?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkViewsAnswer {
   views: WorkView[];
   read_level?: ReadLevel;
@@ -2552,7 +2805,7 @@ export interface WorkPersonState {
   version: number;
   /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
    *  screen offers only the presets the write accepts. */
-  max_snooze_ahead?: number;
+  max_snooze_ahead: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2649,8 +2902,8 @@ export interface WorkItemTurn {
    *  `phases` lists it too — it ran — so a card marks that chip rather than
    *  ticking every phase beside a pill that names none. */
   failed_in?: string;
-  /** What it did, in the agent's own words. Absent on a turn an older build
-   *  recorded. */
+  /** What it did, in the agent's own words. Absent when the turn failed or
+   *  parked before any segment wrote one. */
   summary?: string;
   /** What the newest review that sent the work back asked for. */
   review?: string;
@@ -3163,34 +3416,54 @@ export interface TurnAnswer {
    *  part. */
   coverage?: Coverage;
   /** Which of them RAN it: the nodes whose own store held any of its events,
-   *  sorted. Absent from an older node's answer. */
-  nodes?: string[];
+   *  sorted — empty when no answering node held them yet. */
+  nodes: string[];
 }
 
 /**
- * What a running coding run has said so far, read from its box by the node
- * that owns it (`sandbox.Output`). Redacted by the engine; the LAST 8 KiB.
+ * What a running coding run has said, read from its box by the node that owns
+ * it (`sandbox.Output`), redacted by the engine: what the asker's CURSOR lacks
+ * — the text after the offset it holds through (`start`), or on `reset` the
+ * last 256 KiB (what the record will hold) in whole lines, which replaces what
+ * it held. Offsets are UTF-8 bytes of the reading named `epoch`; `end` and
+ * `digest` go back on the next request.
+ *
+ * `epoch`, `start`, `end` and `digest` are ALWAYS PRESENT, 0 included — a
+ * reading that has settled nothing yet answers at end 0 and is followed from
+ * start 0, and an offset the engine left out at 0 once read as absent, so a
+ * delta from 0 was taken for one that did not follow and thrown away.
  */
 export interface SandboxOutput {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
-  /** The text lost its front to the bound. */
+  /** Output came before what this answer carries and is not in it. */
   cut: boolean;
   /** When the box was read, on the owning node's clock. */
   as_of: string;
   /** The job is over and waiting to be collected; it will not grow again. */
   finished: boolean;
+  epoch: string;
+  start: number;
+  end: number;
+  digest: string;
+  /** The text replaces what the asker holds rather than following it. */
+  reset?: boolean;
+  /** The owner's reading began after the job's own start. */
+  front?: boolean;
+  /** Bytes written but not shown yet, until their redaction is settled. */
+  held?: number;
 }
 
 /**
  * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
- * tail of that job while it runs, `not_running` with the record's own status
- * once it is not, or the owning node NAMED where it did not answer
- * (`owner_silent`).
+ * tail of that job while it runs, `launching` while its box is still being
+ * made, `not_running` with the record's own status once it is not,
+ * `box_paused` for a running record whose box is paused (never woken to be
+ * read), or the owning node NAMED where it did not answer (`owner_silent`).
  */
 export interface SandboxTailAnswer {
-  outcome: "tail" | "not_running" | "owner_silent";
+  outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /** The node that owns the run — the one that answered, or did not. */
@@ -3243,11 +3516,10 @@ export interface RevisionMeta {
   /**
    * WHAT `created_by` names, in the engine's one vocabulary of authors
    * (`iam.ActorKind`): `agent`, `human`, `operator` or `system` — the last for
-   * the engine's own write (a boot seed, the reconcile loop). EMPTY when
-   * nobody recorded it, and a screen shows that as "not recorded" rather than
-   * picking a kind. A kind a newer engine adds arrives as itself, so this is a
-   * string rather than a closed union a newer value would silently fall
-   * outside of.
+   * the engine's own write (a boot seed, the reconcile loop). Always present:
+   * the engine refuses to store a revision that does not say who wrote it. A
+   * kind a newer engine adds arrives as itself, so this is a string rather
+   * than a closed union a newer value would silently fall outside of.
    */
   created_by_kind: string;
   /** The credential the revision was written through — a machine token's
@@ -3440,7 +3712,7 @@ export interface SetupToolState {
    * satisfied and has nothing left to type: both acts that produce an app
    * happen at GitHub, from that agent's own row.
    */
-  form_complete?: boolean;
+  form_complete: boolean;
   inbound_path?: string;
   public_url?: string;
   /** This build runs a provisioning pass for this vendor. */
@@ -3580,16 +3852,22 @@ export interface SetupRun {
 export interface SetupListing {
   tools: SetupToolState[];
   /**
-   * Where a browser and a third-party app reach this deployment.
+   * Where a THIRD-PARTY APP reaches this deployment: the address every
+   * webhook, Slack request URL and GitHub App manifest on this screen is
+   * built on. The public listener's `api.public.external_url` where
+   * `api.public` is configured, and `api.external_url` otherwise —
+   * `config_path` names which key it was read from, since there are two once
+   * a public listener is set (the engine's `config.API.WebhookBase` and
+   * `WebhookBaseKey`). NEVER the address a person or a cookie uses: that is
+   * always `api.external_url`, which a vendor's address may not be.
    *
    * ONE FIELD WHERE THERE WERE FOUR. While this was a key in the company
-   * document — a Tier B pointer a node resolved per epoch — the screen also needed
-   * `present`, `resolved` and the variable's `reference`, because "configured
-   * and resolving to nothing" was a state a banner had to name. It is
-   * `api.external_url` now: Tier A, required once the API is served, and
-   * resolved before the file is decoded. A node serving this screen at all
-   * has an address, so the three fields that described its absence described
-   * a state that can no longer occur.
+   * document — a Tier B pointer a node resolved per epoch — the screen also
+   * needed `present`, `resolved` and the variable's `reference`, because
+   * "configured and resolving to nothing" was a state a banner had to name.
+   * Both keys are Tier A, required on a node serving this screen and resolved
+   * before the file is decoded, so a node answering at all has an address and
+   * those three fields described a state that can no longer occur.
    */
   external_url: {
     value: string;
@@ -3742,12 +4020,16 @@ export interface InboxChange {
 }
 
 /** The named answers the socket's request/response channel serves. */
-/** One field's before and after, AS TEXT — every renderer of a delta wants
+/** One field's move, AS TEXT — every renderer of a delta wants
  *  "todo → in_progress", and the typed value is on the row for anything that
- *  needs it. */
+ *  needs it. A SET (watchers, an edge kind, tags) carries what it gained and
+ *  lost instead, each sorted and each member whole, with `from` and `to`
+ *  empty (`tracker.Delta`). */
 export interface WorkDelta {
   from: string;
   to: string;
+  added?: string[];
+  removed?: string[];
 }
 
 /** One commit, as the activity feed renders it.
@@ -3915,7 +4197,7 @@ export interface WorkMyWork {
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
-  totals?: WorkMyWorkTotals;
+  totals: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -4121,8 +4403,8 @@ export interface TurnRow {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   agent_id?: string;
@@ -4184,10 +4466,12 @@ export interface TurnWorkItem {
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START, and `null` on the last
-   *  page — present only while more turns lie past this one. The fleet's, so
-   *  it can be present on an empty page: where a node's page stopped, with
-   *  nothing above it left to show. */
+  /** The cursor to resume from — an OPAQUE token, handed back as `before`
+   *  exactly as it came and never built from a row, since it names where the
+   *  page's last turn is listed and that turn's id rather than any field a row
+   *  carries — and `null` on the last page, present only while more turns lie
+   *  past this one. The fleet's, so it can be present on an empty page: where
+   *  a node's page stopped, with nothing above it left to show. */
   next: string | null;
   /** Which nodes the page was merged from. */
   coverage?: Coverage;
@@ -4225,6 +4509,18 @@ export interface Viewer {
    *  "" for a caller bound to no seat, and when their team and every team
    *  above it owns none. */
   project: string;
+  /** Whether this caller's credential may CHANGE the company document —
+   *  the engine's own `config.APIAuth.MayWriteCompany`, the rule its config
+   *  surface refuses a write with. False for an anonymous caller, and for
+   *  every credential a managed document's `api.auth.company_writers` does
+   *  not list (ADR-0030): a person's session, a machine token and a lead
+   *  among them. It says nothing about authority — the `config:write` grant,
+   *  or a lead's subtree, still decides whether this caller may write at all. */
+  config_writer: boolean;
+  /** The Tier A token ids that alone may change a managed company document —
+   *  who manages it — and EMPTY when it is not managed. An anonymous caller
+   *  is told none. */
+  config_managed_by: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -4563,7 +4859,9 @@ export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
+  live_call: LiveCallAnswer;
   agent_memory: AgentMemory;
+  agent_episode: AgentEpisode;
   memory_overview: MemoryOverview;
   events: EventsPage;
   event_series: EventSeries;
@@ -4576,6 +4874,7 @@ export interface QueryMap {
   token_series: TokenSeries;
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
+  fleet_broker: FleetBrokerAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;
   backups: BackupsAnswer;
@@ -4591,6 +4890,7 @@ export interface QueryMap {
   work_comments: WorkCommentsAnswer;
   work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
+  work_files: WorkFilesAnswer;
   /** Every saved view a viewer can see, across every container. */
   work_saved_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;

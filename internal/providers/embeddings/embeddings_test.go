@@ -88,11 +88,15 @@ func vectorBody(width int) string {
 		`"embedding":[` + strings.Join(parts, ",") + `]}],"model":"m"}`
 }
 
+// openAILimits are text-embedding-3's, as config.EmbeddingModels resolves
+// them: the limits every test here runs under unless it is about limits.
+var openAILimits = embeddings.Limits{InputBytes: 8192, BatchInputs: 2048, BatchBytes: 300_000}
+
 func provider(t *testing.T, s *server, width int) *embeddings.Provider {
 	t.Helper()
 	p, err := embeddings.New(embeddings.Config{
 		Model: "text-embedding-3-small", Dimensions: width,
-		APIKey: "sk-test", BaseURL: s.url,
+		APIKey: "sk-test", BaseURL: s.url, Limits: openAILimits,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -205,17 +209,44 @@ func TestARefusedCallIsAnErrorNotAnEmptyVector(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a 401 came back as %v with no error", got)
 	}
+	// A BAD KEY IS THE OPERATOR'S TO FIX, and says so: no input is at
+	// fault, so a caller that isolates refused inputs must not read it as
+	// one.
+	if !errors.Is(err, embeddings.ErrConfiguration) || errors.Is(err, embeddings.ErrRefused) {
+		t.Errorf("a 401 classified as %v, want ErrConfiguration alone", err)
+	}
 }
 
-// A model and a width are REQUIRED: a default for either would be a width
-// the store was not sized for.
-func TestAProviderNeedsAModelAndAWidth(t *testing.T) {
+// A model, a width and the model's limits are REQUIRED: a default for the
+// first two would be a width the store was not sized for, and a default for
+// the limits a guess at somebody else's model.
+func TestAProviderNeedsAModelAWidthAndLimits(t *testing.T) {
 	t.Parallel()
-	if _, err := embeddings.New(embeddings.Config{Dimensions: 8}); err == nil {
+	if _, err := embeddings.New(embeddings.Config{Dimensions: 8, Limits: openAILimits}); err == nil {
 		t.Fatal("a provider with no model was accepted")
 	}
-	if _, err := embeddings.New(embeddings.Config{Model: "m"}); err == nil {
+	if _, err := embeddings.New(embeddings.Config{Model: "m", Limits: openAILimits}); err == nil {
 		t.Fatal("a provider with no width was accepted")
+	}
+	for name, limits := range map[string]embeddings.Limits{
+		"none":                     {},
+		"no input bound":           {BatchInputs: 8, BatchBytes: 1024},
+		"a bound under one rune":   {InputBytes: 3, BatchInputs: 8, BatchBytes: 1024},
+		"no inputs a request":      {InputBytes: 512, BatchBytes: 1024},
+		"an input no request fits": {InputBytes: 512, BatchInputs: 8, BatchBytes: 520, InputOverhead: 16},
+		"a negative overhead":      {InputBytes: 512, BatchInputs: 8, BatchBytes: 1024, InputOverhead: -1},
+	} {
+		if _, err := embeddings.New(embeddings.Config{Model: "m", Dimensions: 8, Limits: limits}); err == nil {
+			t.Errorf("%s: limits %+v were accepted", name, limits)
+		}
+	}
+	p, err := embeddings.New(embeddings.Config{Model: "m", Dimensions: 8, Limits: openAILimits})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if p.Model() != "m" || p.Limits() != openAILimits {
+		t.Errorf("the provider reports model %q and limits %+v, not what it was built with",
+			p.Model(), p.Limits())
 	}
 }
 
@@ -326,7 +357,7 @@ func TestNoBaseURLDialsOpenAI(t *testing.T) {
 	t.Parallel()
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
-		Model: "text-embedding-3-small", Dimensions: 4, APIKey: "sk-test",
+		Model: "text-embedding-3-small", Dimensions: 4, Limits: openAILimits, APIKey: "sk-test",
 		HTTPClient: &http.Client{Transport: d},
 	})
 	if err != nil {
@@ -341,6 +372,11 @@ func TestNoBaseURLDialsOpenAI(t *testing.T) {
 	if !strings.Contains(d.url, "api.openai.com") {
 		t.Fatalf("dialled %q, which is not OpenAI", d.url)
 	}
+	// AND IT NAMES THE ENDPOINT IT DIALS, which the corpus duty keys its
+	// memory of refused inputs on: an endpoint left unnamed is OpenAI's.
+	if got := p.Endpoint(); got != embeddings.DefaultBaseURL {
+		t.Fatalf("Endpoint() = %q, want %q", got, embeddings.DefaultBaseURL)
+	}
 }
 
 // A CONFIGURED BASE URL WINS, which is the whole of what makes an
@@ -350,7 +386,7 @@ func TestAConfiguredBaseURLIsDialledInstead(t *testing.T) {
 	t.Parallel()
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
-		Model: "m", Dimensions: 4, APIKey: "sk-test",
+		Model: "m", Dimensions: 4, Limits: openAILimits, APIKey: "sk-test",
 		BaseURL: "https://embeddings.example.com/v1", HTTPClient: &http.Client{Transport: d},
 	})
 	if err != nil {
@@ -361,6 +397,9 @@ func TestAConfiguredBaseURLIsDialledInstead(t *testing.T) {
 	}
 	if !strings.HasPrefix(d.url, "https://embeddings.example.com/v1/") {
 		t.Fatalf("dialled %q, want the configured base URL", d.url)
+	}
+	if got := p.Endpoint(); got != "https://embeddings.example.com/v1" {
+		t.Fatalf("Endpoint() = %q, want the configured base URL", got)
 	}
 }
 
@@ -374,7 +413,7 @@ func TestAnEmptyKeySendsNoAmbientCredential(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-ambient")
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
-		Model: "m", Dimensions: 4, HTTPClient: &http.Client{Transport: d},
+		Model: "m", Dimensions: 4, Limits: openAILimits, HTTPClient: &http.Client{Transport: d},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -404,7 +443,7 @@ func TestNoAmbientOpenAIVariableReachesTheWire(t *testing.T) {
 		for _, key := range []string{"", "sk-named"} {
 			d := &dialed{width: 4}
 			p, err := embeddings.New(embeddings.Config{
-				Model: "m", Dimensions: 4, APIKey: key,
+				Model: "m", Dimensions: 4, Limits: openAILimits, APIKey: key,
 				BaseURL: "https://embeddings.example.com/v1", HTTPClient: &http.Client{Transport: d},
 			})
 			if err != nil {
@@ -433,7 +472,7 @@ func TestANamedKeyBeatsTheEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-environment")
 	d := &dialed{width: 4}
 	p, err := embeddings.New(embeddings.Config{
-		Model: "m", Dimensions: 4, APIKey: "  sk-named  ",
+		Model: "m", Dimensions: 4, Limits: openAILimits, APIKey: "  sk-named  ",
 		HTTPClient: &http.Client{Transport: d},
 	})
 	if err != nil {
@@ -489,9 +528,10 @@ func TestTheFakeIgnoresCase(t *testing.T) {
 }
 
 // NOTHING RETRIES HERE. The SDK's defaults fire on the whole 429/5xx set,
-// and this caller's answer to a failure is "no similarity search" — cheaper
-// than any retry, and it belongs to the caller rather than being spent on
-// its behalf inside a turn-start prefetch a person is waiting on.
+// and what a failure should cost differs by caller — a turn start degrades,
+// the corpus duty asks again on its next tick — so the retry belongs to the
+// caller rather than being spent on its behalf inside a turn-start prefetch a
+// person is waiting on. What the caller gets instead is the class.
 func TestAFailedCallIsNotRetried(t *testing.T) {
 	t.Parallel()
 	s := fakeAPI(t, 8)
@@ -807,6 +847,12 @@ func TestAWrongWidthVectorInABatchIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "2-wide") {
 		t.Fatalf("the error does not name the width it got: %v", err)
+	}
+	// A WRONG WIDTH IS THE CONFIGURATION'S, not the input's: no smaller
+	// request would fix it, so a caller isolating refused inputs must not
+	// set a document aside over it.
+	if !errors.Is(err, embeddings.ErrConfiguration) || errors.Is(err, embeddings.ErrRefused) {
+		t.Errorf("a wrong width classified as %v, want ErrConfiguration alone", err)
 	}
 }
 

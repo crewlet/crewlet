@@ -15,27 +15,34 @@ import (
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
-// A TOKENS ANSWER IS LABELLED ON THE SOURCES' CLOCK.
+// A TOKENS ANSWER'S LIVE WINDOW IS LABELLED ON THE CLOCK IT WAS AGED ON.
 //
-// It read the wall clock while `token_series` beside it read this one, so the
-// breakdown and the chart a screen draws from the same window were dated by
-// two clocks — and a caller that pinned the clock to compare one question
-// asked twice got two answers whenever the asks straddled a second, because
-// the window's edges are what the answer is labelled with.
-func TestATokensAnswerIsLabelledOnTheSourcesClock(t *testing.T) {
+// It read the wall clock while `token_series` beside it read this package's,
+// so the breakdown and the chart a screen draws from the same window were
+// dated by two clocks. The live window is the PROJECTION's now: it ages its
+// records on its own clock ([livestate.WithClock]) and names the two instants
+// it cut the window at ([livestate.LiveState.Spend]), so the label is the
+// window the records were actually kept for — a second reading of any clock
+// here would label a window the projection never cut. The API builds the
+// projection on the app's one clock, which is the sources' too.
+//
+// Mutation: label the window from [queries.Sources.Now] instead of the
+// projection's own instants, and the edges below move to the other clock.
+func TestATokensAnswerIsLabelledOnTheClockItsWindowWasAgedOn(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	aged := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	r := registryOver(t, queries.Sources{
-		State: livestate.New(),
-		Now:   func() time.Time { return at },
+		State: livestate.New(livestate.WithClock(func() time.Time { return aged })),
+		// A DIFFERENT instant, so an answer labelled on this one fails.
+		Now: func() time.Time { return aged.Add(time.Hour) },
 	})
 	got := askRaw(t, r, "tokens", nil).(tokens.Rollup)
-	if want := at.Format(time.RFC3339); got.Until != want {
+	if want := aged.Format(time.RFC3339); got.Until != want {
 		t.Errorf("until = %s, want %s — the window ends at the instant the "+
-			"sources' clock reads, not whenever the answer happened to run",
+			"projection aged it at, not whenever the answer happened to run",
 			got.Until, want)
 	}
-	if want := at.Add(-livestate.LiveSpendWindow).Format(time.RFC3339); got.Since != want {
+	if want := aged.Add(-livestate.LiveSpendWindow).Format(time.RFC3339); got.Since != want {
 		t.Errorf("since = %s, want %s", got.Since, want)
 	}
 }

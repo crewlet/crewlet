@@ -12,7 +12,21 @@
 
 import { expect, test } from "vitest";
 
-import { defaultSearchMode, resolveSearchMode } from "./search.ts";
+import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
+import { defaultSearchMode, resolveSearchMode, searchTooLong } from "./search.ts";
+
+// THE SEARCH BOUND IS THE ENGINE'S, MEASURED AS THE ENGINE MEASURES IT: UTF-8
+// bytes of the trimmed phrase. At it a phrase is searched; past it the
+// sentence names its size and the limit, which is what the person changes.
+test("a phrase is too long to search exactly past the engine's bound, in bytes", () => {
+  expect(searchTooLong("x".repeat(SEARCH_QUERY_MAX))).toBeNull();
+  expect(searchTooLong(`  ${"x".repeat(SEARCH_QUERY_MAX)}\n`)).toBeNull();
+  expect(searchTooLong("x".repeat(SEARCH_QUERY_MAX + 1))).toBe(
+    `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+  );
+  // 134 three-byte runes are 402 bytes in a string JavaScript calls 134 long.
+  expect(searchTooLong("語".repeat(134))).toMatch(/^This is 402 bytes/);
+});
 
 test("the default is Hybrid where Hybrid is served", () => {
   expect(defaultSearchMode({ modes: ["hybrid", "keyword", "semantic"] })).toBe("hybrid");

@@ -27,7 +27,7 @@ func underRoot(t *testing.T, r *roundTrip) {
 // catching up with the newer build whose record it had to set aside.
 func (r *roundTrip) clearDeferred() {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(),
 			`DELETE FROM tracker_log_deferred_scope`); err != nil {
 			return err

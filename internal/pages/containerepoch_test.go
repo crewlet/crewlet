@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // activation is the instant of the nth configuration activation of a case, in
@@ -43,10 +42,11 @@ func (r *roundTrip) container(key string) pages.Container {
 // A CONTAINER IS STAMPED WITH THE ACTIVATION ITS SETTINGS CAME FROM, and an
 // older activation applied late writes nothing.
 //
-// A node applying an older activation late used to rewrite every container's
-// name and purpose back to its own old ones — the same walk-back the chart's
-// projects had — because nothing on the row said which chart had written it.
-func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
+// A node that boots on a revision the fleet has since replaced used to rewrite
+// every container's name and purpose back to its own old ones — the same
+// walk-back the chart's projects had — because nothing on the row said which
+// configuration had written it.
+func TestAnOlderActivationDoesNotWalkAContainerBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	newer := activation(0).Add(3 * time.Millisecond)
@@ -59,10 +59,11 @@ func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 	}
 	end := r.logEnd()
 
-	// THE EARLIER CHART, three milliseconds older, arriving second.
+	// THE EARLIER ACTIVATION, three milliseconds older, arriving second —
+	// apart at the stamp's own resolution, which is all the guard can see.
 	if r.ensure(activation(0), "ENG", "Engineering", "builds it") {
-		t.Error("a chart three milliseconds older than the one applied wrote — it " +
-			"walks the newer names back")
+		t.Error("an activation three milliseconds older than the one applied " +
+			"wrote — it walks the newer names back")
 	}
 	if got := r.logEnd(); got != end {
 		t.Errorf("the older activation put %d record(s) on the log", got-end)
@@ -71,8 +72,8 @@ func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 		t.Errorf("the container reads (%q, %q), want the newer activation's", c.Name, c.Purpose)
 	}
 
-	// AND A NEWER ONE STILL WRITES, even with nothing but the position to say:
-	// a container not re-stamped would let a activation between the two
+	// AND A NEWER ONE STILL WRITES, even with nothing but the stamp to say:
+	// a container not re-stamped would let an activation between the two
 	// walk it back.
 	if !r.ensure(activation(1), "ENG", "Platform", "ships it") {
 		t.Error("a later activation with the same settings wrote nothing — the " +
@@ -86,11 +87,11 @@ func TestAnOlderChartDoesNotWalkAContainerBack(t *testing.T) {
 // A REAPPLY OF ONE ACTIVATION WRITES NOTHING, AND SETS RIGHT WHAT AN EQUAL
 // ACTIVATION WALKED BACK.
 //
-// Every boot of every node reapplies the chart it holds, so a reapply that
-// wrote would be a record per boot per container. But two nodes deriving at
-// one position can race, and the one that lost can land its settings second —
-// so a reapply that finds DIFFERENT settings at its own stamp writes them
-// back.
+// Every boot of every node reapplies the activation it holds, so a reapply
+// that wrote would be a record per boot per container. But the guard lets an
+// EQUAL stamp through, so a write that lands at the current activation's stamp
+// with other settings stands until a reapply puts it back — so a reapply that
+// finds DIFFERENT settings at its own stamp writes them back.
 func TestAReapplyWritesOnlyWhatDiffers(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -115,9 +116,9 @@ func TestAReapplyWritesOnlyWhatDiffers(t *testing.T) {
 	}
 }
 
-// A CONTAINER WRITE MUST NAME ITS ACTIVATION. There is no honest default: a
-// zero position would stamp every container as older than any chart.
-func TestAContainerWriteRefusesToGuessItsChartEpoch(t *testing.T) {
+// A CONTAINER WRITE MUST NAME ITS ACTIVATION. There is no honest default: the
+// zero instant would stamp every container as older than any configuration.
+func TestAContainerWriteRefusesToGuessItsActivation(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	end := r.logEnd()
@@ -160,14 +161,15 @@ func TestTwoNodesEnsuringOneContainerWriteOnce(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
 	b := newRoundTripOn(t, a.log, openNodeStore(t, "node-b.db"), "node-b")
-	b.applyWhileWriting()
 
 	if _, changed, err := a.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", ""); err != nil || !changed {
 		t.Fatalf("node a's write = (%v, %v), want a create", changed, err)
 	}
 	end := a.logEnd()
-	// NODE B HAS NOT APPLIED NODE A'S RECORD.
+	// NODE B HAS NOT APPLIED NODE A'S RECORD: its applier runs only inside
+	// its own writes' waits, so its first decision is taken on rows from
+	// before it, and the wait after the lost round is what applies it.
 	_, changed, err := b.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err != nil {
@@ -192,10 +194,7 @@ func TestAnUnknownContainerWriteIsAnError(t *testing.T) {
 	r := newRoundTrip(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this call mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
-		pages.Domain{}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now().Add(time.Hour))
 	_, changed, err := r.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err == nil {

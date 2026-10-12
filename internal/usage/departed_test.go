@@ -65,12 +65,13 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
-	// THE LOG IS THE RUNNER'S CHECKPOINT LOG AND THE RECORDS ARE SIGNED, as
-	// every state log's are (ADR-0025): the runner verifies each frame under
-	// the fleet's keyring before the applier sees it, and the write
-	// authority below signs under the same one.
+	// THE DOMAIN'S OWN STREAM, as the engine runs it — and its records are
+	// SIGNED, as every state log's are (ADR-0031): the runner verifies each
+	// frame under the fleet's keyring before the applier sees it, and the
+	// write authority below signs under the same one.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: usage.Domain{}, Applier: usage.NewApplier(), Fetch: consumer,
+		Domain: usage.Domain{}, Spec: spec,
+		Applier: usage.NewApplier(), Fetch: consumer,
 		Verifier: testVerifier(t), Log: log, Node: db, DB: db.Replicated(),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
@@ -78,14 +79,16 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if err != nil {
 		t.Fatalf("%s: build the applier: %v", id, err)
 	}
-	rows, err := usage.NewRows(db)
+	rows, err := usage.NewRows(db.Replicated().Reader(), usage.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
+	// ON THE SAME LOG, which the publisher writes and the runner applies.
 	authority, err := statelog.NewPublisher(statelog.Deps{
-		Domain: usage.Domain{}, Log: log, Signer: testSigner(t), Rows: rows,
-		Fence: usage.NewFence(),
-		Gates: usage.NewGates(), Waiter: runner, Identity: runner, NodeID: id,
+		Domain: usage.Domain{}, Spec: spec, Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: testVerifier(t)},
+		Signer:  testSigner(t), Rows: rows, Fence: usage.NewFence(),
+		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: 5 * time.Second,
 	})
@@ -233,7 +236,7 @@ func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 
 // testSigner is this suite's record signer.
 //
-// EVERY RECORD ON EVERY STATE LOG IS SIGNED (ADR-0025), so a write authority
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED (ADR-0031), so a write authority
 // built without one is refused at construction rather than producing records
 // the fleet would refuse one at a time, on every node, for ever. The key is a
 // fixture: what these cases are about is what the domain writes, and the

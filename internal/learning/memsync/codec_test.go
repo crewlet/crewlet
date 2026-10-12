@@ -11,14 +11,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -41,14 +39,14 @@ func seedMemory(t *testing.T, db *store.DB) {
 		}
 	}
 	exec(`INSERT INTO agent_diary (id, agent_id, kind, content, source, turn_id,
-		metadata, retrieval_count, embedding, created_at)
+		metadata, retrieval_count, embedding, embedding_model, created_at)
 		VALUES (?, ?, 'diary_long', 'the release train is thursdays', 'reflect',
-		't1', '{}', 3, ?, ?)`, "d1", seat.AgentID, embedding, at)
+		't1', '{}', 3, ?, 'fixture-model', ?)`, "d1", seat.AgentID, embedding, at)
 	exec(`INSERT INTO episodes (id, agent_handle, agent_role, turn_id, started_at,
 		ended_at, plan_summary, task_summary, tool_sequence, review_outcome,
-		duration_ms, embedding, kind)
+		duration_ms, embedding, embedding_model, kind)
 		VALUES (?, ?, 'Engineer', 't1', ?, ?, 'plan', 'task', '["slack_post"]',
-		'done', 1200, ?, 'raw')`, "e1", seat.Handle, at, at, embedding)
+		'done', 1200, ?, 'fixture-model', 'raw')`, "e1", seat.Handle, at, at, embedding)
 	exec(`INSERT INTO counterparty_profiles (observer_handle, subject_handle,
 		subject_external_id, subject_platform, subject_name, traits,
 		first_seen_at, last_updated_at, last_corroborated_at, interaction_count)
@@ -170,6 +168,28 @@ func TestAnEmbeddingSurvivesAsBytes(t *testing.T) {
 	}
 }
 
+// A VECTOR TRAVELS WITH THE MODEL IT CAME FROM. Recall compares only rows of
+// the query's model, so a vector that arrived without its model would be a
+// row the new holder can never recall — the same silent amnesia as a vector
+// that arrived as text.
+func TestAVectorsModelTravelsWithIt(t *testing.T) {
+	t.Parallel()
+	oldOwner, newOwner := openStore(t), openStore(t)
+	seedMemory(t, oldOwner)
+	carry(t, oldOwner, newOwner)
+
+	for _, table := range []string{"agent_diary", "episodes"} {
+		var model string
+		if err := newOwner.SQL().QueryRowContext(t.Context(),
+			"SELECT embedding_model FROM "+table+" WHERE id IN ('d1', 'e1')").Scan(&model); err != nil {
+			t.Fatalf("read %s.embedding_model: %v", table, err)
+		}
+		if model != "fixture-model" {
+			t.Errorf("%s arrived naming model %q", table, model)
+		}
+	}
+}
+
 // Hydration is repeatable: a seat re-acquired, a redelivered message, a node
 // that restarts mid-replay must not leave the seat remembering everything
 // twice.
@@ -216,7 +236,7 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	}
 
 	// A table whose rows are rewritten in place carries whole, because a
-	// watermark over the rowid cannot see an update.
+	// watermark over an insert sequence cannot see an update.
 	profiles := tables[2]
 	if profiles.name != "counterparty_profiles" || !profiles.wholeEachCycle {
 		t.Fatalf("fixture drifted: tables[2] is %s", profiles.name)
@@ -307,21 +327,6 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 			"and a peer's copy would claim this node had seen it too",
 		"scheduled_runs": "this node's dispatch history; the claim that stops a " +
 			"double fire is the fleet's, in coordination",
-		// THE EXEMPTION THAT WAS WRONG ONCE, and is right now for a
-		// different reason. It used to read "re-asserted by the next
-		// mention, so it self-heals faster than replication would carry
-		// it" — an argument about a seat MOVING node, where the question
-		// was a delivery landing on a different node each time. Node
-		// migration 0028 answered that by moving the state to
-		// coordination. What is left in this table is not memory and not
-		// state: it is the handoff's SOURCE, drained at the next boot by
-		// internal/notify/followsync and empty for ever after. Carrying
-		// it on the changelog would replicate rows whose whole purpose
-		// is to stop existing.
-		"chat_thread_follows": "not a seat's memory and no longer this node's " +
-			"state — the follows are coordination's since node migration 0028, " +
-			"and this table survives only as that move's one-time handoff " +
-			"source, drained at boot by internal/notify/followsync",
 	}
 
 	rows, err := db.SQL().QueryContext(t.Context(),

@@ -418,10 +418,10 @@ type managesIndex struct {
 	seats map[string]struct{}
 	// unitSeats is each unit KEY's seat handles, descendants included, in
 	// [Unit.AllRoles] order. The FIRST unit answering to a key owns it, the
-	// same answer [Organization.Unit] gives: a stored revision can still hold
-	// two units on one key, and an expansion that read the last one while
-	// every lookup read the first would manage one team while reporting
-	// another.
+	// same answer [Organization.Unit] gives: an applied revision can still
+	// hold two units on one key, since an apply does not enforce the
+	// admission rules, and an expansion that read the last one while every
+	// lookup read the first would manage one team while reporting another.
 	unitSeats map[string][]string
 }
 
@@ -749,14 +749,15 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 // schedule on a human lead never fires. This method holds them, and nothing
 // may run a company that breaks one.
 //
-// ADMISSION rules were added after companies already existed, and a company
-// that breaks one still runs exactly as it did before the rule: two units
-// keyed "platform" resolve references to the first of them today and did
-// yesterday. [Organization.ValidateAdmission] holds them. A document somebody
-// submits is refused for breaking one, while a STORED revision that breaks one
-// is applied with a warning, because refusing it would take a running company
-// down on upgrade (or on the older half of a rolling one) over a rule its
-// author never saw. The config layer decides which class a caller runs.
+// ADMISSION rules are authoring hygiene: a company that breaks one still runs
+// — two units keyed "platform" resolve references to the first of them.
+// [Organization.ValidateAdmission] holds them. They are the part of the rule
+// set a later build may add to or relax, so a document somebody submits is
+// refused for breaking one, while a revision being APPLIED that breaks one is
+// applied with a warning: during a rolling upgrade a newer peer may activate a
+// revision it admitted under rules this build does not share, and refusing it
+// here would split the fleet's epoch. The config layer decides which class a
+// caller runs.
 func (o *Organization) Validate() error {
 	var errs []error
 	for _, r := range o.Roles {
@@ -782,10 +783,11 @@ func (o *Organization) Validate() error {
 }
 
 // ValidateAdmission reports every ADMISSION rule the company breaks, joined:
-// two units answering to one key, and a unit reference on a seat declared
-// inside a unit of a different key. See the class note above
-// [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
-// root seat moved into its unit is counted once, where it now sits.
+// two units answering to one key, a unit reference on a seat declared inside
+// a unit of a different key, and a schedule whose cron has five fields that
+// the grammar refuses. See the class note above [Organization.Validate]. It
+// assumes [Organization.Normalize] has run, so a root seat moved into its unit
+// is counted once, where it now sits.
 //
 // NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is a rule rather
 // than a leniency. A name is prose: nothing references a seat or a unit by it
@@ -794,7 +796,34 @@ func (o *Organization) Validate() error {
 // lookup, a roster — answers a shared one with an honest list naming each
 // seat's handle.
 func (o *Organization) ValidateAdmission() error {
-	return errors.Join(o.validateUnitKeys(), o.validateUnitRefs())
+	return errors.Join(o.validateUnitKeys(), o.validateUnitRefs(), o.validateCronGrammar())
+}
+
+// validateCronGrammar refuses every schedule, a seat's or a unit's, whose cron
+// the grammar refuses — see [Schedule.cronGrammar], and for why a seat's
+// schedules are read here rather than in [Role.Validate], the class note above
+// [Organization.Validate]: that method holds the runnable rules.
+//
+// The owner is named by its IDENTITY — a seat by its handle, a unit by its key
+// — since a name is prose two seats may share and the message has to say
+// which one an operator is to fix.
+func (o *Organization) validateCronGrammar() error {
+	var errs []error
+	for r := range o.AllRoles() {
+		for i, s := range r.Schedules {
+			if err := s.cronGrammar(fmt.Sprintf("role %q", r.Handle())); err != nil {
+				errs = append(errs, &SeatError{Seat: r, Field: []any{"schedules", i, "cron"}, Err: err})
+			}
+		}
+	}
+	for u := range o.AllUnits() {
+		for i, s := range u.Schedules {
+			if err := s.cronGrammar(fmt.Sprintf("unit %q", strings.TrimSpace(u.Key()))); err != nil {
+				errs = append(errs, &UnitError{Unit: u, Field: []any{"schedules", i, "cron"}, Err: err})
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateUnitRefs refuses a `unit:` reference on a seat that sits inside a

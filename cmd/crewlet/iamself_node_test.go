@@ -84,7 +84,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	tierA := bootstrapWithKeyring(t, "k1")
 	appendFile(t, tierA, fmt.Sprintf("api:\n  external_url: %s\n", base))
 	var out, errs bytes.Buffer
-	err = runIAM([]string{"token", "-login", "jane.founder", "-label", "laptop",
+	err = runIAM(noEnviron, []string{"token", "-login", "jane.founder", "-label", "laptop",
 		"-grants", string(iam.GrantStateRead), "-config", tierA, "-api", base},
 		strings.NewReader(password+"\n"), &out, &errs)
 	if err != nil {

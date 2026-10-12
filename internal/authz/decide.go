@@ -19,8 +19,8 @@ import (
 type Class string
 
 const (
-	// ClassRead — the ordinary read: the board, the pages, the org chart,
-	// the roster, the fleet, spend.
+	// ClassRead — the ordinary read: the board, a project's files, the
+	// pages, the org chart, the roster, the fleet, spend.
 	//
 	// NO RELATION, WHICH IS WHAT MAKES IT THE OPEN ONE — but the state
 	// grant all the same. The design this implements called this class
@@ -50,7 +50,8 @@ const (
 	ClassSelf Class = "self"
 
 	// ClassColleagueWrite — the ordinary work of a colleague: filing,
-	// commenting, updating, ranking, relating; authoring a page. Governed
+	// commenting, updating, ranking, relating; keeping a file in a
+	// project; authoring a page. Governed
 	// by the capability rather than by any relation, because a company
 	// that hands somebody work:write is saying exactly this.
 	ClassColleagueWrite Class = "colleague_write"
@@ -121,7 +122,7 @@ const (
 	ClassSubtree Class = "subtree"
 
 	// ClassDestructive — removing, restoring and moving a task out of its
-	// project, trashing and restoring a page. The CONTAINER's lead, or the
+	// project, removing a file from one, trashing and restoring a page. The CONTAINER's lead, or the
 	// admin path: a colleague may file work in a project and may not take
 	// it out again.
 	ClassDestructive Class = "destructive"
@@ -648,9 +649,8 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 //
 // THE SEAT, FALLING BACK TO THE LOGIN. A chart holds seats: a person — every
 // person holds one — or a token bound to one is asked about by that seat's
-// handle, and a principal bound to none (a token, a service account, or a
-// person recorded before every person held a seat) is asked about by their
-// login, which the chart will not find — answering false, correctly, because
+// handle, and a principal bound to none (a token, or a service account) is
+// asked about by their login, which the chart will not find — answering false, correctly, because
 // they lead nobody in it.
 func actorOf(p iam.Principal) string {
 	if p.Seat != "" {

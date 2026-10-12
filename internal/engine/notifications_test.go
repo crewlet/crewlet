@@ -2,11 +2,14 @@ package engine_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
@@ -93,12 +96,12 @@ func TestARegistryIsNeverNil(t *testing.T) {
 // restarts, it moves, its certificate lapses — and refusing to start the
 // company over it takes down every seat's scheduled and tracker work too.
 func TestAnUnreachableChatBackendDoesNotStopTheCompany(t *testing.T) {
-	// NOT parallel: the seat's token comes from the process environment,
-	// which is exactly why Go forbids t.Setenv alongside t.Parallel.
-	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
+	t.Parallel()
 	// A seat with a real bot token, so Start actually tries to reach the
 	// instance — without one there are no seats and the failure path is
-	// never taken.
+	// never taken. UNREACHABLE rather than refusing, because that is the
+	// start that blocks — every call spends the client's retry budget —
+	// and a company must still come up once it has.
 	doc := strings.Replace(companyDoc, `  - name: CEO
     handle: ceo
     llm: zulu`, `  - name: CEO
@@ -113,7 +116,8 @@ integrations:
     url: http://127.0.0.1:1
     team: eng
 `
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc),
+		Environment: config.MapSource{"MM_CEO_TOKEN": "tok-ceo"}})
 	if e.Company() == nil {
 		t.Fatal("the company did not start")
 	}
@@ -163,11 +167,22 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 // It is a class, not a typo, so this checks all three at once: the failure
 // is silent per-integration, and a fourth third-party app would repeat it.
 func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
-	// NOT parallel: the addresses come from the process environment.
-	t.Setenv("TEST_MM_URL", "http://127.0.0.1:1")
-	t.Setenv("TEST_GL_URL", "http://127.0.0.1:2")
-	t.Setenv("TEST_CF_URL", "http://127.0.0.1:3")
-	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
+	t.Parallel()
+	// A CHAT SERVER THAT REFUSES THE BOT, so the transport's start fails at
+	// once: what is under test is the address the wiring built, and an
+	// unreachable one costs a retry budget per call to learn nothing more
+	// (TestAnUnreachableChatBackendDoesNotStopTheCompany is that case).
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message":"Invalid or expired session"}`))
+	}))
+	t.Cleanup(chat.Close)
+	env := config.MapSource{
+		"TEST_MM_URL":  chat.URL,
+		"TEST_GL_URL":  "http://127.0.0.1:2",
+		"TEST_CF_URL":  "http://127.0.0.1:3",
+		"MM_CEO_TOKEN": "tok-ceo",
+	}
 
 	doc := strings.Replace(companyDoc, `  - name: CEO
     handle: ceo
@@ -191,18 +206,19 @@ integrations:
     token: cf-token
     webhook_secret: cf-secret
 `
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc), Environment: env})
 	if e.Company() == nil {
 		t.Fatal("the company did not start")
 	}
 
-	// The addresses are unreachable on purpose: what is under test is the
-	// string each wiring BUILT, not whether the third-party app answered.
+	// The addresses answer nothing useful on purpose: what is under test
+	// is the string each wiring BUILT, not whether the third-party app
+	// answered.
 	mm := e.Mattermost()
 	if mm == nil {
 		t.Fatal("no chat transport was built")
 	}
-	if got := mm.URL(); got != "http://127.0.0.1:1" {
+	if got := mm.URL(); got != chat.URL {
 		t.Errorf("mattermost url = %q, want the resolved address", got)
 	}
 	// The other two wirings refuse a url that failed to resolve outright,
@@ -221,8 +237,7 @@ integrations:
 // with a different fix. Starting anyway builds clients pointed at "" and
 // fails at every call with a message that names neither.
 func TestAnUnresolvedChatAddressIsRefusedByName(t *testing.T) {
-	// NOT parallel: it depends on a variable NOT being in the environment.
-	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
+	t.Parallel()
 	doc := strings.Replace(companyDoc, `  - name: CEO
     handle: ceo
     llm: zulu`, `  - name: CEO
@@ -237,7 +252,10 @@ integrations:
     url: ${TEST_MM_URL_THAT_IS_NEVER_SET}
     team: eng
 `
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	// AN ENVIRONMENT THAT CANNOT HOLD the address, which the process's
+	// could: whatever the runner exports, this one answers only the token.
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc),
+		Environment: config.MapSource{"MM_CEO_TOKEN": "tok-ceo"}})
 	if mm := e.Mattermost(); mm != nil {
 		t.Errorf("a chat transport was built for an address that resolved to "+
 			"nothing: %q", mm.URL())
@@ -256,8 +274,7 @@ integrations:
 // renders, so a forged delivery would have verified against a string an
 // attacker could read.
 func TestTheWebhookEdgeGetsResolvedSecrets(t *testing.T) {
-	// NOT parallel: the secret comes from the process environment.
-	t.Setenv("TEST_GL_SIGNING", "whsec_resolved-value")
+	t.Parallel()
 	doc := companyDoc + `
 integrations:
   gitlab:
@@ -265,7 +282,8 @@ integrations:
     url: https://gitlab.example.com
     signing_secret: ${TEST_GL_SIGNING}
 `
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc),
+		Environment: config.MapSource{"TEST_GL_SIGNING": "whsec_resolved-value"}})
 
 	got := e.WebhookSecrets().GitLab
 	if strings.Contains(got, "${") {
@@ -361,9 +379,7 @@ integrations:
 // inbound edge verifies with — so a company on Slack needs both halves and
 // each is silent without the other.
 func TestAConfiguredHostedChatSurfaceActuallyRoutes(t *testing.T) {
-	// NOT parallel: the seat's app credentials come from the environment.
-	t.Setenv("SLACK_CEO_TOKEN", "xoxb-ceo")
-	t.Setenv("SLACK_CEO_SIGNING", "ceo-signing-secret")
+	t.Parallel()
 	doc := strings.Replace(companyDoc, `  - name: CEO
     handle: ceo
     llm: zulu`, `  - name: CEO
@@ -377,7 +393,10 @@ integrations:
   slack:
     typing_status: addressed
 `
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc),
+		Environment: config.MapSource{
+			"SLACK_CEO_TOKEN": "xoxb-ceo", "SLACK_CEO_SIGNING": "ceo-signing-secret",
+		}})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

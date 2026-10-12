@@ -18,15 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // configSurface builds a config service over a real store with one revision.
 func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "cq.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "cq.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
 	// A KEYRING, because the surface refuses to be built without one and

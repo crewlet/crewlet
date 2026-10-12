@@ -12,9 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ABSENT IS NOT ZERO. A node that publishes no status (a peer running a build
-// older than the field) is not a node with no work in flight, and a confident 0
-// would draw an idle row for a process that is simply not saying.
+// ABSENT IS NOT ZERO. A node that publishes no status (its status hook overran
+// its budget on that beat, so its heartbeat carried the placement half alone)
+// is not a node with no work in flight, and a confident 0 would draw an idle
+// row for a process that is simply not saying.
 func TestANodeThatPublishesNoStatusIsNotReadAsIdle(t *testing.T) {
 	t.Parallel()
 	for name, meta := range map[string]map[string]any{
@@ -49,6 +50,26 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 		t.Fatal("a published status read as absent")
 	}
 	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// A KEY THIS BUILD DOES NOT KNOW IS IGNORED. A successor sharing the fleet
+// publishes what it adds beside what this build reads, in whatever shape it
+// chooses, and a status that failed to decode over it would read as absent —
+// "not saying" — for as long as the successor ran.
+func TestAStatusKeyFromANewerBuildDecodesHarmlessly(t *testing.T) {
+	t.Parallel()
+	newer := map[string]any{
+		"in_flight": 2, "draining": false, "posture": "serve",
+		"features":           []any{"a_feature_from_a_newer_build"},
+		"from_a_newer_build": map[string]any{"nested": []any{1.5, "x"}},
+	}
+	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: newer})
+	if !ok {
+		t.Fatal("a newer peer's status read as absent")
+	}
+	if want := (coord.NodeStatus{InFlight: 2, Posture: "serve"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
@@ -112,10 +133,8 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	if _, present := meta["started_at"]; present {
 		t.Errorf("an unset start time was published: %+v", meta)
 	}
-	for _, key := range []string{"features", "mcp"} {
-		if _, present := meta[key]; present {
-			t.Errorf("an empty %s was published: %+v", key, meta)
-		}
+	if _, present := meta["mcp"]; present {
+		t.Errorf("an empty mcp was published: %+v", meta)
 	}
 	// The two that are always meaningful stay, including their zeros: a
 	// node reporting zero turns in flight IS saying something.

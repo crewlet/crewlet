@@ -1875,6 +1875,32 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 	}
 }
 
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY.
+//
+// A deployment that sets `api.public` reads every webhook address from
+// `api.public.external_url`, and its `api.external_url` is the person's
+// address, set and answering 404 for every webhook route. A finding naming
+// that key sent an operator to change a setting that was already set and that
+// nothing building a GitHub hook reads. Both arms are held: the one with no
+// credential, and the one that reached GitHub.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	const key = "api.public.external_url"
+	res, err := github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true}, WebhookBaseKey: key,
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Subject != key {
+		t.Fatalf("findings = %+v, want one naming %s", findings, key)
+	}
+	if !strings.HasPrefix(findings[0].Detail, key+" is unset") {
+		t.Errorf("the sentence names another setting: %q", findings[0].Detail)
+	}
+}
+
 // AN ARCHIVED REPOSITORY IS NOT AN INGRESS BLOCK.
 //
 // It emits no events, so a hook on it would be correct and pointless — the

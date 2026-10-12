@@ -800,7 +800,7 @@ func inboxGesture(args map[string]any) (tracker.InboxGesture, string) {
 		}
 	}
 	if raw := strings.TrimSpace(argString(args, "read_through")); raw != "" {
-		at, err := tracker.ParseLogPosition(raw)
+		at, err := statelog.ParsePosition(raw)
 		if err != nil {
 			return g, err.Error()
 		}
@@ -1046,7 +1046,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		q.Reasons = append(q.Reasons, reason)
 	}
 	if since := strings.TrimSpace(argString(args, "since")); since != "" {
-		at, err := tracker.ParseLogPosition(since)
+		at, err := statelog.ParsePosition(since)
 		if err != nil {
 			return failed(err.Error()), nil
 		}

@@ -322,6 +322,32 @@ func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
 	}
 }
 
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY, and
+// so does its sentence: `api.external_url` there is the person's address, set,
+// and answering 404 for the route Datadog's webhook would post to.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	serveWebhook(reg, &stored{})
+
+	const key = "api.public.external_url"
+	opts := hookOptions(t, reg, "")
+	opts.WebhookBaseKey = key
+	res, err := datadog.Reconcile(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Subject != key {
+		t.Fatalf("findings = %+v, want one naming %s", findings, key)
+	}
+	if !strings.HasSuffix(findings[0].Detail, "Set "+key) {
+		t.Errorf("the sentence names another setting: %q", findings[0].Detail)
+	}
+}
+
 // A WEBHOOK TOKEN THAT DID NOT RESOLVE IS A MISSING CREDENTIAL, and it says
 // so in the word the setup form joins on.
 //

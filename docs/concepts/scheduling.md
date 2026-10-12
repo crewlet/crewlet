@@ -68,7 +68,7 @@ schedules:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. |
+| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. It is also what a fire is **labelled** by — the feed's line and the turn's label read `swe was assigned scheduled work morning-smoke` — so every fire of one schedule reads alike, and is [recalled](agent-learning.md#4-episodes-and-query_episodes-search-own-past) alike; the fire's own run id stays in the event's detail. |
 | `cron` | — (required) | 5-field cron expression, evaluated in `timezone`. |
 | `task` | — (required) | The task prompt handed to the runner agent. |
 | `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
@@ -79,13 +79,18 @@ schedules:
 
 Config load (and so `crewlet validate`) checks each schedule's shape: a
 non-empty `name` and `task`, a `cron` with exactly five fields, a
-`timezone` that loads and is not `Local` or `localtime`, a non-negative `timeout_seconds`, a `target` of
-`each` or `lead`, and names unique within the owning role or unit. The
-cron **grammar** itself is parsed on every tick rather than at load, so an
-expression with five fields and an invalid value (`61 * * * *`) passes
-validation, and the schedule is skipped on every tick with
-`schedule_parse_failed` naming it. Watch for that line after adding a
-schedule.
+`timezone` that loads and is not `Local` or `localtime`, a non-negative
+`timeout_seconds`, a `target` of `each` or `lead`, and names unique within
+the owning role or unit. A written document is also held to the cron
+**grammar** — the same parser the scheduler evaluates it with — so an
+expression with five fields and an invalid value (`61 * * * *`,
+`0 9 * * MON-FRY`) is refused at that schedule's `cron`, naming the field
+and the value. The grammar is an
+[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
+revision being applied that carries one (a newer peer's, admitted under other
+rules) still applies, its node logs `org_admission_warning`, and that one
+schedule is skipped on every tick with `schedule_parse_failed` naming it while
+the rest of the company runs.
 
 ### Which clock a schedule fires on
 
@@ -388,7 +393,8 @@ holds the `scheduler` fleet duty.
 ## Observability
 
 - **Dashboard.** **Agents › Schedules** (`#/agents/schedules`) lists every
-  configured schedule — name, scope (a role's seat by its name, or a unit),
+  configured schedule — name, scope (a role's seat by its handle, or a unit by
+  its key, each labelled with its name),
   cron with what it means in words, task, whom it wakes, when it next fires
   and how it last went — and the recent dispatch ledger below it, both
   sortable. One schedule's own page

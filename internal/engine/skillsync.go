@@ -84,6 +84,12 @@ func (e *Engine) skillSource(c *Company) skillsync.Source {
 	case config.KnowledgeConfluence:
 		return e.confluenceSkillSource(src)
 	case config.KnowledgeNative:
+		if r := e.remote.Load(); r != nil && r.wiki {
+			// THROUGH A DATA NODE, which answers only once its own copy
+			// is established — the wait a local walk does for itself.
+			src.Walk = e.walkRemoteSkills
+			return src
+		}
 		if n := e.native.Load(); n == nil || n.pageReader == nil {
 			src.Unreadable = "the native knowledge base is not running on this " +
 				"node: it starts with the node, so a node that booted on another " +

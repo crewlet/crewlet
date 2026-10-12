@@ -39,10 +39,7 @@ const (
 
 // stateOf is one invitation's state at now — the predicates
 // [iamdomain.InvitationRow.Spent] folds into one, redeemed told apart here for
-// an administrator, who is entitled to know whom it created. An invitation
-// issued before every invitation named a seat reads `expired` whatever its
-// deadline: it no longer opens, its row says it names no seat, and nothing
-// this build writes leaves one.
+// an administrator, who is entitled to know whom it created.
 func stateOf(row iamdomain.InvitationRow, now time.Time) invitationState {
 	switch {
 	case !row.RedeemedAt.IsZero():

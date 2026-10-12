@@ -367,6 +367,11 @@ func (e *Engine) adoptSeatPauses(ctx context.Context, next map[uuid.UUID]coord.S
 	for _, seat := range sortedSeats(slices.Values(lifted)) {
 		e.liftPauseHold(ctx, seat, "the seat was resumed while this node was not listening")
 	}
+	// A COMPLETE ANSWER is the signal for every seat a retried resume was
+	// waiting on the pauses for: one this node had not read at all, and one
+	// lifted while it was not listening. A seat still paused is re-checked
+	// and waits again.
+	e.readmitAnswers(waitPause)
 	log.InfoContext(ctx, "seat_pauses_read", "paused", len(next))
 }
 
@@ -385,6 +390,17 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 		delete(e.pauses.pauses, u.Seat)
 		e.pauses.mu.Unlock()
 		e.liftPauseHold(ctx, u.Seat, "a person resumed the seat")
+		// AND AN ANSWER THE PAUSE KEPT WAITING resumes now rather than at
+		// its next re-check: the resume is the event it was waiting for.
+		// The coordinator keeps its waits by handle, which the running
+		// company names; a seat it does not name — a revision this node
+		// has not applied yet — re-checks every seat waiting on a pause,
+		// which costs one look each, since a seat still paused waits again.
+		if handle, ok := e.seatHandle(u.Seat.String()); ok {
+			e.readmitAnswers(waitPause, handle)
+		} else {
+			e.readmitAnswers(waitPause)
+		}
 		return
 	}
 	e.pauses.mu.Lock()

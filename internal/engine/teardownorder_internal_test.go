@@ -58,8 +58,8 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 // the order it does, so the next sentence written about it has something to
 // be checked against.
 //
-// Mutation: move stopRetention above stopEmbedding, or any duty below
-// releaseDuties, and this fails naming the pair.
+// Mutation: move stopRetention above stopEmbedding, or any duty — the object
+// collector included — below releaseDuties, and this fails naming the pair.
 func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -84,7 +84,12 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 		t.Error("the teardown ends the trim before the usage publisher, which " +
 			"publishes into a log the trim is deciding how far to purge")
 	}
-	for _, duty := range []string{"stopEmbedding", "stopUsage", "stopRetention", "stopIdentityDuties"} {
+	// THE OBJECT COLLECTOR is a duty like the trim, and it deletes bytes the
+	// tracker's rows reference: still ticking past the release, it runs beside
+	// the peer that has just taken its lease; past the core, it judges an
+	// orphan against rows that are closing.
+	for _, duty := range []string{"stopEmbedding", "stopUsage", "stopRetention",
+		"stopIdentityDuties", "stopObjectCollector"} {
 		for _, later := range []string{"releaseDuties", "stopNative", "stopCore"} {
 			if at(duty) > at(later) {
 				t.Errorf("the teardown calls %s before %s, so the duty is "+
@@ -103,12 +108,15 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 //
 // The fleet history, the steer desk, a seat's memory and a run's live output
 // are each a scatter subject this node answers for, armed at boot on every
-// node; one still registered when the store and the logs close answers a
-// peer's question from a file that is closing, and a note it accepts reaches
-// no round. The pause watch and the budget parks take holds on mailboxes, and
+// node — and so, on a data node, are the estate service a node without data
+// reads and writes through and the broker membership every member answers;
+// one still registered when the store and the logs close answers a peer's
+// question from a file that is closing, and a note it accepts reaches no
+// round. The pause watch and the budget parks take holds on mailboxes, and
 // one firing into a closing client would log a release it could not make.
 //
-// Mutation: move any of them below stopCore, and this fails naming it.
+// Mutation: move any of them below stopCore, or stopServingEstate below
+// stopNative, and this fails naming it.
 func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -121,10 +129,54 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 		return i
 	}
 	for _, answerer := range []string{"stopHistory", "stopSteer", "stopMemoryReads",
-		"stopSandboxTails", "stopSeatPauses", "stopBudgetParks"} {
+		"stopSandboxTails", "stopSeatPauses", "stopBudgetParks",
+		"stopServingEstate", "stopServingFleetBroker"} {
 		if at(answerer) > at("stopCore") {
 			t.Errorf("the teardown stops the core before %s", answerer)
 		}
+	}
+	// The estate service answers out of the native half's readers too, and a
+	// node that has decided to go away stops being asked before it stops
+	// being able to answer, so the next request goes to a peer rather than
+	// waiting out its budget here.
+	if at("stopServingEstate") > at("stopNative") {
+		t.Error("the teardown stops the native half before it withdraws the " +
+			"estate service that answers out of it")
+	}
+}
+
+// EVERY FINAL FLUSH LANDS BEFORE THE CUSTODY THAT CARRIES IT, and the custody
+// before the keeper that settles it.
+//
+// On a node without `data` an event reaches the company's history only
+// through the custody buffer, which hands it to a data node's keeper: the
+// authentication trail's last minute and the auxiliary spend ledger's last
+// records are each published by a final flush, so a flush run after the
+// custody's own puts its records in a buffer nothing will ever empty. The
+// keeper, on a data node, settles what peers handed it against the store and
+// the broker, so it ends after the custody and before the backends close.
+//
+// Mutation: move stopAuthEvents or stopAuxSpend below stopCustody, or
+// stopKeeper above it, and this fails naming the pair.
+func TestEveryFinalFlushPrecedesTheCustodyThatCarriesIt(t *testing.T) {
+	t.Parallel()
+	order := callsIn(t, "teardown")
+	at := func(name string) int {
+		t.Helper()
+		i := slices.Index(order, name)
+		if i < 0 {
+			t.Fatalf("the teardown calls %v and no %s", order, name)
+		}
+		return i
+	}
+	for _, flush := range []string{"stopAuthEvents", "stopAuxSpend"} {
+		if at(flush) > at("stopCustody") {
+			t.Errorf("the teardown flushes the custody before %s, whose final "+
+				"records then sit in a buffer nothing empties", flush)
+		}
+	}
+	if at("stopCustody") > at("stopKeeper") {
+		t.Error("the teardown ends the keeper before the custody it settles")
 	}
 }
 

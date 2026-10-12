@@ -78,7 +78,7 @@ func TestThinkingBlocksAreNotPastedIntoTheTranscript(t *testing.T) {
 	t.Parallel()
 	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
 		{Role: llm.RoleAssistant, Content: "the answer", ThinkingBlocks: []llm.ThinkingBlock{
-			{Type: "thinking", Thinking: "secret deliberation", Signature: "sig-abc"},
+			{Type: "thinking", Thinking: "secret deliberation"},
 		}},
 	}})
 	if err != nil {

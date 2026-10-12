@@ -21,9 +21,9 @@ const alarmGauge = metrics.AlarmActive
 //
 // # Why a transition and not a level
 //
-// An alarm evaluated on the fifteen-second heartbeat ([AlarmInterval]) is
-// true for as long as the condition is, which is minutes or days. Logging the
-// level would write the same line four times a minute for a week and make the
+// An alarm evaluated on the position heartbeat ([AlarmInterval]) is true
+// for as long as the condition is, which is minutes or days. Logging the
+// level would write the same line six times a minute for a week and make the
 // log useless for finding when it STARTED — which is the one thing an
 // operator needs and the one thing a level cannot say. So entry and exit are each logged once,
 // carrying how long the alarm was up.

@@ -29,7 +29,15 @@ import {
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
-import { crumbsFor, titleOf } from "./crumbs.ts";
+import {
+  avatarLabel,
+  crumbsFor,
+  seatAvatarKey,
+  seatKindKey,
+  titleOf,
+  turnHandleKey,
+  turnSeatKey,
+} from "./crumbs.ts";
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { segmentsOf } from "~/test/routes.ts";
 
@@ -80,8 +88,8 @@ describe("navigation identity", () => {
 
   // A ROUTE NOTHING OWNS RESOLVES TO NOTHING rather than to the first row: a
   // sidebar that marked a workspace for a path it does not hold would tell the
-  // reader they are somewhere they are not. The retired heads are exactly that.
-  test("an unowned route marks no workspace, the retired heads included", () => {
+  // reader they are somewhere they are not — whatever the head is.
+  test("an unowned route marks no workspace, whatever its head", () => {
     for (const head of ["nowhere", "company", "activity", "cost", "admin", "pages"]) {
       expect(workspaceOf([head]), head).toBe("");
     }
@@ -283,10 +291,10 @@ describe("the resolver", () => {
     expect(resolve(["pages", uuid]).resolved).toBe(false);
   });
 
-  // THE RETIRED HEADS ARE NOT FOUND, and there is no redirect table: a
-  // redirect whose old path becomes a live route sends every reader of it
+  // A HEAD NO ROUTE OWNS IS NOT FOUND, and there is no redirect table: a
+  // redirect whose path becomes a live route sends every reader of it
   // somewhere else, permanently.
-  test("an address from before the one-sidebar rebuild is Not Found", () => {
+  test("an address under a head no route owns is Not Found", () => {
     for (const path of [
       ["company"],
       ["company", "people", "pm"],
@@ -498,6 +506,34 @@ describe("the breadcrumb", () => {
     });
     expect(named[named.length - 1]?.label).toBe("Platform");
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
+  });
+
+  // A SEAT'S BADGE IN THE TRAIL IS THE ONE ITS PAGE DRAWS: an agent wears
+  // the character and colour its page published, on its own crumb and on the
+  // seat crumb of each of its turns, and a crumb with nothing published keeps
+  // the kit's defaults rather than a character the crumb made up.
+  test("an agent's crumb wears the character and colour its page published", () => {
+    const avatar = { character: "foxlet", color: "rose" } as const;
+    const labels = {
+      "agent-cto": "CTO",
+      [seatKindKey("agent-cto")]: "agent",
+      [seatAvatarKey("agent-cto")]: avatarLabel(avatar),
+    };
+    const seat = crumbsFor(["agents", "seats", "agent-cto"], labels);
+    expect(seat[seat.length - 1]?.seat).toEqual({ name: "CTO", kind: "agent", avatar });
+
+    const bare = crumbsFor(["agents", "seats", "agent-cto"], {
+      "agent-cto": "CTO",
+      [seatKindKey("agent-cto")]: "agent",
+    });
+    expect(bare[bare.length - 1]?.seat?.avatar).toBeUndefined();
+
+    const turn = crumbsFor(["live", "turns", "t-1"], {
+      [turnSeatKey("t-1")]: "CTO",
+      [turnHandleKey("t-1")]: "agent-cto",
+      [seatAvatarKey("agent-cto")]: avatarLabel(avatar),
+    });
+    expect(turn.find((c) => c.seat)?.seat).toEqual({ name: "CTO", kind: "agent", avatar });
   });
 
   // A SEGMENT THAT IS ITS OBJECT'S NAME IS DRAWN AS ONE. A node, a secret, a

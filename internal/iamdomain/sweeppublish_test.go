@@ -3,7 +3,6 @@ package iamdomain_test
 import (
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +80,7 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 	}
 	for _, node := range []struct {
 		name string
-		db   *store.DB
+		db   store.ReplicatedHandle
 	}{{"node-a", rig.db}, {"node-b", peer.db}} {
 		if n := countRows(t, node.db, `SELECT COUNT(*) FROM iam_history
 			WHERE class = 'session'`); n != 0 {
@@ -267,7 +266,7 @@ func (r *writeRig) closeSession(person, lineage, reason string) {
 // node writes, on a batch clock of its own.
 type follower struct {
 	t        *testing.T
-	db       *store.DB
+	db       store.ReplicatedHandle
 	applier  *iamdomain.Applier
 	now      time.Time
 	consumed uint64
@@ -275,16 +274,7 @@ type follower struct {
 
 func newFollower(t *testing.T, nodeID string, now time.Time) *follower {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the second node's store: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close the second node's store: %v", err)
-		}
-	})
+	db := openNodeEstate(t, "the second node's store")
 	return &follower{t: t, db: db, applier: iamdomain.NewApplier(nodeID, nil), now: now}
 }
 
@@ -301,7 +291,7 @@ func (f *follower) follow(rig *writeRig) {
 
 // estateOf renders the replicated rows a sweep touches, in key order, as one
 // string two nodes either agree on or do not.
-func estateOf(t *testing.T, db *store.DB) string {
+func estateOf(t *testing.T, db store.ReplicatedHandle) string {
 	t.Helper()
 	var out []string
 	for _, query := range []string{
@@ -321,10 +311,10 @@ func estateOf(t *testing.T, db *store.DB) string {
 }
 
 // columnOf reads one text column out of a node's replicated estate.
-func columnOf(t *testing.T, db *store.DB, query string) []string {
+func columnOf(t *testing.T, db store.ReplicatedHandle, query string) []string {
 	t.Helper()
 	var out []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), query)
 		if err != nil {
 			return err
@@ -345,10 +335,10 @@ func columnOf(t *testing.T, db *store.DB, query string) []string {
 }
 
 // countRows reads one count out of a node's replicated estate.
-func countRows(t *testing.T, db *store.DB, query string) int {
+func countRows(t *testing.T, db store.ReplicatedHandle, query string) int {
 	t.Helper()
 	var n int
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), query).Scan(&n)
 	}); err != nil {
 		t.Fatalf("count %q: %v", query, err)

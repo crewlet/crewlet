@@ -111,6 +111,15 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// thing a released inbox does is judge a delivery against the
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, c)
+		// AND A RETRIED RESUME WAITING ON EITHER: a published company is
+		// the event that brings a model and the one that moves a ceiling,
+		// so the answers waiting on them are re-checked under the company
+		// now current. One still refused waits again, on whatever refuses
+		// it.
+		if c.Models != nil {
+			e.readmitAnswers(waitTurnEngine)
+		}
+		e.readmitAnswers(waitBudget)
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)

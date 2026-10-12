@@ -25,7 +25,8 @@ name: dependabot-merge
 on:
   pull_request:
     # `synchronize` earns its place as much as `opened` does. Dependabot
-    # force-pushes a rebase whenever `main` moves under an open bump, and a
+    # force-pushes a rebase when a bump conflicts with `main` after a push
+    # there, when its schedule runs, and on `@dependabot rebase`, and a
     # protection rule that dismisses stale approvals throws the approval away
     # with the old head — so without this the rebased pull request sits
     # approved by nobody, forever, and the auto-merge it is queued for never
@@ -58,9 +59,12 @@ jobs:
     # hands that commit the approval branch protection is asking for, which is
     # a way to have your own change approved by the repository itself.
     #
-    # The cost is that a maintainer's own "Update branch" click leaves the pull
-    # request unapproved, because the run it triggers is skipped. `@dependabot
-    # rebase` re-pushes as Dependabot and recovers it.
+    # The cost, under a rule that dismisses stale approvals, is that a
+    # maintainer's own "Update branch" click can leave the pull request
+    # unapproved, because the run it triggers is skipped. `@dependabot recreate`
+    # from a person with push access re-pushes as Dependabot and recovers it.
+    # Not `rebase`: the merge commit that click made is one Dependabot did not
+    # write, and it refuses to rebase a branch that holds one.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.actor == 'dependabot[bot]'
@@ -72,8 +76,25 @@ jobs:
       # the same suites for a patch as for a major, so the update type is not
       # what decides whether this lands. A step whose outputs nothing reads is
       # a gate that is not there, and it reads like one that is.
-      - name: approve
-        run: gh pr review --approve "$PR_URL"
+
+      # Approve only while GitHub still says a review is needed. This runs on
+      # `opened` and on each push Dependabot makes (a rebase), and under a rule
+      # that keeps approvals across pushes every run after the first would stack
+      # another review for nothing. `reviewDecision` is GitHub's own answer for the
+      # rule that governs the base branch: APPROVED means nothing to do, and
+      # CHANGES_REQUESTED is somebody's objection this approval would not clear.
+      # Anything else approves, an EMPTY decision included. GitHub leaves it empty
+      # when nothing requires a review, and has been reported to leave it empty
+      # while a ruleset's requirement still blocks the merge
+      # (radius-project/radius#13111), so a skip on doubt could stall every bump
+      # with nothing red to show for it.
+      - name: approve, if one is still needed
+        run: |
+          decision="$(gh pr view "$PR_URL" --json reviewDecision --jq .reviewDecision)"
+          case "$decision" in
+            APPROVED | CHANGES_REQUESTED) echo "Review decision is ${decision}: nothing to approve." ;;
+            *) gh pr review --approve "$PR_URL" ;;
+          esac
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,8 +103,9 @@ jobs:
       # is the pull request title (CONTRIBUTING.md), and that same title is the
       # line the generated release notes carry.
       #
-      # --auto is the whole safety property. Drop it and this merges on the
-      # spot, before a single check has reported.
+      # --auto queues the merge behind the checks `main` requires. Without it this
+      # step goes red while that rule stands, and with no such rule it would merge
+      # on the spot, before a single check has reported.
       - name: queue auto-merge
         run: gh pr merge --auto --squash "$PR_URL"
         env:

@@ -13,7 +13,14 @@ import (
 // maintained by hand is one that stops matching the table.
 func AlarmReference() string {
 	var b strings.Builder
-	b.WriteString(alarmHeader)
+	// THE CADENCES ARE THE CONSTANTS', spelled as an alarm's own sentence
+	// spells a duration: the page once stated the heartbeat as "ten
+	// seconds" in prose, which a retune of [PositionHeartbeat] would have
+	// left describing a loop that no longer ran at it — with the test that
+	// diffs the page against this function still green, because the page
+	// would be regenerated from the same stale words.
+	fmt.Fprintf(&b, alarmHeader,
+		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
 		named := make([]string, len(perLog))
 		for i, kind := range perLog {
@@ -41,7 +48,8 @@ func AlarmReference() string {
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
 	KindApplyLag: "This node is more than a minute behind the log. Being " +
-		"behind does not move its seats; a position that stops moving does.",
+		"behind does not take its copy out of service; a position that stops " +
+		"moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
@@ -61,9 +69,10 @@ var alarmMeaning = map[Kind]string{
 		"nothing in its log is past the window yet.",
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"one log for longer than the thirty-minute deferral grace, and it is " +
-		"raised once for each log that is. Where that log gates seat admission " +
-		"— the tracker's and the knowledge base's do — this node's " +
-		"seats have moved to a peer.",
+		"raised once for each log that is. Where that log judges this node's " +
+		"copy of the estate — the tracker's and the knowledge base's do — the " +
+		"node no longer serves its copy, and its seats read the estate from " +
+		"the other data nodes.",
 	KindFloorUnknown: "This node has been unable to read one log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses; it is " +
 		"raised once for each log that is, which is every log at once when " +
@@ -81,24 +90,37 @@ var alarmMeaning = map[Kind]string{
 		"inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
+	KindIVFRecallBelowFloor: "The latest measurement of the " +
+		"semantic index found recall against the exact scan below the floor, " +
+		"in a query shape a search is issued in, even probing every list — " +
+		"which is the full scan's own candidate pool, so the first stage is " +
+		"below the floor on this corpus with or without the index.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
-	KindVolumeLow: "The volume has less free space than the next restore, " +
-		"vacuum or snapshot needs for a second copy.",
+	KindVolumeLow: "A volume holding this node's databases has less free space " +
+		"than the next restore, vacuum or snapshot needs for a second copy — or " +
+		"could not be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
 		"a checkpoint is not happening.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
-	KindCensusDrift: "This company is doing more than twice the reads its " +
-		"log was sized for, so every sizing decision under it is stale.",
+	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
+		"its census allows — 125 a day per agent seat (at least one seat), " +
+		"plus what the object store's collector reads on its own schedule — " +
+		"so every sizing decision under it is stale.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
 		"satisfied.",
+	KindObjectsMissing: "Some of the company's files cannot be read: the " +
+		"collector's last audit asked the object store for every file's bytes, " +
+		"and some were not there, or were there at the wrong size or under the " +
+		"wrong digest. Those files cannot be downloaded or read until they are " +
+		"restored.",
 }
 
 const alarmHeader = `# Alarms
@@ -110,14 +132,15 @@ An alarm reaches you three ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
 line when it starts and another when it clears, carrying how long it was up,
 and a count on the node's health envelope (` + "`GET /health`" + ` and the
-dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where a per-log
-alarm counts once for each log it stands on and ` + "`worst`" + ` is the alarm that
-has been firing longest). Nothing has to be polled for any of
-them — every node evaluates the whole table on its own heartbeat, every
-fifteen seconds, and again the moment its quarter-hourly measurements (each
-log's daily intake, the vector coverage, the store's connection-pool waits)
-land, so an alarm with a sixty-second threshold is raised within a beat of
-passing it.
+dashboard's health push carry ` + "`alarms: {count, worst, worst_domain}`" + `, where
+a per-log alarm counts once for each log it stands on, ` + "`worst`" + ` is the alarm
+that has been firing longest and ` + "`worst_domain`" + ` the log it stands on when it
+is a per-log one). Nothing has to be polled for any of
+them — every node running a state log, which is every data node, evaluates
+the whole table on its own position heartbeat, every %s, and again the moment
+the measurements it takes every %s (each log's daily intake, the vector
+coverage, the store's connection-pool waits) land, so an alarm whose
+threshold is %s is raised within a beat of passing it.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
@@ -137,9 +160,9 @@ reads 1 while any log's stands. They are %s.
 const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
-decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised, the replay window a log's ceiling was
-sized to hold.
+decides something — the grace that takes a copy out of service, the grace
+that stops a node serving a copy it cannot decode, the budget a caller was
+promised, the replay window a log's ceiling was sized to hold.
 
 A seat whose token window is spent is NOT an alarm, because nothing is wrong
 with the node: the ceiling is doing what it was set to do. Its mail is parked

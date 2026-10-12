@@ -88,11 +88,11 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		userMessages = append(userMessages, BuildPhaseUserMessage(UserMessage{
 			TaskDescription: "post the summary",
 			PriorWork:       ledgerAfter(round),
-		}))
-		return BuildExecutor(seat, frozen)
+		}).Text)
+		return BuildExecutor(seat, frozen).Text
 	}, BuildExecutor(seat, ExecutorInput{
 		ToolCatalogue: "- post_message: Post to a channel.", AvailableTools: frozen.AvailableTools,
-	}))
+	}).Text)
 
 	// Guard the guard: if the per-round state never moved, the stability
 	// assertion above tested nothing at all.
@@ -125,14 +125,14 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 		Skills:   allSkills(),
 	}
 	stableAcrossRounds(t, "review",
-		func(int) string { return BuildReview(seat, frozen) },
-		BuildReview(seat, ReviewInput{Intent: "Post the summary to #eng."}))
+		func(int) string { return BuildReview(seat, frozen).Text },
+		BuildReview(seat, ReviewInput{Intent: "Post the summary to #eng."}).Text)
 
 	// And the cross-round case, stated so it is not mistaken for drift: a
 	// second pass carries the ledger the first one did not have.
 	second := frozen
 	second.EarlierIterations = "### Iteration 1\nCalled:\n- post_message(...) → success"
-	if BuildReview(seat, second) == BuildReview(seat, frozen) {
+	if BuildReview(seat, second).Text == BuildReview(seat, frozen).Text {
 		t.Error("the earlier-rounds ledger did not reach the review prompt")
 	}
 }
@@ -151,8 +151,8 @@ func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	}
 	review := ReviewInput{Intent: "Post.", Outcome: "delivered", Skills: allSkills()}
 	stableAcrossRounds(t, "turn",
-		func(int) string { return BuildExecutor(seat, exec) + BuildReview(seat, review) },
-		BuildExecutor(seat, ExecutorInput{})+BuildReview(seat, ReviewInput{}))
+		func(int) string { return BuildExecutor(seat, exec).Text + BuildReview(seat, review).Text },
+		BuildExecutor(seat, ExecutorInput{}).Text+BuildReview(seat, ReviewInput{}).Text)
 }
 
 // Assembly is deterministic for the same inputs, which is a stronger claim
@@ -178,9 +178,9 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 	in := ExecutorInput{Skills: cat, ToolCatalogue: "- x: does x"}
 
 	const builds = 200
-	first := BuildExecutor(seat, in)
+	first := BuildExecutor(seat, in).Text
 	for i := 2; i <= builds; i++ {
-		if got := BuildExecutor(seat, in); got != first {
+		if got := BuildExecutor(seat, in).Text; got != first {
 			t.Fatalf("build %d of %d differs from the first\n%s", i, builds, firstDiff(first, got))
 		}
 	}

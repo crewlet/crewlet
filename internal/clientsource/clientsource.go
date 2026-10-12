@@ -572,6 +572,11 @@ func Calls(tree string, callees ...string) (map[string][]string, error) {
 	}
 	out := map[string][]string{}
 	for _, f := range files {
+		// As in [declaration]: a callee is an identifier token, whose
+		// text is a substring of the file it is in.
+		if !slices.ContainsFunc(callees, func(c string) bool { return strings.Contains(f.src, c) }) {
+			continue
+		}
 		toks := f.toks
 		for i, t := range toks {
 			if t.kind != kIdent || !slices.Contains(callees, t.text()) {
@@ -851,6 +856,13 @@ func declaration(tree string, kind head, name string) (decl, error) {
 	}
 	var hits []decl
 	for _, f := range files {
+		// A file whose text does not hold the name declares nothing by
+		// it: an identifier token is compared by its SOURCE text, which
+		// is a substring of the file. Skipping it is exact, and it is
+		// most of the work — every reader asks of every file.
+		if !strings.Contains(f.src, name) {
+			continue
+		}
 		for _, at := range heads(f.toks, kind, name) {
 			hits = append(hits, decl{file: f, at: at})
 		}
@@ -939,11 +951,12 @@ func scan(tree string) ([]file, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		toks, err := lexed(rel, string(source), strings.HasSuffix(path, ".tsx"))
+		src := string(source)
+		toks, err := lexed(rel, src, strings.HasSuffix(path, ".tsx"))
 		if err != nil {
 			return err
 		}
-		files = append(files, file{rel: rel, src: string(source), toks: toks})
+		files = append(files, file{rel: rel, src: src, toks: toks})
 		return nil
 	})
 	if err != nil {
@@ -1044,15 +1057,19 @@ func spreadIn(toks []token) int {
 // A path-keyed cache would answer a file's OLD tokens to a test that rewrote
 // it; a content-keyed one cannot be stale, because different content is a
 // different key.
+//
+// ONE LEX PER KEY, EVEN AT ONCE: the entry is the lex itself, run by whichever
+// caller stores it first, and every other caller waits for that one and is
+// handed its tokens — or its error, so a file that does not scan still fails
+// every read of it. A load-then-store cache let the two or three dashboard
+// gates of one package, started together, each lex the whole tree at the same
+// moment.
 func lexed(rel, src string, jsx bool) ([]token, error) {
 	key := lexKey{rel: rel, src: src, jsx: jsx}
-	if hit, ok := lexCache.Load(key); ok {
-		result := hit.(lexResult)
-		return result.toks, result.err
-	}
-	toks, err := lex(rel, src, jsx)
-	lexCache.Store(key, lexResult{toks: toks, err: err})
-	return toks, err
+	entry, _ := lexCache.LoadOrStore(key, sync.OnceValues(func() ([]token, error) {
+		return lex(rel, src, jsx)
+	}))
+	return entry.(func() ([]token, error))()
 }
 
 type lexKey struct {
@@ -1060,12 +1077,7 @@ type lexKey struct {
 	jsx      bool
 }
 
-type lexResult struct {
-	toks []token
-	err  error
-}
-
-var lexCache sync.Map // lexKey → lexResult
+var lexCache sync.Map // lexKey → func() ([]token, error), run once
 
 // exports is every name the source files under `tree` export, mapped to the
 // files (relative to the tree, slash-separated) that export it.

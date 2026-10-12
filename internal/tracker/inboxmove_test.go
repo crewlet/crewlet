@@ -82,7 +82,7 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	// reader already names — still writes no notice, and still moves
 	// nobody: what is announced is what the inbox rows gained, never what a
 	// record could have said.
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`DELETE FROM tracker_history WHERE id = 't-1-patch'`)
 		return err
@@ -118,6 +118,74 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	}
 	if m := got[0][0]; m.Handle != "bo" || m.UnreadDelta != 2 || m.Subject != "t-3" {
 		t.Errorf("the batch announced %+v, want bo moved by 2 with t-3 newest", m)
+	}
+}
+
+// A PURGE SAYS WHOSE INBOX IT EMPTIED, as surely as a commit says whose it
+// filled.
+//
+// A purge deletes the notices its task's records routed — they hold excerpts,
+// and destroying content is what a purge is for — on every node at once. An
+// applier that announced only what it ADDED told nobody: a person whose inbox
+// listed the task went on seeing notices no node held until their screen's
+// next poll, and opening one answered that the task does not exist. So the
+// recipients of what a purge deletes move too, by ZERO — a notice deleted may
+// have been read long ago, and the count claims nothing it cannot know — while
+// the lead the purge itself wakes moves by its one new notice.
+func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	var got [][]tracker.InboxMovement
+	h.applier = tracker.NewApplier("node-a", func(m []tracker.InboxMovement) {
+		got = append(got, m)
+	})
+	create := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), &tracker.Notify{
+		Kind: tracker.ChangeCreated,
+		Snapshot: tracker.Snapshot{
+			Key: "ENG-1", Assignee: "bo", Watchers: []string{"cy"},
+		},
+	})
+	if _, err := h.apply(create, time.Unix(1_700_000_100, 0).UTC()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	h.applier.Committed(context.Background())
+	got = nil
+
+	purge := taskRecord("t-1", tracker.OpPurge,
+		map[string]any{"reason": "a duplicate import"}, &tracker.Notify{
+			Kind: tracker.ChangePurged,
+			Snapshot: tracker.Snapshot{
+				Key: "ENG-1", Project: "ENG", ProjectLead: "lee",
+			},
+		})
+	if _, err := h.apply(purge, time.Unix(1_700_000_200, 0).UTC()); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if left := h.value(`SELECT COUNT(*) FROM tracker_notifications
+		WHERE recipient IN ('bo', 'cy')`); left != 0 {
+		t.Fatalf("the purge left %d of the task's notices", left)
+	}
+	h.applier.Committed(context.Background())
+	want := []tracker.InboxMovement{
+		{Handle: "bo", UnreadDelta: 0, Subject: "t-1", Reason: tracker.ReasonAssignee},
+		{Handle: "cy", UnreadDelta: 0, Subject: "t-1", Reason: tracker.ReasonWatcher},
+		{Handle: "lee", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonPurged},
+	}
+	if len(got) != 1 || !slices.Equal(got[0], want) {
+		t.Fatalf("the purge announced %v, want %v — every inbox it emptied "+
+			"by zero and the lead it woke by one", got, want)
+	}
+
+	// A REDELIVERY OF THE PURGE deletes nothing — the marker lets it
+	// through by its own id, and there is nothing left to delete — so it
+	// moves nobody.
+	got = nil
+	if _, err := h.applyAt(purge, time.Unix(1_700_000_200, 0).UTC(), h.seq); err != nil {
+		t.Fatalf("redeliver the purge: %v", err)
+	}
+	h.applier.Committed(context.Background())
+	if len(got) != 0 {
+		t.Errorf("a redelivered purge announced %v", got)
 	}
 }
 

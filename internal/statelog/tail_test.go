@@ -16,7 +16,7 @@ import (
 // unheld walks the harness's log back from last, as a restored reanchor does.
 func unheld(t *testing.T, h *applyHarness, last uint64) *statelog.TailRecord {
 	t.Helper()
-	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(),
+	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate,
 		statelog.VerifiedLog{Log: h.fetch, Verifier: testVerifier(t, probeDomain{})},
 		h.runner.Committed().Generation, 1, last)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestARecordWhoseEnvelopeDoesNotDecodeIsAnError(t *testing.T) {
 	// which the verified log refuses before any envelope is read.
 	h.fetch.log[4] = statelog.Message{Seq: 4, StoredAt: otherHistory, Payload: probeSeal([]byte("{"))}
 	h.fetch.mu.Unlock()
-	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(),
+	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate,
 		statelog.VerifiedLog{Log: h.fetch, Verifier: testVerifier(t, probeDomain{})},
 		h.runner.Committed().Generation, 1, 4)
 	if err == nil || !strings.Contains(err.Error(), "does not decode") {
@@ -215,16 +215,19 @@ func TestARestoredReanchorOverUnheldRecordsRunsOnlyOnTheOperatorsWord(t *testing
 // The operation ledger travels inside every snapshot, instant and all, so the
 // row a donor wrote when it applied a record names that record on the node that
 // adopted it exactly as it did on the donor: a restored reanchor there finds
-// nothing written after the restore and runs.
+// nothing written after the restore and runs. Where the donor's own sweep had
+// removed the row, the walk cannot vouch — but it says why, with the watermark
+// that travelled beside the ledger, so the refusal can say the rows may hold
+// the record after all.
 func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	t.Parallel()
 	held := otherHistory.Add(-time.Hour).Truncate(time.Microsecond)
 	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200}
 	// THE DONOR APPLIED THE RECORD AT ITS CHECKPOINT: its ledger names it by
 	// operation, position and the broker's instant.
-	seed := func(t *testing.T, db *store.DB) {
+	seed := func(t *testing.T, db store.ReplicatedHandle) {
 		t.Helper()
-		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at, stored_at)
 				VALUES ('op-held', 'object.held', ?, 0, ?)`,
@@ -238,7 +241,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	log.offerStored(at.Seq, held, env(at.Seq, "edit", "held", "op-held", 1))
 	walk := func(t *testing.T, h *joinHarness) *statelog.TailRecord {
 		t.Helper()
-		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.joiner.Replicated(),
+		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.joinEstate,
 			statelog.VerifiedLog{Log: log, Verifier: testVerifier(t, probeDomain{})},
 			at.Generation, 1, at.Seq)
 		if err != nil {
@@ -249,7 +252,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 
 	t.Run("from a donor whose ledger travels", func(t *testing.T) {
 		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: seed})
+		h := newJoinHarnessFrom(t, joinDonor{seed: seed})
 		if _, err := h.adopter(t).Join(t.Context()); err != nil {
 			t.Fatalf("Join: %v", err)
 		}
@@ -259,6 +262,30 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 				"its own history", got)
 		}
 	})
+
+	// THE DONOR'S SWEEP HAD REMOVED THE ROW: the ledger arrives without it
+	// and with the donor's watermark beside it.
+	t.Run("from a donor whose sweep had removed it", func(t *testing.T) {
+		t.Parallel()
+		swept := held.Add(time.Hour)
+		h := newJoinHarnessFrom(t, joinDonor{seed: func(t *testing.T, db store.ReplicatedHandle) {
+			t.Helper()
+			markLedgerLost(t, db, swept)
+		}})
+		if _, err := h.adopter(t).Join(t.Context()); err != nil {
+			t.Fatalf("Join: %v", err)
+		}
+		got := walk(t, h)
+		if got == nil || got.Seq != at.Seq {
+			t.Fatalf("the walk over a swept ledger answered %v — it cannot vouch "+
+				"for a record whose row is gone", got)
+		}
+		if !got.LedgerLostBefore.Equal(swept) {
+			t.Fatalf("the record names the ledger's watermark as %s, want the "+
+				"donor's %s — the refusal cannot say the rows may hold it after all",
+				got.LedgerLostBefore, swept)
+		}
+	})
 }
 
 // A LEDGER'S SILENCE IS CONCLUSIVE ONLY FOR AN OPERATION MINTED SINCE IT LAST
@@ -266,8 +293,9 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 //
 // The walk names an unheld record with the ledger's watermark exactly when the
 // record's operation was minted before it — the one case in which its row may
-// have been swept, and the rows may hold the record after all. An operation id that carries no instant
-// reads as minted before every loss, as the publisher reads it.
+// have been swept, and the rows may hold the record after all. An operation id
+// that carries no instant reads as minted before every loss, as the publisher
+// reads it.
 func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 	t.Parallel()
 	minted := otherHistory.Add(-24 * time.Hour).Truncate(time.Millisecond)
@@ -289,10 +317,7 @@ func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 			t.Parallel()
 			h := appliedThrough(t, 3)
 			if !c.lost.IsZero() {
-				if err := statelog.RecordLedgerLoss(t.Context(), h.db.Replicated(),
-					probeDomain{}, c.lost); err != nil {
-					t.Fatalf("record the ledger's loss: %v", err)
-				}
+				markLedgerLost(t, h.estate, c.lost)
 			}
 			h.fetch.offerStored(4, otherHistory, env(4, "edit", "4", c.opID, 1))
 			got := unheld(t, h, 4)

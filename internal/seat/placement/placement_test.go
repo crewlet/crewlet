@@ -5,14 +5,17 @@
 // group — and the test that proves it is
 // TestComputePinnedMajorityIsNotStrandedByAFleetWideRatio: under the naive
 // ratio every node reports a healthy sweep while five seats are served by
-// nobody.
+// nobody. Nor is a share a number a node may spend on any group it matches:
+// TestGreedyClaimsBoundedPerGroupPlaceEveryPlaceableSeat is why.
 package placement
 
 import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"math/rand/v2"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -223,12 +226,12 @@ func TestParseRoles(t *testing.T) {
 		{
 			name:   "nil is every role",
 			values: nil,
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "empty is every role",
 			values: []string{},
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "one role is one role",
@@ -281,7 +284,7 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	t.Parallel()
 
 	var unset RoleSet
-	for _, role := range []NodeRole{RoleIngress, RoleSeats, RoleWorkers} {
+	for _, role := range Vocabulary() {
 		if !unset.Has(role) {
 			t.Fatalf("the unset role set must have %q", role)
 		}
@@ -291,13 +294,23 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	}
 
 	zero := NodeProfile{ID: "n1"}
-	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() {
+	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() || !zero.HoldsData() {
 		t.Fatalf("a profile with no declared roles must do everything, got %v", zero.Roles.Names())
 	}
 
 	declared := NodeProfile{ID: "api", Roles: Roles(RoleIngress)}
 	if declared.RunsSeats() {
 		t.Fatal("an ingress-only node must not run seats")
+	}
+	// AND A PEER THAT DECLARES NOTHING HOLDS DATA. A row naming no roles
+	// reads as every role, and reading it as stateless would drop a
+	// member's position out of the trim's minimum.
+	if !zero.HoldsData() {
+		t.Fatal("a profile with no declared roles must hold data")
+	}
+	stateless := NodeProfile{ID: "agent", Roles: Roles(RoleSeats)}
+	if stateless.HoldsData() {
+		t.Fatal("a seats-only node must not hold data")
 	}
 }
 
@@ -320,7 +333,7 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 
 	me := NodeProfile{
 		ID:     "n1",
-		Roles:  Roles(RoleSeats, RoleWorkers),
+		Roles:  Roles(RoleSeats, RoleWorkers, RoleData),
 		Labels: map[string]string{"zone": "eu"},
 	}
 
@@ -342,11 +355,10 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 	assertProfile(t, FromMeta("n1", decoded), me)
 }
 
-// A peer running a build that predates the field. "Does everything, labelled
-// with nothing" is the only safe reading — the alternative is a node with no
-// roles, which drops a live peer out of the denominator and over-subscribes
-// the rest of the fleet.
-func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
+// A row that does not say. "Does everything, labelled with nothing" is the
+// only safe reading — the alternative is a node with no roles, which drops a
+// live peer out of the denominator and over-subscribes the rest of the fleet.
+func TestFromMetaOfARowThatDoesNotSayDoesEverything(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -355,7 +367,7 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 	}{
 		{"absent", nil},
 		{"empty", map[string]any{}},
-		{"other fields only", map[string]any{"build": "v3"}},
+		{"other fields only", map[string]any{"zone": "eu"}},
 		{"explicit nulls", map[string]any{"roles": nil, "labels": nil}},
 		{"an empty role list", map[string]any{"roles": []any{}}},
 	}
@@ -363,7 +375,7 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			back := FromMeta("old", tc.meta)
+			back := FromMeta("silent", tc.meta)
 			if !back.Roles.Equal(DefaultRoles()) {
 				t.Fatalf("roles = %v, want every role", back.Roles.Names())
 			}
@@ -371,10 +383,10 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 				t.Fatalf("labels = %v, want none", back.Labels)
 			}
 			if !back.RunsSeats() {
-				t.Fatal("an older peer must still count as a seat runner")
+				t.Fatal("a row that does not say must still count as a seat runner")
 			}
-			if back.ID != "old" {
-				t.Fatalf("id = %q, want %q", back.ID, "old")
+			if back.ID != "silent" {
+				t.Fatalf("id = %q, want %q", back.ID, "silent")
 			}
 		})
 	}
@@ -382,7 +394,7 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 
 // A peer's bad row must not take down the reader's sweep, and there is only
 // one safe reading of one.
-func TestFromMetaMalformedReadsAsTheOldBehaviourToo(t *testing.T) {
+func TestFromMetaOfAMalformedRowDoesEverythingToo(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -446,7 +458,7 @@ func TestFromLease(t *testing.T) {
 // ── the share ────────────────────────────────────────────────────────
 
 // The unconstrained fleet is the degenerate case, not a second path.
-func TestComputeWithNoPlacementIsTheOldArithmetic(t *testing.T) {
+func TestComputeWithNoPlacementIsTheCeilingShare(t *testing.T) {
 	t.Parallel()
 
 	seats := seatsWith(anywhere, "a", "b", "c", "d", "e")
@@ -563,6 +575,34 @@ func TestComputeGivesANonSeatNodeNothing(t *testing.T) {
 	assertHandles(t, "unplaceable", plan.Unplaceable, nil)
 }
 
+// A WITHDRAWN NODE IS NOT A HOME. It runs seats and its presence lease is
+// live, but it holds none and claims none, so a share computed over it is one
+// nobody takes up: its peers would keep half the seats free for it, and a seat
+// pinned to it would read as served. Counted out, the peer's share is the
+// whole group and the pinned seat is reported — by the withdrawn node too,
+// which reaches the same verdict and holds nothing.
+func TestComputeLeavesAWithdrawnNodeOutOfEveryShare(t *testing.T) {
+	t.Parallel()
+
+	pinned := SeatPlacement{Node: "n1"}
+	seats := append(seatsWith(anywhere, "a", "b", "c", "d"), Seat{Handle: "pin", Placement: pinned})
+	out := NodeProfile{ID: "n1", Withdrawn: true}
+	live := []NodeProfile{out, {ID: "n2"}}
+
+	peer := Compute(seats, live[1], live)
+	if peer.SeatNodes != 1 || peer.Capacity != 4 {
+		t.Fatalf("peer: seat nodes = %d, capacity = %d; want 1 and 4", peer.SeatNodes, peer.Capacity)
+	}
+	assertHandles(t, "peer unplaceable", peer.Unplaceable, []string{"pin"})
+
+	self := Compute(seats, out, live)
+	if self.Capacity != 0 || len(self.Groups) != 0 {
+		t.Fatalf("withdrawn node: capacity = %d, groups = %+v; want nothing", self.Capacity, self.Groups)
+	}
+	assertHandles(t, "withdrawn node eligible", self.Eligible, nil)
+	assertHandles(t, "withdrawn node unplaceable", self.Unplaceable, []string{"pin"})
+}
+
 // First sweep of the first node, and every store blip after. A node that is
 // invisible to itself computes a share out of a fleet it is not in — zero
 // eligible nodes for every group, so it claims nothing and reports every
@@ -645,13 +685,15 @@ func TestComputeEligibilityFollowsPinsAndSelectors(t *testing.T) {
 	}
 }
 
-// What makes the give-back settle instead of oscillating: a ceiling per
-// group means a node that has shed down to its share has no room to
-// immediately re-claim what it let go.
-//
-// The invariant is fleet-wide — the shares must cover every placeable seat,
+// EVERY GROUP IS COVERED BY ITS OWN NODES' SHARES. A group's eligible nodes
+// may each hold Share of it and nothing outside the group can occupy that
+// room, so the shares of the nodes it matches must sum to at least its size,
 // or a seat is stranded with every sweep reporting healthy.
-func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
+//
+// Summing over the whole fleet instead — the check this replaced — passes the
+// satellite shape below while it strands the pinned seat: the satellite's
+// total covers it, and then spends itself on unpinned seats.
+func TestEveryGroupIsCoveredByItsOwnNodesShares(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -678,6 +720,18 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 			fleet: []NodeProfile{{ID: "big"}, {ID: "n2"}, {ID: "n3"}},
 		},
 		{
+			name: "a satellite for one pinned seat beside two cores",
+			seats: append(
+				seatsWith(anywhere, "aaron", "bob", "carl"),
+				Seat{Handle: "zed", Placement: SeatPlacement{Labels: map[string]string{"seat": "zed"}}},
+			),
+			fleet: []NodeProfile{
+				{ID: "sat-zed", Roles: Roles(RoleSeats), Labels: map[string]string{"seat": "zed"}},
+				{ID: "core-1"},
+				{ID: "core-2"},
+			},
+		},
+		{
 			name: "overlapping selectors",
 			seats: append(
 				append(
@@ -694,6 +748,14 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 			},
 		},
 		{
+			name: "a seat only a withdrawn node matches",
+			seats: append(
+				seatsWith(anywhere, "a", "b", "c"),
+				Seat{Handle: "pin", Placement: SeatPlacement{Node: "out"}},
+			),
+			fleet: []NodeProfile{{ID: "out", Withdrawn: true}, {ID: "n1"}, {ID: "n2"}},
+		},
+		{
 			name:  "a seat nobody matches",
 			seats: append(seatsWith(anywhere, "a", "b"), Seat{Handle: "gpu", Placement: SeatPlacement{Labels: map[string]string{"gpu": "true"}}}),
 			fleet: []NodeProfile{{ID: "n1"}, {ID: "n2"}},
@@ -704,11 +766,22 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			total := 0
+			reach := map[string]int{}
+			size := map[string]int{}
+			for _, s := range tc.seats {
+				size[s.Placement.Key()]++
+			}
 			var unplaceable []string
 			for i, me := range tc.fleet {
 				plan := Compute(tc.seats, me, tc.fleet)
-				total += plan.Capacity
+				total := 0
+				for _, g := range plan.Groups {
+					reach[g.Placement.Key()] += g.Share
+					total += g.Share
+				}
+				if total != plan.Capacity {
+					t.Fatalf("%s: capacity %d is not the sum of its group shares %d", me.ID, plan.Capacity, total)
+				}
 
 				// Every node must reach the same verdict about the company
 				// from the same membership read; two nodes disagreeing about
@@ -720,12 +793,224 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 				assertHandles(t, "unplaceable", plan.Unplaceable, unplaceable)
 			}
 
-			placeable := len(tc.seats) - len(unplaceable)
-			if total < placeable {
-				t.Fatalf("shares sum to %d, below the %d placeable seats — seats are stranded", total, placeable)
+			for _, s := range tc.seats {
+				key := s.Placement.Key()
+				if slices.Contains(unplaceable, s.Handle) {
+					if reach[key] != 0 {
+						t.Fatalf("%s is reported unplaceable, but its group's shares reach %d", s.Handle, reach[key])
+					}
+					continue
+				}
+				if reach[key] < size[key] {
+					t.Fatalf("group %s: its nodes' shares reach %d of its %d seats — %s is stranded "+
+						"with nothing reported", s.Placement, reach[key], size[key], s.Handle)
+				}
 			}
 		})
 	}
+}
+
+// GREEDY CLAIMS BOUNDED PER GROUP PLACE EVERY PLACEABLE SEAT, in any order,
+// and the seats left over are exactly the ones reported unplaceable.
+//
+// This is the host's policy run against the plan alone: each node, in a
+// shuffled order, walks its groups in a shuffled order and takes free seats
+// while [Plan.Room] says it has room in that seat's group — the order a
+// claim loop happens to use must not be what decides whether a seat is
+// served. Random fleets over a fixed seed, so a failure reproduces.
+func TestGreedyClaimsBoundedPerGroupPlaceEveryPlaceableSeat(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(1, 2))
+	for run := range 500 {
+		seats, fleet := randomCompany(rng)
+
+		plans := make([]Plan, len(fleet))
+		for i, me := range fleet {
+			plans[i] = Compute(seats, me, fleet)
+		}
+		held := simulateClaims(rng, fleet, plans)
+
+		unplaceable := plans[0].Unplaceable
+		for _, s := range seats {
+			_, isHeld := held[s.Handle]
+			if isHeld == slices.Contains(unplaceable, s.Handle) {
+				t.Fatalf("run %d: seat %s (%s) held=%v but unplaceable=%v\nseats=%v\nfleet=%v\nheld=%v",
+					run, s.Handle, s.Placement, isHeld, unplaceable, seats, fleet, held)
+			}
+		}
+		for i, plan := range plans {
+			id := fleet[i].ID
+			for gi, room := range plan.Room(func(h string) bool { return held[h] == id }, nil) {
+				if room < 0 {
+					t.Fatalf("run %d: %s holds more than its share of %s", run, id, plan.Groups[gi].Placement)
+				}
+			}
+		}
+	}
+}
+
+// simulateClaims runs greedy, per-group-bounded claims to a fixed point and
+// returns who holds what.
+func simulateClaims(rng *rand.Rand, fleet []NodeProfile, plans []Plan) map[string]string {
+	held := map[string]string{}
+	for progress := true; progress; {
+		progress = false
+		for _, i := range rng.Perm(len(fleet)) {
+			id, plan := fleet[i].ID, plans[i]
+			room := plan.Room(func(h string) bool { return held[h] == id }, nil)
+			for _, gi := range rng.Perm(len(plan.Groups)) {
+				handles := plan.Groups[gi].Handles
+				for _, hi := range rng.Perm(len(handles)) {
+					if room[gi] <= 0 {
+						break
+					}
+					if _, taken := held[handles[hi]]; taken {
+						continue
+					}
+					held[handles[hi]] = id
+					room[gi]--
+					progress = true
+				}
+			}
+		}
+	}
+	return held
+}
+
+// randomCompany is a fleet of one to six nodes — some running no seats, some
+// withdrawn, each carrying some of a small label vocabulary — and up to
+// sixteen seats placed anywhere, on a label, on a node id that may not be
+// live, or on both.
+func randomCompany(rng *rand.Rand) ([]Seat, []NodeProfile) {
+	zones := []string{"eu", "us", "ap"}
+	fleet := make([]NodeProfile, 1+rng.IntN(6))
+	for i := range fleet {
+		node := NodeProfile{ID: "n" + strconv.Itoa(i), Labels: map[string]string{}}
+		if rng.IntN(4) == 0 {
+			node.Roles = Roles(RoleIngress, RoleWorkers)
+		}
+		if rng.IntN(2) == 0 {
+			node.Labels["zone"] = zones[rng.IntN(len(zones))]
+		}
+		if rng.IntN(3) == 0 {
+			node.Labels["gpu"] = "true"
+		}
+		node.Withdrawn = rng.IntN(5) == 0
+		fleet[i] = node
+	}
+
+	seats := make([]Seat, rng.IntN(17))
+	for i := range seats {
+		var p SeatPlacement
+		switch rng.IntN(5) {
+		case 0:
+			p.Labels = map[string]string{"zone": zones[rng.IntN(len(zones))]}
+		case 1:
+			p.Labels = map[string]string{"gpu": "true"}
+		case 2:
+			p.Node = "n" + strconv.Itoa(rng.IntN(len(fleet)+1))
+		case 3:
+			p.Node = "n" + strconv.Itoa(rng.IntN(len(fleet)))
+			p.Labels = map[string]string{"zone": zones[rng.IntN(len(zones))]}
+		}
+		seats[i] = Seat{Handle: "s" + strconv.Itoa(i), Placement: p}
+	}
+	return seats, fleet
+}
+
+// Room is per group: what this node runs of one group never uses up another,
+// and a group held past what it may keep reads negative by exactly the
+// surplus. A lease it cannot give back is charged first, wherever it sits, and
+// squeezes the least constrained group — never the pinned one.
+func TestRoomIsCountedPerGroup(t *testing.T) {
+	t.Parallel()
+
+	zed := SeatPlacement{Labels: map[string]string{"seat": "zed"}}
+	seats := append(seatsWith(anywhere, "aaron", "bob", "carl"), Seat{Handle: "zed", Placement: zed})
+	sat := NodeProfile{ID: "sat-zed", Roles: Roles(RoleSeats), Labels: map[string]string{"seat": "zed"}}
+	fleet := []NodeProfile{sat, {ID: "core-1"}, {ID: "core-2"}}
+
+	plan := Compute(seats, sat, fleet)
+	if plan.Capacity != 2 {
+		t.Fatalf("capacity = %d, want 2 (1 pinned + a third of 3 unpinned)", plan.Capacity)
+	}
+	if len(plan.Groups) != 2 || plan.Groups[0].Placement.Key() != zed.Key() {
+		t.Fatalf("groups = %+v, want the pinned group first", plan.Groups)
+	}
+
+	holding := func(handles ...string) func(string) bool {
+		return func(h string) bool { return slices.Contains(handles, h) }
+	}
+	tests := []struct {
+		name    string
+		running []string
+		stuck   []string
+		want    []int // pinned group, unpinned group
+	}{
+		{"nothing held", nil, nil, []int{1, 1}},
+		// The stranding: two unpinned seats fill the capacity of 2, and a
+		// pooled room would read zero everywhere. Per group, the pinned
+		// group still has its room and the unpinned one is over by one.
+		{"two unpinned seats", []string{"aaron", "bob"}, nil, []int{1, -1}},
+		{"its own seats", []string{"zed", "carl"}, nil, []int{0, 0}},
+		{"a running seat outside every group", []string{"elsewhere"}, nil, []int{1, 1}},
+		// A stuck lease outside every group takes one of the two: out of
+		// the unpinned group, so the pinned seat keeps its room.
+		{"a stuck seat outside every group", nil, []string{"elsewhere"}, []int{1, 0}},
+		// The same, with an unpinned seat running: total holding 2 of 2,
+		// and a pooled bound would read "full" and shed nothing while the
+		// pinned seat waits. Per group, the unpinned seat is the surplus.
+		{"a stuck seat outside every group and an unpinned one", []string{"aaron"}, []string{"elsewhere"},
+			[]int{1, -1}},
+		// A stuck seat of a group uses that group's own share first.
+		{"the pinned seat stuck", nil, []string{"zed"}, []int{0, 1}},
+		{"an unpinned seat stuck beside a running one", []string{"bob"}, []string{"aaron"}, []int{1, -1}},
+		// More stuck than capacity: nothing running may stay anywhere.
+		{"stuck past capacity", []string{"zed"}, []string{"aaron", "bob", "elsewhere"}, []int{-1, 0}},
+	}
+	for _, tc := range tests {
+		got := plan.Room(holding(tc.running...), tc.stuck)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: room = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Most constrained first: fewest eligible nodes, and a placement before
+// "anywhere" when the count ties, so a claim-limited pass spends itself on
+// the seats with the fewest other homes. Beyond that, the org's order.
+func TestGroupsAreOrderedMostConstrainedFirst(t *testing.T) {
+	t.Parallel()
+
+	eu := SeatPlacement{Labels: map[string]string{"zone": "eu"}}
+	pinned := SeatPlacement{Node: "n1"}
+	gpu := SeatPlacement{Labels: map[string]string{"gpu": "true"}}
+	seats := []Seat{
+		{Handle: "free", Placement: anywhere},
+		{Handle: "eu", Placement: eu},
+		{Handle: "gpu", Placement: gpu},
+		{Handle: "pinned", Placement: pinned},
+	}
+	me := NodeProfile{ID: "n1", Labels: map[string]string{"zone": "eu", "gpu": "true"}}
+	fleet := []NodeProfile{me, {ID: "n2", Labels: map[string]string{"zone": "eu"}}, {ID: "n3"}}
+
+	plan := Compute(seats, me, fleet)
+	var got []string
+	for _, g := range plan.Groups {
+		got = append(got, g.Handles...)
+	}
+	// gpu and pinned each have one node, in the org's order; eu has two;
+	// free has three.
+	assertHandles(t, "group order", got, []string{"gpu", "pinned", "eu", "free"})
+
+	// Alone, every group has one node, and the placed ones still go first.
+	alone := Compute(seats, me, nil)
+	got = nil
+	for _, g := range alone.Groups {
+		got = append(got, g.Handles...)
+	}
+	assertHandles(t, "group order alone", got, []string{"eu", "gpu", "pinned", "free"})
 }
 
 // Eligibility is not a preference to be sorted: the host claims in the order
@@ -807,5 +1092,152 @@ func assertProfile(t *testing.T, got, want NodeProfile) {
 		if !maps.Equal(got.Labels, want.Labels) {
 			t.Fatalf("labels = %v, want %v", got.Labels, want.Labels)
 		}
+	}
+}
+
+// PRESENCE IS A NODE'S PROFILE AND NOTHING ELSE. A share written onto it would
+// be a second answer to what the node holds — one that a shutdown drain
+// withdraws, at its first step, while the node is still serving.
+func TestPresenceCarriesNoObjectShare(t *testing.T) {
+	t.Parallel()
+	meta := NodeProfile{ID: "n1", Roles: Roles(RoleData)}.Meta()
+	for key := range meta {
+		if key != "roles" && key != "labels" {
+			t.Errorf("presence carries %q: a node's profile is its roles and labels", key)
+		}
+	}
+}
+
+// WITHDRAWN READS OFF ITS ROW ONLY AS A REAL TRUE. Anything else is the
+// reading a build that never wrote the key gives — the node is counted —
+// because a value this build cannot read must not take a node that is
+// placing seats out of every share.
+func TestWithdrawnReadsOffTheRowOnlyAsTrue(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw  any
+		want bool
+	}{
+		"written here": {raw: true, want: true},
+		"false, said":  {raw: false, want: false},
+		"absent":       {raw: nil, want: false},
+		"a string":     {raw: "true", want: false},
+		"a number":     {raw: float64(1), want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			meta := map[string]any{}
+			if tc.raw != nil {
+				meta[WithdrawnKey] = tc.raw
+			}
+			got := FromMeta("node-a", meta)
+			if got.Withdrawn != tc.want {
+				t.Fatalf("Withdrawn = %v, want %v", got.Withdrawn, tc.want)
+			}
+			if got.RunsSeats() != true || got.PlacesSeats() == tc.want {
+				t.Fatalf("RunsSeats = %v, PlacesSeats = %v for withdrawn = %v",
+					got.RunsSeats(), got.PlacesSeats(), tc.want)
+			}
+		})
+	}
+}
+
+// A NODE'S SEAT COUNT READS OFF ITS ROW, and a count it cannot read is zero.
+//
+// Peers sum these counts to learn whether any seat is free. The count arrives
+// as an int from this process and as a float64 after a round trip through the
+// lease store; anything else — absent, or not a whole non-negative number —
+// reads as zero, which only ever sends the summing sweep to try.
+func TestASeatCountReadsOffTheRowAndAnUnreadableOneIsZero(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw  any
+		want int
+	}{
+		"written here":       {raw: 3, want: 3},
+		"after a round trip": {raw: float64(3), want: 3},
+		"zero, said":         {raw: float64(0), want: 0},
+		"absent":             {raw: nil, want: 0},
+		"a string":           {raw: "3", want: 0},
+		"negative":           {raw: float64(-1), want: 0},
+		"a fraction":         {raw: 2.5, want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			meta := map[string]any{}
+			if tc.raw != nil {
+				meta[HeldKey] = tc.raw
+			}
+			if got := FromMeta("node-a", meta).Held; got != tc.want {
+				t.Fatalf("Held = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// ── the broker kind on the wire ──────────────────────────────────────
+
+// EVERY KIND A NODE ADVERTISES READS BACK AS ITSELF, through the JSON round
+// trip the lease store puts every row through. A kind that came back as
+// unknown would count a leaf as a member of every seal — safe, and a seal that
+// waits on a node that can never acknowledge it.
+func TestEveryAdvertisedBrokerKindRoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, kind := range BrokerKinds() {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(NodeProfile{ID: "n1", Broker: kind}.Meta())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := FromMeta("n1", decoded).Broker; got != kind {
+				t.Fatalf("advertised %q, read back %q", kind, got)
+			}
+		})
+	}
+}
+
+// A ROW THAT DOES NOT SAY IS UNKNOWN, NEVER A LEAF — a row with no kind, a
+// value of the wrong type, a kind a newer build added. A leaf is the one
+// reading that would drop a member out of a capacity seal, so it is the one a
+// row that says nothing must never be given; unknown is what a seal counts.
+func TestABrokerKindTheRowDoesNotStateIsUnknownNeverALeaf(t *testing.T) {
+	t.Parallel()
+	for name, meta := range map[string]map[string]any{
+		"a row with no kind":         {"roles": []any{"data"}},
+		"no meta at all":             nil,
+		"an empty string":            {"broker": ""},
+		"a value of the wrong type":  {"broker": 7},
+		"a list":                     {"broker": []any{"member"}},
+		"a kind a newer build added": {"broker": "observer"},
+		"another spelling":           {"broker": "Member"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := FromMeta("n1", meta).Broker
+			if got != BrokerUnknown {
+				t.Fatalf("read %q; a row that does not say must read as unknown", got)
+			}
+			if got.String() != "unknown" {
+				t.Errorf("an unknown kind renders as %q, want \"unknown\" — an "+
+					"empty cell reads as nothing to look at", got.String())
+			}
+		})
+	}
+}
+
+// A PROFILE WITH NO KIND WRITES NONE, so absence stays the one way to say
+// unknown and a profile nobody derived a kind for does not claim one.
+func TestAnUnknownBrokerKindIsNotWritten(t *testing.T) {
+	t.Parallel()
+	if _, ok := (NodeProfile{ID: "n1"}).Meta()["broker"]; ok {
+		t.Fatal("a profile with no broker kind advertised one")
+	}
+	if BrokerUnknown.Valid() {
+		t.Fatal("unknown is valid: it would be written onto a presence row as a kind")
 	}
 }

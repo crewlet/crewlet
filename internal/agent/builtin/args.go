@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -242,7 +243,10 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // A refusal or an outcome the state log composed ([statelog.ErrUnavailable]:
 // a node behind its log, below its floor, holding a record it cannot decode, a
 // log that refused the append); a coordination store that did not answer
-// ([coord.ErrUnavailable]); an estate held closed while a peer's snapshot is adopted
+// ([coord.ErrUnavailable]); the estate's router finding no data node to run
+// the call on ([estate.ErrUnserved]) — every node holding the company's
+// records answered that its copy is out of service or behind, or did not
+// answer at all; an estate held closed while a peer's snapshot is adopted
 // ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
@@ -275,6 +279,18 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // so itself: [statelog.RetryAfter] answers zero for those, and a surface
 // answers them `503` with no `Retry-After`. A fault is what NOTHING classified.
 //
+// AND AN ESTATE NOBODY SERVED IS A CONDITION OF THE FLEET, not a fault of this
+// node: every read and write a seat or a person makes of the tracker and the
+// knowledge base goes through the estate's router, which answers
+// [estate.ErrUnserved] once every data node it asked ran nothing — a copy out
+// of service, a node restarting, a peer that did not answer. None of that is
+// broken code, and all of it clears when a data node serves again. It wraps no
+// sentinel this rule already knew, so until it was named here every such call
+// was answered `500` and told the caller sending it again would not help.
+// What the router COULD NOT ACCOUNT FOR is a different answer, never this one:
+// a write it sent and never heard back about ([estate.ErrOutcomeUnknown]) may
+// have landed, and is an unknown outcome ([UnknownCause]).
+//
 // # Why the words are chosen rather than the error's own
 //
 // The state log composes every refusal's words for the caller who receives
@@ -284,7 +300,8 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // wrapper is free to join an error of its own beside it (`%w: %w`), and that
 // one may be a driver's. Everything else is told in fixed words: a
 // coordination backend wraps its transport's error, which names hosts and
-// ports, and a queue's names its broker.
+// ports, a queue's names its broker, and the router's names every node it
+// asked and what each said — which it logs where it concludes it.
 //
 // EXPORTED for the human write surface, whose tool-less writers class their
 // writers' errors by this same rule (internal/api/operator's ClassifyWrite).
@@ -296,6 +313,10 @@ func Condition(err error) (words string, ok bool) {
 		return stateLogWords(err), true
 	case errors.Is(err, coord.ErrUnavailable):
 		return "the coordination store did not answer", true
+	case errors.As(err, new(*estate.ErrUnserved)):
+		return "no data node could serve it right now — every node holding the " +
+			"company's records answered that its copy is out of service or " +
+			"behind, or did not answer at all", true
 	case errors.Is(err, store.ErrNoEstate):
 		return "this node's store is closed while it adopts a peer's snapshot " +
 			"or shuts down", true
@@ -474,23 +495,50 @@ func failedUnknown(opID string, unvouched bool, msg string) tools.Result {
 		Cause: &UnknownOutcome{OpID: opID, Unvouched: unvouched}}
 }
 
-// writeCause is the error a write's failed result carries beneath its class:
-// the error itself, or — for a walking gesture that stopped at a step whose
-// outcome is unknown ([tracker.ErrStepUnresolved]) — an [UnknownOutcome]
-// wrapping it.
-//
-// BECAUSE THAT STOP IS AN UNKNOWN, not a refusal: the steps before it landed
-// and the step itself may have, so a caller answering in status codes owes it
-// the answer it gives every unknown (the same operation, retried), and read as
-// the error alone it was a refusal saying nothing had been written. The error
-// stays inside it, so errors.Is still answers every question it did.
+// writeCause is [UnknownCause] under the actor's operation.
 func writeCause(actor Actor, err error) error {
-	if !errors.Is(err, tracker.ErrStepUnresolved) {
-		return err
-	}
-	return &UnknownOutcome{OpID: actor.Operation,
-		Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
+	return UnknownCause(actor.Operation, err)
 }
+
+// UnknownCause is the error a write's failed result carries beneath its class:
+// the error itself, or — for a write whose outcome is UNKNOWN — an
+// [UnknownOutcome] wrapping it, under the operation opID names. Two errors are
+// that:
+//
+//   - a walking gesture that stopped at a step whose outcome is unknown
+//     ([tracker.ErrStepUnresolved]): the steps before it landed and the step
+//     itself may have;
+//   - a write the estate's router SENT to a data node that never answered,
+//     of a kind it may not send to a second ([estate.ErrOutcomeUnknown]) —
+//     a page write that names no operation of its own: the node may have
+//     run it before it went quiet.
+//
+// BECAUSE EACH IS AN UNKNOWN, not a refusal: a caller answering in status
+// codes owes it the answer it gives every unknown — read back before writing
+// again, or the same operation retried — and read as the error alone the first
+// was a refusal saying nothing had been written, the second a fault telling a
+// person that sending it again could not help. The error stays inside it, so
+// errors.Is still answers every question it did.
+//
+// EXPORTED for the human write surface, whose tool-less writers are read by
+// this one rule (internal/api/operator's ClassifyWrite) — a second list of
+// which writer errors may have landed is a list that misses one.
+func UnknownCause(opID string, err error) error {
+	switch {
+	case errors.Is(err, tracker.ErrStepUnresolved):
+		return &UnknownOutcome{OpID: opID,
+			Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		return &UnknownOutcome{OpID: opID, Err: err}
+	}
+	return err
+}
+
+// Unanswered is how a write the estate's router sent and never heard back
+// about ([estate.ErrOutcomeUnknown]) reads to whoever made it — in fixed
+// words, because the router's own name every node it asked.
+const Unanswered = "the data node this write was sent to did not answer, so " +
+	"whether it landed is unknown"
 
 // clip flattens a caller-supplied string echoed back into a tool result or a
 // log line.

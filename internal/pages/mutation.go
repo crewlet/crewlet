@@ -176,10 +176,10 @@ type ContainerPayload struct {
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
 
-	// ChartEpoch is the activation these settings were derived from
-	// ([configplane.ActivationStamp]), which the next EnsureContainer
-	// compares against so a node applying an older configuration late
-	// cannot walk a newer one back.
+	// ChartEpoch is the configuration activation these settings were
+	// derived from ([configplane.ActivationStamp]), which the next
+	// EnsureContainer compares against so a node applying an older
+	// configuration late cannot walk a newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
@@ -196,8 +196,9 @@ type StatusPayload struct {
 
 // Eviction is a node's eviction from this log, or its readmission.
 //
-// A GATE, so its record stays at the base version for every build there will
-// ever be ([RecordEnvelope.readByEveryBuild]): its shape may only ever grow by
+// PINNED AT [GateRecordVersion] FOR EVER — see the constant — and A GATE, so
+// its record stays at the base version for every build there will ever be
+// ([RecordEnvelope.readByEveryBuild]): its shape may only ever grow by
 // addition.
 type Eviction struct {
 	V      int    `json:"v"`

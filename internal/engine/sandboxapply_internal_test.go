@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -126,7 +128,7 @@ func TestAnAnswerByTurnReachesACoordinatorTheApplyBroughtUp(t *testing.T) {
 	if answer == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn")
 	}
-	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main"}
+	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main", LaunchID: "launch-1"}
 	trigger := events.New(given, events.TraceContext{})
 
 	disposition, err := answer(t.Context(), given, trigger)
@@ -243,6 +245,10 @@ func TestASeatTakenBackAttachesItsControlTopicAgain(t *testing.T) {
 	if e.sandboxSeatAttached("swe") {
 		t.Error("a released seat still reads as attached, so taking it back attaches nothing")
 	}
+	// TAKEN BACK BY A PASS RUN HERE rather than the sweep's next tick: the
+	// release changed no seat set, so nothing asks for one, and what is
+	// under test is the acquisition, not the sweep's cadence.
+	e.node.Host().Sweep(t.Context())
 	waitHeld(t, e, "swe")
 	if !e.sandboxSeatAttached("swe") {
 		t.Error("a seat taken back has no control topic")
@@ -387,6 +393,7 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
 		SandboxPollInterval: 50 * time.Millisecond,
@@ -431,9 +438,12 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
-		CreatedAt: time.Now().UTC(),
+	// THE SEAT'S ID, as every launch records it: what a reply handed back
+	// is published to, the seat's inbox being named by it (ADR-0013).
+	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
+		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -442,10 +452,8 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: map[string]any{
-		"version": float64(1), "pending_tool_call_id": "call-1",
-		"pending_tool_name": builtin.RunSandboxTool,
-	}})
+	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
+		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` + builtin.RunSandboxTool + `"}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

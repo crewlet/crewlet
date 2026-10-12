@@ -129,7 +129,7 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 	// expired. ctx goes in undiminished, which is what lets an operator who
 	// cancels a boot be answered at once.
 	var s jetstream.Stream
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
 		var e error
 		s, e = q.js.Stream(ctx, stream)
 		return e
@@ -371,8 +371,9 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 //
 // The update carries the stream's CURRENT configuration with one field
 // changed, read in the same call, because a JetStream update replaces the
-// whole configuration: sending a config built from this build's own defaults
-// would silently reset every field an operator or an earlier build had set.
+// whole configuration: sending a config built from this node's own spec would
+// silently reset every field an operator had set, or that the node which
+// created the stream set from its own Tier A.
 func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
@@ -385,7 +386,7 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	config := info.Config
 	config.MaxBytes = int64(maxBytes)
 	_, err = l.js.UpdateStream(ctx, config)
-	if refusedStorage(err) {
+	if jsprovision.OutOfCapacity(err) {
 		// NAMED, exactly as a refused CREATE is. The broker answers a
 		// raise it cannot reserve with the same two codes and the same
 		// numberless sentence, and a caller that reported it as "the

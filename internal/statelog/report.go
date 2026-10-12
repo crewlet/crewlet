@@ -2,6 +2,8 @@ package statelog
 
 import (
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -258,8 +260,8 @@ type DomainReport struct {
 	// "not evicted" is then a guess the reader cannot tell from a fact. A
 	// screen that reads a missing tombstone as proof of a readmission
 	// released an eviction it had just made and offered to make it again,
-	// re-dating it. ABSENT WHEN READ, so a node from a build before the
-	// field is read as it always was.
+	// re-dating it. ABSENT WHEN READ, so only the case a reader must treat
+	// differently carries the key.
 	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
 }
 
@@ -681,25 +683,37 @@ type DomainInputs struct {
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
 
-	// DeferredAge, DeferredRecord and DeferredSheds are the oldest record
-	// this node holds on this log and cannot decode, exactly as [Reading]
-	// defines them, and zero while it holds none.
+	// DeferredAge, DeferredRecord and DeferredJudgesCopy are the oldest
+	// record this node holds on this log and cannot decode, exactly as
+	// [Reading] defines them, and zero while it holds none.
 	//
 	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
-	// is the log's: a record held past it on a log that gates seat
-	// admission has moved this node's seats and one on a log that gates
-	// none has moved nothing. Folded into one node-wide alarm naming the
-	// oldest, an identity record two hours old was reported as moving no
-	// seats while a tracker record forty minutes old had moved them all.
-	DeferredAge    time.Duration
-	DeferredRecord string
-	DeferredSheds  bool
+	// is the log's: a record held past it on a log that judges this node's
+	// copy of the estate takes the copy out of service, and one on a log
+	// that judges nothing takes nothing out. Folded into one node-wide
+	// alarm naming the oldest, an identity record two hours old was
+	// reported as consequence-free while a tracker record forty minutes
+	// old had already taken the copy out.
+	DeferredAge        time.Duration
+	DeferredRecord     string
+	DeferredJudgesCopy bool
 
 	// FloorUnknownFor and FloorUnknownCause are how long this node has been
 	// unable to read this log's trim floor and what the latest read said,
 	// as [Reading] defines them — zero while it can.
 	FloorUnknownFor   time.Duration
 	FloorUnknownCause string
+
+	// LinearizableReads and LinearizableReadsExpected are this log's
+	// observed daily read rate and its census, as [Reading] defines them —
+	// evaluated per log, because each log was sized for its own census.
+	LinearizableReads, LinearizableReadsExpected int
+
+	// Tombstones is this log's own evictions: with the register's rows
+	// naming the log and the live data nodes ([ReportInputs.Live]), the
+	// three inputs the trim counts the log's nodes from, which the node
+	// block's counted mark is taken from ([ReportInputs.nodes]).
+	Tombstones []Tombstone
 }
 
 // ReportInputs is everything the report is assembled from, already read.
@@ -715,10 +729,11 @@ type ReportInputs struct {
 
 	// Reading is this node's alarm reading, MINUS the conditions that are
 	// per domain: a log's headroom, its ceiling against its window, a
-	// blocked trim, a record held past the deferral grace and an unreadable
-	// floor are evaluated per domain here, from the domain rows and
-	// [DomainInputs], so a two-domain fleet reports which log is full,
-	// blocked, holding or refusing rather than that something is.
+	// blocked trim, a record held past the deferral grace, an unreadable
+	// floor and a read rate past the census are evaluated per domain here,
+	// from the domain rows and [DomainInputs], so a two-domain fleet
+	// reports which log is full, blocked, holding, refusing or read past
+	// its sizing rather than that something is.
 	Reading Reading
 
 	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
@@ -736,7 +751,15 @@ type ReportInputs struct {
 	Register         []coord.NodePositions
 	RegisterReadable bool
 
-	Live       []Presence
+	// Live is every live data node, which the node block marks live and
+	// every log's counted set counts ([CountedSet]) — nil where they could
+	// not be listed, when the mark counts the rows alone and each log's
+	// published floor says its counted set was unknown.
+	Live []Presence
+
+	// Tombstones is one per node evicted on EVERY identity log, as of the
+	// latest — what the node block renders as evicted. Each log's own are its
+	// [DomainInputs.Tombstones].
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
@@ -979,29 +1002,34 @@ func (in ReportInputs) nodes() []NodeReport {
 	}
 
 	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
-	// trim itself calls, over the same three inputs, so the screen can
-	// never name a different fleet from the one the gate is waiting for.
-	var flat []NodePosition
-	for id, row := range reported {
-		flat = append(flat, NodePosition{NodeID: id, At: row.At})
-	}
+	// trim itself calls, LOG BY LOG over the same three inputs — the rows
+	// naming the log, the live data nodes and the log's own tombstones —
+	// and a node is marked counted where some log's set holds it, so the
+	// screen can never name a different fleet from the one the gate is
+	// waiting for. Folded into one set over every log's rows, it counted a
+	// node evicted on a log beside another it never ran.
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Live, in.Tombstones) {
-		counted[n.NodeID] = true
-	}
-
-	ids := make([]string, 0, len(reported)+len(live)+len(tombs))
-	for id := range reported {
-		ids = append(ids, id)
-	}
-	for id := range live {
-		if _, seen := reported[id]; !seen {
-			ids = append(ids, id)
+	for _, d := range in.Domains {
+		var named []NodePosition
+		for _, row := range in.Register {
+			if _, runs := row.Domains[d.Domain]; runs {
+				named = append(named, NodePosition{NodeID: row.NodeID, At: row.At})
+			}
+		}
+		for _, n := range CountedSet(in.At, named, in.Live, d.Tombstones) {
+			counted[n.NodeID] = true
 		}
 	}
-	for id := range tombs {
-		if _, seen := reported[id]; !seen && !live[id] {
-			ids = append(ids, id)
+
+	named := map[string]bool{}
+	ids := make([]string, 0, len(reported)+len(live)+len(counted)+len(tombs))
+	for _, group := range []iter.Seq[string]{maps.Keys(reported), maps.Keys(live),
+		maps.Keys(counted), maps.Keys(tombs)} {
+		for id := range group {
+			if !named[id] {
+				named[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	slices.Sort(ids)
@@ -1117,10 +1145,10 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and five of its conditions — the log's
+// [Reading] describes ONE node, and six of its conditions — the log's
 // headroom, a ceiling too small for the log's own replay window, a blocked
-// trim, a record held past the deferral grace and a floor this node cannot
-// read — are properties of a DOMAIN. Evaluating the node-wide reading once and
+// trim, a record held past the deferral grace, a floor this node cannot read
+// and a read rate past the log's census — are properties of a DOMAIN. Evaluating the node-wide reading once and
 // each domain's own fields once per domain is what lets a two-domain fleet say
 // WHICH log is filling. Folding them into one reading would report the worst
 // of the two with no name on it, which is the number an operator then has to
@@ -1149,11 +1177,14 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
 			// caller measured it from its own applier and its own
 			// observations of the floor.
-			DeferredAge:       held.DeferredAge,
-			DeferredRecord:    held.DeferredRecord,
-			DeferredSheds:     held.DeferredSheds,
-			FloorUnknownFor:   held.FloorUnknownFor,
-			FloorUnknownCause: held.FloorUnknownCause,
+			DeferredAge:        held.DeferredAge,
+			DeferredRecord:     held.DeferredRecord,
+			DeferredJudgesCopy: held.DeferredJudgesCopy,
+			FloorUnknownFor:    held.FloorUnknownFor,
+			FloorUnknownCause:  held.FloorUnknownCause,
+			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
+			LinearizableReads:         held.LinearizableReads,
+			LinearizableReadsExpected: held.LinearizableReadsExpected,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)

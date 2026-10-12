@@ -445,10 +445,10 @@ describe("what each phase's prompt weighed", () => {
         phase,
         iteration,
         approximate_tokens: tokens,
-        system_chars: 24_000,
-        user_chars: 2_800,
-        message_chars: 0,
-        tool_chars: 3_800,
+        system_bytes: 24_000,
+        user_bytes: 2_800,
+        message_bytes: 0,
+        tool_bytes: 3_800,
         tool_count: 11,
         ...over,
       },
@@ -459,9 +459,9 @@ describe("what each phase's prompt weighed", () => {
       conversation instead. The shape `Runner.Resume` publishes. */
   function reentry(phase: string, iteration: number, tokens: number): EventRecord {
     return size(phase, iteration, tokens, {
-      system_chars: 0,
-      user_chars: 0,
-      message_chars: 3_329,
+      system_bytes: 0,
+      user_bytes: 0,
+      message_bytes: 3_329,
     });
   }
 
@@ -546,35 +546,6 @@ describe("what each phase's prompt weighed", () => {
     expect(promptWeights([event("prompt.size"), event("agent_phase_started")])).toEqual([]);
   });
 
-  // THE WIRE KEYS ARE `system_chars` / `user_chars`, AND THAT IS LOAD-BEARING.
-  //
-  // The measurement is bytes and the keys say chars — the names disagree on
-  // purpose, because the key is a peer contract frozen by ADR-0006 while the
-  // label was the thing that lied. Renaming the reader to the honest spelling
-  // is the tempting tidy-up and it is silent: every row already in the store
-  // carries the old key, `Number(undefined ?? 0)` is 0, and the panel renders
-  // "0 B" beside a truthful token count rather than declining to draw. This
-  // case is what makes that tidy-up fail loudly instead.
-  test("a payload keyed the honest way reads zero, which is why the reader keeps the frozen key", () => {
-    const [row] = promptWeights([
-      event("prompt.size", {
-        payload: {
-          turn_id: "t-1",
-          phase: "execute",
-          iteration: 1,
-          approximate_tokens: 6807,
-          system_bytes: 24_000,
-          user_bytes: 2_800,
-        },
-      }),
-    ]);
-    expect(row!.systemBytes).toBe(0);
-    expect(row!.userBytes).toBe(0);
-    // And the token count still arrives, which is exactly what makes the
-    // zero read as a fact rather than as a row that failed to load.
-    expect(row!.approximateTokens).toBe(6807);
-  });
-
   test("every term the engine measured reaches the row", () => {
     // The tool-definition array is the term this event was blind to, and the
     // dominant one: a measured turn reported ~6,900 tokens here against the
@@ -597,7 +568,7 @@ describe("what each phase's prompt weighed", () => {
     // into `userBytes` would make one column mean two different things
     // depending on whether the phase was resumed.
     const [w] = promptWeights([
-      size("execute", 1, 12_950, { system_chars: 0, user_chars: 0, message_chars: 48_000 }),
+      size("execute", 1, 12_950, { system_bytes: 0, user_bytes: 0, message_bytes: 48_000 }),
     ]) as [PromptWeight];
     expect(w.messageBytes).toBe(48_000);
     expect(w.systemBytes).toBe(0);
@@ -608,23 +579,22 @@ describe("what each phase's prompt weighed", () => {
     expect(w.resumed).toBe(true);
   });
 
-  test("an older engine's row reads as zero rather than NaN", () => {
-    // A rolling upgrade puts a node that never measured the tool array on the
-    // same stream. Its rows must render — `NaN B` in a column is worse than a
-    // zero, because it reads as a broken screen rather than a quiet term.
+  test("a payload missing a term reads as zero rather than NaN", () => {
+    // The parse defaults a missing key to zero — `NaN B` in a column is worse
+    // than a zero, because it reads as a broken screen rather than a quiet
+    // term.
     const [w] = promptWeights([
       event("prompt.size", {
-        payload: { phase: "review", iteration: 1, approximate_tokens: 900, system_chars: 3_600 },
+        payload: { phase: "review", iteration: 1, approximate_tokens: 900, system_bytes: 3_600 },
       }),
     ]) as [PromptWeight];
     expect(w.toolBytes).toBe(0);
     expect(w.toolCount).toBe(0);
     expect(w.messageBytes).toBe(0);
     expect(Number.isNaN(w.toolBytes)).toBe(false);
-    // And it reads as an OPENING, which is the safe direction: an absent
-    // message term is a build that measured none, so there is no re-entry to
-    // claim — and claiming one would label a row "resumed" on the strength of
-    // a key the writer never wrote.
+    // And it reads as an OPENING, which is the safe direction: no message
+    // term, no re-entry claimed — claiming one would label a row "resumed" on
+    // the strength of a key the writer never wrote.
     expect(w.resumed).toBe(false);
   });
 });

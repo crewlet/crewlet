@@ -82,15 +82,23 @@ type ExternalNotification struct {
 	// relevance-filter prefetches skip their aux-LLM call when it is set.
 	ContextRequiresRecon bool `json:"context_requires_recon"`
 
+	// SubjectIsLabel is true when Subject is the SURFACE's name for the
+	// event — "Slack message", the same on every message — rather than
+	// part of what was sent, as the source's own [notify.Prompt] says.
+	// The turn's ask leaves such a subject out and keeps every other.
+	//
+	// Absent is a subject that is content, so a source that never sets it
+	// keeps every subject in the turn's ask.
+	SubjectIsLabel bool `json:"subject_is_label,omitempty"`
+
 	// Addressed is true when somebody is waiting on this seat for an
 	// answer — a direct message, a personal mention, an assignment —
 	// as the source's own [notify.Prompt] reads its routing.
 	//
 	// The turn engine derives the turn's delivery obligation from it: an
-	// addressed turn may not end in silence. ABSENT MEANS UNADDRESSED, and
-	// that is the safe half in both directions — an older build's events
-	// decode as unaddressed, which is the freedom to stay silent rather
-	// than an obligation to post.
+	// addressed turn may not end in silence. ABSENT MEANS UNADDRESSED, the
+	// safe default: the freedom to stay silent rather than an obligation
+	// to post.
 	Addressed bool `json:"addressed,omitempty"`
 
 	// Owes is the CHAT SURFACE this turn must post on before it is done,
@@ -101,9 +109,8 @@ type ExternalNotification struct {
 	// by the tracker is held open until a chat tool has run rather than
 	// being closed out by a comment on the item.
 	//
-	// ADDITIVE AND ABSENT-SAFE, like Addressed: an older build's events
-	// decode with no surface owed, which is the obligation that event's
-	// writer recorded.
+	// Empty, and omitted, on every notification that owes no other
+	// surface: absent decodes as nothing owed, like Addressed.
 	Owes string `json:"owes,omitempty"`
 
 	// Messages are the constituents when this event is a COALESCED trigger.
@@ -224,13 +231,18 @@ type NotificationsCoalesced struct {
 	//
 	// NOT `conversation_key`, which is the conversation IDENTITY on every
 	// event that spells it — the two sandbox events, both turn completions
-	// and the phase record — and which store.ExtractTags promotes by wire
-	// key alone. Spelled that way here, one tag would mean the identity or
-	// the partition depending on which row a filter matched, on a pair of
-	// values that differ exactly where it matters: a direct message's
-	// identity is the bare channel and its partition can be a thread
-	// inside it. The inbox wake's own copy is notify.PartitionField, under
-	// the same name.
+	// and the phase record. One promoted tag would otherwise mean the
+	// identity or the partition depending on which row a filter happened to
+	// match, on a pair of values that differ exactly where it matters: a
+	// direct message's identity is the bare channel and its partition can be
+	// a thread inside it. Spelled as notify.PartitionField spells the same
+	// value on a wake's envelope.
+	//
+	// AND NEVER BOTH SPELLINGS, because store.ExtractTags promotes by WIRE
+	// KEY ALONE and is type-blind on purpose — that is what lets a newer
+	// node's unknown event type still be indexed by the dimensions it does
+	// carry. A payload spelling both keys would be tagged both, and the
+	// `conversation_key` tag would hold a partition.
 	PartitionKey       string `json:"partition_key"`
 	NotificationSource string `json:"notification_source"`
 	// Count is the number of constituent notifications; FirstAt and LastAt
@@ -262,9 +274,17 @@ func (e NotificationsCoalesced) Summary() string {
 }
 
 // NotificationSkipped records a notification dropped, with the reason.
+//
+// Reason is exactly one of the reasons internal/notify declares
+// (notify.SkipReason) and never anything more, so a reader tells which gate
+// dropped a delivery by comparing it whole. What that gate said about THIS
+// delivery — the parser's error, for a payload its parser refused — is
+// Detail, kept apart because appended to the reason it left text no exact
+// comparison could match.
 type NotificationSkipped struct {
 	Handle             string `json:"handle"`
 	Reason             string `json:"reason"`
+	Detail             string `json:"detail,omitempty"`
 	NotificationSource string `json:"notification_source"`
 }
 
@@ -282,11 +302,16 @@ func (e NotificationSkipped) IntegrationSender() string { return "" }
 // IntegrationSender.
 func (e NotificationSkipped) IntegrationEventType() string { return "" }
 
-// Summary always states the reason. A dropped notification with no explanation
-// is indistinguishable from one that never arrived.
+// Summary always states the reason, and the detail after it when there is
+// one. A dropped notification with no explanation is indistinguishable from
+// one that never arrived.
 func (e NotificationSkipped) Summary() string {
-	if e.Handle != "" {
-		return "Skipped for " + e.Handle + ": " + e.Reason
+	why := e.Reason
+	if e.Detail != "" {
+		why += ": " + e.Detail
 	}
-	return "Skipped: " + e.Reason
+	if e.Handle != "" {
+		return "Skipped for " + e.Handle + ": " + why
+	}
+	return "Skipped: " + why
 }

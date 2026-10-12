@@ -55,23 +55,23 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	trackerLog := s.Domain(tracker.Domain{}.Name())
 	pagesLog := s.Domain(pages.Domain{}.Name())
 	iamLog := s.Domain(iamdomain.Domain{}.Name())
-	logs := []*runningDomain{trackerLog, pagesLog, iamLog}
+	logs := []*runningLog{trackerLog, pagesLog, iamLog}
 
-	writeView := func(opID, id string) tracker.WriteResult {
+	writeView := func(ctx context.Context, opID, id string) tracker.WriteResult {
 		t.Helper()
-		prior, err := n.writer.ViewPrior(t.Context(), id)
+		prior, err := n.writer.ViewPrior(ctx, id)
 		if err != nil {
 			t.Fatalf("read what saving view %s replaces: %v", id, err)
 		}
-		res, err := n.writer.WriteView(t.Context(), opID, evictedView(id), prior)
+		res, err := n.writer.WriteView(ctx, opID, evictedView(id), prior)
 		if err != nil {
 			t.Fatalf("write view %s: %v", id, err)
 		}
 		return res
 	}
-	invalidate := func(reason string) statelog.Result {
+	invalidate := func(ctx context.Context, reason string) statelog.Result {
 		t.Helper()
-		res, err := c.iamWriter.InvalidateAll(t.Context(),
+		res, err := c.iamWriter.InvalidateAll(ctx,
 			statelog.NewOpID(time.Now(), "invalidate-"+reason), reason)
 		if err != nil {
 			t.Fatalf("invalidate every session (%s): %v", reason, err)
@@ -82,12 +82,12 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// THE CONTROL: the same writes, made before any eviction, apply.
 	// Without it a harness that applied nothing of this node's would pass
 	// the case below.
-	writeView("op-view-before", "v-before")
+	writeView(t.Context(), "op-view-before", "v-before")
 	if _, _, err := n.pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
 		"Before", ""); err != nil {
 		t.Fatalf("the control container write: %v", err)
 	}
-	invalidate("before")
+	invalidate(t.Context(), "before")
 	for _, running := range logs {
 		waitApplied(t, running)
 	}
@@ -106,14 +106,16 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
 	// applied rows, which do not hold the eviction yet, so every one lands.
 	// None can resolve — the appliers are halted — so each answers pending,
-	// which is the honest answer and the one asserted.
-	res := writeView("op-view-evicted", "v-evicted")
+	// which is the honest answer and the one asserted, after
+	// [haltedWriteBudget] rather than the publisher's whole default.
+	halted := statelog.WithResolveBudget(t.Context(), haltedWriteBudget)
+	res := writeView(halted, "op-view-evicted", "v-evicted")
 	if res.Outcome != statelog.OutcomePending {
 		t.Fatalf("the evicted node's view write answered %q, want pending — it "+
 			"has to LAND for the gate to have anything to drop", res.Outcome)
 	}
 	viewAt := res.Position
-	if _, _, err := n.pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
+	if _, _, err := n.pages.EnsureContainer(halted, testActivation, "EVICTED",
 		"Evicted", ""); err != nil {
 		t.Fatalf("the evicted node's container write: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		t.Fatalf("read the pages log's end: %v", err)
 	}
 	pageAt := pagesLog.runner.Committed().At(pageSeq)
-	invalidated := invalidate("evicted")
+	invalidated := invalidate(halted, "evicted")
 	if invalidated.Outcome != statelog.OutcomePending {
 		t.Fatalf("the evicted node's invalidation answered %q, want pending",
 			invalidated.Outcome)
@@ -160,12 +162,12 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		opID  string
 		at    statelog.Position
 	}{
-		{"tracker", tracker.NewGates(back.Store),
+		{"tracker", tracker.NewGates(back.Store.Replicated().Reader()),
 			statelog.Subject{Kind: string(tracker.KindView), ID: "v-evicted"},
 			"op-view-evicted", viewAt},
-		{"pages", pages.NewGates(back.Store),
+		{"pages", pages.NewGates(back.Store.Replicated().Reader()),
 			statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"}, "", pageAt},
-		{"iam", iamdomain.NewGates(back.Store),
+		{"iam", iamdomain.NewGates(back.Store.Replicated().Reader()),
 			statelog.Subject{Kind: string(iamdomain.KindInvalidation)},
 			invalidated.OpID, invalidated.Position},
 	} {
@@ -192,6 +194,18 @@ func sessionGeneration(t *testing.T, back *Backends) int64 {
 	}
 	return generation
 }
+
+// haltedWriteBudget is the resolution budget a case hands the writes it makes
+// while one of this node's appliers is halted ([statelog.WithResolveBudget]),
+// and those writes alone: every other write keeps the publisher's default.
+//
+// ONE SECOND. A write on a halted applier answers pending whatever the budget,
+// so its length is simply spent — the default's five seconds per write was
+// most of these cases' run time. But one gesture writes every identity log at
+// once, and a log whose applier is RUNNING must still resolve applied inside
+// the same budget, which a running applier does in milliseconds and a loaded
+// race runner in well under a second.
+const haltedWriteBudget = time.Second
 
 // evictedView is a shared workspace view, the smallest thing the tracker's
 // writer publishes that leaves a row a case can look for.
@@ -279,10 +293,10 @@ func iamEviction(t *testing.T, node string) []byte {
 // SIGNED as every record on the log is — an applier refuses a frame this
 // deployment's keyring does not open, so an unsigned one would be a record it
 // never applies rather than the peer's record the case means.
-func appendRecord(t *testing.T, running *runningDomain, subject string, payload []byte) uint64 {
+func appendRecord(t *testing.T, running *runningLog, subject string, payload []byte) uint64 {
 	t.Helper()
 	seq, _, err := running.log.Append(t.Context(),
-		running.domain.Stream().SubjectPrefix+"."+subject, "", nil,
+		running.spec.SubjectPrefix+"."+subject, "", nil,
 		running.signer.Seal(payload))
 	if err != nil {
 		t.Fatalf("append to %s: %v", running.domain.Name(), err)
@@ -296,8 +310,8 @@ func appendRecord(t *testing.T, running *runningDomain, subject string, payload 
 // otherwise hand them over again only after its thirty-second ack window.
 func relaunch(t *testing.T, s *stateLog) {
 	t.Helper()
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
+		name := running.domain.Name()
 		if err := running.consumer.Reset(t.Context(), running.runner.Committed().Seq); err != nil {
 			t.Fatalf("move %s's consumer to its checkpoint: %v", name, err)
 		}
@@ -306,7 +320,7 @@ func relaunch(t *testing.T, s *stateLog) {
 }
 
 // waitApplied waits for a domain's applier to commit its whole log.
-func waitApplied(t *testing.T, running *runningDomain) {
+func waitApplied(t *testing.T, running *runningLog) {
 	t.Helper()
 	_, last, err := running.log.Bounds(t.Context())
 	if err != nil {
@@ -320,7 +334,7 @@ func waitApplied(t *testing.T, running *runningDomain) {
 //
 // THROUGH THE DOMAIN'S VERIFIER, because the log holds the signed frame and
 // the envelope is inside it.
-func requireWriter(t *testing.T, running *runningDomain, seq uint64, writer string) {
+func requireWriter(t *testing.T, running *runningLog, seq uint64, writer string) {
 	t.Helper()
 	_, payload, _, ok, err := statelog.VerifiedLog{Log: running.log,
 		Verifier: running.verifier}.At(t.Context(), seq)

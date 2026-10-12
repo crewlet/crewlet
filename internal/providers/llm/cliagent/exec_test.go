@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,16 +15,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// helperEnv marks a re-execution of this test binary as the fake CLI.
+// helperEnv marks a re-execution of this test binary as the fake CLI rather
+// than the suite. [TestMain] reads it before the framework starts.
 //
-// The fake is this binary rather than a shell script because the engine ships
-// for Windows too, and a suite that proved the exec path only on Unix would
-// leave the platform where process handling differs most untested.
-// helperEnv is what makes this binary the fake CLI instead of the suite. See
-// [TestMain], which reads it before the framework starts.
+// The fake is this binary rather than a shell script because the two platforms
+// the engine ships for do not share a userland: what the fake reports — a
+// file's permission bits, its whole environment, its stdin as base64 — is
+// spelled with `stat`, `base64` and `echo` flags that GNU and BSD disagree
+// about, so a script would test each machine's tools as much as the exec path.
+// Every mode is Go, defined here beside the cases that drive it, and every
+// fixture launches it through [fakeChildEnv].
 //
 // The `-test.run=TestCLIAgentFakeCLI` the fixtures still pass now names no
 // test, and is kept deliberately as a FORK-BOMB GUARD rather than a selector:
@@ -222,19 +227,33 @@ func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any)
 	for k, v := range overrides {
 		base[k] = v
 	}
-	child := map[string]string{helperEnv: "1"}
-	for k, v := range env {
-		child[k] = v
-	}
 	p, err := New(Config{
 		Key: "sub", Agent: "custom", StateDir: dir, Overrides: base,
-		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: child,
+		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: fakeChildEnv(env),
 		Auth: Auth{Mode: AuthSubscription},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return p
+}
+
+// fakeChildEnv is the environment every fake CLI this suite launches is handed
+// through [Config.Env]: the variable that makes the re-executed binary the
+// fake, the race options that let it exit the moment it is done
+// ([procgrouptest.StandInRaceOptions] — a second a call otherwise, which was
+// most of this package's wall clock), and extra over both.
+//
+// THROUGH Config.Env because nothing else reaches the child: buildEnv forwards
+// the host allowlist and the provider's own Env, so a GORACE the suite
+// inherited from make or CI is dropped at the exec.
+func fakeChildEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		helperEnv:            "1",
+		procgrouptest.GORACE: procgrouptest.StandInRaceOptions(),
+	}
+	maps.Copy(env, extra)
+	return env
 }
 
 func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
@@ -247,6 +266,7 @@ func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
 
 // The whole point of the backend: a CLI's prose comes back as a completion.
 func TestAPlainReplyBecomesACompletion(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "the answer"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
@@ -267,6 +287,7 @@ func TestAPlainReplyBecomesACompletion(t *testing.T) {
 // The tool channel rides the prompt, and the reply parses back into real tool
 // calls — otherwise the turn engine sees prose and never runs a tool.
 func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
+	t.Parallel()
 	reply := "```json\n{\"message\":\"reading\",\"tool_calls\":" +
 		"[{\"name\":\"read_file\",\"arguments\":{\"path\":\"/etc/hostname\"}}]}\n```"
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
@@ -282,11 +303,39 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.ToolCalls[0].ID == "" {
 		t.Error("a tool call with no id cannot be paired with its result")
 	}
-	if comp.FinishReason != "tool_calls" {
-		t.Errorf("FinishReason = %q, want tool_calls", comp.FinishReason)
+	if comp.StopReason != llm.StopToolUse {
+		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
+	}
+	// Recorded so no other backend mistakes this turn for one of its own.
+	if comp.Provider != "cli-agent" {
+		t.Errorf("Provider = %q, want cli-agent", comp.Provider)
 	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)
+	}
+}
+
+// A CALL WHOSE ARGUMENTS DID NOT READ REACHES THE LOOP MARKED, not as a call
+// with no arguments: the tool loop answers a marked call with the reason and
+// runs an unmarked one, so the mark is the whole difference between a failed
+// result the model can fix and a search over everything.
+func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
+	t.Parallel()
+	reply := "```json\n{\"message\":\"searching\",\"tool_calls\":" +
+		"[{\"name\":\"search\",\"arguments\":\"{\\\"query\\\": \\\"x\"}]}\n```"
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
+	comp, err := ask(t, p, llm.Request{
+		Tools: []llm.ToolDef{{Name: "search", Description: "search"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(comp.ToolCalls) != 1 || comp.ToolCalls[0].Name != "search" {
+		t.Fatalf("tool calls = %+v, want the one search call", comp.ToolCalls)
+	}
+	if comp.ToolCalls[0].ArgumentsError == "" {
+		t.Errorf("the call reached the loop unmarked with arguments %v, so it would run with none",
+			comp.ToolCalls[0].Arguments)
 	}
 }
 
@@ -294,6 +343,7 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 // RATE_LIMIT is what carries the role onto its metered fallback for the rest
 // of the window and back again afterwards, with no operator intervention.
 func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
+	t.Parallel()
 	reset := time.Now().Add(37 * time.Minute).Unix()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": fmt.Sprintf("Claude AI usage limit reached|%d", reset),
@@ -322,6 +372,7 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 // writes the phrase itself, and throwing that answer away as a spent plan is
 // the bug this classification is shaped to avoid.
 func TestAModelWritingAboutUsageLimitsIsNotASpentSubscription(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDOUT": "A rate limit is when the usage limit for your plan is reached.",
 	}, map[string]any{
@@ -341,6 +392,7 @@ func TestAModelWritingAboutUsageLimitsIsNotASpentSubscription(t *testing.T) {
 // An expired login must classify AUTH, which is retryable — so the chain
 // keeps the seat working off a metered key while the operator re-logs in.
 func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{
 		"FAKE_STDERR": "Error: OAuth token has expired\n", "FAKE_EXIT": "1",
 	}, map[string]any{
@@ -359,6 +411,7 @@ func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
 // the child eventually finishes: the cap exists so a wedged CLI cannot hold a
 // seat's concurrency slot.
 func TestTheWallClockCapEndsACall(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "60000"}, nil)
 	p.timeout = 300 * time.Millisecond
 
@@ -381,6 +434,7 @@ func TestTheWallClockCapEndsACall(t *testing.T) {
 // nothing about the request was refused, so the chain must be free to try
 // another member and the credential must not be cooled.
 func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ""}, nil)
 	_, err := ask(t, p, llm.Request{})
 	if got := llm.KindOf(err); got != llm.KindServer {
@@ -428,6 +482,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 // put in cli.env — that is the flat-rate-plan-billed-anyway failure the mode
 // exists to prevent.
 func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t,
 		map[string]string{"FAKE_DUMP_ENV": "1", "ANTHROPIC_API_KEY": "sk-ant-oops"},
 		map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "token_env": "CLAUDE_CODE_OAUTH_TOKEN"})
@@ -443,6 +498,7 @@ func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
 // api-key mode is the deliberate opposite, and must actually deliver the key
 // or the mode does nothing.
 func TestAPIKeyModeDeliversTheKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
@@ -452,7 +508,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 			"model_args": []any{}, "output": "text", "api_key_env": "VENDOR_API_KEY",
 		},
 		Timeout: 20 * time.Second, MaxConcurrent: 1,
-		Env:  map[string]string{helperEnv: "1", "FAKE_DUMP_ENV": "1"},
+		Env:  fakeChildEnv(map[string]string{"FAKE_DUMP_ENV": "1"}),
 		Auth: Auth{Mode: AuthAPIKey, APIKey: "sk-metered"},
 	})
 	if err != nil {
@@ -478,6 +534,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 // made. os.Getwd() in the child is the only honest source, and it cannot be
 // unavailable.
 func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
@@ -502,21 +559,21 @@ func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
 // The prompt must actually reach the CLI, and the transcript must carry the
 // tool catalogue and the response contract or the model has no protocol.
 func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "you are Dev"},
 			{Role: llm.RoleUser, Content: "read the file"},
 		},
-		Tools:      []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
-		ToolChoice: "required",
+		Tools: []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	prompt := decodePrompt(t, comp.Content)
 	for _, want := range []string{"## system", "you are Dev", "## user", "read the file",
-		"Available tools", "read_file", "Response contract", "MUST"} {
+		"Available tools", "read_file", "Response contract", "empty tool_calls list"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt is missing %q:\n%s", want, prompt)
 		}
@@ -526,6 +583,7 @@ func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
 // A call with NO tools gets no contract: auxiliary work sends a plain prompt
 // and reads a plain answer, with no envelope to get wrong.
 func TestACallWithNoToolsGetsNoContract(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "summarise this"}},
@@ -545,6 +603,7 @@ func TestACallWithNoToolsGetsNoContract(t *testing.T) {
 // The cap is what keeps a fleet of seats starting their turns together from
 // exhausting the engine host — each CLI is a full runtime at 200-400 MB.
 func TestConcurrencyIsCapped(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_SLEEP_MS": "250"}, nil)
 	if cap(p.slots) != 2 {
 		t.Fatalf("slots = %d, want the configured 2", cap(p.slots))
@@ -574,6 +633,7 @@ func TestConcurrencyIsCapped(t *testing.T) {
 // A caller that gave up while queueing must not go on to launch a process
 // nobody is waiting for.
 func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
+	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -583,6 +643,42 @@ func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
 	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
 	if got := llm.KindOf(err); got != llm.KindTimeout {
 		t.Fatalf("kind = %v, want timeout (err %v)", got, err)
+	}
+}
+
+// EVERY PROVIDER GIVES A SIGNALLED CLI FIVE SECONDS to exit, the figure
+// [termGrace] argues for. The cases that watch a stubborn child die run at a
+// grace of their own (exec_unix_test.go), so this is what ties the value they
+// skip waiting for to the one a running engine uses — at both places a child is
+// started, since both read the provider's field.
+func TestAProviderGivesASignalledCLIFiveSecondsToExit(t *testing.T) {
+	t.Parallel()
+	if termGrace != 5*time.Second {
+		t.Errorf("termGrace = %v, want the 5s a Node runtime needs to flush", termGrace)
+	}
+	if p := fakeProvider(t, nil, nil); p.termGrace != termGrace {
+		t.Errorf("New gave the provider a grace of %v, want termGrace (%v)", p.termGrace, termGrace)
+	}
+}
+
+// AN INVOCATION WITH NO GRACE IS REFUSED rather than run. os/exec reads a zero
+// WaitDelay as no bound at all, so a call site that forgot to pass one would
+// start a child that, ignoring SIGTERM, held its call open for ever.
+func TestAnInvocationWithNoGraceIsRefused(t *testing.T) {
+	t.Parallel()
+	env := os.Environ()
+	for k, v := range fakeChildEnv(map[string]string{"FAKE_STDOUT": "ran"}) {
+		env = append(env, k+"="+v)
+	}
+	res, err := run(t.Context(), invocation{
+		binary: os.Args[0], args: []string{"-test.run=TestCLIAgentFakeCLI"},
+		env: env, timeout: 20 * time.Second,
+	})
+	if err == nil {
+		t.Fatalf("an invocation with no grace ran (stdout %q)", res.stdout)
+	}
+	if !strings.Contains(err.Error(), "termination grace") {
+		t.Errorf("the refusal does not name what is missing: %v", err)
 	}
 }
 

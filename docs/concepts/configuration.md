@@ -8,8 +8,8 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), the org chart (`roles:` and `units:`), token budgets |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store files and the object store's backend (`store.objects`), the stream and coordination slots, this node's identity and roles, API host/port and auth, the addresses people reach it at (`api.external_url`) and vendors and sandboxes reach it at, with the optional published listener that serves them (`api.public`, `api.public.external_url`), the secret keyring, the retention estate (`store.snapshot_dir`, `stream.tracker_retention` and backup ownership, `retention.backup_owner`), logging (level, shape and an optional rotating log file) |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, delegate `workers`, `scheduling`, `skill_variables`, the `tracker` and `knowledge` backends, notification coalescing and rate limit, integrations (Slack / Mattermost / Jira / Confluence / GitHub / GitLab / Datadog / Atlassian, plus the Forge app id that verifies relayed Cloud events), the org chart (`roles:` and `units:`), and token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
@@ -100,8 +100,11 @@ config apply failed on `node-2`" the moment more than one process is
 running, and the only way a caller behind a load balancer can tell which
 process answered.
 
-Resolution order: `node.id` (`${VAR}` references work here like anywhere
-in Tier A) → the `CREWLET_NODE_ID` environment variable → `node-0`. You do
+Resolution order: `node.id` (a `${VAR}` reference works here, as in any
+Tier A text field, and the id it resolves to is judged by the rules below —
+see [Environment Variable References](../getting-started/configuration.md#environment-variable-references)
+for how one reads in a number or a boolean field) → the `CREWLET_NODE_ID` environment
+variable → `node-0`. You do
 not need to set it to run a single engine. It starts with a letter or a digit
 and holds only letters, digits, `.`, `_` and `-`, at most 64 characters,
 because it ends up in broker consumer names and subjects — and an operator
@@ -116,23 +119,24 @@ systemd, the host name.
 
 #### `node.roles`
 
-What this process is willing to do. Three roles, and the default is all
-three — one process running a whole company, which is every single-node
+What this process is willing to do. Four roles, and the default is all
+four — one process running a whole company, which is every single-node
 deployment:
 
 ```yaml
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [seats]              # a satellite: agents only
+  roles: [seats]              # a stateless satellite: agents only, no data
   labels:
     zone: eu
 ```
 
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
-| `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
+| `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the learning background passes (episode lifecycle, skill curation, clustering and promotion), the state logs' trim, the embedding duty and the identity sweep | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, and the identity estate's retention never runs |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state logs' trim, the embedding duty, the sandbox waiter, the integration reconcile loop, the object store's collector, the identity sweep, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, no integration is reconciled, no unnamed object is collected, and the identity estate's retention never runs |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -142,15 +146,57 @@ node presence and logs `fleet_role_unmanned` when nobody is doing a job.
 A node that does not run seats is also left out of the denominator its
 peers divide the seats by; counting it would strand the difference.
 
+**`data` is the one role that is a promise about the disk rather than about
+work.** A node without it keeps nothing that has to outlive it, and Tier A
+holds it to that whatever its broker: `store.scratch: true` is required (its
+store is deleted at every boot), and `store.replicated_path` and
+`store.snapshot_dir` are refused. `store.objects` is not: it names the one store the whole fleet keeps its files in, and a node without `data` uploads and downloads through it directly. See
+[Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data).
+
+**The broker is not a role.** How a node's broker takes part in the fleet's
+is its *broker kind*, derived from the `stream` block and from nothing else:
+
+| Broker kind | The `stream` block that makes it | What the broker is |
+|---|---|---|
+| `member` | embedded, with no `stream.leaf.urls` (a solo node included) | runs JetStream in this process, holds stream replicas, votes in the metadata group |
+| `leaf` | embedded, with `stream.leaf.urls` | JetStream off: reaches the members' across a leaf link, holds nothing, votes in nothing |
+| `client` | `type: nats` | a plain client of an external cluster somebody else runs |
+
+Every node advertises its kind on its presence lease (`crewlet fleet broker
+list` and the dashboard's **Settings › Nodes** screen show it), and a node advertising a
+kind this build does not know — a newer build's — shows as `unknown`. The rules that are about the broker
+are asked of the kind, whatever the roles: a member — a solo node included —
+must set `stream.store_dir`, because it holds the fleet's streams for every
+node that reaches it, its own state logs among them, and an in-memory stream
+is a node whose first restart leaves it unable to serve; a leaf carries no
+cluster block, no store directory, no leaf listener and no declined
+`stream.sync` — it runs no JetStream, so it has no file store to keep.
+
+Three pairings of roles and broker are **refused**, and each refusal names
+both ways out: a data node on a leaf, a broker member without `data`, and
+`ingress` or `workers` without `data`. Every data node holds the whole estate
+as a member of the broker, and a node without `data` reaches the estate
+through one — so a node without `data` on an embedded stream joins the fleet
+as a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
+valid shapes: a member whose peer list names more than four other members
+(no stream keeps more than five copies, so a sixth member is a voter holding
+nothing — a fleet grows by adding leaves), and a fleet node that left
+`node.roles` undeclared and so runs every role.
+
 #### `node.labels`
 
 Free-form facts about where this process runs, matched by a seat's
 [`role.placement`](../guides/fleet.md#placement) selector. Values are
 strings and are compared exactly — so both the key and the value are
 trimmed of the whitespace around them before anything reads them, and two
-keys that are one key once trimmed are refused rather than collapsed. They are advertised to peers on this
-node's presence lease, so a label change takes effect one heartbeat after
-the restart that made it — not at the next config activation.
+keys that are one key once trimmed are refused rather than collapsed. A
+key is at most 63 bytes — Kubernetes' limit on a label name — and holds no
+whitespace or unprintable character anywhere, because it is matched
+exactly wherever it is named: a key with a space inside it is refused
+rather than accepted as a label nothing could name. Labels are advertised
+to peers on this node's presence lease, so a label change takes effect
+one heartbeat after the restart that made it — not at the next config
+activation.
 
 Nothing here means anything to the engine on its own: the org decides
 what to select on.
@@ -186,13 +232,20 @@ The engine boots in this order:
    pointing at why. The same ordering has a corollary — a boot that fails on
    the Tier A document itself never reaches this step, so stderr is the only
    record of it, `logging.stderr` notwithstanding
-4. Open the store file and start or dial the stream
-5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the **core runtime** — on every node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in, because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up
-7. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-8. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-9. `SELECT payload FROM company_config WHERE is_active <> 0`
-   - **Row present**: apply the payload, which spawns the full company — including the **native halves** the company declares: the tracker's and the knowledge base's writers and readers over the logs step 6 already applies, their lexical index, change feeds and embedding duty
+4. Hold the Tier A this process is about to run to Tier A's rules once more —
+   the file with every `-roles`, `-api-host` and `-api-port` flag applied. The
+   engine does this itself, before it opens anything, because it is the one
+   thing that runs Tier A: the file was validated as it loaded, but a flag, or
+   a bootstrap a tool built in code, reaches the engine having passed no rule,
+   and a node that opened its store first would have migrated a database for a
+   config it was always going to refuse
+5. Open the store file and start or dial the stream — a node without `data` opens a scratch store, deleted at every boot, and joins the members' broker as a leaf
+6. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+7. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
+8. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes — and, when `api.public.port` is set, the routes outside parties call (`/webhooks/*`, `/otlp/{token}`, `/mcp/{token}`) on that second listener instead (see [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api)). A node without the `ingress` role serves only its `/health` and `/ready` probes on `api.port`, and a seats node's agent-mode tool bridge beside them, or on `api.public.port` when that is set
+9. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
+10. `SELECT payload FROM company_config WHERE is_active <> 0`
+   - **Row present**: apply the payload, which spawns the full company — including the **native halves** the company declares: the tracker's and the knowledge base's writers and readers over the logs step 7 already applies, their lexical index, change feeds and embedding duty
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`, and a Tier A token's session signs in — which is how the dashboard creates the company. Nobody can be invited or created yet: every person holds a human seat the company declares, so that waits for the first revision
 
 **A boot that fails leaves nothing running.** Any step above can fail — an
@@ -350,7 +403,7 @@ in a fixed order, and names each stage it got through.
 3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 6), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
 4. **`sandbox_runtime`** — bring up the [code sandbox](code-sandbox.md)'s coordinator and completion poll on a node running neither, for the first revision whose `providers.sandbox` reaches a cell, and prepare the seats this node **already** holds: each was taken before there was anything to prepare, so each now attaches its completion topic and recovers the runs recorded on it, as a seat taken afterwards does on its way in. A seat whose preparation fails is handed back (a voluntary `unprepared` release), so its next acquisition, here or on a peer, runs the whole of it. **Before** `tools` for the reason `native` is: `run_sandbox` and an agent-mode executor are offered only where the runtime exists. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met a sandbox company at boot. Like the native halves it is a fact about the process rather than a revision, so a later refusal of the same apply does not take it down.
 5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
-6. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
+6. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage builds it, and a build that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy). What feeds the dispatcher is not this stage's: each seat's reflection subject is attached by the node that acquires the seat, beside its mailbox.
 7. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. The swap carries the backend of any cell the revision dropped as *retired*, for the runs still on it, and a revision with no `providers.sandbox` keeps the last manager for the runs in flight (see [Code Sandbox](code-sandbox.md#engine-provider--providerssandbox)). It cannot fail — the catalogue was built at `company` — and it runs after every stage that can refuse a node already serving a company, so a refused apply never leaves this node launching through a catalogue its current epoch does not have. **Conditional:** only where this node runs a sandbox runtime, from its boot or from a `sandbox_runtime` start.
 8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new org chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
    On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
@@ -412,10 +465,10 @@ background learning passes, and on a node's first company the inbound edge.
 > them: they are rebuilt after the last failure point, which is why they are
 > ordered there. A node's **first** company is the one exception, on both
 > sides of `tools`: `native` refuses it when the runtime cannot start,
-> `learning` when the reflect dispatcher cannot attach, and `integrations`
+> `learning` when the reflect dispatcher cannot be built, and `integrations`
 > when the inbound edge cannot start. None of those refusals has a previous
-> epoch to protect, so what it leaves behind (the shared MCP children, an
-> attached dispatcher, the party index, native halves over logs the node
+> epoch to protect, so what it leaves behind (the shared MCP children, a
+> built dispatcher, the party index, native halves over logs the node
 > already applies) serves nothing until the retry the refusal earns, which finds
 > it already there. Widening that window is what would make `degraded`
 > reachable, which is why everything an apply cannot un-apply stays behind the
@@ -435,7 +488,7 @@ background learning passes, and on a node's first company the inbound edge.
 One knob is refused rather than applied live, because applying it would
 corrupt data rather than merely disrupt it:
 
-- **`providers.embeddings.dimensions`** — rows already written carry vectors of the old width, and a similarity query across two widths compares nothing. The apply fails naming the declared width and the width the store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live in both directions: a company that drops it degrades to recency-only recall on the next turn.
+- **`providers.embeddings.dimensions`** — rows already written carry vectors of the old width, and a similarity query across two widths compares nothing. The apply fails naming the declared width and the width the store already holds. Moving a store from one width to another is a **restart**, because its vector columns are sized when it opens; after it, the knowledge corpus re-embeds itself, since its vectors are kept per model and width, and the node holding each seat re-fills that seat's diary and its raw episodes, which store the whole text their vectors are of. Similarity recall compares only vectors of the query's model and width, so until a row is filled it is not reached by similarity: personal memory reaches a note through its recent half, `## Similar prior work` leaves a turn out, and `query_episodes` reaches it with `conversation` or by recency — and says how many turns its search could not reach. A change of `providers.embeddings.model` at the same width *is* live, and for the same reason it needs no refusal: every stored vector names the model it came from, recall compares only rows of the query's model, and the diary and the raw episodes are re-filled in the new space the same way, never ranked across two spaces meanwhile. Adding or removing the whole `embeddings` block *is* live in both directions: a company that drops it degrades on the next turn to keyword-only search, personal memory chosen from each seat's recent notes alone, and no recall of similar prior work, since a seat's recent turns are not similar work.
 
 **`providers.sandbox` is live in every direction.** Adding it brings the code
 sandbox up on the next apply (`sandbox_runtime`), on a node that booted with no
@@ -533,8 +586,9 @@ standing, and the node reads the directory once and — if the answer moved —
 builds a whole new registry for the company it already serves and swaps it in,
 exactly as `parties` does. Both triggers take one lock, so they cannot swap a
 half-built registry past each other, and neither is ever a diff against the
-live one. It is within one apply on every node, whatever its roles, with a
-thirty-second re-read as the net, and it never appears in `applied_subsystems`,
+live one. It is within one apply on every data node, with a thirty-second
+re-read as the net — and on a node holding no data, which applies no log and
+asks a data node for its directory reading, the re-read is the trigger, and it never appears in `applied_subsystems`,
 because no apply ran.
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
@@ -589,7 +643,7 @@ CREATE TABLE company_config (
                                                   -- through: pat:<id>, session:<lineage>,
                                                   -- a Tier A token's login; empty for a
                                                   -- write no credential made
-    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
+    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document, sealed under
                                                   -- the keyring every node holds
@@ -635,13 +689,13 @@ their revision, and a backup when the backup is deleted.
 
 ### What a stored revision is held to
 
-A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: a later build can add a rule, and during a rolling upgrade an older peer keeps activating documents that break it. So reading a revision and running one are held to different standards.
+A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: during a rolling upgrade a newer peer can store a document this build's rules would refuse. So reading a revision and running one are held to different standards.
 
 - **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
 - **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
 - **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
 
-The difference between the last two is the **admission rules**: rules added after companies already existed, which a stored company can break and still run exactly as it did before them. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. Three more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
+The difference between the last two is the **admission rules**: authoring hygiene that nothing about running a company depends on, and the part of the rule set a later build may add to or relax. A revision that breaks one still runs, so an apply does not refuse it: during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. So is a schedule's `cron` that has five fields and still breaks the [cron grammar](scheduling.md#cron-syntax) (`61 * * * *`): a company carrying one runs with that schedule never firing and every other schedule untouched. So is a seat's `avatar` naming a character or a colour this build does not draw, or written on a human seat: nothing that runs a seat reads it, and the set of characters will grow, so a revision a newer peer admitted with a character this build does not know still applies here, and the dashboard draws that seat as the original Crewlet until it is upgraded. So is a sandbox-enabled seat whose code work would hand a [`cli-agent`](subscription-llm-backends.md) entry to another CLI's coding agent — an `opencode` entry under Claude Code, say: the company runs, and only that seat's `run_sandbox` launches are refused, each naming the fix (see [Code Sandbox](code-sandbox.md#failure-modes)). A `cli-agent` entry's credential configured where its CLI never reads it is the same kind of rule, and so is an `opencode` entry's `model` with no provider segment (see [Subscription LLM Backends](subscription-llm-backends.md#configuration-reference)). Three more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
 
 - **An `mcp_env` key must name a tool server.** The engine looks a seat's credentials up per *server*, so a block keyed on a name `mcp_servers` does not declare is never read by anything: it sits in the document looking configured while the server it was meant for starts with none. Six names need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence`.
 - **Two seats may not declare one email.** The party registry keys on the address and the first seat wins, so all but one silently stop being findable and mail meant for one person resolves to another. The same rule already covered every [external account id](humans-in-the-org.md).
@@ -649,7 +703,7 @@ The difference between the last two is the **admission rules**: rules added afte
 
 A seat may not be called `none` either — what `integrations.datadog.route_to` means by nobody, so a seat of that name would be silenced by its own handle. That one is a runnable rule.
 
-A written document is refused for breaking one. A stored revision that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
+A written document is refused for breaking one. A revision being applied that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
 
 ---
 
@@ -727,9 +781,11 @@ itself the first time its configuration went through `PUT /config`.
 
 A deliberately public read surface is now a **named token entry holding read
 grants and nothing else** — listable, revocable without a restart, and present
-in the audit log, none of which a posture flag could be. The key is refused by
-name if it appears, rather than ignored, because ignoring it would silently run
-the opposite posture from the one the file asks for.
+in the audit log, none of which a posture flag could be. A file that still
+carries the key is refused, exactly as one carrying any key this build does not
+know is — Tier A is decoded strictly, so an unknown field is an error rather
+than something ignored — which is what keeps it from silently running the
+opposite posture from the one the file asks for.
 
 `api.auth.disabled` went with it. It authenticated the **empty** credential
 into full operator authority with no check on the bind address anywhere, which
@@ -745,9 +801,8 @@ copied into an image. It grants `api.auth.max_grants` and no more, where
 
 `api.auth.oidc` is retired too: the engine no longer signs anybody in through
 an identity provider. A person signs in with a login, a password and — unless
-`api.auth.totp` says `optional` — a second factor the engine holds. The block is
-refused by name, so a file that still carries it is told what happened rather
-than asked to check its spelling.
+`api.auth.totp` says `optional` — a second factor the engine holds. A file that
+still carries the block is refused like any other unknown key.
 
 There is no switch for password sign-in, either: it is always served. A
 deployment nobody has been invited to already signs nobody in, because nobody
@@ -771,6 +826,15 @@ credential:
 | `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a credential cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
 | `/auth/config`, `/auth/login`, `/auth/invite/*`, `/auth/reset/*` | A login cannot require a login: these are how somebody obtains a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends sessions and enrols second factors. The sign-in throttle and the origin check stand in for the guard |
 | `/auth/logout` | Signing out of this session clears the cookie whatever the node can read, and verifies every bearer it ends itself. Signing out everywhere and ending a named session stay guarded |
+
+**The public listener serves only what an outside party calls.** With
+`api.public.port` set, `/webhooks/*`, `/otlp/*` and `/mcp/*` are served on it
+and nowhere else, behind the same guard, and every other route — every `/auth/`
+route included — only on `api.port`, so the address a vendor is given never
+reaches a sign-in form. A node without `ingress` serves its probes on
+`api.port`, behind the guard as well: `/health` answers, `/dashboard` is `404`
+and every guarded route is `401` (see [probes on a node without
+ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress)).
 
 `/ws/stream` follows the same rule as every other route: the session cookie a
 signed-in browser sends on its own — a browser cannot set a header on a
@@ -807,6 +871,8 @@ only safe reading of "an app was built without being told who may act", and it
 removes the possibility of a process serving `/config` writes with nothing in
 front of them.
 
+**`api.auth.company_writers`** names the Tier A tokens that alone may *change* the company document; unset, whoever the authority table admits may. See [Managed configuration](#managed-configuration).
+
 ### What Tier A must state on every node
 
 **`secrets.keys` is required on every node**, whatever its roles and whether or
@@ -815,8 +881,9 @@ It has no default — a key the engine invented would be one no other node holds
 — and far more than the company's credentials rest on it:
 
 - every record on every state log is signed and verified under it, because the
-  broker authenticates nothing, and every node runs every state log, a
-  seats-only satellite included;
+  broker authenticates nothing and every data node applies every log — and
+  every request a node without `data` sends through the estate router, and
+  every answer it gets, is signed under it too;
 - the company document a node fetches from its peers is authenticated by its
   seal, so a node refuses one that arrives unsealed (see [Secrets](#secrets));
 - on a node serving the API it signs every session cookie and derives the key
@@ -830,15 +897,24 @@ so a key that is not base64, or decodes to the wrong length, is refused by
 
 ### What Tier A must state once the API is served
 
-Three more settings stop being optional the moment `api.port` is non-zero, and
-each is refused by `crewlet validate` on a laptop rather than by a process at
-bind time:
+Three more settings stop being optional the moment a node serves the API —
+`api.port` non-zero on a node running `ingress`; a port on a node without it
+serves only probes and needs none of them — and each is refused by `crewlet
+validate` on a laptop rather than by a process at bind time:
 
 | Setting | Why it cannot be defaulted |
 |---------|----------------------------|
-| `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
+| `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is every link a person follows — an invitation, a password link, a page's address in a notification. Without a public listener it is also what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
 | `api.auth.max_grants` | The ceiling on what a directory record may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
 | `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the company and then puts its first person on their seat — and on a running one it is the way back in when an administrator has locked themselves out |
+
+With `api.public.port` set on an `ingress` node, **`api.public.external_url`** is required as well:
+the address vendors and sandboxes reach the public listener at, which every
+webhook URL, the per-run OTLP endpoint and the tool bridge are built on. The two
+are separate settings because they are separate sockets — a person reaches
+`api.port` and a vendor the public one — and neither is ever read off a request.
+Without a public listener the two are the same address and only
+`api.external_url` is stated.
 
 ### What `crewlet validate` warns about
 
@@ -892,6 +968,92 @@ Every write this surface logs — `config_revision_written`, `secret_written`,
 and `operator`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
+
+### Managed configuration
+
+Some deployments do not edit the company document by hand at all: a GitOps
+pipeline applies it from a repository, or external tooling such as a
+Kubernetes operator renders it from custom resources and writes it on every
+reconcile. Such a system replaces the active revision with its own each time
+it runs, so an edit a person makes through the dashboard or the API lasts only
+until then — and nothing tells them. Naming the system's token as the
+document's only writer turns that silent loss into a refusal at the moment of
+the edit:
+
+```yaml
+api:
+  auth:
+    tokens:
+      - {id: gitops, token: "${CREWLET_API_TOKEN_GITOPS}"}
+      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+    company_writers: [gitops]   # only this token may change the company document
+```
+
+With `company_writers` set, every write that **changes** the document refuses
+any other credential with `403 config_managed`, naming the writers and what to
+do instead. **The credential is what is judged, never the author**: a listed
+token writes because the request came through it (`operator_id` is its login,
+`token:<id>`), so a person's session, a machine token acting as its owner, a
+session exchanged from a listed Tier A token and a lead writing their own team
+are each refused — every one of them is an edit the managing system's next
+reconcile would overwrite. It is judged after the route's own grant and before
+the body is read, so a refusal costs no parse. Reads are unchanged: every
+credential holding `config:read` still reads `/config`, its history and its
+diffs.
+
+| Refused for a credential not listed | Still open to whoever the authority table admits |
+|---|---|
+| `PUT` and `PATCH /config`, every per-entity `PUT /config/{kind}/{id}`, `POST /config/revisions/{id}/revert`, and the `?dry_run=true` check of each — a check answers what the write would, and the write would be refused | `POST /config/reload`, which re-publishes the active document's own bytes |
+| A `/setup` connect that writes a pointer, a disconnect, and an agent's GitHub App — each refused **before** anything is sealed, queued or created at the vendor | A `/setup` submission that only rotates a value the document already names, and the provisioning pass and its check |
+| An offline `crewlet config import`, an offline `crewlet config activate` of any revision but the active one, and `crewlet run -import-company`; a `-company` bootstrap seed is ignored with a `company_seed_ignored` warning | `/secrets`, `crewlet secrets` and `crewlet config rekey`, and `crewlet config activate` of the active revision |
+
+**Why the secret store and a rotation stay open.** A leaked credential has to
+be replaced now, by whoever holds the new one, and the managing system cannot
+know it is needed. Writing the new value and re-publishing the unchanged
+document — `PUT /secrets/{name}` then `POST /config/reload`, or one rotation
+through Settings › Integrations — changes nothing the managing system renders,
+so it is the break-glass a person keeps. If the managing system also syncs the
+secret store, it will overwrite a rotated name it owns at its next sync; fix
+the value at its source as well.
+
+**The engine's own writes are not judged by the list.** A reconcile pass that
+records what it discovered at a vendor writes as the engine itself (kind
+`system`), not as a credential; a managing system that re-renders the document should carry those
+values (they are in the active revision it reads back) or set them itself.
+That includes a provisioning pass any operator starts on demand from `/setup`
+or Settings › Integrations: where `integrations.jira` or
+`integrations.confluence` has no `cloud_id`, the Atlassian pass records the
+`cloud_id` and `site_url` of the site it found, and the revision is credited to
+the engine (`reconcile loop`, kind `system`), not to the person who pressed
+the button.
+
+**It prevents drift; it is not a privilege boundary.** `company_writers`
+stops a person's edit from being silently overwritten, and nothing more. Every
+credential holding `secrets:write` still writes the secret store, and a
+`config:write` holder can reload, so a credential that is not a writer can
+still change what the managed document *does* by rewriting a value it
+references — a model's API key, a webhook secret, or any URL or endpoint kept
+as a `${VAR}` — and publishing it with `POST /config/reload`. A deployment that
+needs to keep somebody away from the company's behaviour must not grant them
+those.
+
+**The dashboard shows the document as managed.** The [`viewer`](../reference/api-endpoints.md#queries)
+answer says whether the caller's credential may change the document
+(`config_writer`) and who manages it (`config_managed_by`); every control that
+writes the document — a lead's edit of their own team included — is drawn
+disabled with that sentence, and the org builder opens read-only.
+
+`crewlet validate` warns about a list that is valid and almost certainly wrong:
+an id that names no token in `api.auth.tokens` (it lets nobody write), and a
+list naming no configured token at all (nothing may change the document
+through the API — a frozen document). An entry outside the token-id grammar
+every `api.auth.tokens[].id` is held to, or a repeated one, is refused
+outright. The list is per
+node, like the rest of `api.auth`: give every node the same one.
+
+To take the document back, remove `company_writers` from every node's Tier A
+and restart. The decision and its boundaries are
+[ADR-0030](https://github.com/crewlet/crewlet/blob/main/adr/0030-a-managed-company-document-names-its-writers.md).
 
 ---
 
@@ -950,7 +1112,7 @@ If you also use the [secret store](secret-store.md), run `crewlet secrets rekey`
 
 Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The `/org` view — read by every holder of `state:read` — needs no masking because it carries no credential field at all: it is an explicit projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
 
-**What counts as a credential is structural.** A field is a credential because its Go type carries a `secret` tag (`secret:"true"`, or `secret:"content"` for a file's body, which is read whole — see [setup steps](code-sandbox.md#setup-steps--provisioning-the-box)), never because of how its value or its key reads, and a tag on a list or a map covers every element. The tagged fields today: LLM `api_keys`, the embeddings and sandbox `api_key`, a `cli-agent` provider's `cli.auth.token`, `cli.auth.credential_bundle` and `cli.env`, the integration tokens, admin tokens, API and app keys, webhook and signing secrets, a seat's `integrations.slack` bot token and signing secret, `integrations.mattermost.bot_token` and GitHub App private key and webhook secret, every `mcp_env` value on a seat or a unit, `mcp_servers[].env` and `mcp_servers[].headers`, `role.sandbox.env`, and each sandbox setup step's `env` and `files` (under `providers.sandbox.setup` and `role.sandbox.setup`). Everything else (URLs, hosts, flags, model names, the org chart) is served exactly as stored, including every toggle an operator set explicitly: a schedule kept with `enabled: false` reads as disabled, so sending the read back never re-enables it. A test fails the build when a field whose name reads like a credential, or a `map[string]string` named `env`, `headers` or `files`, is added without the tag, so a new credential field is masked by declaring it rather than by remembering to.
+**What counts as a credential is structural.** A field is a credential because its Go type carries a `secret` tag (`secret:"true"`, or `secret:"content"` for a file's body, which is read whole — see [setup steps](code-sandbox.md#setup-steps--provisioning-the-box)), never because of how its value or its key reads, and a tag on a list or a map covers every element. The tagged company fields today: LLM `api_keys`, the embeddings and sandbox `api_key`, a `cli-agent` provider's `cli.auth.token`, `cli.auth.credential_bundle` and `cli.env`, the integration tokens, admin tokens, API and app keys, webhook and signing secrets, a seat's `integrations.slack` bot token and signing secret, `integrations.mattermost.bot_token` and GitHub App private key and webhook secret, every `mcp_env` value on a seat or a unit, `mcp_servers[].env` and `mcp_servers[].headers`, `role.sandbox.env`, and each sandbox setup step's `env` and `files` (under `providers.sandbox.setup` and `role.sandbox.setup`). Everything else (URLs, hosts, flags, model names, the org chart) is served exactly as stored, including every toggle an operator set explicitly: a schedule kept with `enabled: false` reads as disabled, so sending the read back never re-enables it. A test fails the build when a field whose name reads like a credential, or a `map[string]string` named `env`, `headers` or `files`, is added without the tag — in either tier, since Tier A's credentials carry it too (`secrets.keys[].material`, `api.auth.tokens[].token`, `stream.token` and `store.objects.s3.secret_access_key`, listed under [credential positions](../reference/cli.md#credential-positions-x-crewlet-secret)) — so a new credential field is masked by declaring it rather than by remembering to. The same tag marks each of these positions `"x-crewlet-secret": true` in the [generated JSON Schema](../reference/cli.md#credential-positions-x-crewlet-secret), held by a second test to exactly the set a read masks, so tooling that writes a company without the engine (an editor, a CI linter, a Kubernetes operator rendering the document from its own `Secret`s) knows where a `${VAR}` belongs instead of a value.
 
 **Only a whole `${VAR}` reference is shown.** A credential field whose value is exactly one reference (`"${TRACKER_TOKEN}"`) is left visible: it names a credential and carries none, since the value it points at lives in the environment or the [secret store](secret-store.md) and never in this document. Every other non-empty value is masked, including one that embeds a reference beside literal text. `"Bearer sk-live-${SUFFIX}"` and `"sk-live-SECRET-${ROTATION}"` are legitimate (the resolver expands embedded references), and their literal half is a credential. A value using brace syntax the resolver ignores (`${line#host=}`, `${1}`, an unclosed `${`) is not a reference at all and is masked too. "Is a reference" is the engine's own grammar (`internal/envref`). The variable names an embedded reference carries are still listed, with their paths, by `GET /config/references`, which reads the unredacted document and answers names only.
 

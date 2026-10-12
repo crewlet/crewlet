@@ -50,7 +50,8 @@ var log = logging.Get("providers.credential")
 //
 // It is a sentinel rather than a distinct error type because the layer above
 // does not branch on it: the backend wraps it in an [llm.Error] carrying the
-// kind that did the cooling, and the fallback chain then treats it exactly
+// kind that did the cooling — and what the last key was told, beside it — and
+// the fallback chain then treats it exactly
 // like any other retryable failure. A dedicated error type would need a
 // dedicated catch in the fallback wrapper; here the classification IS the
 // return value, so the chain needs no special case at all. Callers that genuinely want to tell "no key left" from
@@ -415,9 +416,9 @@ func (p *Pool) Refresh(ctx context.Context) (int, error) {
 	return applied, nil
 }
 
-// Lease is one credential checked out of the pool. Exactly one of Succeed or
-// Fail returns it; a second call is a no-op, so a deferred release beside an
-// explicit one cannot double-count in-flight.
+// Lease is one credential checked out of the pool. Exactly one of Succeed,
+// Fail or Release returns it; a second call is a no-op, so a deferred release
+// beside an explicit one cannot double-count in-flight.
 type Lease struct {
 	pool     *Pool
 	e        *entry
@@ -468,6 +469,24 @@ func (l *Lease) Succeed() {
 	l.released = true
 	l.e.inFlight--
 	l.e.authFailures = 0
+}
+
+// Release returns the lease having learned NOTHING about the key: no bench,
+// and no reset of the auth backoff either. It is for a call whose answer is a
+// fact about something other than the credential — `crewlet llm doctor`'s
+// Models API read, where a gateway may refuse a key on that one route while
+// its messages route takes it, or rate-limit the route alone — so that neither
+// a refusal nor a success there moves what the pool believes about the key
+// every real call depends on. Succeed and Fail are the verdicts; this is the
+// abstention.
+func (l *Lease) Release() {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	if l.released {
+		return
+	}
+	l.released = true
+	l.e.inFlight--
 }
 
 // Fail returns the lease and benches the key when kind says the key itself is
@@ -584,6 +603,9 @@ func Rotate[T any](
 	// about WHY, and the honest default is the kind that says "try again
 	// elsewhere" without claiming the key is bad.
 	last := llm.KindRateLimit
+	// refused is the last key's own classified answer, kept for the error an
+	// exhausted pool returns — see below.
+	var refused *llm.Error
 
 	// At most one attempt per key: each rotation benches the key it
 	// consumed, so the bag cannot supply more.
@@ -610,13 +632,32 @@ func Rotate[T any](
 		if !classified.Kind.ExhaustsCredential() {
 			return zero, classified
 		}
-		last = classified.Kind
+		last, refused = classified.Kind, classified
 	}
-	return zero, &llm.Error{
+	exhausted := &llm.Error{
 		Kind:     last,
 		Provider: id.Provider,
 		Model:    id.Model,
 		Err: fmt.Errorf("all %d credentials cooling after %s: %w",
 			p.Size(), last, ErrExhausted),
 	}
+	if refused != nil && refused.Err != nil {
+		// WHAT THE LAST KEY WAS TOLD, kept rather than replaced. The kinds
+		// that bench a key are the ones whose reason an operator acts on —
+		// a key the provider rejects, a quota run out, a rate limit that
+		// clears by itself — and they share a status, so the kind alone
+		// cannot tell them apart. The pool's own sentence used to be all
+		// that reached the caller, and a seat whose one key was revoked read
+		// exactly like one being briefly throttled.
+		//
+		// Its cause's TEXT is put in this one, which is the classifier's
+		// line rather than the SDK's: a classified error's text is shown
+		// wherever the failure goes, so a backend keeps an SDK error that
+		// prints its URL or pastes its body behind a line of its own
+		// ([llm.Error]). The SDK's error is still reachable through it.
+		exhausted.Err = fmt.Errorf("all %d credentials cooling after %s: %w; the last was refused: %w",
+			p.Size(), last, ErrExhausted, refused.Err)
+		exhausted.Detail = refused.Detail
+	}
+	return zero, exhausted
 }

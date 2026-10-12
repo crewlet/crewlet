@@ -85,13 +85,11 @@ export const TOKEN_MAX_DAYS = 365;
  * HELD BY `internal/api/iamapi.TestTheDashboardWordsEveryFindingKindInTheEnginesOrder`
  * in both directions and in order. People & access words each one
  * (`FINDING_WORDS`, keyed on this list so a kind left unworded does not
- * compile); a kind the engine grew that this lacks is drawn as its raw code,
- * which is what `person_without_seat` would have been.
+ * compile); a kind the engine grew that this lacks is drawn as its raw code.
  */
 export const FINDING_KINDS = [
   "no_people_manage_holder",
   "person_without_credential",
-  "person_without_seat",
   "binding_dangling",
   "grant_clamped_by_ceiling",
 ] as const;

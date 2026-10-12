@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // What an agent read from the company's knowledge base.
@@ -79,26 +78,19 @@ func (v KnowledgeReadVia) Valid() bool {
 	return false
 }
 
-// KnowledgeReadQueryMax bounds the query a read carries, in bytes.
+// KnowledgeReadQuery is the query as a read records it: trimmed, and
+// otherwise WHOLE.
 //
-// Two hundred: the query is a label a reader recognises a search by ("the one
-// that looked for `deploy rollback`"), not an input anything re-runs. The
-// model's own query is already capped at 400 bytes by search_knowledge and the
-// prefetch's is one line of keywords, so the cap bites only on the long tail —
-// and it is what keeps a read's row, which is written for every search every
-// seat makes, from carrying a pasted thread.
-const KnowledgeReadQueryMax = 200
-
-// KnowledgeReadQuery is the query as a read records it: trimmed and clipped to
-// [KnowledgeReadQueryMax] on a rune boundary, with the marker counted inside
-// the cap so a clipped query says so.
+// It used to be clipped to two hundred bytes as "a label a reader recognises a
+// search by" — but every producer already bounds it where it is written
+// (search_knowledge refuses a query past four hundred bytes; the prefetch's is
+// one line of keywords), so the clip changed nothing but the long tail, where
+// it made two different searches that shared an opening read as one search
+// to anything grouping on the text.
 //
 // ONE RULE for every producer, and here rather than at each of them, because
-// two producers clipping differently would make one search look like two to
-// anything that groups on the text.
-func KnowledgeReadQuery(query string) string {
-	return textcut.Within(strings.TrimSpace(query), KnowledgeReadQueryMax)
-}
+// two producers normalising differently would make one search look like two.
+func KnowledgeReadQuery(query string) string { return strings.TrimSpace(query) }
 
 // KnowledgeReadPage is one page a read reached.
 type KnowledgeReadPage struct {

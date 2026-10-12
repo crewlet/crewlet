@@ -26,7 +26,8 @@ import "context"
 
 // Message is one thing somebody said in a thread.
 //
-// Every field is read by the renderer: a value type here exists to be
+// Every field is read by the renderer — the text, the speaker, whose it is,
+// and which message it was ([Message.ID]): a value type here exists to be
 // rendered, and a field nothing reads is a field that drifts out of step with
 // the vendor that fills it.
 type Message struct {
@@ -54,6 +55,18 @@ type Message struct {
 	// seat's identity on that backend, and it is what stops an agent
 	// reading its own replies as a colleague's and answering itself.
 	Own bool
+
+	// ID is the backend's own id for the message — the value a chat
+	// trigger's metadata carries as `ts` (a Slack message ts, a Mattermost
+	// post id) — and empty for the stand-in a missing root is read as.
+	//
+	// NOT RENDERED, and the one field here that is not: it is what lets the
+	// reader say WHICH messages a turn was shown, which the turn's dispatch
+	// records so that a message a later turn already saw in this block is
+	// not run again as a turn of its own when it comes back behind that one
+	// (see engine's worked-through record). An opaque string in the
+	// backend's own format, compared for equality and nothing else.
+	ID string
 }
 
 // Transcript is what a backend read back from a thread.

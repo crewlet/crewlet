@@ -126,8 +126,14 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
-			Seats:           func() []colleague.Seat { return nil },
-			DefaultProject:  func(string) string { return "ENG" },
+			// THE PROJECT FILES TOO, each over the seam the seat's own
+			// registry is built with: a catalogue that left them off would
+			// be one whose four file verbs no walk here ever reached.
+			Files:          full.Work.Files,
+			FileWriter:     full.Work.FileWriter,
+			Objects:        full.Work.Objects,
+			Seats:          func() []colleague.Seat { return nil },
+			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
@@ -142,7 +148,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: builtin.PrincipalActor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: orgOf, Actor: builtin.PrincipalActor},
-		Steer: builtin.SteerDeps{Asker: &fleetAsker{}, Actor: builtin.PrincipalActor},
+		Steer: builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: builtin.PrincipalActor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget,
 			Actor: builtin.PrincipalActor},
 		Authorize: builtin.Decide(chartLeads),

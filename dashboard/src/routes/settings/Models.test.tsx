@@ -22,6 +22,7 @@ import { POOL_STATE_WORDS } from "~/lib/models.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { CredentialPoolAnswer } from "~/contract/credentials.ts";
+import { withDerived } from "~/test/org.ts";
 
 const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
 
@@ -144,7 +145,7 @@ class InertWebSocket {
 
 function mount(id?: string, { refuse = false, answer = pool() } = {}) {
   const store = new Store();
-  store.applyOrg(org as never);
+  store.applyOrg(withDerived(org) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
@@ -376,7 +377,7 @@ const entity = {
   type: "anthropic",
   model: "claude-sonnet-5",
   api_keys: ["${ANTHROPIC_KEY_A}", "__redacted__"],
-  reasoning: true,
+  reasoning_effort: "high",
   timeout_seconds: 300,
 };
 
@@ -502,4 +503,78 @@ test("the edit opens with the model field focused", async () => {
   stubConfig((call) => (call.method === "GET" ? json(entity, 200, { ETag: '"r1"' }) : valid()));
   const dialog = await openEdit();
   expect(document.activeElement).toBe(within(dialog).getByLabelText(/^Model/));
+});
+
+/** A cli-agent entry as the engine serves it. */
+const cliEntity = (auth?: Record<string, unknown>, keys?: string[]) => ({
+  type: "cli-agent",
+  model: "sonnet",
+  ...(keys ? { api_keys: keys } : {}),
+  cli: { agent: "claude-code", ...(auth ? { auth } : {}) },
+});
+
+async function openCLIEdit() {
+  mount("subscription");
+  await settle();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  });
+  await settle();
+  return screen.getByRole("dialog");
+}
+
+// A CLI-AGENT ENTRY IS NOT A KEY POOL, and the editor stops drawing it as one.
+// It labelled the list "Tokens" and offered any number of rows, though the
+// engine reads api_keys there only under cli.auth.mode api-key, and only one:
+// every row it invited was refused on Save.
+test("a subscription cli-agent entry offers no key, and says how it signs in", async () => {
+  stubConfig((call) =>
+    call.method === "GET" ? json(cliEntity(), 200, { ETag: '"r1"' }) : valid(),
+  );
+  const dialog = await openCLIEdit();
+  expect(within(dialog).queryByText("Tokens")).toBeNull();
+  expect(within(dialog).getByText(/signs in through its CLI's login/)).toBeDefined();
+  expect(within(dialog).queryByRole("button", { name: "Add key" })).toBeNull();
+});
+
+test("an api-key cli-agent entry holds exactly one key", async () => {
+  stubConfig((call) =>
+    call.method === "GET"
+      ? json(cliEntity({ mode: "api-key" }, ["${ANTHROPIC_API_KEY}"]), 200, { ETag: '"r1"' })
+      : valid(),
+  );
+  const dialog = await openCLIEdit();
+  expect(within(dialog).getByText("API key")).toBeDefined();
+  const add = within(dialog).getByRole("button", { name: "Add key" });
+  expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
+  expect(add.getAttribute("title")).toMatch(/holds one key and rotates nothing/);
+});
+
+test("a key on a cli-agent entry that reads none is a fault to remove before saving", async () => {
+  const calls = stubConfig((call) =>
+    call.method === "GET"
+      ? json(cliEntity(undefined, ["${ANTHROPIC_API_KEY}"]), 200, { ETag: '"r1"' })
+      : valid(),
+  );
+  const dialog = await openCLIEdit();
+  fireEvent.change(within(dialog).getByLabelText(/^Model/), { target: { value: "opus" } });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  expect(within(dialog).getByText(/read only under cli.auth.mode api-key/)).toBeDefined();
+  expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove key 1" }));
+  });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  // The first check is of the company as stored, which is what an edit's
+  // warnings are compared against; every request carrying the edit has no key.
+  const edited = calls.filter((c) => c.method === "PUT" && c.body?.model === "opus");
+  expect(edited.length).toBe(2);
+  expect(edited.every((c) => !("api_keys" in (c.body ?? {})))).toBe(true);
 });

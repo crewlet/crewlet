@@ -64,8 +64,8 @@ func (m Mode) Valid() bool {
 // Resolved is the mode a search runs in: the zero value is hybrid.
 //
 // A METHOD rather than a constructor default, so every search that names no
-// mode — the prefetch, a seat's tools, a caller written before modes existed
-// — gets the same answer from the one place that decides it.
+// mode — the prefetch, a seat's tools — gets the same answer from the one
+// place that decides it.
 func (m Mode) Resolved() Mode {
 	if m == "" {
 		return ModeHybrid
@@ -181,14 +181,14 @@ type Outcome struct {
 	// ServedMode is the ranking the hits came from. EMPTY when nothing
 	// ran — a semantic search with nothing to rank by meaning with — and
 	// never a mode that did not produce the hits.
-	ServedMode Mode
+	ServedMode Mode `json:"served_mode"`
 
 	// Modes is what this backend can serve AS ASKED right now. A mode
 	// missing from it would be answered degraded.
-	Modes []Mode
+	Modes []Mode `json:"modes"`
 
-	Coverage Coverage
-	Degraded Degradation
+	Coverage Coverage    `json:"coverage"`
+	Degraded Degradation `json:"degraded"`
 }
 
 // Result is one knowledge search's answer.

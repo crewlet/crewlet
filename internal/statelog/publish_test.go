@@ -102,6 +102,10 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 		if refusal.Position.Seq == 0 {
 			t.Error("a gated refusal must name the position the record is durable at")
 		}
+		if refusal.CopyWriter != "" {
+			t.Errorf("a refusal of this node's own record names %q as the copy's "+
+				"writer — the reason is this node's standing", refusal.CopyWriter)
+		}
 		// THE GATE READER IS HANDED THE BODY THIS CALL APPENDED — the
 		// decision's own bytes, not the signed frame — which is what lets a
 		// reader whose gate is keyed on what the payload names (the
@@ -723,7 +727,8 @@ func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 	// A peer writes the object. This node has applied nothing, so its
 	// anchor for the subject is empty while the subject is not — which
 	// is exactly the state a lost race leaves behind.
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -754,7 +759,8 @@ func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -931,7 +937,8 @@ func (unreachable) LastSeq(context.Context, string) (uint64, bool, error) {
 func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -1117,13 +1124,17 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 	complete := func() statelog.Deps {
 		a := newApplier()
 		return statelog.Deps{
-			Domain:     probeDomain{},
-			Log:        refusingAppender{err: errors.New("never asked")},
-			Signer:     testSigner(t, probeDomain{}),
+			Domain: probeDomain{},
+			Spec:   specOf(probeDomain{}),
+			Log:    refusingAppender{err: errors.New("never asked")},
+			Signer: testSigner(t, probeDomain{}),
+			Records: statelog.VerifiedLog{Log: struct{ statelog.LogReader }{},
+				Verifier: testVerifier(t, probeDomain{})},
 			Rows:       &fakeRows{applier: a},
 			Fence:      &fakeFence{},
 			Gates:      &fakeGates{},
 			Waiter:     a,
+			Voids:      a,
 			Identity:   a,
 			Admission:  noCeiling(t),
 			NodeID:     "node-a",
@@ -1139,12 +1150,15 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 		names string
 	}{
 		{"Domain", func(d *statelog.Deps) { d.Domain = nil }, "no domain"},
+		{"Spec", func(d *statelog.Deps) { d.Spec = statelog.StreamSpec{} }, "stream spec has no name"},
 		{"Log", func(d *statelog.Deps) { d.Log = nil }, "no appender"},
 		{"Signer", func(d *statelog.Deps) { d.Signer = nil }, "no signer"},
+		{"Records", func(d *statelog.Deps) { d.Records = nil }, "no reader of its log"},
 		{"Rows", func(d *statelog.Deps) { d.Rows = nil }, "no rows"},
 		{"Fence", func(d *statelog.Deps) { d.Fence = nil }, "no fence"},
 		{"Gates", func(d *statelog.Deps) { d.Gates = nil }, "no gates"},
 		{"Waiter", func(d *statelog.Deps) { d.Waiter = nil }, "no waiter"},
+		{"Voids", func(d *statelog.Deps) { d.Voids = nil }, "no reanchor rules"},
 		{"Identity", func(d *statelog.Deps) { d.Identity = nil }, "no stream identity"},
 		{"Admission", func(d *statelog.Deps) { d.Admission = nil }, "no admission"},
 		{"Generation", func(d *statelog.Deps) { d.Generation = nil }, "no generation source"},
@@ -1296,13 +1310,9 @@ func TestAnEvictionLandingMidWriteRefusesAsAnEviction(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			fence := &laterFence{fakeFence: h.fence, after: 1, answer: c.answer}
-			pub, err := statelog.NewPublisher(statelog.Deps{
-				Domain: probeDomain{}, Log: h.appends,
-				Signer: testSigner(t, probeDomain{}), Rows: h.rows, Fence: fence,
-				Gates: h.gates, Waiter: h.applier, Identity: h.applier,
-				Admission: noCeiling(t), NodeID: "node-a",
-				Generation: h.gen.Load, ResolveBudget: 250 * time.Millisecond,
-			})
+			deps := h.deps
+			deps.Fence = fence
+			pub, err := statelog.NewPublisher(deps)
 			if err != nil {
 				t.Fatalf("NewPublisher: %v", err)
 			}

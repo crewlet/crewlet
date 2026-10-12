@@ -82,3 +82,83 @@ func TestAPersonsSurfacesAreHandedEveryWriterSeam(t *testing.T) {
 		}
 	}
 }
+
+// A PERSON'S SURFACES REACH THE ESTATE THROUGH THE ROUTER, never through this
+// node's own copy.
+//
+// The operator's assistant, the dashboard's act route, the human write surface
+// and the read surface's board, pages, search and file listing are all built
+// in humans.go and native.go, and the engine hands them the tracker and the
+// knowledge base two ways: its own copy ([engine.Engine.Tracker] and the rest),
+// and its estate router ([engine.OperatorWork] and the rest), which answers
+// from this node's copy while it serves and from another data node's while it
+// does not. Built over the first, a data node whose copy was taken out of
+// service — wrong rather than behind, or its file shut — sent its own seats to
+// a peer's copy and went on answering a PERSON from the one it had stopped
+// serving: a board, an inbox or a purge read off rows the node itself would
+// not vouch for. And a read after a person's own write waited on this node's
+// applier ([engine.Engine.WaitCommitted]) rather than the router's session
+// floor ([engine.Engine.AwaitEstate]), which is the floor whichever holder
+// answers the next read honours.
+//
+// Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
+// reason: these constructors need a running engine. An engine value is
+// spelled `e`, or `.engine` on a per-request source, in both files — the
+// controls below fail if the walk finds no routed call, which is what a
+// rename of that convention would look like.
+func TestAPersonsSurfacesReachTheEstateThroughTheRouter(t *testing.T) {
+	t.Parallel()
+	// Each accessor of this node's own copy, and the routed one to call.
+	local := map[string]string{
+		"Tracker":       "engine.OperatorWork",
+		"TrackerWriter": "engine.OperatorWorkWriter",
+		"Pages":         "engine.OperatorPages",
+		"PagesStore":    "engine.OperatorPageWriter",
+		"WorkSearch":    "engine.WorkSearcher",
+		"WaitCommitted": "Engine.AwaitEstate",
+	}
+	routed := map[string]bool{}
+	for _, name := range []string{"humans.go", "native.go"} {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "engine" {
+				routed[sel.Sel.Name] = true
+				return true
+			}
+			use, isLocal := local[sel.Sel.Name]
+			if isLocal && isEngineValue(sel.X) {
+				t.Errorf("%s reaches this node's own copy through %s — use %s, "+
+					"which a copy taken out of service is answered around",
+					fset.Position(sel.Pos()), sel.Sel.Name, use)
+			}
+			return true
+		})
+	}
+	for _, want := range []string{"OperatorWork", "OperatorWorkWriter",
+		"OperatorPages", "OperatorPageWriter", "WorkSearcher"} {
+		if !routed[want] {
+			t.Errorf("no call to engine.%s in humans.go or native.go, so this gate "+
+				"is not reading the surfaces it is about", want)
+		}
+	}
+}
+
+// isEngineValue reports whether e is an engine as these files spell one: `e`,
+// or a source's `.engine`.
+func isEngineValue(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == "e"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "engine"
+	}
+	return false
+}

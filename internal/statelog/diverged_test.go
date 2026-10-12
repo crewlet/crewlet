@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,9 +42,9 @@ func appliedThrough(t *testing.T, n uint64) *applyHarness {
 }
 
 // storedAtOf reads the record the committed checkpoint row names.
-func storedAtOf(t *testing.T, db *store.DB) time.Time {
+func storedAtOf(t *testing.T, db store.ReplicatedHandle) time.Time {
 	t.Helper()
-	cp, found, err := statelog.CheckpointOf(t.Context(), db.Replicated(), probeStream)
+	cp, found, err := statelog.CheckpointOf(t.Context(), db, probeStream)
 	if err != nil || !found {
 		t.Fatalf("read the checkpoint: %v (found %v)", err, found)
 	}
@@ -68,7 +69,7 @@ func appliedAt(h *applyHarness, seq uint64) bool {
 func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 		t.Fatalf("the checkpoint at 3 names the record stored at %s, want the one "+
 			"consumed there, %s", got, probeStoredAt(3))
 	}
@@ -88,7 +89,7 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	if h.fetch.ackCount(3) < 2 {
 		t.Fatal("the redelivery was never consumed")
 	}
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 		t.Fatalf("after a run of redeliveries the checkpoint at 3 names %s, want %s",
 			got, probeStoredAt(3))
 	}
@@ -97,7 +98,7 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	if err := h.run(4); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(4)) {
 		t.Fatalf("the checkpoint at 4 names %s, want %s", got, probeStoredAt(4))
 	}
 }
@@ -410,77 +411,169 @@ func TestAReanchorEndsTheDivergenceAndAJoinThatReplacedNothingDoesNot(t *testing
 	})
 }
 
-// unname makes the checkpoint row name no record, as one a reanchor placed
-// where the log held none does.
-func unname(t *testing.T, h *applyHarness) {
-	t.Helper()
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(),
-			`UPDATE statelog_cursor SET stored_at = 0 WHERE stream = '`+probeStream+`'`)
-		return err
-	}); err != nil {
-		t.Fatalf("clear what the checkpoint names: %v", err)
+// THE VERDICT IS KEPT IN THE NODE'S OWN FILE, AND NOTHING ELSE IS ACCEPTED IN
+// ITS PLACE.
+//
+// [TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord] is what the node's
+// file buys; this is what stops another file being handed as it. The
+// replicated estate reads and writes exactly as the node's file does, carries
+// none of the verdict's table, and is replaced by an adoption — at the moment
+// the verdict has to be judged against what replaced it. Its handle cannot be
+// handed at all, which the build refuses; its database answers Estate like the
+// node's, so the runner refuses that.
+func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
+	t.Parallel()
+	node := reflect.TypeFor[statelog.NodeEstate]()
+	if reflect.TypeFor[store.ReplicatedHandle]().Implements(node) {
+		t.Error("the replicated estate's handle satisfies statelog.NodeEstate, " +
+			"so the runtime can hand it as the node's own file and the build " +
+			"says nothing")
+	}
+	if !reflect.TypeFor[*store.DB]().Implements(node) {
+		t.Fatal("the node's own store does not satisfy statelog.NodeEstate")
+	}
+
+	h := newApplyHarness(t, probeDomain{})
+	replicated, err := h.estate.DB()
+	if err != nil {
+		t.Fatalf("the harness's replicated estate: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		node   statelog.NodeEstate
+		refuse bool
+	}{
+		{"the node's own file", h.db, false},
+		{"the replicated estate's database", replicated, true},
+	} {
+		_, err := statelog.NewRunner(statelog.RunnerDeps{
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+			Verifier: testVerifier(t, probeDomain{}), Applier: h.applier,
+			Fetch: h.fetch, Log: h.fetch, Node: c.node, DB: h.estate,
+			Metrics: h.metrics,
+		})
+		if got := err != nil; got != c.refuse {
+			t.Errorf("NewRunner with %s as the node's estate: err = %v, want "+
+				"refused = %v", c.name, err, c.refuse)
+		}
 	}
 }
 
-// A CHECKPOINT THAT NAMES NO RECORD COMPARES NOTHING, AND THE FIRST BATCH PAST
-// IT NAMES ONE.
+// A CHECKPOINT A REANCHOR PLACED WHERE THE LOG HELD NO RECORD IS COMPARED WITH
+// NOTHING — AND IS UNREACHED PAST THE LOG'S END, EXACTLY AS A NAMED ONE IS.
 //
-// A reanchor placed where the log held no record leaves the checkpoint naming
-// none. There is then nothing this node consumed to hold the log's record
-// against, so no verification establishes anything — whatever the log holds
-// at that sequence — and the loop goes on rather than stopping a domain over a
-// question it cannot ask; the record past the checkpoint it then commits is
-// the one it names from then on.
-func TestACheckpointThatNamesNoRecordComparesNothing(t *testing.T) {
+// A reanchor names the log's own record at the checkpoint it places, and none
+// where the log holds none there: below a rebuilt stream's first record, or at
+// a sequence it skipped. There is nothing on the log to compare such a
+// checkpoint with, so it is settled, and the first batch the node commits
+// names its own record. But a log whose end is below it is the reading the
+// loop refuses on whatever the checkpoint names, or a member that has not
+// caught up would have its records applied past a checkpoint it does not
+// reach.
+func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 	t.Parallel()
-	h := appliedThrough(t, 3)
-	unname(t, h)
-	h.rebuild(probeDomain{}, time.Time{})
-	h.fetch.offerStored(3, otherHistory, env(3, "edit", "3", "op-3", 1))
-	h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
-	if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || established {
-		t.Fatalf("VerifyCheckpoint with no record named = (%v, %v), want nothing "+
-			"established", established, err)
+	live := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	// THE REANCHOR, at a sequence the log holds no record at.
+	at := statelog.Position{Stream: probeStream, Generation: 2, Seq: 5}
+	next := func(h *applyHarness) {
+		e := env(6, "edit", "6", "op-6", 1)
+		e.Gen = at.Generation
+		h.fetch.offer(6, e)
 	}
-	if got := storedAtOf(t, h.db); !got.IsZero() {
-		t.Fatalf("the checkpoint row names %s — the log's record is the thing in "+
-			"question and is never written as the one this node consumed", got)
+	// THE ROW THE REANCHOR COMMITS — naming no record, since the log holds
+	// none at its sequence — and a runner built over it, as the node that
+	// restarts after it builds one.
+	reanchored := func(t *testing.T) *applyHarness {
+		t.Helper()
+		h := appliedThrough(t, 3)
+		if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `
+				UPDATE statelog_cursor SET generation = ?, seq = ?, stored_at = 0,
+					stream_created_at = ?, void_after = 1, void_before = ?, stale_after = 0
+				WHERE stream = ?`,
+				int64(at.Generation), int64(at.Seq), store.EncodeTime(live),
+				int64(at.Generation), probeStream)
+			return err
+		}); err != nil {
+			t.Fatalf("place the reanchor's checkpoint: %v", err)
+		}
+		h.rebuild(probeDomain{}, live)
+		if got := h.runner.Committed(); got != at {
+			t.Fatalf("the runner stands at %s, want the reanchor's %s", got, at)
+		}
+		return h
 	}
-	if err := h.run(4); err != nil {
-		t.Fatalf("a checkpoint that names no record stopped the loop: %v", err)
-	}
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
-		t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(4))
-	}
-}
 
-// A REDELIVERY NEVER NAMES A CHECKPOINT THAT NAMES NO RECORD.
-//
-// What a restored consumer redelivers at the checkpoint is the log's record,
-// whichever history that is, so a run of nothing but redeliveries leaves an
-// unnamed checkpoint unnamed rather than adopting the record in question.
-func TestARedeliveryNeverNamesACheckpointThatNamesNoRecord(t *testing.T) {
-	t.Parallel()
-	h := appliedThrough(t, 3)
-	unname(t, h)
-	h.rebuild(probeDomain{}, time.Time{})
-	h.fetch.offerStored(3, otherHistory, env(3, "edit", "3", "op-3", 1))
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-	errs := make(chan error, 1)
-	go func() { errs <- h.runner.Run(ctx) }()
-	for h.fetch.ackCount(3) < 1 && ctx.Err() == nil {
-		time.Sleep(2 * time.Millisecond)
-	}
-	cancel()
-	<-errs
-	if h.fetch.ackCount(3) < 1 {
-		t.Fatal("the redelivery was never consumed")
-	}
-	if got := storedAtOf(t, h.db); !got.IsZero() {
-		t.Fatalf("a redelivery named the checkpoint by the log's record, %s — what a "+
-			"restored consumer redelivers is whichever history the log holds", got)
-	}
+	t.Run("at a sequence the log holds no record at, it is settled and the next batch names its own", func(t *testing.T) {
+		t.Parallel()
+		h := reanchored(t)
+		next(h)
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); established || err != nil {
+			t.Fatalf("VerifyCheckpoint at a sequence the log holds nothing at = (%v, %v), "+
+				"want nothing established", established, err)
+		}
+		if err := h.run(6); err != nil {
+			t.Fatalf("the loop past a checkpoint that names nothing: %v", err)
+		}
+		if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(6)) {
+			t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(6))
+		}
+	})
+
+	t.Run("past the log's end, it is unreached and nothing past it is applied", func(t *testing.T) {
+		t.Parallel()
+		h := reanchored(t)
+		next(h)
+		// ONE MEMBER'S VIEW: the log ends below the checkpoint although
+		// a record past it is delivered.
+		h.fetch.endAt(4)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		err := h.runner.Run(ctx)
+		cancel()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			t.Fatalf("the loop over a log ending below the checkpoint returned %v", err)
+		}
+		if appliedAt(h, 6) || h.runner.Committed() != at {
+			t.Fatalf("the loop applied past a checkpoint the log does not reach "+
+				"(at %s) — a checkpoint naming nothing is unreached there exactly "+
+				"as a named one is", h.runner.Committed())
+		}
+		// AND ONCE THE END REACHES IT, the loop goes on — over the record
+		// redelivered, since the first run never acknowledged it.
+		h.fetch.endAt(6)
+		next(h)
+		if err := h.run(6); err != nil {
+			t.Fatalf("the loop once the log reached the checkpoint: %v", err)
+		}
+	})
+
+	// A REDELIVERY AT THE CHECKPOINT NAMES NOTHING: a record arriving at the
+	// reanchor's own sequence is what a broker restored from a copy that
+	// held one there redelivers, whichever history that is — and naming the
+	// checkpoint by it would adopt that history's record as the one this
+	// node consumed, so every comparison after it would read settled.
+	t.Run("a redelivery at its sequence names nothing", func(t *testing.T) {
+		t.Parallel()
+		h := reanchored(t)
+		e := env(5, "edit", "5", "op-5", 1)
+		e.Gen = at.Generation
+		h.fetch.offerStored(5, otherHistory, e)
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		errs := make(chan error, 1)
+		go func() { errs <- h.runner.Run(ctx) }()
+		for h.fetch.ackCount(5) < 1 && ctx.Err() == nil {
+			time.Sleep(2 * time.Millisecond)
+		}
+		cancel()
+		<-errs
+		if h.fetch.ackCount(5) < 1 {
+			t.Fatal("the redelivery was never consumed")
+		}
+		if got := storedAtOf(t, h.estate); !got.IsZero() {
+			t.Fatalf("a redelivery named the checkpoint by the log's record, %s — what a "+
+				"restored consumer redelivers is whichever history the log holds", got)
+		}
+	})
 }
 
 // A PEER'S TRUNCATION IS THE RUNNER'S WRITE FENCE, NOT ITS IDENTITY.
@@ -573,9 +666,10 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 
 	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
 	_, err = statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Verifier: testVerifier(t, probeDomain{}),
-		Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
-		Node: h.db, DB: h.db.Replicated(),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Verifier: testVerifier(t, probeDomain{}),
+		Applier:  h.applier, Fetch: h.fetch, Log: h.fetch,
+		Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
 	})
 	if !errors.Is(err, statelog.ErrWrongStream) {
@@ -667,7 +761,7 @@ func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
 				t.Fatalf("VerifyCheckpoint = (%v, %v), want the divergence", established, err)
 			}
 			if c.move != "" {
-				if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+				if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 					_, err := tx.ExecContext(t.Context(), c.move, store.EncodeTime(otherHistory))
 					return err
 				}); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -38,6 +39,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -84,8 +86,8 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, 0, 0, ?, ?)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, 0, 0, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET stream_created_at = excluded.stream_created_at`,
 			stream, store.EncodeTime(stats.CreatedAt.UTC()), store.EncodeTime(time.Now().UTC()))
 		return err
@@ -357,6 +359,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -373,7 +376,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("New: %v", err)
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		e.Stop(context.Background())
@@ -388,6 +391,9 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	// boot finds is — by every identity check — the one it started against.
 	// This is a node whose rows are newer than the broker it came back to.
 	ahead := end + 5
+	// The node still holds its replicated estate open after e.Stop — a
+	// state log that stops leaves the file to the store — so the row is
+	// staged through it directly.
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = ? WHERE stream = ?`, ahead, stream)
@@ -516,8 +522,8 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), `
 					INSERT INTO statelog_cursor
-						(stream, generation, seq, stream_created_at, updated_at)
-					VALUES (?, 0, ?, ?, ?)`,
+						(stream, generation, seq, stream_created_at, updated_at, applied_version)
+					VALUES (?, 0, ?, ?, ?, 0)`,
 					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
 					store.EncodeTime(stats.CreatedAt.UTC()),
 					store.EncodeTime(time.Now().UTC()))
@@ -556,12 +562,12 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
+	path := filepath.Join(t.TempDir(), "crewlet.db")
+	db := storetest.OpenNode(t, path, store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	boot := testBootstrap(t)
+	// The estate the runtime's start opens below, migrated already.
+	storetest.Seed(t, store.EstateReplicated, store.ReplicatedPath(path, ""))
 	ceilings, err := sizeCeilings(t.Context(), q, boot.Stream,
 		64<<30, "/var/lib/crewlet/stream")
 	if err != nil {
@@ -570,8 +576,13 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	// THE KEYRING A BOOT HANDS EVERY DOMAIN: a runner verifies every
 	// record against it and refuses to start without one.
 	s := &stateLog{
-		domains: map[string]*runningDomain{}, nodeID: "node-a", db: db,
+		mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(), ring: recordKeyring(&boot),
+	}
+	// THE REPLICATED ESTATE FIRST, as the runtime's own start opens it
+	// before any log's checkpoint is read.
+	if err := s.reopenEstate(t.Context()); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
 	}
 	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
 	if err != nil {
@@ -620,10 +631,17 @@ func requireRebuiltLogRefusal(t *testing.T, err error) {
 // admit seats, and answers a JetStream handle on that broker.
 func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aRunningNodeOf(t, nativeCleanupCompany)
+}
+
+// aRunningNodeOf is [aRunningNode] running the given company.
+func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	SeedStore(t, &b)
+	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
@@ -637,7 +655,7 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend — there is no "+
@@ -686,7 +704,7 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 }
 
 // endOf is a domain log's last sequence.
-func endOf(t *testing.T, running *runningDomain) uint64 {
+func endOf(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	end, err := running.log.End(t.Context())
 	if err != nil {

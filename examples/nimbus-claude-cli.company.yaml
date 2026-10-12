@@ -144,8 +144,9 @@ providers:
     # configured perfectly and still not work — a missing binary, a
     # profile whose flags drifted from the installed version, an expired
     # login, or the one nothing else catches: a model that answers PROSE
-    # instead of the tool-call envelope, which costs every seat a
-    # corrective round for ever.  Only a real completion with a real tool
+    # instead of the tool-call envelope, which costs every phase
+    # corrective rounds and, when the model never manages the envelope,
+    # ends the phase without its submission.  Only a real completion with a real tool
     # proves that, so `doctor` runs one.
     #
     # See docs/concepts/subscription-llm-backends.md.
@@ -162,7 +163,10 @@ providers:
       cli:
         agent: claude-code          # or codex | gemini-cli | opencode
                                     #    | muse-code | kimi-code | hermes
-                                    #    | pi | …
+                                    #    | pi | …  Another CLI reads
+                                    #   `model` in its own grammar:
+                                    #   opencode's is <provider>/<model>
+                                    #   (anthropic/claude-sonnet-5).
         mode: text                  # the default: a model behind the
                                     #   engine's own tool loop.  `agent`
                                     #   hands the executor to the CLI's own
@@ -553,7 +557,7 @@ learning:
   enabled: true
   reflect:
     enabled: true                          # PersistDecider runs after every terminal turn
-    summarize_episodes: true               # cheap-model summary of query_episodes hits
+    summarize_episodes: true               # cheap-model briefing of the Similar prior work hits
   counterparty:
     enabled: true                          # observe + auto-inject counterparty traits
   skill_synthesis:

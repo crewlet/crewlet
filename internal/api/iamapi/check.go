@@ -38,14 +38,6 @@ const (
 	// cause.
 	KindNoCredential FindingKind = "person_without_credential"
 
-	// KindNoSeat is a PERSON who holds no seat: one recorded before every
-	// person held a human seat (ADR-0026), which nothing this build writes
-	// can produce — so they act under their bare login, in no unit, led by
-	// nobody. Reported at every stage, and never for a service account,
-	// whose seat is optional by design. The repair is a move onto a vacant
-	// human seat (`PATCH /iam/people/{id}` with `seat`), or removing them.
-	KindNoSeat FindingKind = "person_without_seat"
-
 	// KindDanglingBinding is somebody bound to a seat the company this node
 	// runs does not hold as a human seat: removed, turned into an agent
 	// seat, or — on a node that has not applied the revision yet — a hire.
@@ -67,16 +59,14 @@ const (
 	KindClampedGrant FindingKind = "grant_clamped_by_ceiling"
 )
 
-// FindingKinds are the five, in the order the report is SORTED in: what ends a
+// FindingKinds are the four, in the order the report is SORTED in: what ends a
 // company's ability to administer itself first, then somebody who cannot get
-// in, somebody the chart does not hold, a binding the chart lost, and a grant
-// a ceiling withholds. The report sorts by it, stably — so within a kind the
+// in, a binding the chart lost, and a grant a ceiling withholds. The report sorts by it, stably — so within a kind the
 // directory's own order holds — which is what makes the order this says true:
 // it was declared "the order the report renders them" and read by nothing,
 // while findings came out person by person.
 var FindingKinds = []FindingKind{
-	KindNoManageHolder, KindNoCredential, KindNoSeat, KindDanglingBinding,
-	KindClampedGrant,
+	KindNoManageHolder, KindNoCredential, KindDanglingBinding, KindClampedGrant,
 }
 
 // Finding is one row of the report.
@@ -204,17 +194,6 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow,
 		out = append(out, Finding{
 			Kind: KindNoCredential, Person: row.ID, Login: row.Login,
 			Detail: detail,
-		})
-	}
-	if row.Seatless() {
-		// NOTHING TO ASK THE CHART, so never counted unchecked: the row
-		// itself says it binds no seat.
-		out = append(out, Finding{
-			Kind: KindNoSeat, Person: row.ID, Login: row.Login,
-			Detail: "this person holds no seat, which every person does — they " +
-				"act under their bare login, in no unit and led by nobody; move " +
-				"them onto a vacant human seat (PATCH /iam/people/" + row.ID +
-				" with seat), or remove them",
 		})
 	}
 	bindingChecked = true

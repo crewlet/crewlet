@@ -20,19 +20,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The PUBLISHER: one per node, publishing that node's own days and nothing
-// else.
+// The PUBLISHER: one per data node, publishing that node's own days and
+// nothing else. A node without `data` runs none: it keeps no event log, and
+// its events are counted in the day of the data node that keeps them in
+// custody (see the package doc).
 //
 // # Not a duty
 //
 // Every other writer of a derived domain in this engine is a fleet singleton,
 // because every node could compute the same value and paying for it N times
-// is waste. That is false here: each node's event log holds only what ITS
-// seats did, so each node is the only one that can derive its own day. The
-// node in the subject is what makes N writers safe — no two nodes ever
-// publish on one subject — and it is why a node that leaves the fleet takes
-// nothing with it: what it published stays on the stream and in every peer's
-// rows for [History].
+// is waste. That is false here: a data node's event log holds only what its
+// own seats did and what it keeps in custody for nodes without `data`, so
+// each data node is the only one that can derive its day. The node in the
+// subject is what makes N writers safe — no two nodes ever publish on one
+// subject — and it is why a node that leaves the fleet takes nothing with it:
+// what it published stays on the stream and in every peer's rows for
+// [History].
 //
 // # What a tick does
 //
@@ -103,6 +106,14 @@ type PublisherDeps struct {
 
 	// Now is the clock. Nil is [time.Now].
 	Now func() time.Time
+
+	// Every is the cadence [Publisher.Run] ticks on. Zero is
+	// [FlushInterval], which is what every production caller leaves it:
+	// the cadence is the domain's decision, and a node publishing on
+	// another would put its day behind the live meters it is read beside.
+	// A test that must see a LIVE loop publish something written after
+	// boot shortens it rather than waiting out fifteen seconds.
+	Every time.Duration
 
 	Logger *slog.Logger
 }
@@ -193,6 +204,12 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 	case d.Zone == nil:
 		return nil, fmt.Errorf("usage: a publisher needs the company's clock, " +
 			"which is what a day is cut on")
+	case d.Every < 0:
+		return nil, fmt.Errorf("usage: a publisher's cadence of %v is negative; "+
+			"leave it zero for %v", d.Every, FlushInterval)
+	}
+	if d.Every == 0 {
+		d.Every = FlushInterval
 	}
 	if d.Now == nil {
 		d.Now = time.Now
@@ -206,9 +223,10 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 		reopened: map[string]bool{}}, nil
 }
 
-// Run flushes at once and then every [FlushInterval] until ctx ends.
+// Run flushes at once and then every [PublisherDeps.Every] — [FlushInterval]
+// in production — until ctx ends.
 func (p *Publisher) Run(ctx context.Context) {
-	ticker := time.NewTicker(FlushInterval)
+	ticker := time.NewTicker(p.deps.Every)
 	defer ticker.Stop()
 	for {
 		if err := transient(p.Flush(ctx)); err != nil && ctx.Err() == nil {
@@ -348,6 +366,25 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 			})
 		}
 		rec.Reads, rec.ReadsElided = capReads(s.Reads)
+		out = append(out, rec)
+	}
+	for _, person := range d.People {
+		rec := Record{
+			RecordEnvelope: RecordEnvelope{
+				Subject: Subject{Kind: KindPerson, Node: p.deps.NodeID, Day: day,
+					Person: person.Handle},
+				Writer: p.deps.NodeID,
+			},
+			Role: person.Role,
+		}
+		for _, t := range person.Tokens {
+			rec.Tokens = append(rec.Tokens, Tokens{
+				Phase: t.Phase, Worker: t.Worker, Model: t.Model,
+				ProviderKey: t.ProviderKey, Input: t.Input, Output: t.Output,
+				CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, Total: t.Total,
+				Calls: t.Calls,
+			})
+		}
 		out = append(out, rec)
 	}
 	for _, s := range d.Schedules {

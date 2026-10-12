@@ -2,6 +2,7 @@ package search_test
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -17,11 +18,12 @@ import (
 func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// One document per bucket, each carrying the same word, so a search
 	// over an assignment returns exactly the documents in it.
 	inBucket := map[int]string{}
+	var rows []appliedPage
 	for i := range 200 {
 		id := fmt.Sprintf("p.%03d", i)
 		shard := search.ShardOf("page", id)
@@ -29,8 +31,10 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 			continue
 		}
 		inBucket[shard] = id
-		page(t, db, id, "ENG", "Doc "+id, "the migration plan is here", 1)
+		rows = append(rows, appliedPage{id: id, container: "ENG", title: "Doc " + id,
+			body: "the migration plan is here", version: 1})
 	}
+	writePages(t, db, rows...)
 	if len(inBucket) < 8 {
 		t.Fatalf("only %d of %d buckets were populated — the fixture cannot "+
 			"demonstrate a narrowed scan", len(inBucket), search.SearchShards)
@@ -167,7 +171,7 @@ func TestSearchShardsAreEvenAndStable(t *testing.T) {
 func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range 40 {
 		page(t, db, fmt.Sprintf("p.%02d", i), "ENG", fmt.Sprintf("Doc %02d", i),
 			"the migration plan is here", 1)
@@ -210,7 +214,7 @@ func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 func TestBothEstatesAgreeOnADocumentsBucket(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	const id = "p.agree"
 	page(t, db, id, "ENG", "Agreement", "the migration plan is here", 1)
 	indexAll(t, x)
@@ -248,7 +252,7 @@ func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 		var hits []search.SemanticHit
 		if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 			var err error
-			hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+			hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 				Vector: query, Model: model, Dim: dim,
 				Limit: 500, Candidates: 500, Shards: a,
 			})
@@ -358,13 +362,14 @@ func TestTheVectorsTwoRowsCarryOneBucket(t *testing.T) {
 func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	page(t, db, "p.1", "ENG", "Doc", "the migration plan is here", 1)
 	indexAll(t, x)
 	scanner := search.NodeScanner{Index: x}
 
 	asked, err := scanner.Scan(t.Context(),
-		search.FanQuery{Text: "migration plan"}, search.Everything())
+		search.FanQuery{Text: "migration plan", Methods: []search.Method{search.MethodLexical}},
+		search.Everything())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -383,6 +388,7 @@ func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 	// change or a corrupt query embedding looks like from here.
 	failed, err := scanner.Scan(t.Context(), search.FanQuery{
 		Text: "migration plan", Vector: []byte{1, 2, 3}, Model: "m", Dim: 999,
+		Methods: []search.Method{search.MethodLexical, search.MethodSemantic},
 	}, search.Everything())
 	if err != nil {
 		t.Fatalf("a failed semantic half must not fail the scan: %v", err)
@@ -395,6 +401,28 @@ func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 	if len(failed.Lexical) != 1 {
 		t.Fatalf("the lexical half lost its hits to the semantic half's "+
 			"failure: %d", len(failed.Lexical))
+	}
+}
+
+// A QUERY NAMING NO RANKER IS REFUSED, never scanned.
+//
+// A participant that ran nothing would answer its range with nothing in it,
+// and the coordinator could not tell that from a range that matched nothing —
+// a short answer counted as complete coverage. [search.FanOut.Search] always
+// names the rankers it resolved, so a query naming none is malformed, and the
+// refusal is what the coordinator counts as a missing assignment.
+func TestAQueryNamingNoRankerIsRefused(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db, db.Replicated().Reader())
+	page(t, db, "p.1", "ENG", "Doc", "the migration plan is here", 1)
+	indexAll(t, x)
+	scanner := search.NodeScanner{Index: x}
+	got, err := scanner.Scan(t.Context(), search.FanQuery{Text: "migration plan"},
+		search.Everything())
+	if !errors.Is(err, search.ErrNoMethods) {
+		t.Fatalf("a query naming no ranker was answered %+v (%v), want it "+
+			"refused as naming none", got, err)
 	}
 }
 
@@ -414,12 +442,13 @@ func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// A CORPUS WITH A LOPSIDED TERM: "retention" is in almost every
 	// document, "migration" in a handful. Split by bucket, a slice's own
 	// view of how rare each is differs from the corpus's.
 	target := ""
+	var rows []appliedPage
 	for i := range 300 {
 		body := "this page is about retention and the sweep that enforces it"
 		if i%50 == 0 {
@@ -428,9 +457,10 @@ func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 				target = fmt.Sprintf("p.%03d", i)
 			}
 		}
-		page(t, db, fmt.Sprintf("p.%03d", i), "ENG",
-			fmt.Sprintf("Doc %03d", i), body, 1)
+		rows = append(rows, appliedPage{id: fmt.Sprintf("p.%03d", i), container: "ENG",
+			title: fmt.Sprintf("Doc %03d", i), body: body, version: 1})
 	}
+	writePages(t, db, rows...)
 	indexAll(t, x)
 	if target == "" {
 		t.Fatal("the fixture wrote no document holding the rare term")

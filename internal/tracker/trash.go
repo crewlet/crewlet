@@ -254,7 +254,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"there is nothing left to remove")
 			}
 			// THE PROJECT FIRST, before the no-op below: who may remove
 			// this task was decided on the project the caller read it
@@ -308,7 +309,8 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"nothing can restore it")
 			}
 			if moved := stillIn(current, project); moved != nil {
 				return statelog.Decision{}, moved
@@ -332,7 +334,9 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 }
 
 // stillIn refuses a write whose authority was decided on a project the task
-// is no longer filed under.
+// is no longer filed under — an edit, a removal, a restore or a purge, the
+// four writes that name the task's project. It is the ONE such refusal, and
+// every one of them asks it BEFORE its idempotent no-op.
 //
 // # Why the project a caller passes is checked INSIDE the snapshot
 //
@@ -349,7 +353,9 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // not in, so a deferral on its real project would not hold this write back and
 // one on the named project would hold back a write that never touches it. A
 // bulk edit names one project for every task in it, which is where a task
-// from elsewhere arrives.
+// from elsewhere arrives, and a subtree's descendants are named by a read
+// outside the snapshot, so a removal or a restore of one moved since is
+// refused here and the walk stops where a re-run resolves it again.
 //
 // So the project argument is a PRECONDITION, not a label, and it is checked
 // here — the one place the framework guarantees a single consistent read —
@@ -358,13 +364,19 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // decides again on the project it is in now, and re-sends. It is also what
 // makes a second walk of one move harmless: a descendant the first walk
 // carried is refused here rather than re-keyed again.
+//
+// BEFORE THE NO-OP, never after it: the no-op answers success, and a success
+// decided on a task another project now holds is the very answer this refusal
+// exists to withhold. A re-run of the SAME operation, which the no-op is for,
+// never reaches either — its ledger row answers it before anything is decided —
+// and a walk re-run under a new one resolves its tasks again first.
 func stillIn(current Task, project string) error {
 	if current.Project == project {
 		return nil
 	}
-	return fmt.Errorf("tracker: task %s (%s) is filed under project %s now, "+
-		"not %s where it was read — what this write may do was decided on a "+
-		"project the task is not in, so read it again and decide on %s: %w",
+	return fmt.Errorf("tracker: task %s (%s) is in project %s, not %s where "+
+		"it was read — what this write may do was decided on a project the "+
+		"task is not in, so read it again and decide on %s: %w",
 		current.Key, current.ID, current.Project, project, current.Project,
 		statelog.ErrConflict)
 }
@@ -377,12 +389,12 @@ func stillIn(current Task, project string) error {
 // descendant that arrives after this read is left live rather than removed,
 // which is the safe direction and which a re-run fixes.
 func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, fmt.Errorf("tracker: this writer has no store, so it "+
 			"cannot read task %s's subtree; a subtree removal needs one", id)
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		out, err = readSubtree(ctx, tx, id)
 		return err
@@ -399,11 +411,11 @@ func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
 // is the whole point of the column: a restore brings back exactly what one
 // removal took.
 func (w *Writer) removedWith(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, nil
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT id, project_key FROM tracker_tasks
 			 WHERE removed_with = ? AND removed_at IS NOT NULL

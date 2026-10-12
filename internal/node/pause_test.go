@@ -26,8 +26,10 @@ const pausedHold = "seat_paused"
 // The resume is then the only thing that delivers the mail: lifting the hold
 // on the node that now holds the seat hands it on, in order.
 func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
+	t.Parallel()
 	for _, sub := range substrates() {
 		t.Run(sub.name, func(t *testing.T) {
+			t.Parallel()
 			f := newFleet(t, sub, "ceo")
 			var mu sync.Mutex
 			paused := true

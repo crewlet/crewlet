@@ -85,12 +85,13 @@ const completeDeadline = 2 * time.Minute
 // manifestTTL is how long a begun app creation stays valid.
 //
 // IT IS [coord.SetupOnceRetention] RATHER THAN A NUMBER BESIDE IT. The state
-// is spent by a record in the fleet's setup-state bucket, and that record
-// expires with the BUCKET — so a manifestTTL longer than the bucket's age
-// would leave the token still validating after the thing that spends it is
-// gone, which is a bearer credential that works as often as it is presented.
-// Written as two numbers it was exactly that: a fifteen-minute claim taken
-// against a five-minute bucket, replayable for the last ten.
+// is spent by a claim in the fleet's registry taken at this TTL, and the claim
+// lapses at the deadline its own record carries — so a state that outlived
+// the claim spending it would still open after the thing that spends it had
+// stopped holding anybody off, which is a bearer credential that works as
+// often as it is presented. Written as two numbers it was exactly that: a
+// fifteen-minute claim that lapsed with a five-minute bucket, replayable for
+// the last ten.
 //
 // The value's own reasons live at that constant: a quarter of an hour is the
 // span of the task (a browser round trip to GitHub and two clicks), and it is
@@ -187,22 +188,22 @@ type AppFlow struct {
 // twice.
 //
 // The consumer's own interface, one method wide: this package needs
-// first-claim-wins and nothing else. The fleet's [coord.SetupClaims] satisfies
-// it, and reading it here INVERTS the polarity of the sibling registry beside
-// it. Webhook dedupe fails OPEN, because a push suppressed by a store blip is
-// a wake nobody notices. This is an authorization check, so it fails CLOSED: a
+// first-claim-wins and nothing else. The fleet's [coord.Claims] satisfies it,
+// and reading it here INVERTS that type's documented polarity on purpose.
+// Webhook dedupe fails OPEN, because a push suppressed by a store blip is a
+// wake nobody notices. This is an authorization check, so it fails CLOSED: a
 // store that cannot answer is not evidence that a state is unspent, and the
 // cost of refusing is that an operator clicks again.
 //
-// IT IS THE SETUP REGISTRY AND NOT THE DELIVERY ONE, which is a different
-// bucket rather than a different argument: how long a claim lasts is the age
-// of the bucket it lands in, so this flow's quarter-hour horizon needed an
-// estate of its own. Asked for as a TTL it was accepted and ignored.
+// THE DELIVERY REGISTRY, at this flow's own TTL. A claim carries its
+// deadline in its record, so a quarter-hour claim shares the bucket with a
+// five-minute delivery claim and lapses at its own deadline rather than the
+// bucket's; a TTL past the registry's ceiling ([coord.MaxClaimTTL]) is an
+// error, which this flow refuses on like any other.
 type StateClaims interface {
-	// ClaimSetup records key and reports whether THIS caller was first. It
-	// lapses [manifestTTL] after it is written, by that bucket's own
-	// expiry.
-	ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error)
+	// Claim records key and reports whether THIS caller was first. It
+	// lapses ttl after now, judged against the now the next caller passes.
+	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 }
 
 // newAppFlow builds the completer the webhook mux serves. See
@@ -222,14 +223,13 @@ func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 // and the state IS the credential on this route, so writing it there would
 // put a live bearer token in a store read by every node.
 //
-// The claim outlives the token deliberately — the bucket's age is the TTL the
-// state was minted for, and the record's clock starts at the moment it is
-// spent — so a token cannot be replayed at any point while it would still
-// validate.
+// The claim outlives the token deliberately — taken at the TTL the state was
+// minted for, measured from the moment it is spent — so a token cannot be
+// replayed at any point while it would still open.
 func (f *AppFlow) spend(ctx context.Context, state string) error {
 	digest := sha256.Sum256([]byte(state))
 	key := "github-app-state:" + hex.EncodeToString(digest[:])
-	first, err := f.spent.ClaimSetup(ctx, key, f.service.now())
+	first, err := f.spent.Claim(ctx, key, manifestTTL, f.service.now())
 	if err != nil {
 		// CLOSED. See [StateClaims]: a registry that could not answer has
 		// not told us this state is unspent.
@@ -256,6 +256,17 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	if !s.mayWriteCredentials(w, r) {
 		return
 	}
+	// A MANAGED DOCUMENT IS REFUSED HERE, before GitHub is asked for
+	// anything: the app this begins is recorded on the seat, and a refusal
+	// at the callback would come after GitHub had created the app and
+	// issued its key, once. After the grants, so a caller who could never
+	// connect anything is told the grant they lack rather than who manages
+	// the document.
+	if err := s.config.Authorize(attributionOf(r)); err != nil {
+		s.refuse(w, r, err, setup.Result{})
+		return
+	}
+
 	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
 	// straight off r.Body reads whatever is sent: this route names one seat,
 	// so the body is tens of bytes, and streaming an unbounded one into a
@@ -301,8 +312,8 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	base := s.publicBase()
 	if base == "" {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
-			"config_path": "api.external_url",
-			"hint": "set api.external_url first: the app is created " +
+			"config_path": s.webhookBaseKey,
+			"hint": "set " + s.webhookBaseKey + " first: the app is created " +
 				"with its delivery address baked in, and only the operator can " +
 				"change that afterwards, so creating one now would need doing again",
 		})
@@ -374,6 +385,16 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	if company == nil || seatByHandle(roster, handle) == nil {
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
+	// ASKED AGAIN BEFORE THE EXCHANGE, which is the last moment a refusal
+	// costs nothing: the begin route asked on the node that minted the
+	// state, and the callback may land on a node whose Tier A names the
+	// writers differently, or on this one after a restart that changed them.
+	// Asked of the party the SEALED state names, because the callback
+	// carries no credential of its own and its writes are that party's.
+	by := opened.party()
+	if err = s.config.Authorize(by); err != nil {
+		return handle, err
+	}
 
 	// DETACHED FROM THE BROWSER, which is the same move [Service.runPass]
 	// makes and for a sharper reason. Everything below is irreversible: the
@@ -402,13 +423,12 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	now := s.now()
 	// THE BEGINNER'S, both writes: the key's row and the seat's record name
 	// who began the creation and the credential they began it through.
-	by := opened.party()
-	if err := s.secrets.Set(ctx, keyVar, app.PEM, authorOf(by), "setup", now); err != nil {
+	if err := s.secrets.Set(ctx, keyVar, app.PEM, authorOf(by), setup.Source, now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}
 	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
 	if sealedHook {
-		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, authorOf(by), "setup", now); err != nil {
+		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, authorOf(by), setup.Source, now); err != nil {
 			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
 		}
 	}
@@ -594,6 +614,7 @@ func (s *Service) apiBaseOf(company *config.Company) string {
 // delivery URL, the redirect and the setup URL — and only a person can change
 // those afterwards, so a `${PUBLIC_URL}` copied in literally creates an app
 // nothing can ever deliver to. That was reachable while the address was a
-// Tier B pointer; `api.external_url` is resolved before Tier A is decoded, so
-// the literal has nowhere to come from.
-func (s *Service) publicBase() string { return s.externalBase }
+// Tier B pointer; Tier A is resolved before it is decoded, so the literal has
+// nowhere to come from. The VENDOR's address ([Options.WebhookBase]), since
+// GitHub delivers to it and redirects the browser back onto it.
+func (s *Service) publicBase() string { return s.webhookBase }

@@ -116,9 +116,10 @@ export function AgentsHeader({
   // GRANT — or, inside a unit the reader leads, by that lead — and never by a
   // credential's kind or a seat binding, so the control asks the one gate
   // every org chart write asks (`useOrgWriteAccess`), and a reader who cannot
-  // press it is told which of offline, still being read, signed out or
-  // missing the grant is why. A lead adds to the first unit they lead, since
-  // nothing at the company's top level is theirs.
+  // press it is told which of offline, still being read, signed out, missing
+  // the grant, or a document another system manages (ADR-0030) is why. A lead
+  // adds to the first unit they lead, since nothing at the company's top level
+  // is theirs.
   const access = useOrgWriteAccess("anywhere");
   const viewer = useViewer();
   const scope = useLeadScope();
@@ -151,7 +152,7 @@ export function AgentsHeader({
           Edit org
         </ButtonLink>
       </span>
-      {/* NEVER HIDDEN: a reader without the credential sees the control and
+      {/* NEVER HIDDEN: a reader who may not add a seat sees the control and
           the reason, rather than a product with no way to grow its company. */}
       {access.can ? (
         <ButtonLink
@@ -243,7 +244,7 @@ function FindSeat({ index, onFound }: { index: OrgIndex; onFound?: (seat: Seat) 
         onCommit={(option) => {
           const seat = found.find((s) => s.key === option.value);
           if (!seat) return;
-          const ref = { kind: "seat" as const, id: seat.handle || seat.name };
+          const ref = { kind: "seat" as const, id: seat.handle };
           // A PEEK ALREADY OPEN IS MOVED, not stacked: Back from the found
           // seat leaves the list, as `[` and `]` do.
           if (peek) move(ref);

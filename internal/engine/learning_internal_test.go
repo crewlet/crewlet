@@ -1,9 +1,17 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // EACH REVISION GETS ITS OWN PASSES, and a company with no model gets only the
@@ -116,5 +124,91 @@ roles:
 	_, err := complete(t.Context(), "Senior Developer", "system", "user")
 	if err == nil || !strings.Contains(err.Error(), "no seat with that handle") {
 		t.Errorf("a display name resolved a seat: %v", err)
+	}
+}
+
+// AN EPISODE IS CONDENSED ON ITS SEAT, FOUND BY HANDLE.
+//
+// The compaction pass names the seat whose episode a field belongs to by the
+// handle the episodes are keyed on ([learning.FitFunc]), and the org chart
+// resolves a handle and nothing else. A lookup by display name found nobody
+// on any company whose seats declare a handle, so every oversized field was
+// refused rather than condensed and the summary call carried it whole — or
+// was not made at all.
+//
+// Ended at the lookup, as the compaction case above is: a text already under
+// its budget is returned untouched by a seat that resolved, so only the
+// refusal names a lookup that failed.
+func TestEpisodeCondensingResolvesItsSeatByHandle(t *testing.T) {
+	t.Parallel()
+	e := engineOver(t)
+	c := companyFor(t, `
+name: Acme
+providers:
+  llm:
+    gateway:
+      type: anthropic
+      model: m
+      api_keys: ["${K}"]
+roles:
+  - name: Senior Developer
+    handle: dev
+    llm: gateway
+    llm_auxiliary: gateway
+`)
+	fit := e.episodeFit(c)
+	if fit == nil {
+		t.Fatal("no condenser on a company whose seat has an auxiliary model")
+	}
+	if _, err := fit(t.Context(), "dev", learning.FieldTask, "short", 1<<10); err != nil &&
+		strings.Contains(err.Error(), "no seat with that handle") {
+
+		t.Errorf("the seat's own handle resolved nobody: %v — every oversized "+
+			"field on this company is carried whole", err)
+	}
+	_, err := fit(t.Context(), "Senior Developer", learning.FieldTask, "short", 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "no seat with that handle") {
+		t.Errorf("a display name resolved a seat: %v", err)
+	}
+}
+
+// recordingProvider keeps the requests it was sent.
+type recordingProvider struct{ asked []llm.Request }
+
+func (p *recordingProvider) Model() string { return "aux-model" }
+
+func (p *recordingProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+	p.asked = append(p.asked, req)
+	return &llm.Completion{Model: "aux-model", Content: "a summary"}, nil
+}
+
+// A CLUSTER SUMMARY IS WORTH LITTLE THINKING. It describes rows that already
+// exist, and on a thinking model the thinking is spent out of the same cap as
+// the summary, so one at its entry's level comes back empty and the cluster
+// is compacted into nothing.
+func TestACompactionSummaryAsksForLowEffort(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	provider := &recordingProvider{}
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "aux", Provider: provider}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = models
+	e := &Engine{backends: &Backends{Fleet: coordmem.NewFleet()}}
+
+	summarize := e.auxSummarizer(c)
+	if summarize == nil {
+		t.Fatal("a company whose seat has an auxiliary model was given no summarizer")
+	}
+	if _, err := summarize(t.Context(), seat.Handle(), "system", "user"); err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if len(provider.asked) != 1 {
+		t.Fatalf("the model was asked %d times, want 1", len(provider.asked))
+	}
+	if got := provider.asked[0].Effort; got != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", got)
 	}
 }

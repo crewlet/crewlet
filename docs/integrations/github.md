@@ -201,7 +201,7 @@ seat's own app, the identity an agent acts as, and nothing creates, installs
 or reconciles an app for a person. A document that gives one to a human seat
 is refused at that block; the rule is an [admission
 rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a
-stored company that already carries one still runs.
+revision being applied that carries one still runs.
 
 ## One GitHub App per agent
 
@@ -272,15 +272,18 @@ Together the card is normally correct by the time you switch back to it. If it i
 
 ### What has to be in place first
 
-- **`api.external_url`.** Three addresses are baked into an app at
-  creation: where its deliveries go, where the browser returns after the
-  creation, and where it returns after the install. Only a person at GitHub can
-  change them afterwards, so the engine refuses to begin without a public base
-  (`409 no_external_url`) rather than create an app that would have to be created
-  again. The reconcile loop reports the same gap for the org- and
-  repository-level hooks: with no public base there is no address for GitHub to
-  deliver to, so the integration is reported **degraded** naming that field
-  rather than **ready** with nothing registered anywhere.
+- **The webhook address** — `api.public.external_url` when the deployment has
+  a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
+  (`api.public`), and `api.external_url` otherwise. Three addresses are baked
+  into an app at creation: where its deliveries go, where the browser returns
+  after the creation, and where it returns after the install. Only a person at
+  GitHub can change them afterwards, so the engine refuses to begin without a
+  public base (`409 no_external_url`, naming the key in `config_path`) rather
+  than create an app that would have to be created again. The reconcile loop
+  reports the same gap for the org- and repository-level hooks: with no public
+  base there is no address for GitHub to deliver to, so the integration is
+  reported **degraded** naming that key rather than **ready** with nothing
+  registered anywhere.
 - **`integrations.github.provisioning.org`.** It names the account the app is
   registered under, and the account matters: an app registered under a person's
   own account cannot be installed on the organization that owns the
@@ -296,11 +299,16 @@ Together the card is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes.url` | `<external_url>/webhooks/github/<handle>` |
-| `redirect_url` | `<external_url>/webhooks/github-app` |
-| `setup_url` | `<external_url>/webhooks/github-app?installed=<handle>` |
+| `hook_attributes.url` | `<webhook address>/webhooks/github/<handle>` |
+| `redirect_url` | `<webhook address>/webhooks/github-app` |
+| `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
 | `default_permissions` | The seat's tier, below |
+
+`<webhook address>` is the one above: the public listener's
+`api.public.external_url` where `api.public` is set — the return and the
+deliveries are served only there, and `api.external_url` answers `404` for
+them — and `api.external_url` otherwise.
 
 **The events are named, never `*`.** An app with a delivery address and no
 events subscribes to nothing, receives nothing, and reports itself healthy
@@ -529,9 +537,12 @@ and ready.
   to run before the engine knows its own public base.
 - **An app name is globally unique and capped at 34 characters.** A name built
   from the seat alone would collide the second time two companies both have an
-  `sre-lead`, so the company name leads, the seat's role name follows, and the
-  whole is cut on a rune boundary (a name sliced through a multi-byte character
-  is refused as malformed rather than as too long). GitHub then slugifies the
+  `sre-lead`, so the company name leads and the seat's role name follows. A
+  name past the limit shortens the company and keeps the seat whole, and ends
+  in six hex characters of a digest of the full name, so two seats of a
+  company whose name alone fills the limit never share one (a name sliced
+  through a multi-byte character is refused as malformed rather than as too
+  long, so every shortening lands on a character boundary). GitHub then slugifies the
   name and disambiguates a collision itself, so the app that exists may not
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was

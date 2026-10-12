@@ -73,10 +73,15 @@ units:
 				"a reader cannot click", handle, got, want)
 		}
 	}
-	// THE HUMAN IS NOT HERE: a person runs no turn and bills nothing, and an
-	// entry for them would be a directory row no record can ever name.
-	if len(seats) != 3 {
-		t.Errorf("the directory holds %d seats, want every agent seat and no person: %v",
+	// AND THE HUMAN UNDER THEIR PERSON KEY: a person runs no turn, but what
+	// the operator surface spent for them is filed under their human seat's
+	// handle, and a row the directory cannot name prints whatever its newest
+	// day carried instead of the seat's own name.
+	if got, want := seats[tokens.PersonKey("founder")], (tokens.Seat{Handle: "founder", Name: "Founder"}); got != want {
+		t.Errorf("the founder's entry = %+v, want %+v under their person key", got, want)
+	}
+	if len(seats) != 4 {
+		t.Errorf("the directory holds %d seats, want every agent seat and the person: %v",
 			len(seats), seats)
 	}
 }

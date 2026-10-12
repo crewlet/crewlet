@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/cron"
 	"github.com/crewlet/crewlet/internal/period"
 )
 
@@ -165,6 +166,29 @@ func (s Schedule) faults(owner string) []fieldError {
 			owner, name, ErrInvalidSchedule, s.Target))
 	}
 	return out
+}
+
+// cronGrammar is the cron grammar this schedule's expression breaks although
+// it has the grammar's five fields — `61 * * * *`, `0 9 * * MON-FRY` — or nil.
+//
+// AN ADMISSION RULE, reported by [Organization.ValidateAdmission], where the
+// field count [Schedule.Validate] checks is a runnable one. A schedule that
+// never fires does not stop the rest of the company running — the scheduler
+// reports `schedule_parse_failed` on every tick and fires the others — so an
+// applied revision carrying one is warned about rather than refused, and a
+// write that keeps it is refused, naming the field and what the parser found.
+//
+// Five fields only: an expression with any other count already breaks the
+// runnable rule, and reporting it twice would say one mistake as two.
+func (s Schedule) cronGrammar(owner string) error {
+	if len(strings.Fields(s.Cron)) != cronFields {
+		return nil
+	}
+	if err := cron.Validate(s.Cron); err != nil {
+		return fmt.Errorf("%s: schedule %q: %w: %w", owner, strings.TrimSpace(s.Name),
+			ErrInvalidSchedule, err)
+	}
+	return nil
 }
 
 // validateSchedules checks a role's or unit's schedules and their names,

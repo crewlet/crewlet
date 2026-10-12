@@ -67,9 +67,21 @@ func TestMain(m *testing.M) {
 }
 
 // helperSpec returns a Spec that launches this test binary in helper mode.
+//
+// With the race runtime's exit sleep switched off
+// ([procgrouptest.StandInRaceOptions]): a race-built helper that exits 0
+// otherwise sleeps a second first, which was most of this package's wall
+// clock and a floor under every stop it measured. It is set HERE rather than
+// left to the GORACE the suite inherits — the child does inherit the parent's
+// environment, but a suite should not run at a different speed depending on
+// whether whoever ran it exported one. The grandchild modes inherit it with
+// the rest of the helper's environment.
 func helperSpec(t *testing.T, name, mode string, env map[string]string) Spec {
 	t.Helper()
-	full := map[string]string{helperModeEnv: mode}
+	full := map[string]string{
+		helperModeEnv:        mode,
+		procgrouptest.GORACE: procgrouptest.StandInRaceOptions(),
+	}
 	for k, v := range env {
 		full[k] = v
 	}

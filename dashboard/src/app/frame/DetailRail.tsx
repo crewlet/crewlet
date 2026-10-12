@@ -51,6 +51,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useKeymap } from "../keymap.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { PEEK_MAX, PEEK_MIN } from "../layout.ts";
 import { PeekRestingWidth } from "./peekWidth.ts";
 
@@ -194,6 +195,12 @@ export function DetailRail({
     "peek.previous": { run: () => onStep?.(-1), when: Boolean(onStep) },
     "peek.next": { run: () => onStep?.(1), when: Boolean(onStep) },
   });
+
+  // AND A CLICK ON NOTHING CLOSES IT, on every width rather than only behind
+  // the drawer's veil: the row or card it was opened from stayed highlighted
+  // beside an open rail wherever the reader clicked next. A click inside the
+  // rail is the rail's (`ui/clickOnNothing.ts`).
+  useClickOnNothing(close, ".peek-rail");
 
   // THE DRAGGED WIDTH IS PUBLISHED ON THE ROOT, not on the rail.
   //

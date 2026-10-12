@@ -49,7 +49,7 @@ func TestAPhasesPriceReachesTheRollup(t *testing.T) {
 	seedPhase(t, log, "p1", base, "PM", 100, 0.25)
 	seedPhase(t, log, "p2", base.Add(time.Minute), "PM", 50, 0)
 
-	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
 		Since: base, Until: base.Add(time.Hour),
-	}, time.Now().UTC())
+	})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -103,9 +103,10 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 //
 // Every caller heads its answer with [store.PhaseTokenQuery.Window] at an
 // instant of its own, and the rows beneath that heading are that window's only
-// if the read measures from the same instant. A day back from an instant two
-// days ago is a window this package's clock would never choose, so which of the
-// two records comes back says which instant the read was measured from.
+// if the read measures from the same instant — the one the caller pins on the
+// query. A day back from an instant two days ago is a window this package's
+// clock would never choose, so which of the two records comes back says which
+// instant the read was measured from.
 func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -114,7 +115,7 @@ func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
 	seedPhase(t, log, "then", at.Add(-time.Hour), "PM", 1, 0)
 	seedPhase(t, log, "now", wall.Add(-time.Hour), "PM", 2, 0)
 
-	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, at)
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1, At: at})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -122,13 +123,41 @@ func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
 		t.Errorf("a day back from %s read %+v, want the one record inside it — "+
 			"the rows are not the window the caller's heading names", at, got)
 	}
+}
 
-	// A ZERO INSTANT IS REFUSED rather than read as now: "now" is the second
-	// reading of the clock the parameter exists to remove, and a window
-	// measured from the year 1 is an empty answer that reads as a quiet
-	// company.
-	if _, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Time{}); err == nil {
-		t.Error("a read with no instant answered; want it refused")
+// A PINNED WINDOW IS CUT AND FLOORED AT ITS OWN INSTANT.
+//
+// A fleet cuts the spend window on the asker's clock and sends the instant
+// with it ([store.PhaseTokenQuery.At]), and by the time a peer reads, that
+// instant is in the peer's past. The read cut the window against its own clock
+// instead: the floor rose past the records just above the asker's, and the
+// open top edge reached records the asker's window ends before.
+//
+// Mutation: cut the window in [store.EventLog.PhaseTokens] against `now()`
+// rather than the query's instant, and the record above the floor is lost
+// while the one after the instant is counted.
+func TestAPinnedSpendWindowIsCutAtItsOwnInstant(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	floor := at.Add(-time.Duration(store.MaxPhaseTokenDays) * 24 * time.Hour)
+	seedPhase(t, log, "above-the-floor", floor.Add(time.Minute), "PM", 7, 0)
+	seedPhase(t, log, "under-the-floor", floor.Add(-time.Minute), "PM", 100, 0)
+	seedPhase(t, log, "after-the-instant", at.Add(time.Minute), "PM", 1000, 0)
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
+		SinceDays: store.MaxPhaseTokenDays, At: at,
+	})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	var sum int
+	for _, r := range got {
+		sum += r.TotalTokens
+	}
+	if sum != 7 {
+		t.Errorf("tokens = %d over %d records, want 7 — the record above the floor under "+
+			"the instant, and nothing past the instant itself", sum, len(got))
 	}
 }
 

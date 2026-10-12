@@ -38,6 +38,10 @@ func (Prompt) Source() string { return Backend }
 // rather than filter against a bare pointer.
 func (Prompt) RequiresRecon(notify.Inbound) bool { return true }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject is the
+// monitor's rendered alert title, which names what crossed its threshold.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed implements [notify.Prompt]: a monitor tagged as this seat's.
 //
 // The SAME split the prompt frames as "your service and your call" against
@@ -73,8 +77,9 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // own to write and Datadog's $ALERT_ID is the monitor.
 //
 // The title remains the fallback, for an alert delivered by a webhook
-// definition written before the template carried the id — an operator's
-// hand-made one, or this engine's own before the next pass rewrites it. A
+// definition that does not carry the id — an operator's hand-made one, or
+// this engine's own after somebody edited its payload at Datadog, until the
+// next pass rewrites it. A
 // retitled monitor then starts a new conversation, which is the correct
 // behaviour for the one case it costs anything: renaming a monitor is usually
 // redefining what it watches.

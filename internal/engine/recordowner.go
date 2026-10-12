@@ -46,20 +46,30 @@ import (
 
 // HolderRecord answers whose record a login names — see [iam.Holders].
 //
-// BOUNDED BY [requestReadBudget], for [Engine.BoundSeat]'s reason: it is one
-// keyed local read in front of a request, and running out is the unknown
-// answer — a 503 — never "nobody".
+// BOUNDED BY [requestReadBudget] where it reads this node's own rows, for
+// [Engine.BoundSeat]'s reason: it is one keyed local read in front of a
+// request, and running out is the unknown answer — a 503 — never "nobody".
 func (e *Engine) HolderRecord(ctx context.Context, login string) (string, error) {
 	if e == nil {
 		return "", errNoDirectory
 	}
-	reader := e.IAM()
-	if reader == nil {
+	// THIS NODE'S OWN ROWS on a data node, and a data node's through the
+	// router on one without `data` — whose seats ask this as often as any —
+	// with this node's chart and its own Tier A tokens applied to either.
+	dir, ok := e.identityDirectory()
+	if !ok {
 		return "", errNoDirectory
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
-	defer cancel()
-	return holderRecordOf(ctx, reader, SeatViewOf(e), e.declaresToken, login)
+	// THE LOCAL READ IS BOUNDED HERE; a routed one is bounded by the router,
+	// per data node it asks ([estate.Router]), and by the caller as a whole —
+	// a two-second ceiling over a failover would end it at the first silent
+	// node and answer unknown where the next one would have answered.
+	if _, routed := dir.(routedIdentity); !routed {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, requestReadBudget)
+		defer cancel()
+	}
+	return holderRecordOf(ctx, dir, SeatViewOf(e), e.declaresToken, login)
 }
 
 // declaresToken reports whether this node's Tier A declares a token by id.

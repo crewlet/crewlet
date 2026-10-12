@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // fakeCapacityNode answers the maintenance surface, recording what it was
@@ -142,6 +146,7 @@ func reply(w http.ResponseWriter, body any) {
 // will accept, so the byte count is not a value to get from a shell history —
 // and an operator who has just run it needs the next gesture, not a summary.
 func TestSetCapacityRepeatsTheCeilingAndSaysWhatIsNext(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 
@@ -181,6 +186,7 @@ func TestSetCapacityRepeatsTheCeilingAndSaysWhatIsNext(t *testing.T) {
 // stopping every Crewlet node establishes nothing, and the operator says so in
 // their own words rather than a check quietly proving nothing.
 func TestTheExternalAssertionIsExplicit(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	if _, _, err := cli(t, "retention", "set-capacity",
@@ -204,6 +210,7 @@ func TestTheExternalAssertionIsExplicit(t *testing.T) {
 // can see why a fleet is still excluded: who has not acknowledged, whose
 // incarnation is unchanged, and which admission is blocking activation.
 func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	stdout, _, err := cli(t, "retention", "maintenance", "status",
 		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
@@ -230,9 +237,9 @@ func TestMaintenanceStatusNamesWhatIsHoldingTheSeal(t *testing.T) {
 //
 // An exclusion is the one fact the seal takes on somebody's word, and it
 // printed as "excluded by an operator" whoever it was; an abandonment printed
-// nothing at all, while the window named whoever OPENED it. A window a node
-// that did not record the gesture wrote still reads "an operator". Mutation:
-// print the participant line without its party and the first want goes red.
+// nothing at all, while the window named whoever OPENED it. A window nobody
+// abandoned prints no abandonment. Mutation: print the participant line without
+// its party and the first want goes red.
 func TestMaintenanceStatusNamesWhoExcludedAndWhoAbandoned(t *testing.T) {
 	node := newFakeCapacityNode(t)
 	op := node.op()
@@ -257,23 +264,22 @@ func TestMaintenanceStatusNamesWhoExcludedAndWhoAbandoned(t *testing.T) {
 		}
 	}
 
-	// AND A GESTURE NOBODY RECORDED IS STILL AN OPERATOR'S.
-	delete(op, "excluded_by")
+	// AND A WINDOW NOBODY ABANDONED SAYS NOTHING ABOUT AN ABANDONMENT.
 	delete(op, "abandoned_by")
 	stdout, _, err = cli(t, "retention", "maintenance", "status",
 		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
 	if err != nil {
 		t.Fatalf("maintenance status: %v", err)
 	}
-	if !strings.Contains(stdout, "excluded by an operator") ||
-		strings.Contains(stdout, "ABANDONED") {
-		t.Errorf("an unrecorded gesture printed as something else:\n%s", stdout)
+	if strings.Contains(stdout, "ABANDONED") {
+		t.Errorf("a window nobody abandoned printed an abandonment:\n%s", stdout)
 	}
 }
 
 // TestMaintenanceStatusOnAFleetWithNoOperationSaysSo: "no window" and "a
 // window in phase opened" are different facts with different next steps.
 func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	node.status = map[string]any{
 		"stream": "CREWLET_TRACKER_LOG", "open": false, "mode": "normal",
@@ -299,6 +305,7 @@ func TestMaintenanceStatusOnAFleetWithNoOperationSaysSo(t *testing.T) {
 // verb prints it and refuses, rather than reading it and feeding it straight
 // back — which would be confirming against its own output.
 func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 
@@ -344,6 +351,7 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 // which, before the confirmation, and the report says which again after. And a
 // log with nothing to re-anchor offers no command to run.
 func TestAReanchorNamesTheCaseTheOperatorConfirms(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor = "restored", 7000
@@ -393,6 +401,7 @@ func discardedRecord() map[string]any {
 // refusal — and the command it offers carries -discard, which the transition
 // then passes on and whose answer names what it discarded.
 func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
+	t.Parallel()
 	node := newFakeCapacityNode(t)
 	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor, node.reanchorDiscards = "restored", 7100, true
@@ -435,6 +444,7 @@ func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
 // test into a failing check somebody's cron notices, rather than a paragraph
 // in a runbook nobody read.
 func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	taken := time.Date(2031, 3, 1, 3, 0, 0, 0, time.UTC)
 	writeArtefact(t, filepath.Join(root, "nightly"), taken)
@@ -444,7 +454,9 @@ func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
 	if err := verifyRestore(root, 30*24*time.Hour, taken.Add(72*time.Hour), &out); err != nil {
 		t.Fatalf("a three-day-old artefact was refused: %v", err)
 	}
-	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001"} {
+	// THE STORE COPY BY ITS ESTATE, as `crewlet backup` names it.
+	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001",
+		"STORE replicated"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report never mentions %q:\n%s", want, out.String())
 		}
@@ -466,6 +478,7 @@ func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
 // that sequence, so an artefact without one is not restorable whatever else it
 // contains.
 func TestAnArtefactWithNoDomainPositionCannotBeVerified(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := filepath.Join(root, "nightly")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -487,6 +500,7 @@ func TestAnArtefactWithNoDomainPositionCannotBeVerified(t *testing.T) {
 
 // TestADirectoryWithNoManifestIsDebrisRatherThanABackup.
 func TestADirectoryWithNoManifestIsDebrisRatherThanABackup(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "half-finished"), 0o700); err != nil {
 		t.Fatal(err)
@@ -536,19 +550,60 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 // gets. The CLI gave up there and reported a failure for a transition the node
 // went on to finish; the node had also been running it on the request's own
 // context, so the cancellation stopped it halfway.
+//
+// Against a client whose ORDINARY timeout is two seconds and a node that
+// answers the transition after four: the status read before it is answered
+// at once, so only a transition sent through [nodeClient.patiently] can be
+// waited for. Two seconds rather than half of one, because "at once" is a
+// loopback round trip under the race detector on a runner the rest of the
+// suite shares, and at half a second a starved machine timed the status read
+// out and failed the case on the call it does not test. The command's own wiring — the
+// flags, the client nodeClientFor builds at nodeRequestTimeout — is the other
+// reanchor cases' and [TestAnOperatorCallIsGivenTenSeconds]'s; this one would
+// otherwise sit out the real ten seconds to prove a relation.
 func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
+	t.Parallel()
+	const ordinary = 2 * time.Second
 	node := newFakeCapacityNode(t)
-	base := bootstrapForURL(t, node.server.URL)
 	node.reanchorCase, node.reanchorCursor = "restored", 7000
-	node.reanchorTakes = nodeRequestTimeout + 500*time.Millisecond
+	node.reanchorTakes = 2 * ordinary
+	client := &nodeClient{base: node.server.URL, token: "t", http: httpx.Client(ordinary)}
 
-	stdout, _, err := cli(t, "retention", "reanchor", base,
-		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	var stdout bytes.Buffer
+	err := reanchor(t.Context(), client, reanchorAsk{
+		stream: "CREWLET_TRACKER_LOG", confirm: "2031-04-02T03:00:00Z",
+	}, &stdout)
 	if err != nil {
-		t.Fatalf("a reanchor the node answered after %s was reported as %v — the "+
-			"CLI gave up on a transition the node finished", node.reanchorTakes, err)
+		t.Fatalf("a reanchor the node answered after %s, past the client's own %s, was "+
+			"reported as %v — the CLI gave up on a transition the node finished",
+			node.reanchorTakes, ordinary, err)
 	}
-	if !strings.Contains(stdout, "is re-anchored at generation") {
-		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout)
+	if !strings.Contains(stdout.String(), "is re-anchored at generation") {
+		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout.String())
+	}
+}
+
+// AN OPERATOR CALL IS GIVEN TEN SECONDS, and a reanchor longer: the client
+// every node-facing command builds waits nodeRequestTimeout, the figure that
+// constant argues for, and the transition outlasts it. The case above proves
+// the reanchor waits past whatever ordinary timeout its client has; this is
+// what ties that to the ten seconds a real command gets.
+func TestAnOperatorCallIsGivenTenSeconds(t *testing.T) {
+	t.Parallel()
+	if nodeRequestTimeout != 10*time.Second {
+		t.Errorf("nodeRequestTimeout = %v, want 10s", nodeRequestTimeout)
+	}
+	if reanchorRequestTimeout <= nodeRequestTimeout {
+		t.Errorf("reanchorRequestTimeout = %v, which does not outlast the ordinary %v",
+			reanchorRequestTimeout, nodeRequestTimeout)
+	}
+	client, err := nodeClientFor(noEnviron, []string{"-url", "http://127.0.0.1:1"},
+		"retention reanchor", io.Discard, nil)
+	if err != nil {
+		t.Fatalf("nodeClientFor: %v", err)
+	}
+	if client.http.Timeout != nodeRequestTimeout {
+		t.Errorf("a node-facing command waits %v, want nodeRequestTimeout (%v)",
+			client.http.Timeout, nodeRequestTimeout)
 	}
 }

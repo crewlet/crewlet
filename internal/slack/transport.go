@@ -410,7 +410,10 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 			// the previous speaker continuing.
 			SenderID:   firstOf(reply.User, reply.BotID),
 			SenderName: reply.Username,
-			Text:       body,
+			// THE MESSAGE TS, which is what the trigger's `ts` is on
+			// this backend — see [notify.Message.ID].
+			ID:   reply.TS,
+			Text: body,
 			// BOTH IDS. A bot_message echo of this seat's own post
 			// carries the app id and no user id at all, so a check
 			// on the user id alone would present the agent's own

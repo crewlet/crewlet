@@ -54,17 +54,24 @@ type PendingRuns interface {
 // SandboxTails answers a running coding run's live output from the node that
 // owns it — the one method this surface calls of [sandbox.TailReader].
 type SandboxTails interface {
-	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
 }
 
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
-// launch while it runs, `not_running` with the record's own status once it is
-// not, or the owning node NAMED where it did not answer (`owner_silent`).
+// launch while it runs, `launching` while its box is being made, `not_running`
+// with the record's own status once it is not, `box_paused` for a running
+// record whose box is paused, or the owning node NAMED where it did not answer
+// (`owner_silent`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job
 // its row holds now, which is a different job from the span a person clicked
 // the moment a second launch replaces the first.
+//
+// BY CURSOR: `epoch`, `after` and `digest` say what the asker holds — all
+// three absent for one holding nothing yet — and the answer carries what it
+// lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
+// name otherwise.
 func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 	turnID := strings.TrimSpace(p.String("turn_id"))
 	launchID := strings.TrimSpace(p.String("launch_id"))
@@ -72,11 +79,22 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
 			"run's job", ErrBadParams)
 	}
-	return s.SandboxTail.Tail(ctx, turnID, launchID)
+	var after int64
+	if p.Has("after") {
+		var whole bool
+		if after, whole = p.WholeInt("after"); !whole || after < 0 {
+			return nil, fmt.Errorf("%w: sandbox_tail's after is the byte offset the asker "+
+				"holds through, a whole number of zero or more", ErrBadParams)
+		}
+	}
+	return s.SandboxTail.Tail(ctx, sandbox.TailQuery{
+		TurnID: turnID, LaunchID: launchID,
+		Cursor: sandbox.TailCursor{Epoch: p.String("epoch"), Offset: after, Digest: p.String("digest")},
+	})
 }
 
 // sandboxRuns answers the board, or — with `audience=<name>` — the runs whose
-// question is put to that one person.
+// question is put to that one person and still waits for them ([putTo]).
 //
 // THE NAME IS A RECORD'S, resolved as every personal read here resolves one
 // ([iam.OwnerOf]): the caller's own with no name or one of theirs, a person's
@@ -88,9 +106,9 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 // reads: the unfiltered board already carries every run's audience to anybody
 // who may read it, so a narrower answer reveals nothing the wider one did not.
 //
-// A run parked by a build that resolved no audience carries none, and is
-// therefore nobody's by this filter — which is the truth about it: nothing
-// recorded whom its question was put to.
+// A run whose question resolved to nobody carries no audience, and is
+// therefore nobody's by this filter — which is the truth about it: nobody was
+// recorded as the one its question was put to.
 func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
@@ -105,12 +123,30 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	}
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
-		if filtered && !slices.Contains(run.AudienceHandles, who) {
+		if filtered && !putTo(run, who) {
 			continue
 		}
 		out = append(out, serialiseRun(run))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// putTo reports whether a run's question is put to this record and is still
+// waiting for it.
+//
+// STILL WAITING, because "what is waiting on me" is the question this answers:
+// a run whose question already has its answer recorded ([sandbox.StatusAnswered])
+// or is being resumed with it keeps the audience it was asked of, and listing
+// it would put a question the person already answered back in front of them.
+// The home screen's decisions ask the same two things, through this.
+//
+// ONE RECORD, never a set of identities: a run's audience is recorded as seat
+// handles, and the name a caller asked about is resolved to the one record it
+// names before anything is compared ([Sources.audienceOf], [iam.OwnerOf]). An
+// empty record — a login nobody holds a seat by — is put nothing.
+func putTo(run sandbox.PendingRun, record string) bool {
+	return record != "" && slices.Contains(sandbox.Awaiting, run.Status) &&
+		slices.Contains(run.AudienceHandles, record)
 }
 
 // audienceOf resolves the name `audience=` filters by to the record it names —
@@ -158,7 +194,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
 		// the trigger rather than only to the one execution that detached.
-		// Empty when the run has none.
+		// Empty when the run's turn had no ledgerable trigger.
 		"work_key": run.WorkKey,
 		// THE ITEM THE LAUNCHING TURN WAS CHARGED TO, which the row has
 		// carried since runs named one and this answer never served — so a
@@ -186,8 +222,8 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
 		// run parked, and whether that is a fallback — the seat's lead
 		// chain — because the audience above named nobody the chart has.
-		// Always an array, empty on a run that is not parked or that a
-		// build which resolved nothing parked.
+		// Always an array, empty on a run that is not parked on a
+		// question.
 		"audience_handles":  nonNilStrings(run.AudienceHandles),
 		"audience_fallback": run.AudienceFallback,
 		"branch":            run.Branch,
