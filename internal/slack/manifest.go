@@ -27,26 +27,33 @@ import (
 // The groups:* and mpim:* scopes are required EVEN IF agents never join a
 // private channel. The MCP server's startup channel-cache refresh is one
 // conversations.list call across all four conversation types, and a single
-// missing scope fails the whole call — the bot then sees no channels at all,
-// which looks like an empty workspace rather than a missing scope.
+// missing scope fails the whole call — with no cache left by an earlier run
+// the server then exits at startup, taking every Slack tool the seat has with
+// it, and the cause is in its stderr rather than in anything Slack reports.
+//
+// NOTHING HERE IS FOR A CALL NO CONSUMER MAKES, which is why
+// search:read.public is absent although it reads like the bot-token search
+// scope: the MCP server registers its one search tool only for a user token
+// (Slack's search.messages refuses a bot's) and the transport searches
+// nothing, so the scope would grant every app a read of the workspace's
+// public messages that no call uses.
 var BotScopes = []string{
-	"app_mentions:read",  // app_mention events — the thread-follow trigger
-	"channels:history",   // read public-channel messages
-	"channels:read",      // list public channels
-	"chat:write",         // MCP posts with it; the working indicator needs it too
-	"files:read",         // read shared files
-	"groups:history",     // read private-channel messages
-	"groups:read",        // list private channels — see the cache note above
-	"im:history",         // read DM history
-	"im:read",            // read direct messages
-	"im:write",           // DM a human, for an escalation
-	"mpim:history",       // read group-DM messages
-	"mpim:read",          // list group DMs — see the cache note above
-	"reactions:write",    // react to a message
-	"search:read.public", // the BOT-token search scope; search:read is user-token only
-	"usergroups:read",    // resolve a user group a message named
-	"usergroups:write",   // manage a user group
-	"users:read",         // resolve a sender, and look a colleague's id up
+	"app_mentions:read", // app_mention events — the thread-follow trigger
+	"channels:history",  // read public-channel messages
+	"channels:read",     // list public channels
+	"chat:write",        // MCP posts with it; the working indicator needs it too
+	"files:read",        // read shared files
+	"groups:history",    // read private-channel messages
+	"groups:read",       // list private channels — see the cache note above
+	"im:history",        // read DM history
+	"im:read",           // read direct messages
+	"im:write",          // DM a human, for an escalation
+	"mpim:history",      // read group-DM messages
+	"mpim:read",         // list group DMs — see the cache note above
+	"reactions:write",   // react to a message
+	"usergroups:read",   // resolve a user group a message named
+	"usergroups:write",  // manage a user group
+	"users:read",        // resolve a sender, and look a colleague's id up
 }
 
 // BotEvents are the events every agent app subscribes to.
