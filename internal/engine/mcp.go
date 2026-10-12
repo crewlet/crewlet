@@ -321,9 +321,16 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 	}
 	// REMOVED FIRST. A name that moved between servers appears in both
 	// lists, and registering before unregistering would file the new
-	// object and then delete it by name.
+	// object and then delete it by name. And ONLY AN MCP TOOL: a server's
+	// tool that collided with a builtin was refused when it was filed, so
+	// the name in this registry is the builtin's, and unregistering by name
+	// alone took the builtin with it when the server stopped offering it.
 	for _, name := range change.Removed {
-		reg.Unregister(name)
+		if entry, ok := reg.Lookup(name); ok {
+			if _, fromMCP := entry.FromMCP(); fromMCP {
+				reg.Unregister(name)
+			}
+		}
 	}
 	filed := 0
 	for _, registration := range change.Registrations() {
