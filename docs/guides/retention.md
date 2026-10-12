@@ -720,12 +720,16 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
-  (`-url`). Where the answer names a **position**, the gesture's record on that
-  log landed and applies nowhere, and it holds the operation id there for the
-  log's duplicate window (two minutes) from when it landed: the same `-op-id`
-  sent sooner — through any node — is collapsed onto that record and answered
-  `evicted` again, so wait out the window first. A fresh id is not the way
-  round it, for the reason above.
+  (`-url`). Where the hint says the **gesture's record** on that log landed and
+  applies nowhere, it holds the operation id there for the log's duplicate
+  window (two minutes) from when it landed: the same `-op-id` sent sooner —
+  through any node — is collapsed onto that record and answered `evicted`
+  again, so wait out the window first. A fresh id is not the way round it, for
+  the reason above. Where the hint instead names **another operation's** record
+  — the newest on that log's subject when the gesture's answer was lost, which
+  may be a healthy peer's — the refusal is only about the node you ran it on:
+  run the gesture through another node at once, and if this node's own record
+  did land, that node answers with the copy case below.
 - `overtaken` or `abandoned` — the node you ran it on wrote that log's record
   from rows a reanchor left behind — after a restored reanchor it had not yet
   learned of, or in a generation a reanchor abandoned — so it landed and
