@@ -892,7 +892,10 @@ sends as itself.
 
 Give the human seat a `contact.mattermost_user_id` — the **username**, not
 the 26-character user id, because Mattermost mentions address a person by
-name and the name is what an agent has to write for the mention to render:
+name and the name is what an agent has to write for the mention to render.
+It is lowercased, as Mattermost stores every username, so `Jane` and `jane`
+name one person — and two seats giving either are refused as one account
+claimed twice:
 
 ```yaml
 roles:
