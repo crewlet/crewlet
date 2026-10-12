@@ -2057,12 +2057,13 @@ func (e *Engine) Stop(ctx context.Context) {
 // ([Engine.admissionShare]), so the stop's coordination is still one
 // allowance in total.
 //
-// NOT the stop's lifecycle events, the custody flush or the last auxiliary
-// spend, which carry records on the event stream rather than give a lease
-// back: what they could not publish is lost rather than lapsed, and a stream
-// that will not acknowledge must not spend the time the coordination store is
-// owed ([lifecyclePublishBudget]), so each keeps the bound of its own it
-// states. Nor the admission, which has no lapse to fall back on.
+// NOT the stop's lifecycle events, the custody flush, the last auxiliary
+// spend or the usage publisher's last flush, which carry records on a stream
+// rather than give a lease back: what they could not publish is lost, or
+// waits for this node's next start, rather than lapsed, and a stream that will
+// not acknowledge must not spend the time the coordination store is owed
+// ([lifecyclePublishBudget]), so each keeps the bound of its own it states.
+// Nor the admission, which has no lapse to fall back on.
 func (e *Engine) stopping() *seat.StopBudget {
 	e.stopBudgetOnce.Do(func() {
 		e.stopBudget = seat.NewStopBudget(
@@ -2188,6 +2189,36 @@ func (e *Engine) teardown(ctx context.Context) {
 	// usage publisher, which is not a duty but writes the usage log the trim
 	// counts.
 	e.stopEmbedding()
+	// EVERY WRITER OF A ROW THIS NODE'S USAGE DAY COUNTS, before the usage
+	// publisher's last flush — or what they write after it is published only
+	// by a next start, and a node that never starts again leaves it out of
+	// the fleet's history: the learning passes, whose auxiliary calls spend;
+	// the scheduler, whose late fire records a dispatch; the auxiliary-spend
+	// ledger's last flush, once every producer of it has stopped — the turns
+	// and reflections with the seats, the sandbox's condensations above, the
+	// learning passes, a person's question with the HTTP surface before the
+	// teardown began; and the custody keeper, whose settles make a stateless
+	// node's rows count. The drain already ended the turns, whose phases and
+	// completions are the rest.
+	//
+	// The memory fill stops beside them although it writes no such row — it
+	// only embeds, and spends nothing a day counts — because it and the
+	// learning passes query the store backends.Close closes, and tick on a
+	// detached context on purpose — like the node's loops, they must not stop
+	// at SIGTERM — so nothing else ends them, and a tick landing after the
+	// close would run compaction queries and paid summarisation against a
+	// closed database. Both also write memory the memory sync below carries.
+	e.stopMemoryFill()
+	e.stopLearning()
+	e.stopScheduler()
+	// BEFORE the custody flush below, which is what carries a node without
+	// `data` its records.
+	e.stopAuxSpend(ctx)
+	// AND LEAVING THE GROUP, not only ending the pass: the group's
+	// attachment would otherwise keep taking batches until the queue closes.
+	// BEFORE backends.Close, which closes the store the keeper writes and the
+	// broker it settles against.
+	e.stopKeeper(ctx)
 	e.stopUsage()
 	e.stopRetention()
 	e.stopIdentityDuties()
@@ -2215,18 +2246,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the
 	// releases to the flush alone, which is the bounded path rather than
-	// the whole one.
+	// the whole one. And after the memory fill and the learning passes
+	// above, which write the memory it carries.
 	e.stopMemorySync()
-	// AND THE FILL BESIDE IT, for the same reason the learning passes
-	// below stop here: it queries the store that backends.Close closes.
-	e.stopMemoryFill()
-	// BEFORE backends.Close below, which closes the store the four passes
-	// query. They tick on a detached context on purpose — like the node's
-	// loops, they must not stop at SIGTERM — so nothing else ends them,
-	// and a tick landing after the close would run compaction queries and
-	// paid summarisation against a closed database.
-	e.stopLearning()
-	e.stopScheduler()
 	// THE OBJECT STORE'S COLLECTOR with the other duty loops: the loop
 	// claims its duty afresh every turn, so one still running past the
 	// release below takes it straight back and the node exits holding it.
@@ -2285,19 +2307,10 @@ func (e *Engine) teardown(ctx context.Context) {
 	// final flush publishes onto is closed — and before the custody flush
 	// below, which carries a node without `data` its records.
 	e.stopAuthEvents()
-	// THE LAST AUXILIARY SPEND, once every producer of it has stopped —
-	// the turns and reflections with the seats, the learning passes and
-	// the sandbox's condensations above, a person's question with the HTTP
-	// surface before the teardown began — and BEFORE the custody flush
-	// below, which is what carries a node without `data` its records.
-	e.stopAuxSpend(ctx)
 	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last events they
 	// published are in the buffer, and BEFORE the broker closes under the
 	// last batch.
 	e.stopCustody(ctx)
-	// BEFORE backends.Close, which closes the store the keeper writes and
-	// the broker it settles against.
-	e.stopKeeper()
 	e.stopWatchingDataNodes()
 	if e.ownsBackends {
 		e.backends.Close(ctx)
@@ -2758,7 +2771,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge.carry, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge, tel.ask, tel.senders))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase

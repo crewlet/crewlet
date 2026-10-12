@@ -73,25 +73,47 @@ roles:
 		procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
 }
 
-// claimed starts the engine and waits for it to hold its seats.
+// claimed starts the engine and waits for it to hold its seats, each with its
+// acquisition finished.
 //
 // A per-role child belongs to a seat's LEASE, not to the epoch: this node
 // spawns one only for a seat it has claimed. So a test about per-role tools
 // has to go through the claim, which is also the ordering OnAcquire exists to
 // enforce — the children are up before the mailbox opens.
+//
+// HELD IS NOT READY: [seat.Host.Held] counts a seat whose acquisition hook is
+// still running — its lease is genuinely held — so a wait on the count alone
+// returned while the last seat's children were still starting, and the case
+// read that seat's surface without them. A seat may start a turn only once its
+// hook has returned ([seat.Host.MayStart]), which is the moment its tools are
+// whole.
 func claimed(t *testing.T, e *engine.Engine, seats int) {
 	t.Helper()
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	host := e.Node().Host()
+	ready := func() bool {
+		held := host.Held()
+		if len(held) < seats {
+			return false
+		}
+		for _, handle := range held {
+			if _, ok := host.MayStart(handle); !ok {
+				return false
+			}
+		}
+		return true
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(e.Node().Host().Held()) >= seats {
+		if ready() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("held %v after 10s, want %d seats", e.Node().Host().Held(), seats)
+	t.Fatalf("held %v after 10s, want %d seats each with its acquisition finished",
+		host.Held(), seats)
 }
 
 // surfaceOf is the tool names one seat's turns would be built against.

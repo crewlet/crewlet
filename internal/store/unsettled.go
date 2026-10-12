@@ -19,21 +19,33 @@ import (
 // and a fleet adding two nodes' counts counts it twice.
 //
 // So every read that COUNTS — the outcome counts, the axis's bars and facets, a
-// trace's and a turn's extent, a turn's sums — counts the rows this node KEEPS,
-// and names the rows it holds of a batch it has written and not settled
-// ([EventLog.WriteCustody]) beside the count instead, as [UnsettledRow]s: by
-// identity, with whatever each count needs to add the row in. Whoever sums the
-// fleet asks every node which of the named rows it keeps ([EventLog.KeptRows])
-// and counts each once (internal/eventfan). The named rows are read in the SAME
-// SNAPSHOT as the count they are taken out of: read apart, a batch settled
-// between the two is counted as kept and named as unsettled, or neither.
+// trace's and a turn's extent, a turn's sums, a usage day — counts the rows
+// this node KEEPS, and does one of two things with the rows it holds of a
+// batch it has written and not settled ([EventLog.WriteCustody]), depending on
+// who reads the count:
 //
-// ONE SHAPE AND ONE READ for every count rather than one per question, because
-// what makes a row unsettled is a property of the row and not of the question:
-// [unsettledSQL] is the one statement that finds them, each count narrows it
-// with its own predicate, and [UnsettledRow] carries the columns any count adds
-// a row in by. A count that took its own route to the custody table is a count
-// whose idea of "unsettled" could drift from its neighbours'.
+//   - A count that is ANSWERED — to a fleet read, whose asker sums every
+//     node's answer — names those rows beside the count, as [UnsettledRow]s:
+//     by identity, with whatever each count needs to add the row in. The
+//     asker asks every node which of the named rows it keeps
+//     ([EventLog.KeptRows]) and counts each once (internal/eventfan). The
+//     named rows are read in the SAME SNAPSHOT as the count they are taken out
+//     of: read apart, a batch settled between the two is counted as kept and
+//     named as unsettled, or neither. [unsettledSQL] is the read.
+//   - A count that is PUBLISHED — a usage day, summed across nodes by every
+//     reader of the replicated history ([DB.UsageForDay]) — leaves them out
+//     and names nothing, because no reader of a published day can ask a node
+//     which of its rows it keeps: the day has to BE the rows it keeps.
+//     [keptRowSQL] is the predicate.
+//
+// ONE TABLE AND ONE KEY for both: what makes a row unsettled is a property of
+// the row and not of the question, so `custody_unsettled_rows` — one row per
+// identity of a batch in flight, keyed on the log's own `(event_time,
+// event_id)` — is the only place either shape finds it. [unsettledSQL] drives
+// a seek of the log from each of its rows; [keptRowSQL] seeks it from each row
+// counted, and [EventLog.KeptRows] from each row named. A count that took its own route
+// to the custody tables is a count whose idea of "unsettled" could drift from
+// its neighbours'.
 
 // UnsettledRow is one row this node holds of a custody batch it has written and
 // not settled: its identity in the event log — `(Time, ID)`, the table's
@@ -102,13 +114,19 @@ type querier interface {
 // `where` is a predicate over the event log written with its columns
 // UNQUALIFIED, the way every count's own statement writes it ([ListQuery]'s
 // filters, [TurnQuery]'s row terms): each column it names is the log's alone,
-// since neither the custody table nor json_each has one of those names, so one
-// predicate counts the rows and narrows the rows named.
+// since the custody table has none of those names but the identity, which the
+// join equates, so one predicate counts the rows and narrows the rows named.
 //
-// DRIVEN FROM THE CUSTODY TABLE, which holds only the batches in flight: each
-// row it names is a seek of the log by its primary key, and CROSS JOIN fixes
-// that order, so the planner cannot walk the count's rows and probe the batches
-// for each (TestTheCustodyReadsSeekTheLogByIdentity).
+// DRIVEN FROM THE IN-FLIGHT IDENTITIES: each is a seek of the log by its
+// primary key, and CROSS JOIN fixes that order, so the planner cannot walk the
+// count's rows and probe the identities for each
+// (TestTheCustodyReadsSeekTheLogByIdentity). That costs one seek per identity
+// in flight, whatever the count's own window — a few normally, and tens of
+// thousands after a coordination outage leaves batches unsettled (about 12 ms
+// per count beside fifty thousand, measured). Driven from the identities on
+// purpose all the same: the broad counts — the axis over the thirty-day floor
+// — would otherwise read every row they count to probe the key, which is far
+// more than any backlog.
 func unsettledSQL(where []string, args []any) (string, []any) {
 	failed, failedArgs := failedRow(func(name string) string { return "e." + name })
 	query := `SELECT e.event_time, e.event_id, e.event_type, e.category,
@@ -117,9 +135,9 @@ func unsettledSQL(where []string, args []any) (string, []any) {
 	       e.cache_read_tokens, e.cache_write_tokens,
 	       CASE WHEN e.event_type = ? THEN COALESCE(json_extract(e.payload, '$.duration_ms'), 0) ELSE 0 END,
 	       COALESCE(json_extract(e.tags, '$.notification_source'), '')
-	  FROM custody_unsettled AS c CROSS JOIN json_each(c.events) AS j CROSS JOIN crewlet_events AS e
-	 WHERE e.event_id = json_extract(j.value, '$.id')
-	   AND e.event_time = json_extract(j.value, '$.t')`
+	  FROM custody_unsettled_rows AS u CROSS JOIN crewlet_events AS e
+	 WHERE e.event_time = u.row_time
+	   AND e.event_id = u.row_id`
 	if len(where) > 0 {
 		query += "\n\t   AND " + strings.Join(where, " AND ")
 	}
@@ -173,9 +191,13 @@ func readUnsettled(ctx context.Context, q querier, where []string, args []any) (
 // keeps is in no count at all. So whoever sums the fleet asks every node this
 // about the rows named unsettled, and counts a row once unless a node that
 // keeps it counted it already. Only the identity of each row is read. ONE
-// SNAPSHOT for the rows held and the batches unsettled, for the counts' own
-// reason. The answer is never nil, and each row in it carries its identity
-// alone.
+// STATEMENT for the rows held and the batches unsettled — each named row a seek
+// of the log, and its in-flight key probed from it ([keptRowSQL]) — so the two
+// are one snapshot, for the counts' own reason, and the cost is the rows named
+// rather than the backlog in flight: read whole into a set, as it was, the
+// in-flight table cost every fleet read about 170 ms beside the fifty thousand
+// identities a coordination outage leaves. The answer is never nil, and each
+// row in it carries its identity alone.
 func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]UnsettledRow, error) {
 	out := []UnsettledRow{}
 	if len(named) == 0 {
@@ -187,10 +209,6 @@ func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]Unsett
 	}
 	if err := l.db.Read(ctx, func(tx *sql.Tx) error {
 		out = out[:0]
-		unsettled, err := unsettledKeys(ctx, tx)
-		if err != nil {
-			return err
-		}
 		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
@@ -203,9 +221,7 @@ func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]Unsett
 				return err
 			}
 			r.Time = DecodeTime(stamp)
-			if !unsettled[r.Key()] {
-				out = append(out, r)
-			}
+			out = append(out, r)
 		}
 		return rows.Err()
 	}); err != nil {
@@ -214,35 +230,33 @@ func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]Unsett
 	return out, nil
 }
 
-// unsettledKeys is the identity of every row of every custody batch this node
-// has written and not settled — what the table holds only while a batch is in
-// flight, so a read of all of it is a read of a few moments' batches.
-func unsettledKeys(ctx context.Context, tx *sql.Tx) (map[RowKey]bool, error) {
-	rows, err := tx.QueryContext(ctx, unsettledKeysSQL)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := map[RowKey]bool{}
-	for rows.Next() {
-		var k RowKey
-		if err := rows.Scan(&k.At, &k.ID); err != nil {
-			return nil, err
-		}
-		out[k] = true
-	}
-	return out, rows.Err()
-}
-
-// unsettledKeysSQL reads every unsettled batch's rows as the table stores them,
-// `{"t": event_time, "id": event_id}` ([EventLog.WriteCustody]).
-const unsettledKeysSQL = `SELECT json_extract(j.value, '$.t'), json_extract(j.value, '$.id')
-	  FROM custody_unsettled AS c, json_each(c.events) AS j`
+// keptRowSQL is a predicate over the event log under the alias `e`, which
+// every usage statement gives it, that holds for a row this node KEEPS: every
+// row it holds but those of a custody batch it has written and not settled.
+//
+// It is how a count that is PUBLISHED rather than answered obeys the rule the
+// file doc states. Counted as held, a batch two data nodes wrote before either
+// settled it was in both nodes' days, and once the loser's copy was deleted the
+// double count stayed in the history of any day the publisher no longer
+// re-derived.
+//
+// A SEEK OF THE IN-FLIGHT KEY FROM EACH ROW COUNTED, which costs the same
+// whether a few identities are in flight or fifty thousand: the
+// `custody_unsettled_rows` key leads with the log's own `(event_time,
+// event_id)`, so the anti-join is a covering-index probe per row
+// (TestEveryUsageCountSeeksItsWindow). The obvious alternative — an
+// uncorrelated `NOT IN` over the batches' JSON — is read once and then checks
+// every counted row against the whole of it, measured at 2.4 s for one
+// fingerprint of a five-thousand-row day beside ten thousand identities in
+// flight, which a coordination store away for a few minutes leaves behind.
+const keptRowSQL = `NOT EXISTS (SELECT 1 FROM custody_unsettled_rows AS u
+	         WHERE u.row_time = e.event_time AND u.row_id = e.event_id)`
 
 // keptSQL is the statement [EventLog.KeptRows] runs and its arguments: the
-// named rows this log holds, by its primary key, the names bound as ONE JSON
-// array so the statement's variables do not grow with them. A function of its
-// own so its plan can be read back (TestTheCustodyReadsSeekTheLogByIdentity).
+// named rows this log KEEPS — holds by its primary key, and not as a row of a
+// batch in flight ([keptRowSQL]) — the names bound as ONE JSON array so the
+// statement's variables do not grow with them. A function of its own so its
+// plan can be read back (TestTheCustodyReadsSeekTheLogByIdentity).
 func keptSQL(named []UnsettledRow) (string, []any, error) {
 	ids := make([]rowIdentity, 0, len(named))
 	for _, r := range named {
@@ -258,5 +272,6 @@ func keptSQL(named []UnsettledRow) (string, []any, error) {
 	return `SELECT e.event_time, e.event_id
 	  FROM json_each(?) AS j CROSS JOIN crewlet_events AS e
 	 WHERE e.event_time = json_extract(j.value, '$.t')
-	   AND e.event_id = json_extract(j.value, '$.id')`, []any{string(raw)}, nil
+	   AND e.event_id = json_extract(j.value, '$.id')
+	   AND ` + keptRowSQL, []any{string(raw)}, nil
 }

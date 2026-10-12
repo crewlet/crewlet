@@ -15,10 +15,11 @@ import (
 // Every one of those steps races a lease, and every one falls back to the
 // same thing when it cannot reach the store: the lease lapses on its TTL.
 // Each used to run under a bound of its own, so a member whose store had gone
-// spent the SUM of them, five seconds a step and every one failing. A process
-// under an orchestrator's thirty-second kill grace that spends that long on
-// deadlines that cannot succeed is killed before its custody flush and its
-// store close.
+// spent the SUM of them, five seconds a step and every one failing — more than
+// an orchestrator's grace leaves a stop after its drain, so it was killed
+// before its custody flush and its store close. Sharing one allowance bounds
+// the give-backs; what else a stop waits on, and the grace that covers it, is
+// "What it bounds, and what it does not" below.
 //
 // So the steps draw on one allowance, [StopAllowance] of the lease TTL: on a
 // healthy fleet each takes milliseconds and the allowance never binds; on an
@@ -36,12 +37,27 @@ import (
 // gone, where the event stream and the buckets lose their quorum together —
 // also pays every bound the stream's records keep, which this allowance
 // cannot share because none of them falls back to a lease (see "Only what
-// lapses" below): each seat's last event beside its last memory publish, and
-// the engine's auxiliary-spend flush, five seconds each. With the engine's
-// admission share, that stop still takes about 25 s at the shipped TTL — what
-// the e2e fleet measured a lone member's stop at before this allowance
-// existed — and fits a thirty-second kill grace by five seconds, not by the
-// fifteen a member that lost only its store has to spare.
+// lapses" below): each seat's last event beside its last memory publish, the
+// engine's auxiliary-spend flush and the usage publisher's last flush on a
+// data node whose day moved since its last tick, five seconds each — and up to
+// a second for a custody batch a data node's keeper had in hand. With the
+// engine's admission share, that stop's own steps take about 30 s at the
+// shipped TTL — the 25 s the e2e fleet measured a lone member's stop at before
+// this allowance existed, and the usage flush added since. After the drain,
+// the stop also closes the HTTP listeners (cmd/crewlet's shutdown), which wait
+// up to 5 s each and 5 s more for the projector and the sign-in surface's
+// background writes; an open sandbox bridge session spends its listener's
+// grace whole. The leases' share can fall entirely after the drain too: a
+// store lost during it leaves the presence give-back fast and the seats'
+// give-backs, each after its seat's 5 s last event, spending all of it. So
+// what follows the drain can take about 46 s: 15 for the seats, 15 for the
+// listeners, 16 for the aux, keeper, usage and admission bounds — about 50 s
+// on a node without `data`, which flushes its custody batches on a ten-second
+// budget instead of a keeper and a usage flush. docs/guides/deployment.md
+// therefore has every pod given a grace of at least its longest turn plus
+// 60 s, plus any preStop sleep (Kubernetes counts the hook inside the grace):
+// the drain's share, this stop's 50 s at most, and room for the process to
+// exit.
 //
 // # Only what lapses
 //

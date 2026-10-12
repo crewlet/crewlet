@@ -379,9 +379,10 @@ func (e *Engine) seatCompactor(c *Company, handle string, use auxspend.Use) comp
 const auxSpendStopBudget = 5 * time.Second
 
 // stopAuxSpend flushes the ledger one last time. Ordered by the teardown after
-// every producer of auxiliary calls has stopped and before the custody flush
+// every producer of auxiliary calls has stopped, and before the usage
+// publisher's last flush — whose day counts these records — the custody flush
 // and the broker's close, so the last records reach a stream that is still
-// there. Nil-safe.
+// there and a day that is published after them. Nil-safe.
 func (e *Engine) stopAuxSpend(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), auxSpendStopBudget)
 	defer cancel()

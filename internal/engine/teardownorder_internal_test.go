@@ -58,8 +58,10 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 // the order it does, so the next sentence written about it has something to
 // be checked against.
 //
-// Mutation: move stopRetention above stopEmbedding, or any duty — the object
-// collector included — below releaseDuties, and this fails naming the pair.
+// Mutation: move stopRetention above stopEmbedding, any duty — the object
+// collector included — below releaseDuties, any writer of a usage row below
+// stopUsage, or stopMemorySync above stopMemoryFill, and this fails naming the
+// pair.
 func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -83,6 +85,38 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	if at("stopUsage") > at("stopRetention") {
 		t.Error("the teardown ends the trim before the usage publisher, which " +
 			"publishes into a log the trim is deciding how far to purge")
+	}
+	// AND EVERY WRITER OF A ROW ITS DAY COUNTS IS DOWN BEFORE ITS LAST FLUSH:
+	// what one writes after it is published only by a next start, which a
+	// node that never starts again does not have. The learning passes spend
+	// auxiliary calls, the scheduler records fires, the auxiliary-spend
+	// ledger's last flush writes the spend of every one of them, and the
+	// custody keeper settles a stateless node's rows into this node's days
+	// until it leaves the group. (The memory fill is none of them: it only
+	// embeds, and its order is the memory sync's, below.)
+	for _, writer := range []string{"stopLearning", "stopScheduler",
+		"stopAuxSpend", "stopKeeper"} {
+		if at(writer) > at("stopUsage") {
+			t.Errorf("the teardown runs the usage publisher's last flush before %s, "+
+				"so what it writes after that flush is in no published day", writer)
+		}
+	}
+	// The ledger's last flush once every producer of auxiliary spend has
+	// stopped.
+	for _, producer := range []string{"stopLearning", "stopSandbox"} {
+		if at(producer) > at("stopAuxSpend") {
+			t.Errorf("the teardown flushes the auxiliary-spend ledger before %s, "+
+				"whose spend then reaches no flush", producer)
+		}
+	}
+	// THE MEMORY SYNC carries what the memory fill and the learning passes
+	// write — a filled vector takes a fresh change sequence — so it ends after
+	// both, or their last rows reach no changelog.
+	for _, w := range []string{"stopMemoryFill", "stopLearning"} {
+		if at(w) > at("stopMemorySync") {
+			t.Errorf("the teardown ends the memory sync before %s, whose rows it then "+
+				"never carries", w)
+		}
 	}
 	// THE OBJECT COLLECTOR is a duty like the trim, and it deletes bytes the
 	// tracker's rows reference: still ticking past the release, it runs beside
@@ -145,19 +179,20 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 	}
 }
 
-// EVERY FINAL FLUSH LANDS BEFORE THE CUSTODY THAT CARRIES IT, and the custody
-// before the keeper that settles it.
+// EVERY FINAL FLUSH LANDS BEFORE THE CUSTODY THAT CARRIES IT.
 //
 // On a node without `data` an event reaches the company's history only
 // through the custody buffer, which hands it to a data node's keeper: the
 // authentication trail's last minute and the auxiliary spend ledger's last
 // records are each published by a final flush, so a flush run after the
 // custody's own puts its records in a buffer nothing will ever empty. The
-// keeper, on a data node, settles what peers handed it against the store and
-// the broker, so it ends after the custody and before the backends close.
+// custody and the keeper are never on one node — the custody is a node
+// without `data`'s, the keeper a data node's — so how the two are ordered says
+// nothing; the keeper's place is before the usage publisher's last flush
+// (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
 //
-// Mutation: move stopAuthEvents or stopAuxSpend below stopCustody, or
-// stopKeeper above it, and this fails naming the pair.
+// Mutation: move stopAuthEvents or stopAuxSpend below stopCustody, and this
+// fails naming it.
 func TestEveryFinalFlushPrecedesTheCustodyThatCarriesIt(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -174,9 +209,6 @@ func TestEveryFinalFlushPrecedesTheCustodyThatCarriesIt(t *testing.T) {
 			t.Errorf("the teardown flushes the custody before %s, whose final "+
 				"records then sit in a buffer nothing empties", flush)
 		}
-	}
-	if at("stopCustody") > at("stopKeeper") {
-		t.Error("the teardown ends the keeper before the custody it settles")
 	}
 }
 

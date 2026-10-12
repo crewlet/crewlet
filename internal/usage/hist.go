@@ -104,6 +104,50 @@ func (h *Hist) Merge(o Hist) {
 	}
 }
 
+// Join is the least histogram holding, AT OR ABOVE every bin, as many
+// durations as the more of h and o does there — the join a node's published
+// day takes of what it derived and what the fleet holds (see join.go).
+//
+// AT OR ABOVE, never bin by bin: a turn whose end states no tally is measured
+// over the segments its node holds, so as a later one arrives the turn moves UP
+// a bin and its old bin's count falls. The count at or above any bin cannot
+// fall that way — a turn added raises it, a turn moved up raises it or leaves
+// it — so it is the figure that only grows, and the one a join may take the
+// larger of. Its total is the larger of the two totals, as the turns it counts
+// are. And where o is at or below h at every bin — an earlier measurement of
+// the same turns — the join is h exactly.
+func (h Hist) Join(o Hist) Hist {
+	var (
+		out            []histBin
+		inH, inO, prev int64
+	)
+	i, j := len(h.bins)-1, len(o.bins)-1
+	for i >= 0 || j >= 0 {
+		index := -1
+		if i >= 0 {
+			index = h.bins[i].index
+		}
+		if j >= 0 && o.bins[j].index > index {
+			index = o.bins[j].index
+		}
+		if i >= 0 && h.bins[i].index == index {
+			inH += h.bins[i].count
+			i--
+		}
+		if j >= 0 && o.bins[j].index == index {
+			inO += o.bins[j].count
+			j--
+		}
+		atOrAbove := max(inH, inO)
+		if n := atOrAbove - prev; n > 0 {
+			out = append(out, histBin{index: index, count: n})
+		}
+		prev = atOrAbove
+	}
+	slices.Reverse(out)
+	return Hist{bins: out}
+}
+
 // Count is how many durations the histogram holds.
 func (h Hist) Count() int64 {
 	var n int64

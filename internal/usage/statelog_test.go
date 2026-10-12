@@ -59,11 +59,13 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 // writer this domain has — over a node whose store holds one seat's day, run
 // as the suite's own node so the subject's node and the stamp's writer agree
 // as they do in production.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, estate store.ReplicatedReader) error {
 	p, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: oneSeatDay{}, Log: pub, NodeID: statelogtest.SuiteWriter,
-		Zone: func() *time.Location { return time.UTC },
-		Now:  func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
+		Store: oneSeatDay{}, Log: pub, Estate: estate, NodeID: statelogtest.SuiteWriter,
+		Caught:      caught,
+		Zone:        func() *time.Location { return time.UTC },
+		Now:         func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		return err
@@ -77,6 +79,35 @@ type oneSeatDay struct{}
 
 func (oneSeatDay) UsageMark(context.Context, store.UsageWindow) (store.UsageMark, error) {
 	return store.UsageMark{Events: 1, LastEvent: 1}, nil
+}
+
+// UsageRederive answers that no settle has changed an older day, and
+// UsageWatermark that the node owes nothing older than the two days a tick
+// fingerprints: the suite's write is one tick of those two days.
+func (oneSeatDay) UsageRederive(context.Context) (store.UsageRederive, bool, error) {
+	return store.UsageRederive{}, false, nil
+}
+
+func (oneSeatDay) ClearUsageRederive(context.Context, int64) (bool, error) { return false, nil }
+
+func (oneSeatDay) UsageWatermark(context.Context) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
+func (oneSeatDay) SetUsageWatermark(context.Context, time.Time) error { return nil }
+
+// UsageDayWindow, UsageDayContaining and PinUsageDay record no cut: every day
+// is the company clock's own, which never moves here.
+func (oneSeatDay) UsageDayWindow(context.Context, string) (store.UsageWindow, bool, error) {
+	return store.UsageWindow{}, false, nil
+}
+
+func (oneSeatDay) UsageDayContaining(context.Context, time.Time) (string, store.UsageWindow, bool, error) {
+	return "", store.UsageWindow{}, false, nil
+}
+
+func (oneSeatDay) PinUsageDay(_ context.Context, _ string, w store.UsageWindow) (store.UsageWindow, error) {
+	return w, nil
 }
 
 func (oneSeatDay) UsageForDay(context.Context, store.UsageWindow) (store.UsageDay, error) {

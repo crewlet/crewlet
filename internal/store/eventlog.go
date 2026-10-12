@@ -1382,6 +1382,24 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 	); err != nil {
 		return 0, fmt.Errorf("store: purge event parties: %w", err)
 	}
+	// AND THE CUSTODY BATCHES THIS NODE SETTLED, on the same horizon,
+	// counted from the settle: a record exists to turn away a redelivery
+	// of its batch (see [EventLog.WriteCustody]), which a group makes when
+	// an acknowledgement was lost — within the delivery's own retries,
+	// minutes after the settle, and never a retention window later.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM custody_settled WHERE settled_at < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge settled custody batches: %w", err)
+	}
+	// AND THE CUT OF EVERY USAGE DAY that ended before the same horizon: the
+	// usage publisher never derives a day older than the read floor again,
+	// so its recorded window ([DB.PinUsageDay]) answers nothing any more.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM usage_day_windows WHERE end_at < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge the cuts of old usage days: %w", err)
+	}
 	var total int64
 	for {
 		res, err := l.db.sql.ExecContext(ctx,

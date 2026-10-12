@@ -96,9 +96,10 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 		t.Fatalf("%s: build the write authority: %v", id, err)
 	}
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: db, Log: authority, NodeID: id,
-		Zone: func() *time.Location { return santiago },
-		Now:  func() time.Time { return now },
+		Store: db, Log: authority, Estate: db.Replicated().Reader(), NodeID: id, Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return now },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatalf("%s: build the publisher: %v", id, err)

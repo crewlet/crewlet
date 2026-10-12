@@ -211,7 +211,7 @@ Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
 There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
 
-Under an orchestrator, SIGTERM follows the same tiers; the host's grace period (k8s `terminationGracePeriodSeconds`, systemd `TimeoutStopSec`) is the SIGKILL backstop. See [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
+Under an orchestrator, SIGTERM follows the same tiers; the host's grace period (k8s `terminationGracePeriodSeconds`, systemd `TimeoutStopSec`, Docker `--stop-timeout` / Compose `stop_grace_period`) is the SIGKILL backstop. See [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
 
 When piping output, prefer `tee -i` — Ctrl+C reaches the whole pipeline, and a plain `tee` dies on the first press, taking the drain logs with it (the shutdown itself is unaffected).
 

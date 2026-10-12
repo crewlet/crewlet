@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -97,6 +98,49 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		},
 		"UsageForDay": func(t *testing.T) {
 			_, err := d.UsageForDay(ctx, store.UsageWindow{})
+			wantErrNoEstate(t, err)
+		},
+		"UsageRederive": func(t *testing.T) {
+			_, ok, err := d.UsageRederive(ctx)
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered a re-derive mark")
+			}
+		},
+		"ClearUsageRederive": func(t *testing.T) {
+			cleared, err := d.ClearUsageRederive(ctx, 1)
+			wantErrNoEstate(t, err)
+			if cleared {
+				t.Error("a handle that is not open cleared a re-derive mark")
+			}
+		},
+		"UsageWatermark": func(t *testing.T) {
+			_, ok, err := d.UsageWatermark(ctx)
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered a usage watermark")
+			}
+		},
+		"SetUsageWatermark": func(t *testing.T) {
+			wantErrNoEstate(t, d.SetUsageWatermark(ctx, time.Now()))
+		},
+		"UsageDayWindow": func(t *testing.T) {
+			_, ok, err := d.UsageDayWindow(ctx, "2026-09-23")
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered a usage day's cut")
+			}
+		},
+		"UsageDayContaining": func(t *testing.T) {
+			_, _, ok, err := d.UsageDayContaining(ctx, time.Now())
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered the usage day an instant falls in")
+			}
+		},
+		"PinUsageDay": func(t *testing.T) {
+			_, err := d.PinUsageDay(ctx, "2026-09-23", store.UsageWindow{Start: time.Now(),
+				End: time.Now().Add(time.Hour)})
 			wantErrNoEstate(t, err)
 		},
 		"Backup": func(t *testing.T) {

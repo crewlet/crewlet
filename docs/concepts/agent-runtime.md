@@ -467,8 +467,8 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
-    S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · credential cooldown"] --> S9
+    S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
@@ -518,32 +518,47 @@ flowchart TD
    closed (`api_stopped`).
 8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
    a running box being reaped while turns are still finishing), then the
-   notification transports, the maintenance duties, the integration reconcile
-   loop, memory sync, the learning passes, the cron scheduler and the
-   credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped; the
-   auxiliary-spend ledger publishes its last records — what the seats'
-   auxiliary model spent since its last 15-second flush — on a budget of five
-   seconds, once every producer of them has stopped and before a node without
-   `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
-   batches, which carry those records too; then the custody flush, and the
-   stream connection and the store file are closed (`engine_stopped`).
+   notification transports, the maintenance duties and the embedding duty.
+   The memory fill stops beside them — it only embeds, and spends nothing a
+   usage day counts, but it reads the store step 9 closes, and the vectors it
+   fills ride the memory sync, which stops after it. Then everything that
+   writes a row this node's usage day counts: the learning passes and the cron
+   scheduler; the auxiliary-spend
+   ledger's last records — what the seats' auxiliary model spent since its last
+   15-second flush — published on a budget of five seconds once every producer
+   of them has stopped, and before a node without `data` flushes its
+   [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+   batches in step 9, which carry those records too; and, on a data node, the
+   custody keeper, which leaves its group — it stops taking batches, gives one
+   in hand up to a second to settle, and detaches, so a batch it did not take
+   goes to the data nodes still in the group. Then the
+   [usage publisher](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day),
+   which publishes what today and yesterday gained since its last 15-second
+   tick on a budget of five seconds, the state log's own resolve budget — after
+   every writer above, so a node stopped this way and never started again
+   still leaves that day whole, and before the trim and the logs it publishes
+   into. Then the integration reconcile loop, memory sync and the credential
+   cooldown refresh.
+9. **Close the backends**: the shared MCP servers are reaped; a node without
+   `data` flushes its custody batches; and the stream connection and the store
+   file are closed (`engine_stopped`).
 
 **The stop's coordination shares one allowance.** Every lease the stop gives back — the presence and seat leases of steps 2 and 6, and in step 8 its fleet duties and the integration lease a reconcile pass still in flight gives back as its loop is stopped — draws on ONE allowance of one heartbeat interval: the lease TTL over three, 15 s at the shipped 45 s. A third of it, 5 s there, is reserved for withdrawing the node's admission to a [ceiling change](../guides/retention.md#changing-a-logs-ceiling) in step 8, and no step before it can spend that share: every lease falls back to lapsing on its TTL, but an admission has no TTL, so one that is not withdrawn stays until the node restarts under the same id or an operator excludes it (`admission_not_withdrawn` says which). The leases' two thirds are charged only while one of their round trips is in flight, so the wait of step 5 spends none of it, and seats released together are charged once for the time they overlap. On a healthy fleet each step takes milliseconds and the allowance never binds. On a member that has lost its coordination store — every step failing, each lease falling back to lapsing on its TTL — the stop's give-back costs that one allowance in total, after which every remaining step fails at once with its own `…_unavailable` / `…_not_released` warning. The integration lease is charged only from step 8, where its loop is stopped and the stop waits for the pass in flight — from that moment on, a give-back that began before it included. The loop runs through the drain, so a pass that ends on its own while step 5 waits is an ordinary pass, and its give-back ends on its own client's request timeout rather than spending what the seats are owed when the wait is over. Each step used to wait out a bound of its own, so a member whose coordination store had gone spent the sum of them on deadlines that could not succeed; one that has lost that store alone now stops in about one allowance, 15 s at the shipped TTL.
 
-**The stop's events are not on the allowance.** The `org_stopped` announcement of step 1 and each seat's last `agent_terminated` in step 6 travel on the event stream rather than through the coordination store, and the two are separately replicated streams, so one can lose its quorum alone. Each event is therefore bounded on its own, by the five seconds the stream's client gives a request with no deadline (past it, `lifecycle_event_not_published` or `seat_lifecycle_not_published`, and a live screen ages the seat out), and published beside the give-backs rather than in front of them: the announcement while the drain runs, each seat's event while that seat is torn down — and finished before its lease is given back, so a peer that takes the seat over announces it only after this node has let it go. A stream that will not acknowledge costs the stop those bounds where nothing else is running, and never the time the leases and the admission are owed. The auxiliary-spend and custody flushes of step 9 are not on the allowance either: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there.
+**The stop's events are not on the allowance.** The `org_stopped` announcement of step 1 and each seat's last `agent_terminated` in step 6 travel on the event stream rather than through the coordination store, and the two are separately replicated streams, so one can lose its quorum alone. Each event is therefore bounded on its own, by the five seconds the stream's client gives a request with no deadline (past it, `lifecycle_event_not_published` or `seat_lifecycle_not_published`, and a live screen ages the seat out), and published beside the give-backs rather than in front of them: the announcement while the drain runs, each seat's event while that seat is torn down — and finished before its lease is given back, so a peer that takes the seat over announces it only after this node has let it go. A stream that will not acknowledge costs the stop those bounds where nothing else is running, and never the time the leases and the admission are owed. The auxiliary-spend flush and the usage publisher's last flush in step 8 and the custody flush of step 9 are not on the allowance either: they carry records rather than give a lease back, and what they cannot publish is lost rather than lapsed, so each keeps the budget of its own named there — and so does the custody keeper's second for a batch in hand, which orders a settle before the usage flush rather than giving anything back.
 
-**A member that has lost both stores stops in about 25 s.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every one of those bounds besides: the leases' share of the allowance (10 s at the shipped TTL, spent by the presence give-back while the announcement waits out its own five seconds inside it), each seat's last event beside its last memory publish (5 s), the admission's share (5 s) and the auxiliary-spend flush (5 s). That is about 25 s at the shipped TTL, as such a stop was measured before the allowance existed, and it fits Kubernetes' 30 s default grace by five seconds rather than by the fifteen a member that lost only its coordination store has to spare.
+**A member that has lost both stores can take about 46 s after the drain.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every one of those bounds besides: the leases' share of the allowance (10 s at the shipped TTL — spent by the presence give-back in step 2 when the stores were already gone, or by the seats' give-backs in step 6, each after its 5 s last event, when they went during the drain), each seat's last event beside its last memory publish (5 s), the auxiliary-spend flush (5 s), the usage publisher's last flush when its day moved since its last tick (5 s) and the admission's share (5 s) — and up to one second more on a data node whose custody keeper had a batch in hand. Those are the stop's own steps, about 30 s at the shipped TTL — about 25 s, as such a stop was measured before the allowance existed, plus the usage flush. Step 7 adds the listeners: five seconds of grace for each (the public one first when `api.public` is set, then `api.port`), which an open [sandbox bridge](code-sandbox.md) session spends whole, and five more shared by the live projection and the sign-in surface's background writes. So what follows step 5 can take about 46 s — 15 for the seats' last events and give-backs, 15 for the listeners, 16 for the auxiliary-spend, keeper, usage and admission bounds — or about 36 s when the stores were gone before the stop began; a node without `data`, which runs no keeper and no usage publisher but flushes its custody batches in step 9 on a ten-second budget of their own, about 50 s. That is more than Kubernetes' 30 s default grace on its own. And it all comes AFTER step 5, whose wait for the turns still running has no bound of the engine's own, so a grace sized to the longest turn alone still kills such a member before its store closes: give every pod a `terminationGracePeriodSeconds` of at least its longest turn plus 60 s, plus any `preStop` sleep the pod has, since Kubernetes counts the hook inside the grace (see [Probes](../guides/deployment.md#probes)) — and a deployment whose turns finish in seconds the same 60 s.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
 **No engine-level timeout on the drain.** On a signal, step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
 - **Interactive:** a second Ctrl+C tells us you're done waiting.
-- **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
-- **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback.
+- **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL. The default is never enough: set it to your longest turn plus 60 s, plus any `preStop` sleep.
+- **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback. The default covers turns up to 30 s; raise it to your longest turn plus 60 s once turns run longer.
+- **Docker / Compose:** `docker stop -t`, `docker run --stop-timeout`, or Compose's `stop_grace_period` (default 10 s) — same SIGKILL fallback, and too short for any turn: set it to your longest turn plus 60 s.
 
-Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes).
+Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to at least your longest turn plus 60 s (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes): the drain needs the longest turn, and what follows it needs up to about 50 s on a node that has lost both its stores (see "A member that has lost both stores" above, and [Probes](../guides/deployment.md#probes)).
 
 **Force stop (second signal).** The first signal starts the drain and
 *hands the signals back to the operating system*, so a second SIGINT or

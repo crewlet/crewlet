@@ -85,6 +85,12 @@ type segmentCharge struct {
 	// carry is what a parked segment charged to nothing hands on to the
 	// segment that finishes the turn; nil otherwise.
 	carry *execstate.Uncharged
+	// soFar is what a parked segment hands on of the turn's own
+	// measurement, charged or not ([turnTelemetry.measured]); nil on a
+	// segment that did not park, and on one of a turn whose earlier
+	// segments a build before the measurement parked
+	// ([turnTelemetry.measuredWhole]).
+	soFar *execstate.TurnSoFar
 	// aux is the segment's attribution for the auxiliary calls its charge
 	// makes — the card's rewrite — with no tally: [Engine.withCards] gives
 	// the card one of its own, since the segment's was summed already.
@@ -175,6 +181,14 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	cardUse.Tally, cardUse.Budget = nil, nil
 	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed, t.rebasedTo),
 		aux: cardUse, ended: ended}
+	if res.Suspended && t.measuredWhole() {
+		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on — but only by a
+		// turn that knows its whole past: a measurement of a turn whose
+		// first segment nobody measured would be read by the segment that
+		// ends it as the whole turn ([turnTelemetry.measuredWhole]).
+		soFar := t.measured(spend, ended)
+		charge.soFar = &soFar
+	}
 	if item == nil {
 		if res.Suspended {
 			charge.carry = unchargedOf(total)

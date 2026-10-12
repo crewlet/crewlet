@@ -28,6 +28,31 @@ applier writes every node's days into its replicated estate, so any node
 answers for the fleet — including for a node that has gone, and a node that
 joins later replays the days from the stream alone.
 
+**A node's day is the rows it keeps.** A data node also writes the custody
+batches of nodes without `data` (ADR-0025), and until a batch's claim settles
+two data nodes can hold it — so a day counts only what its node keeps, and the
+fleet's sum holds every row once. A turn's figures are read off the ONE record
+that ends it, which states the whole turn — its reviews, its send-backs, every
+segment's duration — because its other records reach the data nodes a custody
+batch at a time, kept by whichever node won each claim, and a resumed turn
+leaves its first segment on another node: summed from what each node held,
+the turn was counted short on one node and nowhere on the rest. So a row
+changes only the day it falls on — but for a turn whose end states no tally —
+one a build before that record ended, or one this build ended after resuming a
+park such a build made — which is read off its records as it always was — and
+a batch settled as kept changes the days its rows fall on, however far back;
+the node derives every such day again, except one older than its event log is
+read back, which keeps the value it was last published at rather than be
+replaced by a derivation of rows partly swept. A day derived again keeps the instants it
+was first cut on, so a moved company clock never moves rows between days
+already published, and no day — today and yesterday included — is ever
+published below what the fleet holds of it: inside the read floor a day only
+grows, so a smaller derivation proves the node's own log lost rows — a
+restore, an emptied store, a parked turn's earliest records swept — rather
+than that the day shrank, and what goes out is the derivation JOINED with the
+fleet's record, every figure at the larger of the two, which on an ordinary
+day is the derivation itself. `internal/usage`'s publisher says how.
+
 **The horizon is the applier's.** A record for day D deletes every row older
 than D minus 181 days in the transaction that writes D, which is a pure function
 of the record — so the history ages out identically on every node and nothing

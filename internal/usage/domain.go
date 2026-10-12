@@ -45,7 +45,14 @@ const (
 	// the cadence the live budget meters are pushed on: a spend figure that
 	// trailed the meter above it by more than one of the meter's own
 	// refreshes would read as two different numbers. A tick that finds
-	// nothing moved costs two indexed counts per day it looks at.
+	// nothing moved costs one read of the re-derive marks, two reads of the
+	// recorded day cuts (usage_day_windows: the cut now falls in, and
+	// yesterday's), and, for each of the two days it looks at, two counts:
+	// one seeks the day's window per event type and probes the in-flight
+	// custody identities' key once per row it counts, the other seeks the
+	// dispatch ledger's window. A day that moved adds its derivation, and
+	// each object whose derivation changed one read of what the fleet holds
+	// of it ([Applied]) beside its publish.
 	FlushInterval = 15 * time.Second
 
 	// ReadsPerSeatDay is how many (page, via) entries one seat-day record

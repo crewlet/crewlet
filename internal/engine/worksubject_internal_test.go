@@ -346,6 +346,71 @@ func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 	}
 }
 
+// AND WHAT THE SEGMENTS BEFORE A PARK MEASURED, read back off the parked
+// conversation by the real resume path: the record ending the resumed turn
+// states at least what they carried. Read back by hand, a resume that dropped
+// the field would still pass every case built on its telemetry.
+//
+// Mutation: stop the resume reading State.SoFar, and this goes red.
+func TestTheMeasurementBeforeAParkCountsAtTheEnd(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	carried := execstate.TurnSoFar{DurationMS: 60_000, Reviews: 2, SentBack: 1, Unaccepted: 1}
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3},
+		State: execstate.State{SoFar: &carried},
+		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+			Org: company.Org},
+		Answer:  "done",
+		Trigger: chatTrigger("D0ANA"),
+	}); err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	done := only[*types.TurnCompleted](t, p, "turn_completed")
+	if done.Turn == nil || done.Turn.DurationMS < carried.DurationMS ||
+		done.Turn.Reviews < carried.Reviews || done.Turn.SentBack < carried.SentBack ||
+		done.Turn.Unaccepted < carried.Unaccepted {
+		t.Errorf("the record ending a resumed turn states %+v, want at least the %+v "+
+			"its parked segments measured", done.Turn, carried)
+	}
+}
+
+// A RESUMED TURN WHOSE PARK NOBODY MEASURED STATES NO TALLY, through the real
+// resume path.
+//
+// A build before the tally parked it, so its conversation carries no `so_far`
+// and what its first segment ran is unknown. Stated from this segment alone,
+// the tally would be read as the whole turn — short of the first segment's span
+// and reviews for good — so the end states none and the usage reader sums the
+// turn from its records, the first segment's included.
+//
+// Mutation: state the tally on every end that is not a suspension, and this
+// goes red.
+func TestAResumeOfAnUnmeasuredParkStatesNoTally(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3},
+		State: execstate.State{},
+		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+			Org: company.Org},
+		Answer:  "done",
+		Trigger: chatTrigger("D0ANA"),
+	}); err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	if done := only[*types.TurnCompleted](t, p, "turn_completed"); done.Turn != nil {
+		t.Errorf("the record ending a turn an earlier build parked states %+v — a tally "+
+			"of the last segment alone, read as the whole turn", done.Turn)
+	}
+}
+
 // writingDetach is run_sandbox for a turn that wrote a task in the same call it
 // detached from — what the real tools report through the turn's write set.
 type writingDetach struct{ suspendingTool }
@@ -414,6 +479,14 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if state.Uncharged == nil || state.Uncharged.Turns != 1 {
 		t.Errorf("the suspension hands on %+v, want the parked segment's spend "+
 			"and its one turn", state.Uncharged)
+	}
+	// AND WHAT THE TURN HAS MEASURED OF ITSELF, for the record that ends it to
+	// state the whole turn (types.TurnTally) — the usage domain reads a turn's
+	// span and reviews off that one record. Presence, not a span: a fake
+	// segment can end inside the millisecond it started.
+	if state.SoFar == nil {
+		t.Errorf("the suspension hands on no measurement of the turn so far, " +
+			"so the record ending it states only its last segment")
 	}
 }
 

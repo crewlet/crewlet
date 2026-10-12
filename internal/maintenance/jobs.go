@@ -35,6 +35,13 @@ const (
 	// swept table a human actually reads — the dashboard's schedules view
 	// — and a week of scheduled runs is both a useful history and a
 	// trivial number of rows.
+	//
+	// internal/usage READS IT TOO (the engine hands it to the usage
+	// publisher as PublisherDeps.FireHistory): a day older than this is
+	// derived again without its schedules, since the sweep may have cut
+	// into its fires and a short schedule-day would replace a whole one on
+	// every node. Shortening it shortens how far back a re-derived day
+	// keeps its schedules.
 	ScheduledRunRetention = 7 * 24 * time.Hour
 
 	// ConversationRetention is how long a seat remembers what it already

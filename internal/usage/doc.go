@@ -25,6 +25,39 @@
 // keeper's day, under the keeper's node id — and in no other data node's, since
 // the custody claim gives each batch exactly one keeper.
 //
+// # A day is the rows a node KEEPS, and every day those change is published
+//
+// The claim decides the keeper only after a batch is written, so until it
+// settles two data nodes can hold one batch's rows. A day therefore counts the
+// rows its node keeps and never a batch in flight ([store.DB.UsageForDay]) —
+// counted on both nodes, every reader summing the fleet would bill the batch
+// twice, and once the losing copy was deleted the double count would stay in
+// the history of any day nobody derived again. Every count of a day is read
+// off rows inside it — a turn's off the one record that ends it, which states
+// the whole turn (internal/events/types' TurnTally), and only a turn whose end
+// states none (ended by a build before the tally, or resumed from such a
+// build's park) is read off its records, which reach back to wherever the turn
+// started — so settled as kept, a batch's rows count on the days they fall on
+// and on no other, which can be days back; the settle marks the oldest in its
+// own transaction and the [Publisher] derives every day from it again, never
+// one older than the event log is read back ([store.EventHistory]), whose rows
+// may already be swept. A day derived again keeps the instants it was first
+// cut on, whatever the company's clock does since, and NO day — today and
+// yesterday included — is ever published below what the fleet already holds
+// of it: what goes out is the derivation joined with the fleet's record, the
+// larger of the two in every figure ([Join]), because inside the read floor a
+// day only grows and a smaller derivation means this node's log lost rows that
+// record counted (a restore, an emptied store, a turn whose earliest records
+// were swept), not that the day shrank. What the publisher
+// still owes on its own account — the day before the newest it fingerprinted,
+// or an older one it could not settle — is a watermark in the node's store,
+// which its next start derives every day from again: the day a node stopped
+// in reaches the fleet when it comes back inside that read floor, a day older
+// than the dispatch ledger's retention without its schedules. And an orderly
+// stop flushes today and yesterday once more, so a node stopped and never
+// started again leaves its last day whole; one that crashed and never returns
+// loses up to a tick of it.
+//
 // # Why the node is part of the identity
 //
 // A node can only derive what its own log holds. Putting the node in the
@@ -46,7 +79,9 @@
 // somebody is moved to another seat. A principal bound to no seat charges the
 // company's day alone and no person's. A seat's handle rides its record as a
 // LABEL only, for a seat the organisation no longer holds; a reader resolves
-// a seat's id to its handle.
+// a seat's id to its handle. A day derived again once the seat has left the
+// chart keeps the handle the fleet's record already states wherever its own
+// rows name nobody ([Join]).
 //
 // # What a record holds
 //

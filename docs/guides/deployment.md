@@ -1077,8 +1077,24 @@ exits once its watched duty stalls for a seat lease TTL (45 s), so a liveness
 failure is the backstop for a process that cannot even do that. Readiness on a
 node without `ingress` is what a rolling update waits on before it replaces
 the next pod, so a satellite that cannot reach its fleet holds the rollout
-rather than letting it take the next one down too. Give every pod a
-`terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+rather than letting it take the next one down too.
+
+Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
+plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
+countdown before the hook runs, so the sleep is spent out of the same grace.
+The drain waits for the turns already running and has no bound of the engine's
+own, so the longest turn is the part of the grace it needs; what follows the
+drain — giving its leases back, closing the HTTP listeners (five seconds each,
+which an open sandbox bridge session spends whole), flushing the auxiliary
+spend and the day's usage, closing the store — takes milliseconds on a healthy
+fleet but up to about 46 s on a member that has lost both its event stream and
+its coordination store, and about 50 s on a node without `data`, each step
+waiting out its own bound (see
+[Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)). A grace of the longest turn
+alone kills such a member before its store closes; the extra 60 s covers that
+with room for the process to exit. A deployment whose turns finish in seconds
+still needs 60 s, not Kubernetes' 30 s default — and an `ingress` pod with the
+`preStop` sleep described above needs 60 s plus that sleep.
 
 A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
 needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
@@ -1390,7 +1406,12 @@ one** of them keeps each one:
 
 That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
-kept would bill a stateless node's spend twice.
+kept would bill a stateless node's spend twice. And a node's day counts only
+what it keeps: a batch it has written and not settled counts in none of its
+days, and one it settles as kept is counted from then on — on the day its
+rows fall, which the node publishes again however far back that is, within
+the event log's 30-day read floor
+([Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day)).
 
 Until the node that lost the claim has settled its copy — at once when its
 claim is answered, and otherwise at its next pass, a minute later or as soon

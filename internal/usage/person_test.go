@@ -165,9 +165,10 @@ func TestAPersonsDayIsPublishedWithItsDay(t *testing.T) {
 
 	log := &loopback{t: t, into: own, node: "node-a"}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: own, Log: log, NodeID: "node-a",
-		Zone: func() *time.Location { return santiago },
-		Now:  func() time.Time { return at },
+		Store: own, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return at },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatal(err)

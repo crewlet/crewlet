@@ -493,6 +493,20 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   one-directory, one-instant copy is the paved path. On an external NATS
   cluster, `nats stream backup` / `nats account backup` against the cluster
   are the equivalent, taken across the streams and KV buckets as one session.
+- **A node's usage history never shrinks under a restore.** A backup copies
+  the store before the streams, and a fleet restore puts one node's store
+  beside another node's streams, so a restored node's event log can stop
+  before records its usage publisher sent after that copy — and its first
+  start derives again the days its restored watermark names, most often today
+  or yesterday. No day, today and yesterday included, is published below what
+  the fleet already holds of it: each figure of the day goes out at the larger
+  of what the node's log now counts and what the fleet held, the node logs
+  `usage_rederive_short` once, and no day is derived at all until the node's
+  usage applier has replayed the usage log to its end. A node started with an
+  empty store gets the same protection, for the day it is running in and for
+  a day a redelivered custody batch names. What the restored log lost is not
+  recovered: a figure the fleet held more of counts the node's new rows only
+  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
 - **Config converges on its own.** The current revision's payload rides the
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any

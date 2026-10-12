@@ -727,9 +727,78 @@ an apply replaces the object's rows.
 
 A day is cut on the company's clock (`timezone`). A node re-derives today and
 yesterday on every tick, so the turn that ended a second before midnight
-reaches the fleet, and on every start, so a day a node was down across still
-arrives. History older than 181 days leaves in the same transaction that
-applies the day that makes it old, on every data node alike — there is no sweep.
+reaches the fleet. What it has not yet published whole — the day before the
+newest it fingerprinted, or an older day a tick could not settle — it keeps as
+a watermark in its own store (`usage_watermark`), and every start re-derives
+each day from that one. So the tail of the day a node stopped in, written
+after its last tick, reaches the fleet when it comes back, if that day began
+less than the event log's 30-day read floor before the node derives it again (a
+day that began more than 30 days back keeps the value it was last published
+at, even when the node was down for less than 30 days); a day more than 7 days back — the
+dispatch ledger's retention — is derived without its schedules, which the
+ledger may already have swept. An orderly stop also flushes today and
+yesterday once more on its way out, after every writer of a usage row on the
+node has stopped, so a node stopped in an orderly way and never started again
+leaves its last day whole. A node that crashes and never comes back loses up to
+one 15-second tick of it.
+
+A node's day counts the rows it **keeps**. A [custody](deployment.md#custody-the-rows-of-a-node-without-data)
+batch a data node has written but not yet settled may be another data node's
+to keep, so no day counts it until it settles — counted on both, every reader
+summing the fleet would bill a stateless node's spend twice. Every count of a
+day is read off rows inside it — a turn's reviews, send-backs and duration off
+the one record that ends the turn, which states the whole turn however its
+other records were spread over the data nodes (a turn whose end states no
+tally — one a build before that record ended, or one resumed from a park such a
+build made — is read off its records, as that build read it) — so once a batch
+settles as kept its rows count on the days they fall on and on no other, which
+can be days back after a long partition. The settle records the oldest of them
+(the node's own `usage_rederive` rows) and the next tick derives every day from
+it again. Never a day older than the event log's 30-day read floor: its rows
+may already be swept, and a short derivation would replace the whole day on
+every node with less, so such a day keeps the value it was last published at
+and the node logs `usage_rederive_past_floor` once.
+
+A day derived again is cut on the instants it was first cut on (the node's
+`usage_day_windows`), so moving the company's `timezone` never moves rows
+between days already published: the day the clock moves on is longer or
+shorter by the move instead. For the hours between the old clock's midnight
+and the new one's, a node's usage day label is not the company's local date.
+Moved west, those hours belong to the first day cut on the new clock, which
+starts where the old clock's last day ended, so the label runs one ahead. A
+move of more than a day makes it two ahead for its first hours, and makes that
+first day more than two days long. Moved east, those hours stay on the old
+clock's last day, so the label runs one behind. A move of more than a day
+leaves the date in between with no instants at all: the node publishes no
+record for it, and the label runs two behind until the old clock's day ends. A
+chart that buckets by label shows the node's spend for those hours on the
+neighbouring date.
+
+And no day — today and yesterday included — is ever published **below** what
+the fleet already holds of it. Inside the read floor a day only grows, so a
+derivation that comes out smaller in any figure — fewer turns, failed turns,
+reviews, send-backs or long turns, fewer tokens, calls, page reads or fires —
+means the node's own event log lost rows that record counted: a store
+[restored](backup.md) beside a usage log copied later, one started empty, or a
+turn whose end states no tally and whose earliest records the event log's sweep
+removed (a parked turn's records reach back to wherever it started). So what a
+node publishes is its derivation **joined** with the fleet's record: every
+figure at the larger of the two. On an ordinary day that is the derivation
+itself; after a loss the figures the fleet held more of stay at the fleet's
+while every other keeps moving, and the node logs `usage_rederive_short` once.
+A seat's handle and role are the derivation's wherever it states them and the
+fleet's where it does not, so a seat since removed from the org chart keeps
+its name in the history even where this node's rows of the day — spend alone,
+which carries no handle — name nobody. A handle never changes, so the fleet's
+is never another seat's, and a label carried this way is not a short
+derivation.
+A join cannot recover what was lost: a figure the fleet held more of counts the
+node's new rows only once its own count passes the fleet's. The node derives no
+day at all until its usage applier has replayed the log to its end, so the
+rows it joins with are the fleet's and not a restore's.
+
+History older than 181 days leaves in the same transaction that applies the
+day that makes it old, on every data node alike — there is no sweep.
 The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).
 
 ## The six capacity ceilings

@@ -140,6 +140,13 @@ type turnTelemetry struct {
 	jobEngine           sandbox.EngineSpend
 	uncharged           *execstate.Uncharged
 
+	// soFar is what the turn's segments before this one measured — their
+	// spans and their reviews — carried on the parked conversation, nil on a
+	// turn that has not parked and on a resumed one whose park nobody
+	// measured ([turnTelemetry.measuredWhole]). The record that ends the turn
+	// states it whole ([turnTelemetry.measured]).
+	soFar *execstate.TurnSoFar
+
 	// auxSpent is what this segment's in-turn auxiliary calls have cost —
 	// its turn-start context, every rewrite its ledgers, its judge's
 	// evidence and its tools asked for — shared with every tool call and
@@ -565,8 +572,58 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
 	}
+	if !res.Suspended && t.measuredWhole() {
+		// THE WHOLE TURN, on the one record that ends it: what every
+		// segment measured, this one included, and whether it failed — the
+		// figures the usage domain reads a turn's statistics off, which
+		// summed from the turn's records came out short wherever those
+		// records were not all on one node (types.TurnTally). Only a turn
+		// that knows every segment before this one states it: one whose
+		// earlier segments nobody measured — parked by a build before the
+		// tally — states nothing, and the usage domain reads it off its
+		// records as it read every turn before ([turnTelemetry.measuredWhole]).
+		whole := t.measured(spend, ended)
+		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
+			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted}
+	}
 	e.publishEvent(ctx, events.New(completed, t.trace), t.role)
 	e.publishReflectionDue(ctx, completed, t)
+}
+
+// measuredWhole reports whether this segment knows the whole turn before it: a
+// first segment does, and a resumed one only if the conversation it resumed
+// carried what the segments before it measured. A build that did not measure
+// parked it otherwise, so the earlier segments are UNKNOWN rather than zero —
+// and a tally stating only what came after the park would be read as the whole
+// turn, short of its first segment's span and reviews for good. Such a turn
+// states no tally on its end and hands none on at a park
+// ([turnTelemetry.chargeFor]), so every later segment knows it too.
+//
+// The nil is a fact rather than an absence of one: every park on this build
+// hands on a measurement ([segmentCharge.soFar]), a zero one included, which
+// the parked row carries as `"so_far":{}`.
+func (t turnTelemetry) measuredWhole() bool { return !t.resumed || t.soFar != nil }
+
+// measured is the turn's own measurement through the end of this segment: what
+// the segments before it carried on the parked conversation, and this one's
+// span — its start to its end, the same arithmetic as the segment's own
+// `duration_ms` — and its reviews, off the runner's tally of its phase
+// records. A segment that parks hands it on ([segmentCharge.soFar]); the one
+// that ends the turn states it ([Engine.publishTurnCompleted]).
+func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.TurnSoFar {
+	out := execstate.TurnSoFar{
+		DurationMS: int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
+		Reviews:    spend.Reviews,
+		SentBack:   spend.SentBack,
+		Unaccepted: spend.Unaccepted,
+	}
+	if t.soFar != nil {
+		out.DurationMS += t.soFar.DurationMS
+		out.Reviews += t.soFar.Reviews
+		out.SentBack += t.soFar.SentBack
+		out.Unaccepted += t.soFar.Unaccepted
+	}
+	return out
 }
 
 // publishReflectionDue puts a finished turn in front of reflection ON THE
@@ -823,6 +880,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	t.jobInput, t.jobOutput = in.InputTokens, in.OutputTokens
 	t.jobEngine = in.Engine
 	t.uncharged = in.State.Uncharged
+	t.soFar = in.State.SoFar
 	// Re-derived from the org, so a resumed turn names its seat's role as
 	// the running company calls it now.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {
