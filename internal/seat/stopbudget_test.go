@@ -47,31 +47,56 @@ func TestAStopsStepsShareOneAllowance(t *testing.T) {
 // and its last sits the drain's unbounded wait for running turns, which must
 // spend none of it; and steps in flight together are charged once for the
 // time they overlap, since a node's seats are released together.
+//
+// Driven on instants of its own rather than the wall clock, so what a step
+// was charged is an exact figure: read across a sleep it is bounded only from
+// below, and on a loaded runner neither a fixed tolerance nor any bound read
+// off clocks around the steps tells one charge for an overlap from one per
+// step every time. [StopStep] is the same two calls on time.Now, which
+// [TestAStopsStepsShareOneAllowance] holds it to.
 func TestTheAllowanceIsChargedOnlyWhileAStepRuns(t *testing.T) {
 	t.Parallel()
 	const total = 2 * time.Second
-	ctx := WithStopBudget(t.Context(), NewStopBudget(total))
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
+	budget := NewStopBudget(total)
 
-	_, quick := StopStep(ctx)
-	quick()
-	time.Sleep(300 * time.Millisecond) // the drain's wait, between steps
-	if left := remaining(ctx, t); left < total-200*time.Millisecond {
-		t.Fatalf("%v left after a step that took nothing and a wait between "+
-			"steps, want nearly all of %v: the wait was charged", left, total)
+	// A step of 100ms, then the drain's wait of 300ms before the next one.
+	budget.begin(at(0))
+	budget.end(at(100))
+	deadline := budget.begin(at(400))
+	if got := spent(budget); got != 100*time.Millisecond {
+		t.Fatalf("%v charged after a 100ms step and a 300ms wait between steps, "+
+			"want 100ms: the wait was charged", got)
 	}
+	if want := at(400).Add(total - 100*time.Millisecond); !deadline.Equal(want) {
+		t.Fatalf("a step begun after 100ms was spent may run until %v, want %v",
+			deadline.Sub(start), want.Sub(start))
+	}
+	budget.end(at(400))
 
-	_, a := StopStep(ctx)
-	_, b := StopStep(ctx)
-	time.Sleep(300 * time.Millisecond)
-	a()
-	b()
-	// About 300ms charged for the overlap, never 600ms for two steps — and
-	// never less than the overlap itself, which a timer cannot shorten.
-	left := remaining(ctx, t)
-	if left > total-300*time.Millisecond || left < total-550*time.Millisecond {
-		t.Fatalf("%v left after two steps overlapping for 300ms, want about %v: "+
-			"the overlap was charged once per step", left, total-300*time.Millisecond)
+	// Two steps that overlap: one runs 500..900, the other 600..1000. Both
+	// together run for 500ms; charged per step it would be 800ms.
+	budget.begin(at(500))
+	deadline = budget.begin(at(600))
+	if want := at(600).Add(total - 200*time.Millisecond); !deadline.Equal(want) {
+		t.Fatalf("a step begun while another ran may run until %v, want %v: "+
+			"the running step's time so far is what is left",
+			deadline.Sub(start), want.Sub(start))
 	}
+	budget.end(at(900))
+	budget.end(at(1000))
+	if got := spent(budget); got != 600*time.Millisecond {
+		t.Fatalf("%v charged in all after a 100ms step and two steps overlapping across "+
+			"500ms, want 600ms: an overlap is charged once, not once per step", got)
+	}
+}
+
+// spent is what b has charged so far.
+func spent(b *StopBudget) time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
 }
 
 // A STEP OUTSIDE A STOP KEEPS WHATEVER BOUND ITS CALLER GAVE IT: a seat handed
