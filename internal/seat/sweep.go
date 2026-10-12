@@ -545,6 +545,14 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 		return false, "", false // re-claimed under us while we waited
 	}
 
+	// BEFORE THE CALL, as a renew and the presence claim take theirs: the
+	// store counts the lease's TTL from the moment it grants it, somewhere
+	// inside this call, so a stamp read once a slow store has answered is
+	// later than the store's by the round trip — and turn admission
+	// ([Host.MayStart]), [Host.Provable] and the unreachable-store grace
+	// would all credit this node with that much time it never held, on the
+	// one stamp nothing has renewed since.
+	asked := h.now()
 	lease, refused, err := h.backend.TryAcquire(ctx, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: h.owner,
 		TTL:   h.ttl,
@@ -583,7 +591,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 		h.giveBackUnattached(ctx, handle, *lease)
 		return false, "", true
 	}
-	h.held[handle] = &heldSeat{lease: *lease, renewedAt: h.now(), establishing: true}
+	h.held[handle] = &heldSeat{lease: *lease, renewedAt: asked, establishing: true}
 	h.mu.Unlock()
 	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 

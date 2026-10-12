@@ -307,3 +307,54 @@ func TestEveryRoleSaysWhatAFleetWithoutItLoses(t *testing.T) {
 		}
 	}
 }
+
+// A CLAIM COUNTS ITS LEASE FROM BEFORE IT ASKED FOR IT, as a renew and the
+// presence claim count theirs.
+//
+// The store counts a lease's TTL from the moment it grants it, inside the
+// acquire, and until the first renew replaces it the host's own stamp is what
+// turn admission and the unreachable-store grace measure from. Stamped once
+// the call had returned, it was later than the store's by the round trip, so
+// the host believed it held the seat that much longer than the store did —
+// and admitted turns into time a peer may already own. Here the store's
+// answer arrives three seconds after it granted the lease.
+func TestAClaimCountsItsLeaseFromBeforeItAskedForIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), TTL: 30 * time.Second, HeartbeatInterval: 5 * time.Second,
+		Backend: &lateAnswers{Backend: f.store, clock: f.clock, late: 3 * time.Second},
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "ceo")
+	wantAdmits(t, h, "ceo", true)
+
+	// One heartbeat and a second after the store granted the lease, and
+	// only three seconds after this node heard that it had.
+	f.clock.Advance(3 * time.Second)
+	if _, ok := h.MayStart("ceo"); ok {
+		t.Error("a turn is admitted more than a heartbeat after the store granted " +
+			"the seat: the claim stamped its lease from when the store's answer " +
+			"arrived, not from when it was asked for")
+	}
+}
+
+// lateAnswers is the lease store with every seat acquire answered late: the
+// store grants the lease at once, by its own clock, and the answer reaches the
+// host once the shared clock has moved on by late.
+type lateAnswers struct {
+	coord.Backend
+	clock *fakeClock
+	late  time.Duration
+}
+
+func (s *lateAnswers) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	lease, refused, err := s.Backend.TryAcquire(ctx, resource, opts)
+	if coord.IsSeatResource(resource) {
+		s.clock.Advance(s.late)
+	}
+	return lease, refused, err
+}
