@@ -150,9 +150,23 @@ export const DIRECTORY_READ: RestOptions = { pollMs: 60_000, refetchOnFocus: tru
  */
 const directoryWrites = new EventTarget();
 
-/** Tell every seat listing on the page that the directory may have moved. */
+/** Tell every directory reading on the page that the directory may have moved. */
 export function directoryMoved(): void {
   directoryWrites.dispatchEvent(new Event("moved"));
+}
+
+/**
+ * Run `heard` whenever a write anywhere on the page may have moved the
+ * directory ([directoryMoved]) — while `enabled`. People & access and the
+ * person peek beside it are two trees, and a removal made in the peek left
+ * the list it was opened from naming the person until its next poll.
+ */
+export function useDirectoryMoved(heard: () => void, enabled = true): void {
+  useEffect(() => {
+    if (!enabled) return;
+    directoryWrites.addEventListener("moved", heard);
+    return () => directoryWrites.removeEventListener("moved", heard);
+  }, [enabled, heard]);
 }
 
 /** What each grant opens, in a line — beside the grant's own name, never instead of it. */
@@ -368,12 +382,10 @@ export function useHumanSeats(enabled: boolean): RestResult<HumanSeat[]> {
     DIRECTORY_READ,
   );
   const { reload } = seats;
-  useEffect(() => {
-    if (!enabled) return;
-    const moved = () => void reload({ quiet: true });
-    directoryWrites.addEventListener("moved", moved);
-    return () => directoryWrites.removeEventListener("moved", moved);
-  }, [enabled, reload]);
+  useDirectoryMoved(
+    useCallback(() => void reload({ quiet: true }), [reload]),
+    enabled,
+  );
   return seats;
 }
 

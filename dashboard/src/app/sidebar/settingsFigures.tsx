@@ -10,10 +10,10 @@
  * would ask the engine three questions on a timer for the whole life of every
  * tab, on screens that draw none of the answers, and ask a reader without the
  * grants three refusals on the same timer. So each query is ENABLED only while
- * the Settings column is on screen and the reader holds the grant of the
- * section its figure is drawn beside (`nav.ts` — Nodes and Backups take
- * `fleet:operate`, Integrations `config:read`, which are the answers' own);
- * everywhere else the hook asks nothing.
+ * the Settings column is on screen and the section its figure is drawn beside
+ * is open to the reader (`nav.ts`'s `sectionOpen` — Nodes and Backups take
+ * `fleet:operate`, Integrations `config:read`, which are the answers' own,
+ * beside the company's `state:read`); everywhere else the hook asks nothing.
  *
  * # What each figure is
  *
@@ -46,7 +46,7 @@ import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { grantsOpen, workspaceRow } from "../nav.ts";
+import { sectionOpen, workspaceRow } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
 export interface SectionFigure {
@@ -150,9 +150,15 @@ export function settingsFigures({
   return figures;
 }
 
-/** Whether a reader holding `grants` may open the Settings section `key`. */
+/**
+ * Whether a reader holding `grants` may open the Settings section `key` — by
+ * the one rule the column draws its locks by (`sectionOpen`), so a figure is
+ * never asked for beside a section the column locks: each of these answers is
+ * a socket question, and a reader without `state:read` has no socket to ask.
+ */
 function opens(key: string, grants: readonly string[]): boolean {
-  return grantsOpen(workspaceRow("settings")?.sections.find((s) => s.key === key)?.grants, grants);
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, grants);
 }
 
 /**
@@ -167,7 +173,7 @@ export function useSettingsSidebar({
   published,
 }: {
   here: boolean;
-  /** What the viewer holds, as the engine reports it. */
+  /** What the reader holds — the frame's `useHeldGrants`, empty while nobody has said. */
   grants: readonly string[];
   health: EngineHealth | null | undefined;
   /** The `fleet` answer a screen on the page already polls — see

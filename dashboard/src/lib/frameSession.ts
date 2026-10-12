@@ -38,7 +38,7 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import type { Grant } from "~/app/nav.ts";
+import { COMPANY_GRANT, type Grant } from "~/app/nav.ts";
 import { takeSession } from "./session.ts";
 import { useRest, type RestResult } from "./useRest.ts";
 import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
@@ -46,9 +46,10 @@ import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
 /**
  * The grant the live socket needs — the engine's `iam.GrantStateRead`, which
  * `internal/api/stream` refuses a handshake without — and so the grant every
- * screen but the reader's Account needs.
+ * screen but the reader's own needs: `nav.ts`'s [COMPANY_GRANT], the one rule
+ * every lock the navigation draws is decided by, named here for the socket.
  */
-export const LIVE_VIEW_GRANT: Grant = "state:read";
+export const LIVE_VIEW_GRANT: Grant = COMPANY_GRANT;
 
 /**
  * The refusal a session without [LIVE_VIEW_GRANT] is recorded as in the store

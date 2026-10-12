@@ -181,4 +181,32 @@ describe("what the card is", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Access refused")).toBeTruthy();
   });
+
+  // A STATEMENT WEARS NOTHING A CONTROL WEARS. "No access yet" drew the
+  // chevron (and the pointer and the hover border, frame.css) on a card that
+  // did nothing and could not be focused. The CONTROL is the two pressable
+  // forms, which keep it. Mutation: draw the chevron on every form and the
+  // statements go red.
+  test("the chevron is on a card that can be pressed, and on no statement", () => {
+    for (const statement of [
+      read({ noAccess: true }),
+      read({ accessRefused: "seat_unavailable" }),
+    ]) {
+      expect(statement.press).toBe("none");
+      const { container, unmount } = render(<HealthCard reading={statement} onSignIn={() => {}} />);
+      const card = container.querySelector(".health-card")!;
+      expect(card.tagName).toBe("DIV");
+      expect(card.querySelector(".health-card-go")).toBeNull();
+      expect(card.hasAttribute("tabindex")).toBe(false);
+      expect(card.querySelector("a, button, [tabindex]")).toBeNull();
+      unmount();
+    }
+    for (const pressable of [read(), read({ authRejected: true })]) {
+      const { container, unmount } = render(<HealthCard reading={pressable} onSignIn={() => {}} />);
+      const card = container.querySelector(".health-card")!;
+      expect(["A", "BUTTON"]).toContain(card.tagName);
+      expect(card.querySelector(".health-card-go")).not.toBeNull();
+      unmount();
+    }
+  });
 });

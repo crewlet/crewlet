@@ -95,6 +95,7 @@ import {
   awaitingPerson,
   handleLabel,
   indexOrg,
+  isOwnSeat,
   nameOfIn,
   statusOf,
   seatPath,
@@ -114,7 +115,7 @@ import {
 } from "~/components/people.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { HoldWrites, menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -125,7 +126,6 @@ import {
   HUMAN_TABS,
   TAB_LABELS,
   findSeat,
-  isOwnSeat,
   liveRow,
   pillWord,
   seatRun,
@@ -142,7 +142,6 @@ const WORK_PAGE = 50;
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
-  const viewer = useViewer();
   const org = useOrg();
   const agents = useAgents();
   const now = useNow();
@@ -203,7 +202,9 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE TURN TO WATCH, while the engine says the seat is working on one with
   // an id: a working seat a frame ahead of its turn id has nothing to watch.
   const watching = !human && activityOf(agent) === "working" ? turnIdOf(agent) : "";
-  const messageAccess = useWriteAccess("create_work_item");
+  // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
+  // held in the words the inline control is.
+  const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu(
@@ -308,18 +309,9 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
         <span className={paused ? "page-action-folds" : undefined}>
-          {/* NOT TO YOURSELF: a message files an ask of the seat, and on
-              your own seat that is a question only you could answer. Held,
-              never hidden, as every write is. */}
-          <HoldWrites
-            reason={
-              isOwnSeat(viewer, seat.handle)
-                ? "This is your own seat — a message here would ask yourself."
-                : null
-            }
-          >
-            <MessageSeatButton handle={seat.handle} />
-          </HoldWrites>
+          {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+              everywhere the button is drawn. */}
+          <MessageSeatButton handle={seat.handle} />
         </span>
         <span className="page-action-folds">
           <AssignToSeatButton

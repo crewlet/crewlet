@@ -47,6 +47,7 @@
 
 import { createContext, createElement, useContext, type ReactNode } from "react";
 import { useLeadScope, type LeadScope } from "./leadScope.ts";
+import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
@@ -154,6 +155,43 @@ export function useWriteAccess(tool: ActionTool): WriteAccess {
  */
 export function menuHold(access: WriteAccess): { disabled?: boolean; description?: string } {
   return access.can ? {} : { disabled: true, description: access.reason };
+}
+
+// ---------------------------------------------------------------------------
+// Messaging a seat
+// ---------------------------------------------------------------------------
+
+/** The sentence Message is held with on the reader's own seat. */
+export const OWN_SEAT_MESSAGE = "This is your own seat — a message here would ask yourself.";
+
+/**
+ * Whether this browser may MESSAGE the seat `handle` — file an ask of it — and
+ * why not: the act's own access, HELD on the reader's own seat.
+ *
+ * A message files an ask the seat owes an answer on, and on your own seat that
+ * is a question only you could answer. THE RULE IS THE CONTROL'S, never each
+ * screen's: the seat page wrapped its Message in a hold while the seat peek
+ * drew the same button bare, so a person opening their own seat from the
+ * chart was offered an enabled Message to themselves one press from the page
+ * that refused it. So Message holds itself (`MessageSeatButton`), and a
+ * phone's folded entry for it asks here too and is held in the same words.
+ *
+ * LAST, as every hold is ([writeAccess]): a reader who cannot act at all is
+ * told what they can clear first, and only one who could file is told this.
+ */
+export function messageSeatAccess(
+  access: WriteAccess,
+  viewer: Pick<ViewerState, "handle">,
+  handle: string,
+): WriteAccess {
+  return access.can && isOwnSeat(viewer, handle)
+    ? { can: false, block: "held", reason: OWN_SEAT_MESSAGE }
+    : access;
+}
+
+/** [messageSeatAccess] for this browser now. */
+export function useMessageSeatAccess(handle: string): WriteAccess {
+  return messageSeatAccess(useWriteAccess("create_work_item"), useViewer(), handle);
 }
 
 // ---------------------------------------------------------------------------

@@ -34,18 +34,23 @@
  * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
- * # Settings is never hidden
+ * # A lock goes where the closed thing is, and a row is never hidden
  *
- * It carries a lock while the reader holds none of the grants some of its
- * sections need, and stays: a section that vanished when a grant is absent is
- * indistinguishable from one that does not exist. The lock says how many of
- * its sections are closed to the reader, and its title names the grants that
- * would open them — what a reader would ask somebody for.
+ * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
+ * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
+ * row that vanished when a grant is absent is indistinguishable from one that
+ * does not exist. Its title names what would open it — what a reader would
+ * ask somebody for. A workspace only PART of which is closed is not locked as
+ * a whole: Settings draws its locks per section, in its column. Settings
+ * carried a key for any closed section, so a person holding nothing but
+ * their own Account was told Settings was closed to them — while its first
+ * group, You, needs nothing at all. That group is why the Settings row is
+ * never locked.
  *
- * AND EVERY ROW IS LOCKED, NEVER HIDDEN, for a reader with no access yet — a
- * session without `state:read`, which every workspace reads the company
- * through (`lib/frameSession.ts`). Offered unmarked, each row led to the same
- * refusal panel with nothing beside it saying so.
+ * So for a reader with no access yet — a session without `state:read`, which
+ * every company screen reads the company through (`lib/frameSession.ts`) —
+ * every row but Settings carries the lock: offered unmarked, each led to the
+ * same refusal panel with nothing beside it saying so.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -63,15 +68,15 @@ import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   WORKSPACES,
   grantWords,
-  grantsOpen,
+  workspaceMissing,
   workspaceOf,
   type Grant,
   type WorkspaceRow,
 } from "~/app/nav.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
-import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
+import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
@@ -88,12 +93,18 @@ import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
+import { useKeyHints } from "~/lib/media.ts";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
   const { noAccess } = useFrameSession();
+  // WHAT THE READER HOLDS, for the locks — the frame's one reading of it
+  // (`useHeldGrants`), which Settings' column and the route's own refusal read
+  // too. Null while nobody has said: a lock drawn on no answer claims a
+  // refusal nobody has made.
+  const held = useHeldGrants();
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -103,6 +114,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // one), and the drawer's own Escape is what closes it.
   const shell = useAppShell();
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
+  const keyHints = useKeyHints();
   const org = useOrg();
   const agents = useAgents();
   const health = useEngineHealth();
@@ -180,22 +192,25 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         : {},
   };
 
-  const row = (ws: WorkspaceRow) => (
-    <NavRow
-      key={ws.key}
-      label={
-        noAccess ? (
-          <Locked label={ws.label} needs={[LIVE_VIEW_GRANT]} said="needs a grant you do not hold" />
-        ) : (
-          ws.label
-        )
-      }
-      icon={ws.icon}
-      path={ws.path}
-      current={here === ws.key}
-      {...figures[ws.key]}
-    />
-  );
+  const row = (ws: WorkspaceRow) => {
+    const needs = held === null ? [] : workspaceMissing(ws, held);
+    return (
+      <NavRow
+        key={ws.key}
+        label={
+          needs.length > 0 ? (
+            <Locked label={ws.label} needs={needs} said="needs a grant you do not hold" />
+          ) : (
+            ws.label
+          )
+        }
+        icon={ws.icon}
+        path={ws.path}
+        current={here === ws.key}
+        {...figures[ws.key]}
+      />
+    );
+  };
 
   return (
     <AppShell.Rail
@@ -221,37 +236,9 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       footer={
         <>
           <SidebarNav label="Settings">
-            {WORKSPACES.filter((ws) => ws.place === "foot").map((ws) => {
-              // THE LOCK IS ON THE ROW, NOT INSTEAD OF IT, and only once the
-              // viewer has answered: a lock drawn while the first read is out
-              // claims a refusal nobody has made.
-              const closed = viewer.loading ? [] : closedSections(ws, viewer.grants);
-              return (
-                <NavRow
-                  key={ws.key}
-                  label={
-                    noAccess ? (
-                      <Locked
-                        label={ws.label}
-                        needs={[LIVE_VIEW_GRANT]}
-                        said="needs a grant you do not hold"
-                      />
-                    ) : closed.length > 0 ? (
-                      <Locked
-                        label={ws.label}
-                        needs={neededBy(closed)}
-                        said={`${closed.length} of its sections need a grant you do not hold`}
-                      />
-                    ) : (
-                      ws.label
-                    )
-                  }
-                  icon={ws.icon}
-                  path={ws.path}
-                  current={here === ws.key}
-                />
-              );
-            })}
+            {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
+                note — and drawn by the same rule as every other row's. */}
+            {WORKSPACES.filter((ws) => ws.place === "foot").map(row)}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
             <HealthCard
@@ -278,7 +265,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           title="Search everything"
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
+          // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
+          // phone's drawer "Ctrl + K" named a key nobody there has, and cut
+          // the trigger's own label to "Ask or jump t…".
+          shortcut={
+            keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
+          }
         />
       </div>
       <SidebarNav label="Navigation">
@@ -324,21 +316,6 @@ function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]
       <span className="sr-only">, {said}</span>
     </span>
   );
-}
-
-/** The sections of a workspace a reader holding `grants` holds none of the grants for. */
-function closedSections(row: WorkspaceRow, grants: readonly string[]): Grant[][] {
-  const closed: Grant[][] = [];
-  for (const section of row.sections) {
-    if (section.elsewhere || !section.grants) continue;
-    if (!grantsOpen(section.grants, grants)) closed.push([...section.grants]);
-  }
-  return closed;
-}
-
-/** Every grant that would open one of `closed`, once each. */
-function neededBy(closed: Grant[][]): Grant[] {
-  return [...new Set(closed.flat())];
 }
 
 interface NavRowProps {

@@ -35,7 +35,7 @@ import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { ownName, useViewer } from "~/lib/viewer.ts";
 import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { toWall } from "~/lib/format.ts";
@@ -77,11 +77,11 @@ export function Home() {
   const now = useNow();
   const org = useOrg();
   const viewer = useViewer();
-  // A PERSON NO SEAT NAMES is greeted by their own name, which their
-  // directory row holds and the frame's `GET /auth/session` answered: the
-  // viewer's name is the seat's, so an unbound person was greeted with nothing.
-  const session = useFrameSession().answer;
-  const own = viewer.unbound ? session?.name : undefined;
+  // THE READER IS GREETED BY THEIR OWN NAME, which their directory row holds
+  // and the frame's `GET /auth/session` answered (`ownName`) — never the
+  // seat's, which is the chart's name for a place and often a role: a person
+  // with no name was greeted "Good afternoon, Founder". No name, no name.
+  const own = ownName(useFrameSession().answer);
   const agents = useAgents();
   const engine = useEngineHealth();
   const { connected, authRejected } = useConnection();
@@ -170,7 +170,7 @@ export function Home() {
 
       <header className="home-head">
         <div className="home-head-text">
-          <h2 className="home-greeting">{greeting(now, viewer.name || own || "")}</h2>
+          <h2 className="home-greeting">{greeting(now, own)}</h2>
           <p className="home-status">
             {sentence.map((run, i) =>
               run.strong ? (

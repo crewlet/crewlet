@@ -25,9 +25,16 @@ import {
   FRAMELESS,
   RESERVED_SEGMENTS,
   WORKSPACES,
+  grantsMissing,
+  isSidebarRow,
+  personalPath,
   sectionOf,
+  sectionOpen,
+  workspaceMissing,
   workspaceOf,
+  workspaceOpen,
   workspaceRow,
+  type WorkspaceRow,
 } from "./nav.ts";
 import { keyRow, sequenceWords } from "./keymap.ts";
 import {
@@ -103,6 +110,26 @@ describe("navigation identity", () => {
     // entry a reader has to click to understand.
     for (const d of DESTINATIONS) {
       expect(d.hint.length, d.key).toBeGreaterThan(10);
+    }
+  });
+
+  // THE WORDS A READER LOOKS FOR A SCREEN BY are matched against what they
+  // type, which the palette lowercases; a word in capitals would never match.
+  // One a destination lists twice is noise, and one that IS another
+  // destination's name would offer this screen beside the one so called.
+  test("a destination's keywords are lowercase, its own, and nobody's name", () => {
+    const labels = new Set(DESTINATIONS.map((d) => d.label.toLowerCase()));
+    const seen = DESTINATIONS.filter((d) => (d.keywords ?? []).length > 0);
+    expect(seen.map((d) => d.key)).toContain("account");
+    for (const d of seen) {
+      const words = d.keywords ?? [];
+      expect(new Set(words).size, d.key).toBe(words.length);
+      for (const word of words) {
+        expect(word, d.key).toBe(word.toLowerCase().trim());
+        expect(word.length, d.key).toBeGreaterThan(1);
+        if (word !== d.label.toLowerCase())
+          expect(labels.has(word), `${d.key}: ${word}`).toBe(false);
+      }
     }
   });
 
@@ -211,6 +238,72 @@ describe("the navigation grammar", () => {
     }
     // NOT VACUOUS: the table has sections to hold.
     expect(sections).toBeGreaterThan(25);
+  });
+
+  // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule. The reader's own
+  // sections need nothing; every other needs the company's grant AND one of
+  // its own; a workspace is closed only when nothing in it is open, and one
+  // that names grants of its own needs one of them as well as its section's.
+  test("one rule opens a section, and a workspace only when nothing in it is", () => {
+    const settings = workspaceRow("settings")!;
+    const people = settings.sections.find((s) => s.key === "people")!;
+    expect(sectionOpen(people, ["state:read", "audit:read"])).toBe(true);
+    expect(sectionOpen(people, ["audit:read"]), "the company's grant too").toBe(false);
+    expect(grantsMissing(people, [])).toEqual(["state:read"]);
+    expect(grantsMissing(people, ["state:read"])).toEqual(["people:manage", "audit:read"]);
+    // THE READER'S OWN SECTIONS NEED NOTHING, the company's grant included.
+    for (const key of ["account", "appearance"]) {
+      const own = settings.sections.find((s) => s.key === key)!;
+      expect(sectionOpen(own, []), key).toBe(true);
+      expect(grantsMissing(own, []), key).toEqual([]);
+    }
+    // SETTINGS IS NEVER CLOSED: its You group is the reader's own.
+    expect(workspaceOpen(settings, [])).toBe(true);
+    expect(workspaceMissing(settings, [])).toEqual([]);
+    const home = workspaceRow("home")!;
+    expect(workspaceOpen(home, [])).toBe(false);
+    expect(workspaceMissing(home, [])).toEqual(["state:read"]);
+    expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
+    // A WORKSPACE'S OWN GRANTS ARE NEEDED BESIDE ITS SECTION'S, never
+    // instead of them: folded into one list they would admit either.
+    const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["fleet:operate"] };
+    expect(workspaceOpen(guarded, ["state:read", "audit:read"])).toBe(false);
+    expect(workspaceMissing(guarded, ["state:read", "audit:read"])).toEqual(["fleet:operate"]);
+    expect(workspaceOpen(guarded, ["state:read", "fleet:operate"])).toBe(true);
+    // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
+    expect(personalPath(["account"])).toBe(true);
+    expect(personalPath(["settings", "appearance"])).toBe(true);
+    expect(personalPath(["settings"])).toBe(false);
+    expect(personalPath(["work"])).toBe(false);
+  });
+
+  // ALREADY IN THE SIDEBAR is a fact about the sidebar: every row's landing,
+  // the empty fragment being Home's — and not the reader's Account, which is
+  // one segment long and has no row.
+  test("a sidebar row is a workspace's landing drawn as a row", () => {
+    expect(isSidebarRow([])).toBe(true);
+    for (const row of WORKSPACES.filter((w) => w.place !== "menu")) {
+      expect(isSidebarRow(row.path), row.key).toBe(true);
+    }
+    expect(isSidebarRow(["account"])).toBe(false);
+    expect(isSidebarRow(["work", "tasks"])).toBe(false);
+  });
+
+  // ONE PLACE, ONE DESCRIPTION. A cross-link is the place it leads to, drawn
+  // in another workspace's renderer, so its name, its glyph, its hint and what
+  // opens it are that place's: written out beside it, Settings' Account row
+  // said "two-step verification" where the palette said "second factor".
+  test("a cross-link is described exactly as the place it leads to", () => {
+    const links = WORKSPACES.flatMap((w) => w.sections.filter((s) => s.elsewhere));
+    expect(links.map((s) => s.key)).toEqual(expect.arrayContaining(["account", "budgets"]));
+    for (const link of links) {
+      const target = DESTINATIONS.find((d) => d.path.join("/") === link.path.join("/"));
+      expect(target, link.key).toBeDefined();
+      expect(link.label, link.key).toBe(target!.label);
+      expect(link.icon, link.key).toBe(target!.icon);
+      expect(link.hint, link.key).toBe(target!.hint);
+      expect(link.grants ?? [], link.key).toEqual(target!.grants ?? []);
+    }
   });
 
   // EVERY DESTINATION IS ONE ADDRESS, resolved to the workspace it claims. Two

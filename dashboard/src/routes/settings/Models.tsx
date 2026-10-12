@@ -262,7 +262,7 @@ function ModelList({
               {
                 key: "act",
                 header: "",
-                label: "Actions",
+                action: true,
                 shrink: true,
                 cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
               },

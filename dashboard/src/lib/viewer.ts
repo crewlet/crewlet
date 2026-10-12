@@ -40,9 +40,10 @@
  * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
-import { createContext, createElement, useContext, type ReactNode } from "react";
+import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
-import type { Viewer } from "~/protocol/index.ts";
+import { useFrameSession } from "./frameSession.ts";
+import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 
 export interface ViewerState {
   /** The login the engine resolved this browser to, or "". */
@@ -73,7 +74,10 @@ export interface ViewerState {
    * by this, never by `handle`.
    */
   owner: string;
-  /** That seat's display name, or "". */
+  /**
+   * That SEAT's display name, or "" — the chart's name for a place, and never
+   * what the reader is called ([readerName]).
+   */
   name: string;
   /**
    * The changes the engine will make for this caller — every tool
@@ -191,6 +195,88 @@ export function useViewer(): ViewerState {
     );
   }
   return viewer;
+}
+
+/**
+ * The reader's OWN name — their directory row's, as the frame's `GET
+ * /auth/session` answered it — or "" where the row holds none.
+ *
+ * NEVER THE SEAT'S NAME. [ViewerState.name] is the chart's name for the seat
+ * the reader holds, which is the name of a PLACE and is often a role: a person
+ * with no name on their row was called "Founder" by the sidebar and greeted
+ * "Good afternoon, Founder" on Home, while their own Account said they had no
+ * name at all.
+ */
+export function ownName(session: Pick<SessionAnswer, "name"> | null): string {
+  return session?.name?.trim() ?? "";
+}
+
+/**
+ * What the reader is CALLED wherever the frame names them: their own name
+ * ([ownName]), or else their login — the session's, or `login` while the
+ * session has not answered. Never the seat's name, for [ownName]'s reason; the
+ * seat is said beside it, as the seat.
+ */
+export function readerName(
+  session: Pick<SessionAnswer, "name" | "login"> | null,
+  login = "",
+): string {
+  return ownName(session) || session?.login || login;
+}
+
+/** No grant at all, as one value, so a reading that holds none is stable across renders. */
+const NO_GRANTS: readonly string[] = Object.freeze([]);
+
+/**
+ * Who the frame has been told the reader is, and what they hold — one answer,
+ * from one source ([useHeldReading]).
+ */
+export interface HeldReading {
+  /** The login the reader is signed in as, or "" for nobody. */
+  login: string;
+  /** The grants they hold. */
+  grants: readonly string[];
+}
+
+/**
+ * WHO THE READER IS AND WHAT THEY HOLD, as every lock and refusal the frame
+ * draws decides on it — the sidebar's rows, Settings' column and the section
+ * a route opens — or null while nobody has said.
+ *
+ * THE VIEWER'S ANSWER once it has answered, and otherwise what the frame's
+ * `GET /auth/session` answered ([useFrameSession]), which every session gets
+ * whatever else the engine refuses it. The viewer is asked over the live
+ * socket, and a session without `state:read` never dials one, so its viewer
+ * never answers: read alone, as Settings' column read it, a person holding
+ * nothing was drawn every company section unlocked while the sidebar, reading
+ * the session, locked them — two answers to one reader. And a session the
+ * frame KNOWS has no access is read off the session even where an earlier
+ * socket's viewer answered, because the refusal that closed that socket is
+ * exactly a grant the viewer still lists.
+ *
+ * THE LOGIN COMES FROM THE SAME SOURCE AS THE GRANTS. A refusal decided on the
+ * session's grants while the viewer was still out — the moment between the
+ * session's answer and the socket's on every cold load of a closed section —
+ * named the reader off the viewer, which had not answered, and told a person
+ * signed in that nobody was.
+ *
+ * ONE READING, decided by one rule (`nav.ts`'s `sectionOpen`): every caller
+ * that drew a lock read the grants its own way, and no two agreed.
+ */
+export function useHeldReading(): HeldReading | null {
+  const viewer = useViewer();
+  const { answer, noAccess } = useFrameSession();
+  return useMemo(() => {
+    const session = answer ? { login: answer.login, grants: answer.grants ?? NO_GRANTS } : null;
+    if (noAccess && session) return session;
+    if (!viewer.loading) return { login: viewer.login, grants: viewer.grants };
+    return session;
+  }, [answer, noAccess, viewer.loading, viewer.login, viewer.grants]);
+}
+
+/** What the reader holds, off [useHeldReading] — the locks' half of it. */
+export function useHeldGrants(): readonly string[] | null {
+  return useHeldReading()?.grants ?? null;
 }
 
 /** The wire answer, re-exported so a screen types its own reads. */

@@ -30,8 +30,8 @@ import {
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { OrgIndex, Seat } from "~/lib/seats.ts";
-import { isOwnSeat, mayReadRecord } from "./profile.ts";
+import { isOwnSeat, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { mayReadRecord } from "./profile.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
 import { itemPath } from "~/lib/work.ts";
 

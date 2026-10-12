@@ -15,8 +15,18 @@
  * step-up dialog's, and neither sends the person to sign in; recovery codes
  * are offered only beside an authenticator; and a Tier
  * A token's session is told what it is and asks the directory nothing.
+ *
+ * And what a person comes for is where they look first: two-step
+ * verification leads Security and the password form waits behind its button;
+ * a session row's sign-out names itself on a phone's card, and signing out
+ * everywhere stands beside the sentence saying what it ends rather than in
+ * the title's way; the seat is written as a seat — its name and `@handle`,
+ * linked only for a reader its page serves; and the page's note describes
+ * the session it shows.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -27,6 +37,9 @@ import { Router } from "~/app/router.tsx";
 import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { withDerived } from "~/test/org.ts";
+import { SRC } from "~/test/source.ts";
+import { href } from "~/app/router.tsx";
 import {
   currentSessionNeed,
   LiveSocket,
@@ -177,8 +190,10 @@ function engine({
   };
 }
 
-function mount() {
+/** The page, over a store holding `org` where the chart is readable. */
+function mount(org?: unknown) {
   const store = new Store();
+  if (org) store.applyOrg(withDerived(org) as never);
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -197,6 +212,12 @@ function mount() {
 
 function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+
+/** Open the password's dialog from its line, as a person does. */
+async function openPasswordDialog(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: "Change password…" }));
+  return screen.findByRole("dialog", { name: "Change password" });
 }
 
 let reloads: ReturnType<typeof vi.spyOn>;
@@ -331,6 +352,7 @@ describe("changing the password", () => {
   const PASSWORD_ONLY = [PASSWORD, TOKEN];
 
   async function fill(current: string, next: string, again = next, code?: string) {
+    if (!screen.queryByRole("dialog", { name: "Change password" })) await openPasswordDialog();
     await screen.findByLabelText("Current password");
     type("Current password", current);
     if (code !== undefined) type("Code", code);
@@ -358,6 +380,7 @@ describe("changing the password", () => {
     const sessionReads = () => engineIs.reads("/auth/session").length;
     await screen.findByText("This browser");
     await screen.findByRole("button", { name: "Set up an authenticator…" });
+    await openPasswordDialog();
     expect(screen.queryByLabelText("Code")).toBeNull();
     const before = sessionReads();
     await fill("the old long passphrase", "a brand new long passphrase");
@@ -425,6 +448,8 @@ describe("changing the password", () => {
     });
     mount();
     await screen.findByText("This browser");
+    await screen.findByRole("button", { name: "Replace authenticator…" });
+    await openPasswordDialog();
     await screen.findByLabelText("Code");
     const before = engineIs.reads("/auth/session").length;
     await fill(
@@ -445,6 +470,7 @@ describe("changing the password", () => {
 
 describe("changing the password while holding a second factor", () => {
   async function fill(code: string) {
+    if (!screen.queryByRole("dialog", { name: "Change password" })) await openPasswordDialog();
     await screen.findByLabelText("Code");
     type("Current password", "the old long passphrase");
     if (code) type("Code", code);
@@ -470,6 +496,7 @@ describe("changing the password while holding a second factor", () => {
       },
     });
     mount();
+    await openPasswordDialog();
     expect(await screen.findByLabelText("Code")).toBeDefined();
     expect(
       screen.getByText(
@@ -535,6 +562,7 @@ describe("changing the password while holding a second factor", () => {
     });
     mount();
     await screen.findByRole("button", { name: "Set up an authenticator…" });
+    await openPasswordDialog();
     expect(screen.queryByLabelText("Code")).toBeNull();
     type("Current password", "the old long passphrase");
     type("New password", "a brand new long passphrase");
@@ -703,6 +731,147 @@ describe("personal access tokens", () => {
     const revoke = engineIs.writes()[0]!;
     expect(`${revoke.method} ${revoke.path}`).toBe("DELETE /iam/credentials/c-tok");
     expect(revoke.query.has("person")).toBe(false);
+  });
+});
+
+describe("what a person comes for is where they look", () => {
+  // TWO-STEP VERIFICATION LEADS, and the password form waits behind its
+  // button: drawn in place, its four fields stood above the second factor and
+  // pushed it below the fold at 1280x720 and on a phone, and a person looking
+  // for two-step verification found a password form. Mutations: put the
+  // password's line first, or draw its form in place, and this goes red.
+  test("two-step verification comes first, and the password's form opens in a dialog", async () => {
+    engine({ credentials: [PASSWORD] });
+    mount();
+    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    const twoStep = screen.getByRole("region", { name: "Two-step verification" });
+    const password = screen.getByRole("region", { name: "Password" });
+    expect(
+      twoStep.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
+    expect(screen.queryByLabelText("New password")).toBeNull();
+    const dialog = await openPasswordDialog();
+    expect(within(dialog).getByLabelText("Current password")).toBeDefined();
+    expect(within(dialog).getByLabelText("New password")).toBeDefined();
+  });
+
+  // THE HEADER IS THE TITLE'S: "Sign out everywhere" there took its width,
+  // and on a phone the title read "Where you are sign…". It stands beside the
+  // sentence saying what it ends. Mutation: hand it back to `actions`.
+  test("signing out everywhere stands beside what it ends, not in the title's header", async () => {
+    engine();
+    mount();
+    const title = await screen.findByText("Where you are signed in");
+    const header = title.closest<HTMLElement>(".crewlet-card__header")!;
+    expect(header).not.toBeNull();
+    expect(within(header).queryAllByRole("button")).toEqual([]);
+    const everywhere = screen.getByRole("button", { name: "Sign out everywhere" });
+    expect(title.closest(".crewlet-card")!.contains(everywhere)).toBe(true);
+    expect(everywhere.parentElement!.textContent).toMatch(/ends every session you hold/);
+  });
+
+  // A BUTTON IS ITS OWN NAME on a phone's card, where a labelled column drew
+  // "SIGN OUT  Sign out" on every row and "SIGN OUT  This browser" on this
+  // one. The CONTROL is the Signed in column, which still says its word.
+  // Mutation: declare the column with `label: "Sign out"` and no `action`.
+  test("a session's sign-out names itself, with no column word beside it", async () => {
+    engine();
+    mount();
+    const mark = await screen.findByText("This browser");
+    const grid = mark.closest<HTMLElement>(".grid-wrap")!;
+    const labels = [...grid.querySelectorAll(".grid-row > .grid-cell")].map((c) =>
+      c.getAttribute("data-label"),
+    );
+    expect(labels).toContain("Signed in");
+    expect(labels).not.toContain("Sign out");
+    expect(mark.closest(".grid-cell")!.hasAttribute("data-label")).toBe(false);
+  });
+});
+
+describe("the profile", () => {
+  /** The Seat fact, once the profile has answered. */
+  async function seatFact(): Promise<HTMLElement> {
+    await screen.findByText("ada@example.com");
+    return screen.getByText("Seat").nextElementSibling as HTMLElement;
+  }
+
+  // WRITTEN AS A SEAT: the name and its `@handle`, linked to the seat's page.
+  // It was the name and the bare handle — "Bob bob". Mutation: drop the `@`.
+  test("a reader the seat's page serves sees the seat's name, its @handle, and a link", async () => {
+    engine();
+    mount({
+      name: "Nimbus",
+      roles: [{ name: "Ada Lovelace", handle: "ada", kind: "human" }],
+      units: [],
+    });
+    const seat = await seatFact();
+    await waitFor(() =>
+      expect(within(seat).getByRole("link", { name: "Ada Lovelace" }).getAttribute("href")).toBe(
+        href(["agents", "seats", "ada"]),
+      ),
+    );
+    expect(within(seat).getByText("@ada")).toBeDefined();
+  });
+
+  // A READER WITHOUT state:read reads no chart, so there is no name to put
+  // beside the handle — it read "cara cara" — and the seat's page is the panel
+  // refusing them the company, so it is no link. The CONTROL is the case
+  // above. Mutation: link it whatever the grants, and this goes red.
+  test("a reader the seat's page does not serve sees the handle alone, unlinked", async () => {
+    engine({ session: { ...PERSON, grants: [] } });
+    mount();
+    const seat = await seatFact();
+    expect(seat.textContent).toBe("@ada");
+    expect(within(seat).queryByRole("link")).toBeNull();
+  });
+
+  // AT THE CARD'S OWN INSET: in a flush card the first fact touched the
+  // header's rule, and in a padded one the list's own padding doubled the
+  // left edge — so the list sits in the card's body, and the sheet takes the
+  // list's padding off there. Mutation: `padding="none"` on the card, or the
+  // rule dropped from screens.css.
+  test("the facts sit in the card's body, at its inset", async () => {
+    engine();
+    mount();
+    const seat = await seatFact();
+    expect(seat.closest(".crewlet-card__body")).not.toBeNull();
+    const css = readFileSync(join(SRC, "styles", "screens.css"), "utf8");
+    expect(css).toMatch(/\.crewlet-card__body \.prof-facts \{\s*padding: 0;\s*\}/);
+  });
+});
+
+describe("while the engine has not said who this is", () => {
+  // THE READER'S OWN PAGE IS NEVER BLANK: the note waits for the session it
+  // describes, and `QueryState` draws nothing for a read still out, so the
+  // page drew nothing at all for as long as `GET /auth/session` took. The
+  // CONTROL is every case above, whose read answers. Mutation: hand the
+  // pending read to `QueryState` and the page is empty.
+  test("says it is reading, and draws no note until it knows which", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    mount();
+    expect(screen.getByText("Reading who you are signed in as")).toBeDefined();
+    expect(screen.queryByText(/Who (you are|this browser is) signed in as/)).toBeNull();
+  });
+});
+
+describe("the page's note", () => {
+  // THE NOTE DESCRIBES THE SESSION IT SHOWS: the person's sentence, promising
+  // a password and a second factor, stood above the card telling a Tier A
+  // token's session it has neither. The CONTROL is a person's page, which
+  // carries it. Mutation: draw the person's note for every session.
+  test("a person's note promises their own credentials, and a token's does not", async () => {
+    engine();
+    mount();
+    expect(await screen.findByText(/your password, your second factor/)).toBeDefined();
+    cleanup();
+    engine({ session: TIER_A });
+    mount();
+    expect(await screen.findByText(/A deployment.s API token is its own credential/)).toBeDefined();
+    expect(screen.queryByText(/your password, your second factor/)).toBeNull();
   });
 });
 

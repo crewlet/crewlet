@@ -11,7 +11,16 @@
  */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
@@ -36,6 +45,8 @@ interface Sent {
   path: string;
   headers: Record<string, string>;
   body: unknown;
+  /** The status the stubbed engine answered it with. */
+  status: number;
 }
 
 type Answer = { status: number; body: unknown; headers?: Record<string, string> };
@@ -63,14 +74,17 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://engine.test");
       const method = (init?.method ?? "GET").toUpperCase();
-      sent.push({
+      const record: Sent = {
         method,
         path: url.pathname + url.search,
         headers: (init?.headers ?? {}) as Record<string, string>,
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-      });
+        status: 0,
+      };
+      sent.push(record);
       if (method === "GET" && url.pathname === "/auth/session" && cookie) {
         const login = cookie.login ?? "";
+        record.status = 200;
         return new Response(
           JSON.stringify({
             person: cookie.person ?? "",
@@ -85,6 +99,7 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
       }
       const queue = queues.get(`${method} ${url.pathname}`);
       const answer = queue && (queue.length > 1 ? queue.shift()! : queue[0]!);
+      record.status = answer?.status ?? 404;
       if (!answer) return new Response(JSON.stringify({ error: "no_route" }), { status: 404 });
       const body = answer.body as { status?: unknown } | null;
       const signsIn =
@@ -196,20 +211,35 @@ beforeAll(async () => {
   await Promise.all([...CHUNKS, "signin" as const].map((chunk) => loadChunk(chunk)));
 });
 
+/**
+ * THE SIGN-IN ADDS NOTHING TO THE CONSOLE, on any path a case takes. A browser
+ * logs every 4xx a page loads — the one `401` a signed-out load costs, and a
+ * two-step sign-in's `401 second_factor_required` at the password step — and
+ * no page can stop it; a line of ours beside them would read as a fault on a
+ * screen working as it should. So every case ends with the console as it
+ * found it. Mutation: log a refusal from any form and that case goes red.
+ */
+let consoleLines: MockInstance[] = [];
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   Element.prototype.scrollIntoView = () => {};
   location.hash = `#/login?next=${encodeURIComponent(NEXT)}`;
+  consoleLines = [vi.spyOn(console, "error"), vi.spyOn(console, "warn")];
 });
 
 afterEach(() => {
   cleanup();
+  // READ BEFORE THE SPIES ARE RESTORED, and asserted after everything else is
+  // put back, so a case that logged fails alone rather than every case after.
+  const logged = consoleLines.flatMap((line) => line.mock.calls);
   vi.unstubAllGlobals();
   sessionRestored();
   localStorage.clear();
   sessionStorage.clear();
   vi.restoreAllMocks();
   location.hash = "#/";
+  expect(logged).toEqual([]);
 });
 
 describe("signing in with a password", () => {
@@ -264,12 +294,20 @@ describe("signing in with a password", () => {
     expect((screen.getByLabelText(/login or email/i) as HTMLInputElement).value).toBe("jane.doe");
   });
 
+  // AND IT COSTS EXACTLY ONE MORE REFUSED REQUEST than a signed-out load does:
+  // the password step's `401 second_factor_required`, which stays a 401 — a
+  // `200` from `/auth/login` is a session opened, and it is typed, so nothing
+  // reads it as signed out (`protocol/rest.ts`). A browser logs it; what is
+  // ours is that it is ONE request, and that the resubmission carrying the
+  // code is the sign-in. Mutation: post the details again before the code
+  // field shows, or send the resubmission twice, and the counts are off.
   test("the code is asked for only when the engine asks, and sent with the resubmission", async () => {
     const sent = engine({
       "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
     });
+    const logins = () => sent.filter((s) => s.method === "POST" && s.path === "/auth/login");
     await mount();
     // THE CONTROL: nothing asks for a code before the password has proved
     // itself, because only the engine knows whether this person holds one.
@@ -283,14 +321,24 @@ describe("signing in with a password", () => {
 
     screen.getByLabelText(/^code$/i);
     expect(alerts()).toEqual([]);
+    // ONE ATTEMPT BEFORE THE CODE FIELD, without a code, and the only refused
+    // requests so far are the signed-out load's and that one.
+    expect(logins().map((s) => s.body)).toEqual([
+      { login: "jane.doe", password: "correct horse battery staple" },
+    ]);
+    expect(sent.filter((s) => s.status >= 400).map((s) => `${s.method} ${s.path}`)).toEqual([
+      "GET /auth/session",
+      "POST /auth/login",
+    ]);
     type(/^code$/i, "123456");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await answered();
 
     expect(location.hash).toBe(NEXT);
-    const posts = sent.filter((s) => s.method === "POST" && s.path === "/auth/login");
-    expect(posts[1]?.body).toEqual({
+    // ONE MORE, with the code, and it is the sign-in.
+    expect(logins().map((s) => s.status)).toEqual([401, 200]);
+    expect(logins()[1]?.body).toEqual({
       login: "jane.doe",
       password: "correct horse battery staple",
       code: "123456",

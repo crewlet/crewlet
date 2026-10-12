@@ -12,7 +12,7 @@ import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -402,6 +402,42 @@ test("Message is pressable for a reader who can file", async () => {
   await mount(OPERATOR);
   const message = screen.getByRole("button", { name: /Message/ });
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+// YOUR OWN SEAT, PEEKED FROM THE CHART, IS THE PAGE'S OWN SEAT: Message held —
+// an ask of it is a question only you could answer — and the way to your
+// Account, which the page carried and the peek did not, so a person who found
+// themselves on the chart offered to message themselves and found no way to
+// their own security. The CONTROL is a colleague's seat by the same reader:
+// Message free and no Account. Mutation: drop the button's own-seat rule and
+// the first half goes red; draw the card on every seat and the second does.
+test("your own seat's peek holds Message and points to your Account, and a colleague's does not", async () => {
+  const jane = {
+    login: "jane.doe",
+    grants: ["state:read", "work:write"],
+    handle: "jane",
+    owner: "jane",
+    acts: ["create_work_item"],
+  };
+  await mount(jane, { handle: "jane" });
+  const foot = screen.getByRole("link", { name: "Open profile" }).closest("footer")!;
+  const message = within(foot as HTMLElement).getByRole("button", { name: "Message" });
+  expect(message.getAttribute("aria-disabled")).toBe("true");
+  expect(message.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
+  const card = screen.getByRole("heading", { name: "Your account" }).closest(".prof-card")!;
+  expect(
+    within(card as HTMLElement)
+      .getByRole("link", { name: "Account" })
+      .getAttribute("href"),
+  ).toBe("#/account");
+  cleanup();
+
+  await mount(jane, { handle: "swe" });
+  expect(screen.getByRole("button", { name: "Message" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+  expect(screen.queryByRole("heading", { name: "Your account" })).toBeNull();
+  expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
 // A SEAT THE ENGINE GAVE NO MANAGER is the top of the chart, and says so

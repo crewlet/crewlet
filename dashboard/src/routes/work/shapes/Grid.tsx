@@ -898,7 +898,7 @@ function trashColumns(
     {
       key: "restore",
       header: "",
-      label: "Restore",
+      action: true,
       shrink: true,
       cell: (row) => <RestoreButton item={itemAddress(row)} label={row.key} />,
     },

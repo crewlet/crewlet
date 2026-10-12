@@ -10,10 +10,13 @@
  * document is told so rather than shown seats nobody can reach.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Suspense } from "react";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { INVITATION_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -125,6 +128,13 @@ function stubIam(override: (url: URL) => Response | null = () => null) {
     asked.push(url);
     const answer = override(url);
     if (answer) return Promise.resolve(answer);
+    // ONE PERSON, as the peek reads them: the row the directory holds under
+    // that id, or the engine's 404.
+    const one = /^\/iam\/people\/([^/]+)$/.exec(url.pathname);
+    if (one) {
+      const row = [...PAGE_ONE.people, ...PAGE_TWO.people].find((p) => p.id === one[1]);
+      return Promise.resolve(row ? json(200, row) : json(404, { error: "not_found" }));
+    }
     switch (url.pathname) {
       case "/iam/people":
         return Promise.resolve(json(200, url.searchParams.get("after") ? PAGE_TWO : PAGE_ONE));
@@ -169,12 +179,19 @@ function mount(viewer: Record<string, unknown> = AUDITOR) {
     if (what === "config") return Promise.resolve({ name: "Acme", roles: [], units: [] });
     return new Promise(() => {});
   };
+  // THE SCREEN AND THE FRAME'S ONE PEEK beside it, as the shell mounts them:
+  // a row opens its person there, and a pasted `peek=` opens it on arrival.
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
           <SessionReading>
-            <PeopleAndAccess />
+            <PeekNeighbours>
+              <PeopleAndAccess />
+              <Suspense fallback={null}>
+                <PeekHost />
+              </Suspense>
+            </PeekNeighbours>
           </SessionReading>
         </Router>
       </ViewerProvider>
@@ -183,9 +200,20 @@ function mount(viewer: Record<string, unknown> = AUDITOR) {
   return { queried };
 }
 
+/** The peek, once it is open. */
+async function peek(): Promise<HTMLElement> {
+  return (await screen.findByRole("complementary", { name: "Person detail" })) as HTMLElement;
+}
+
+// THE PEEK'S BODY IS THE SETTINGS CHUNK'S, loaded once so a case measures what
+// it draws rather than a cold import.
+beforeAll(async () => {
+  await loadChunk("settings");
+});
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/settings/access";
+  location.hash = "#/settings/people";
 });
 
 afterEach(() => {
@@ -365,38 +393,155 @@ test("a reader without config:read is told what reading a seat's surfaces needs"
   expect(queried).not.toContain("config");
 });
 
-// OPENING A PERSON reads that one principal's credentials and sessions.
+// A ROW OPENS ITS PERSON IN THE PEEK, which is in view beside the list: the
+// panel was a card drawn under the stats, the report and the whole grid, so
+// pressing a row opened it below the fold and the page did not move. The row
+// is a real link to that peek's address, and is marked while it is open.
+// Mutation: open the row anywhere but the frame's peek and the rail never
+// appears.
+test("activating a row opens that person in the peek, by their id", async () => {
+  stubIam();
+  mount();
+  const row = (await screen.findByText("Ana Diaz")).closest(".grid-row") as HTMLElement;
+  const link = row.querySelector<HTMLAnchorElement>("a.row-link")!;
+  expect(link.getAttribute("href")).toBe("#/settings/people?peek=person%3Ap-ana");
+  fireEvent.click(link);
+  await waitFor(() => expect(location.hash).toContain("peek=person%3Ap-ana"));
+  const rail = await peek();
+  expect(await within(rail).findByText("Authenticator app")).toBeTruthy();
+  // ITS ONLY PAGE IS THIS ONE, so the rail offers no Open that would close it.
+  expect(within(rail).queryByRole("link", { name: /^Open/ })).toBeNull();
+  // AND THE ROW IS MARKED as the one the peek is open on.
+  await waitFor(() => expect(link.getAttribute("aria-current")).toBe("true"));
+});
+
+// THE PEEK MAKES THE PEOPLE LIST A COLUMN OF THE SHEET, and the peek's own
+// grids are a 385px column too. A flexible track floored at zero gives way to
+// every content-sized one: beside the peek the seat drew its avatar alone and
+// the grants stacked a row ten lines tall, and in the peek "Password" read
+// "P…" while Expires and Carries, which go first, kept a pixel each. So every
+// flexible column these grids keep has a floor — the tracks overrun and the
+// grid drops by `drop` instead — and the peek's pill and timestamp take their
+// own width rather than a fifth of the column. Mutation: drop a floor, or put
+// a `shrink` back on State, and its track reads at zero or capped.
+test("no grid beside or inside the person peek floors a flexible column at zero", async () => {
+  location.hash = "#/settings/people?peek=person:p-ana";
+  stubIam();
+  mount();
+  const rail = await peek();
+  await within(rail).findByText("Authenticator app");
+  await within(rail).findByText("Signed in");
+  const tracks = (wrap: Element) => {
+    const heads = [...wrap.querySelectorAll(":scope > .grid-head > *")].map(
+      (h) => h.textContent?.trim() ?? "",
+    );
+    const list = splitTracks((wrap as HTMLElement).style.gridTemplateColumns);
+    return new Map(heads.map((h, i) => [h, list[i]]));
+  };
+  const people = screen
+    .getAllByText("Ana Diaz")
+    .find((e) => !rail.contains(e))!
+    .closest(".grid-wrap")!;
+  const credentials = within(rail).getByText("Password").closest(".grid-wrap")!;
+  const sessions = within(rail).getByText("Signed in").closest(".grid-wrap")!;
+  for (const wrap of [people, credentials, sessions]) {
+    expect([...tracks(wrap).values()].filter((t) => t === "minmax(0, 1fr)")).toEqual([]);
+  }
+  expect(tracks(people).get("Seat")).toBe("minmax(8rem, 1fr)");
+  expect(tracks(people).get("Grants")).toBe("minmax(8rem, 1fr)");
+  expect(tracks(credentials).get("Credential")).toBe("minmax(8rem, 1fr)");
+  expect(tracks(credentials).get("State")).toBe("max-content");
+  expect(tracks(sessions).get("Session")).toBe("max-content");
+});
+
+/** A track list split at its top-level spaces, a `minmax(a, b)` kept whole. */
+function splitTracks(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of list) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === " " && depth === 0) {
+      if (current) out.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+// OPENING A PERSON reads that one principal's row, credentials and sessions.
 test("an opened person shows the credentials and sessions read for them", async () => {
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   const asked = stubIam();
   mount();
-  expect(await screen.findByText("Authenticator app")).toBeTruthy();
-  expect(screen.getByText("Password")).toBeTruthy();
-  expect(screen.getByText("Signed in")).toBeTruthy();
+  const rail = await peek();
+  expect(await within(rail).findByText("Authenticator app")).toBeTruthy();
+  expect(within(rail).getByText("Password")).toBeTruthy();
+  expect(within(rail).getByText("Signed in")).toBeTruthy();
   const credentials = asked.find((u) => u.pathname === "/iam/credentials");
   expect(credentials?.searchParams.get("person")).toBe("p-ana");
+  expect(asked.some((u) => u.pathname === "/iam/people/p-ana")).toBe(true);
+});
+
+// THE READER'S OWN ROW POINTS AT THEIR ACCOUNT, first: every gesture in the
+// peek is an administrator's, made about somebody, and a person who opened
+// their own row was offered a reset link and an "end all sessions" and nothing
+// saying their password and second factor are theirs to manage. The CONTROL
+// is somebody else's row, which carries no such pointer. Mutation: drop the
+// callout and the first half goes red; draw it on every row and the second.
+test("the reader's own row leads with their Account; somebody else's does not", async () => {
+  location.hash = "#/settings/people?peek=person:p-ana";
+  stubIam((url) =>
+    url.pathname === "/auth/session"
+      ? json(200, { person: "p-ana", login: "ana.diaz", kind: "person", grants: [] })
+      : null,
+  );
+  mount();
+  const rail = await peek();
+  expect(await within(rail).findByText("This is you")).toBeTruthy();
+  expect(
+    within(rail)
+      .getByRole("link", { name: /Your Account/ })
+      .getAttribute("href"),
+  ).toBe("#/account");
+  cleanup();
+
+  location.hash = "#/settings/people?peek=person:p-ci";
+  stubIam((url) =>
+    url.pathname === "/auth/session"
+      ? json(200, { person: "p-ana", login: "ana.diaz", kind: "person", grants: [] })
+      : null,
+  );
+  mount();
+  const other = await peek();
+  await within(other).findAllByText("ci:release");
+  expect(within(other).queryByText("This is you")).toBeNull();
+  expect(other.querySelector('a[href="#/account"]')).toBeNull();
 });
 
 // A PERSON THE LINK NAMES AND THE DIRECTORY DOES NOT HOLD is said, and Close
 // takes the address back to the list: a saved link to somebody since removed
-// drew the list with no panel and no word. The CONTROL is the case above, a
-// person the directory holds, which draws no such note. Mutation: drop the
-// note and the first half goes red.
+// drew the list with no panel and no word. The CONTROL is a person the
+// directory holds, which draws no such note. Mutation: drop the note and the
+// first half goes red.
 test("a link to a person the directory does not hold says so, and closes", async () => {
-  location.hash = "#/settings/access?person=p-gone";
+  location.hash = "#/settings/people?peek=person:p-gone";
   stubIam();
   mount();
-  expect(await screen.findByText("Nobody in the directory has this id")).toBeTruthy();
-  expect(screen.getByText("p-gone")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  expect(location.hash).not.toContain("person=");
+  const rail = await peek();
+  expect(await within(rail).findByText("Nobody in the directory has this id")).toBeTruthy();
+  expect(within(rail).getByText(/p-gone is not a person or service account here/)).toBeTruthy();
+  fireEvent.click(within(rail).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(location.hash).not.toContain("peek="));
   expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   stubIam();
   mount();
-  await screen.findByText("Authenticator app");
+  await within(await peek()).findByText("Authenticator app");
   expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
 });
 
@@ -405,7 +550,7 @@ test("a link to a person the directory does not hold says so, and closes", async
 // deadline read as "in 6d" beside "Ended". Mutation: show the expiry for every
 // ended session and the deadline is drawn.
 test("an ended session says why and draws no deadline it never reached", async () => {
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   stubIam((url) =>
     url.pathname === "/iam/people/p-ana/sessions"
       ? json(200, {
@@ -440,7 +585,7 @@ test("an ended session says why and draws no deadline it never reached", async (
 // too, and "Revoked" said somebody had withdrawn it. The CONTROL is a link
 // withdrawn unused. Mutation: drop `spent` from the word and both read Revoked.
 test("a reset link its person used reads used, one withdrawn reads revoked", async () => {
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   stubIam((url) =>
     url.pathname === "/iam/credentials"
       ? json(200, {
@@ -474,7 +619,7 @@ test("a reset link its person used reads used, one withdrawn reads revoked", asy
 // password, which signs its holder in with what they hold. Mutation: give the
 // link the password's words and the first expectation goes red.
 test("a reset link says it sets a password, never that it carries grants", async () => {
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   stubIam((url) =>
     url.pathname === "/iam/credentials"
       ? json(200, {
@@ -500,7 +645,7 @@ test("a reset link says it sets a password, never that it carries grants", async
 // Mutation: draw the deadline whatever the state and the used link counts
 // down.
 test("an ended credential draws no deadline it will never reach", async () => {
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   const later = new Date(Date.now() + 86_400_000).toISOString();
   const earlier = new Date(Date.now() - 86_400_000).toISOString();
   stubIam((url) =>

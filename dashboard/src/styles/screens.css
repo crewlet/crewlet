@@ -1588,6 +1588,14 @@ a.prof-row:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* IN A PADDED CARD THE BODY IS THE INSET. The list's own padding is for the
+   FLUSH card a seat's Setup draws it in (`padding="none"`, no body); inside a
+   card at its own inset — the Account's Profile — that padding doubled the
+   left edge, and the obvious way out, a flush card, left the first fact
+   touching the header's rule. */
+.crewlet-card__body .prof-facts {
+  padding: 0;
+}
 .prof-tools {
   display: flex;
   flex-wrap: wrap;

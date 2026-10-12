@@ -20,9 +20,10 @@
  *
  *  - `GET /iam/people` — every principal, walked to its last page, because a
  *    directory drawn from its first page is a company that looks smaller than
- *    it is. Opening a row reads that one principal's credentials
+ *    it is. A row opens that principal in the frame's peek ([PersonPeek]),
+ *    which reads their row (`GET /iam/people/{id}`), credentials
  *    (`GET /iam/credentials?person=`) and sessions
- *    (`GET /iam/people/{id}/sessions`).
+ *    (`GET /iam/people/{id}/sessions`) for itself.
  *  - `GET /iam/seats` — every human seat of the running company and what
  *    holds it: a person, a service account, or an open invitation.
  *  - `GET /iam/node-tokens` — THIS NODE's Tier A tokens by label, each joined
@@ -40,9 +41,11 @@
  * # And written, by a reader holding `people:manage`
  *
  * Creating a service account and minting its token, cancelling an invitation,
- * and — on an opened row — changing a login, a seat or grants, suspending and
- * reactivating, resetting a second factor, issuing a password reset link,
- * ending every session, revoking one credential and removing somebody.
+ * and — in an opened person's peek — changing a login, a seat or grants,
+ * suspending and reactivating, resetting a second factor, issuing a password
+ * reset link, ending every session, revoking one credential and removing
+ * somebody. Every write is announced ([directoryMoved]), so the list and the
+ * peek beside it, two trees, each read again what it moved.
  *
  * NOT INVITING OR CREATING A PERSON. Every person holds exactly one human seat
  * for as long as they exist, so a person comes from a vacant human seat: its
@@ -84,6 +87,7 @@ import {
   Card,
   Checkbox,
   EMPTY_VALUE,
+  EmptyState,
   EmptyValue,
   InlineCode,
   Modal,
@@ -107,6 +111,7 @@ import {
   canManagePeople,
   ConfirmDialog,
   DIRECTORY_READ,
+  directoryMoved,
   endedWord,
   ExpiresCell,
   GrantTags,
@@ -114,15 +119,20 @@ import {
   listsNoCompany,
   MintTokenDialog,
   ShownOnce,
+  useDirectoryMoved,
   useHumanSeats,
   useSeatEntry,
 } from "~/components/people.tsx";
 import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import type { ObjectRef } from "~/app/frame/objects.ts";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { href, useParam } from "~/app/router.tsx";
+import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { needsSentence } from "~/lib/refusal.ts";
@@ -590,8 +600,6 @@ export function PeopleAndAccess() {
   const viewer = useViewer();
   const health = useEngineHealth();
   const manages = canManagePeople(viewer.grants);
-  const toast = useToast();
-  const [opened, setOpened] = useParam("person", "");
   const [creating, setCreating] = useState(false);
   const [allInvitations, setAllInvitations] = useState(false);
 
@@ -612,23 +620,31 @@ export function PeopleAndAccess() {
   );
   // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: a
   // cancellation moves the invitations and the vacant seats, a create the
-  // directory, an edit the directory, the seats and the report.
+  // directory, an edit the directory, the seats and the report. A write is
+  // ANNOUNCED ([directoryMoved]) rather than re-read here, because the person
+  // peek beside this list is another tree: an edit or a removal made there
+  // left this list naming what it had replaced until the next poll. The
+  // seats hear it for themselves ([useHumanSeats]).
   const { reload: reloadDirectory } = directory;
-  const { reload: reloadSeats } = seats;
   const { reload: reloadTokens } = tokens;
   const { reload: reloadCheck } = check;
   const { reload: reloadInvitations } = invitations;
-  const refresh = useCallback(() => {
-    for (const reload of [
-      reloadDirectory,
-      reloadSeats,
-      reloadTokens,
-      reloadCheck,
-      reloadInvitations,
-    ]) {
-      void reload({ quiet: true });
-    }
-  }, [reloadDirectory, reloadSeats, reloadTokens, reloadCheck, reloadInvitations]);
+  useDirectoryMoved(
+    useCallback(() => {
+      for (const reload of [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]) {
+        void reload({ quiet: true });
+      }
+    }, [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]),
+  );
+  // A ROW OPENS ITS PERSON IN THE FRAME'S PEEK, beside the list on a wide
+  // window and as a drawer on a phone: the panel was drawn under the stats,
+  // the report and the whole People grid, so the row a reader pressed opened
+  // something below the fold and the page did not move. `[` and `]` step
+  // through the rows as the grid draws them.
+  const { open: openPeek } = usePeekControls();
+  usePeekNeighbours(
+    useMemo(() => (directory.data ?? []).map((p) => personRef(p.id)), [directory.data]),
+  );
   // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes
   // `config:read`. A reader without it is never asked: the refusal is known
   // before the question, and each seat says what it would take instead.
@@ -647,11 +663,6 @@ export function PeopleAndAccess() {
   const tokenRows = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
   const companyWriters = tokens.data?.companyWriters ?? [];
   const boundTokens = tokenRows.filter((t) => t.seat).length;
-  const openedRow = people.find((p) => p.id === opened) ?? null;
-  // WHO IS READING, by the id the session names — never the login, which a
-  // rename moves to somebody else: a gesture on the reader's own row signs
-  // them out, and the panel names that row in the third person.
-  const reader = useFrameSession().answer?.person;
 
   return (
     <>
@@ -693,7 +704,7 @@ export function PeopleAndAccess() {
         <ServiceAccountDialog
           held={viewer.grants}
           onClose={() => setCreating(false)}
-          onDone={refresh}
+          onDone={directoryMoved}
         />
       )}
 
@@ -772,8 +783,10 @@ export function PeopleAndAccess() {
               rows={people}
               rowKey={(p) => p.id}
               defaultSort="person"
-              isSelected={(p) => p.id === opened}
-              onRowActivate={(p) => setOpened(p.id === opened ? "" : p.id)}
+              // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS — the frame's one
+              // rule — and the grid marks the row the peek is open on.
+              rowHref={(p) => peekHref(personRef(p.id))}
+              onRowActivate={peekRow((p: DirectoryRow) => openPeek(personRef(p.id)))}
               empty={{
                 title: "Nobody is in the directory yet",
                 hint: "Invite or create the first person on their human seat in the org chart (or crewlet iam invite EMAIL -seat SEAT), signed in with this node's API token.",
@@ -790,6 +803,10 @@ export function PeopleAndAccess() {
                   key: "login",
                   header: "Login",
                   shrink: true,
+                  // LAST TO GO, and it does go: the name column draws the
+                  // login of anybody with no name, and the peek beside the
+                  // list leads with it.
+                  drop: 3,
                   sortValue: (p) => p.login ?? "",
                   cell: (p) =>
                     p.login ? <KeyCell value={p.login} /> : <EmptyValue label="No login" />,
@@ -812,12 +829,23 @@ export function PeopleAndAccess() {
                 {
                   key: "seat",
                   header: "Seat",
+                  // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
+                  // the person peek the list is a column of the sheet, and a
+                  // flexible track at zero gave way to every content-sized
+                  // one — the seat drew its avatar alone and the grants
+                  // stacked one tag per line, a row ten lines tall — while the
+                  // columns that could have gone stayed. With floors the
+                  // tracks overrun instead, and the grid drops by `drop`. Eight
+                  // rem each, so the full list at 1280 still draws every column
+                  // it drew before.
+                  floor: "8rem",
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <BoundSeat seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
                   header: "Grants",
+                  floor: "8rem",
                   drop: 1,
                   sortValue: (p) => (p.grants ?? []).length,
                   cell: (p) => <GrantTags grants={p.grants} />,
@@ -826,51 +854,13 @@ export function PeopleAndAccess() {
             />
           </Card>
 
-          {/* A PERSON THE LINK NAMES AND THE DIRECTORY DOES NOT HOLD — removed
-              while their row was open, or a saved link to somebody since
-              removed — is said, with the way back to the list: drawn as
-              nothing, the address named somebody the page said nothing
-              about. */}
-          {opened !== "" && !openedRow && (
-            <Callout
-              variant="neutral"
-              title="Nobody in the directory has this id"
-              action={
-                <Button size="small" variant="secondary" onClick={() => setOpened("")}>
-                  Close
-                </Button>
-              }
-            >
-              <InlineCode>{opened}</InlineCode> is not a person or service account here: they were
-              removed, or the link was mistyped.
-            </Callout>
-          )}
-          {openedRow && (
-            <Principal
-              row={openedRow}
-              you={openedRow.id === reader}
-              administrators={check.data?.people_with_people_manage}
-              manages={manages}
-              held={viewer.grants}
-              onChanged={refresh}
-              onRemoved={(who) => {
-                // THE PANEL CLOSES ON ITS OWN REMOVAL, with what happened said:
-                // left open, the re-read directory no longer held the row and
-                // the panel turned into the note for a link naming nobody,
-                // a raw id included, right after the reader's own action.
-                toast.ok(`${who} was removed`);
-                setOpened("");
-              }}
-            />
-          )}
-
           <Invitations
             invitations={invitations}
             all={allInvitations}
             onAll={setAllInvitations}
             manages={manages}
             index={index}
-            onChanged={refresh}
+            onChanged={directoryMoved}
           />
 
           <Card padding="none">
@@ -1282,7 +1272,7 @@ function Invitations({
                   {
                     key: "cancel",
                     header: "",
-                    label: "Cancel",
+                    action: true,
                     shrink: true,
                     cell: (i: InvitationRow) =>
                       i.state === "redeemed" ? null : (
@@ -1361,32 +1351,176 @@ type PersonGesture =
   | "mint"
   | { revoke: CredentialRow };
 
+/** A directory row's peek reference: by its id, never a login, which a rename moves. */
+function personRef(id: string): ObjectRef {
+  return { kind: "person", id };
+}
+
 /**
- * One principal opened: the credentials they prove themselves with and the
- * sessions they are signed in with, read for this row alone — and, for a reader
- * holding `people:manage`, what may be done about them. A machine is offered
- * what applies to one: its grants, its stage, its tokens and its removal; it
- * has no password, no second factor and no session.
+ * One principal, beside the directory it was found in — the frame's peek on
+ * `person:{id}`, opened from a row of People & access, and their only page
+ * (`KindSpec.peekIsPage`).
+ *
+ * IN THE PEEK, NOT UNDER THE LIST. It was a card drawn after the stats, the
+ * report and the whole People grid, so pressing a row — your own row
+ * included — opened it below the fold and the page did not move: it looked
+ * as if nothing had happened. The peek opens in view beside the list on a
+ * wide window and as a drawer on a phone, steps through the rows with `[` and
+ * `]`, and closes on Back.
+ *
+ * IT ASKS FOR ITS OWN ROW (`GET /iam/people/{id}`), because a `peek=` arrives
+ * pasted as often as clicked, and an id the directory does not hold — a
+ * person removed since the link was made, or a mistyped one — is said rather
+ * than drawn as an empty rail.
+ *
+ * THE READER'S OWN ROW LEADS WITH THEIR ACCOUNT. Every gesture here is an
+ * administrator's, made about somebody — a reset link, a reset factor, every
+ * session ended — and the reader who opened their own row was offered those
+ * and nothing that said their password, their second factor and their
+ * sessions are theirs to manage, on their Account. It says so first; the
+ * administrator's gestures follow, each warning what it does to the reader.
+ */
+export function PersonPeek({ id }: { id: string }) {
+  const viewer = useViewer();
+  const toast = useToast();
+  const { close } = usePeekControls();
+  const at = encodeURIComponent(id);
+  const read = useRest(
+    id ? `/iam/people/${at}` : null,
+    // THE PATH A LITERAL AT ITS CALL, which is what the dev proxy's gate reads.
+    async (signal) => (await rest.get(`/iam/people/${at}`, signal)) as DirectoryRow | null,
+    READ,
+  );
+  const row = read.data;
+  // WHO IS READING, by the id the session names — never the login, which a
+  // rename moves to somebody else: a gesture on the reader's own row signs
+  // them out, and the panel names that row in the second person.
+  const reader = useFrameSession().answer?.person;
+  const you = row !== null && reader !== undefined && row.id === reader;
+  // THE ADMINISTRATORS' COUNT, asked only about the reader's own row — the one
+  // place it changes a sentence (`alone`).
+  const check = useRest(
+    you ? "/iam/check" : null,
+    async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
+    READ,
+  );
+  const { reload } = read;
+  const { reload: reloadCheck } = check;
+  useDirectoryMoved(
+    useCallback(() => {
+      void reload({ quiet: true });
+      void reloadCheck({ quiet: true });
+    }, [reload, reloadCheck]),
+  );
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+
+  if (read.loading && !row) return <Skeleton variant="text" rows={6} label="Loading" />;
+  // NOT AN EMPTY RAIL: an id nobody holds is said — the rail's own Close is
+  // the way back to the list — and every other refusal is the read's own.
+  if (read.code === "not_found") {
+    return (
+      <EmptyState
+        size="compact"
+        icon={<UsersGlyph size="xl" />}
+        title="Nobody in the directory has this id"
+        description={`${id} is not a person or service account here: they were removed, or the link was mistyped.`}
+      />
+    );
+  }
+  if (!row) {
+    return (
+      <QueryState
+        error={read.code}
+        refusal={read.refusal}
+        detail={read.error?.detail || undefined}
+        loading={false}
+      />
+    );
+  }
+  const who = row.sealed ? row.id : row.name || row.login || row.id;
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind={KIND_WORDS[row.kind] ?? row.kind}
+        icon="user"
+        identifier={row.sealed ? undefined : row.login}
+        title={row.sealed ? <SealedTag /> : who}
+        status={<WordTag words={STAGE_WORDS[row.stage]} fallback={row.stage} />}
+        facts={[
+          { label: "Seat", value: <BoundSeat seat={row.seat} index={index} /> },
+          { label: "Grants", value: <GrantTags grants={row.grants} /> },
+        ]}
+      />
+      <div className="col gap-3">
+        {you && (
+          <Callout
+            variant="neutral"
+            title="This is you"
+            action={
+              <ButtonLink size="small" variant="secondary" href={href(["account"])}>
+                Your Account
+              </ButtonLink>
+            }
+          >
+            Your password, two-step verification, sessions and personal access tokens are yours to
+            manage on your Account.
+            {canManagePeople(viewer.grants)
+              ? " What follows is what an administrator does to anybody's row, and each gesture says what it would do to you."
+              : ""}
+          </Callout>
+        )}
+        <Principal
+          row={row}
+          who={who}
+          you={you}
+          administrators={check.data?.people_with_people_manage}
+          manages={canManagePeople(viewer.grants)}
+          held={viewer.grants}
+          onRemoved={() => {
+            // THE PEEK CLOSES ON ITS OWN REMOVAL, with what happened said:
+            // left open, the re-read row answered 404 and the rail turned into
+            // the note for a link naming nobody, a raw id included, right after
+            // the reader's own action.
+            toast.ok(`${who} was removed`);
+            close();
+          }}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * One principal's credentials and sessions, read for this row alone — and, for
+ * a reader holding `people:manage`, what may be done about them. A machine is
+ * offered what applies to one: its grants, its stage, its tokens and its
+ * removal; it has no password, no second factor and no session.
+ *
+ * SECTIONS, NOT CARDS: the rail is the panel already, so they run on as plain
+ * blocks rather than growing a second frame inside the first.
  */
 function Principal({
   row,
+  who,
   you,
   administrators,
   manages,
   held,
-  onChanged,
   onRemoved,
 }: {
   row: DirectoryRow;
+  /** What the panel calls them. */
+  who: string;
   /** Whether this row is the person reading it. */
   you: boolean;
   /** How many active people `GET /iam/check` counts holding `people:manage`. */
   administrators: number | undefined;
   manages: boolean;
   held: readonly string[];
-  onChanged: () => void;
-  /** The row's removal landed, named as the panel names it. */
-  onRemoved: (who: string) => void;
+  /** The row's removal landed. */
+  onRemoved: () => void;
 }) {
   const now = useNow();
   const id = encodeURIComponent(row.id);
@@ -1403,7 +1537,6 @@ function Principal({
     READ,
   );
   const [gesture, setGesture] = useState<PersonGesture | null>(null);
-  const who = row.sealed ? row.id : row.name || row.login || row.id;
   // THE SEAT AS THE CHART NAMES IT, which a suspension withholds and a
   // removal frees — said by name, since it is the seat the reader will next
   // look for on the chart.
@@ -1416,23 +1549,23 @@ function Principal({
   // THE ONE ADMINISTRATOR LEFT, by the engine's own count — active, enrolled,
   // holding `people:manage` — which the reader, signed in, is among.
   const alone = you && canManagePeople(row.grants ?? []) && administrators === 1;
+  // EVERY WRITE IS ANNOUNCED ([directoryMoved]), and these reads hear it
+  // with the list this peek is beside.
   const { reload: reloadCredentials } = credentials;
   const { reload: reloadSessions } = sessions;
-  const changed = () => {
-    onChanged();
-    void reloadCredentials({ quiet: true });
-    void reloadSessions({ quiet: true });
-  };
+  useDirectoryMoved(
+    useCallback(() => {
+      void reloadCredentials({ quiet: true });
+      void reloadSessions({ quiet: true });
+    }, [reloadCredentials, reloadSessions]),
+  );
+  const changed = directoryMoved;
   const close = () => setGesture(null);
 
   return (
-    <Card padding="none">
-      <Card.Header icon={<KeyGlyph size="sm" />}>{who}: credentials and sessions</Card.Header>
+    <>
       {manages && (
-        <div
-          className="row gap-2"
-          style={{ flexWrap: "wrap", padding: "var(--spacing-3) var(--spacing-4)" }}
-        >
+        <div className="row gap-2" style={{ flexWrap: "wrap" }}>
           <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
             Edit login, seat and grants
           </Button>
@@ -1582,7 +1715,7 @@ function Principal({
           request={{ method: "DELETE", path: `/iam/people/${id}` }}
           onClose={close}
           onDone={changed}
-          onLanded={() => onRemoved(who)}
+          onLanded={onRemoved}
         >
           {you && <OnYourself alone={alone} />}
           {/* A SERVICE ACCOUNT IS NOT INVITED BACK: nobody redeems a link for
@@ -1594,176 +1727,198 @@ function Principal({
               : `Their row, credentials and sessions are deleted, ${row.seat ? `their seat ${seatName} is freed and stands vacant in the org chart, ` : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them onto a seat again. The trail keeps what they did.`}
         </PersonWrite>
       )}
-      <QueryState
-        error={credentials.code}
-        refusal={credentials.refusal}
-        detail={credentials.error?.detail || undefined}
-        loading={credentials.loading && !credentials.data}
-      >
-        <DataGrid<CredentialRow>
-          rows={credentials.data ?? []}
-          rowKey={(c) => c.id}
-          defaultSort="method"
-          empty={{ title: "Holds no credential" }}
-          columns={[
-            {
-              key: "method",
-              header: "Credential",
-              sortValue: (c) => c.method,
-              cell: (c) => (
-                <TextCell>
-                  {METHOD_WORDS[c.method] ?? c.method}
-                  {c.label ? ` · ${c.label}` : ""}
-                </TextCell>
-              ),
-            },
-            {
-              key: "state",
-              header: "State",
-              shrink: true,
-              sortValue: (c) => (c.revoked ? 1 : 0),
-              cell: (c) =>
-                c.revoked ? (
-                  <Tag size="sm" variant="neutral">
-                    {endedWord(c, now)}
-                  </Tag>
-                ) : (
-                  <Tag size="sm" variant="success">
-                    In use
-                  </Tag>
-                ),
-            },
-            {
-              key: "created",
-              header: "Created",
-              shrink: true,
-              sortValue: (c) => c.created_at ?? "",
-              cell: (c) => <DateCell at={c.created_at} now={now} />,
-            },
-            {
-              key: "expires",
-              header: "Expires",
-              shrink: true,
-              drop: 1,
-              sortValue: (c) => c.expires_at ?? "",
-              cell: (c) => <ExpiresCell c={c} now={now} />,
-            },
-            {
-              key: "grants",
-              header: "Carries",
-              drop: 2,
-              // A RESET LINK CARRIES NO GRANT: it sets a password once and
-              // signs nobody in, and "Its holder's grants" beside it read as a
-              // link that opened the account.
-              cell: (c) =>
-                c.method === "token" ? (
-                  <GrantTags grants={c.grants} />
-                ) : (
-                  <EmptyValue
-                    label={c.method === "reset" ? "Sets a password once" : "Its holder's grants"}
-                  />
-                ),
-            },
-            ...(manages
-              ? [
-                  {
-                    key: "revoke",
-                    header: "",
-                    label: "Revoke",
-                    shrink: true,
-                    cell: (c: CredentialRow) =>
-                      c.revoked ? null : (
-                        <Button
-                          size="small"
-                          variant="ghost"
-                          aria-label={`Revoke ${METHOD_WORDS[c.method] ?? c.method}${c.label ? ` ${c.label}` : ""}`}
-                          onClick={() => setGesture({ revoke: c })}
-                        >
-                          Revoke
-                        </Button>
-                      ),
-                  },
-                ]
-              : []),
-          ]}
-        />
-      </QueryState>
-      {!machine && (
+      <section className="col gap-2">
+        <div className="t-label">Credentials</div>
         <QueryState
-          error={sessions.code}
-          refusal={sessions.refusal}
-          detail={sessions.error?.detail || undefined}
-          loading={sessions.loading && !sessions.data}
+          error={credentials.code}
+          refusal={credentials.refusal}
+          detail={credentials.error?.detail || undefined}
+          loading={credentials.loading && !credentials.data}
         >
-          <DataGrid<SessionRow>
-            rows={sessions.data ?? []}
-            rowKey={(s) => s.lineage}
-            defaultSort="started"
-            empty={{ title: "Signed in nowhere" }}
+          <DataGrid<CredentialRow>
+            rows={credentials.data ?? []}
+            rowKey={(c) => c.id}
+            defaultSort="method"
+            empty={{ title: "Holds no credential" }}
             columns={[
               {
-                // A TIMESTAMP, so it is the column that shrinks: it took the
-                // grid's flexible width and drew it nearly empty while the
-                // State beside it, capped as a shrink column, cut a session's
-                // reason off at its edge with no ellipsis and no way to read
-                // the rest.
-                key: "started",
-                header: "Session",
-                shrink: true,
-                sortValue: (s) => s.created_at ?? "",
-                cell: (s) => <DateCell at={s.created_at} now={now} />,
+                key: "method",
+                header: "Credential",
+                // THE POINT OF THE LIST HAS A FLOOR, and so does Carries: in
+                // the peek's column every flexible track at zero gave way to
+                // the content-sized ones, so "Password" read "P…" and the
+                // header "C…" while Expires and Carries — which go first —
+                // stayed at a pixel each.
+                floor: "8rem",
+                sortValue: (c) => c.method,
+                cell: (c) => (
+                  <TextCell>
+                    {METHOD_WORDS[c.method] ?? c.method}
+                    {c.label ? ` · ${c.label}` : ""}
+                  </TextCell>
+                ),
               },
               {
                 key: "state",
                 header: "State",
-                sortValue: (s) => (s.live ? 0 : 1),
-                cell: (s) =>
-                  s.live ? (
-                    <Tag
-                      size="sm"
-                      variant="success"
-                      title={s.enrolment_only ? "May only enrol a second factor" : undefined}
-                    >
-                      {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                // ITS OWN WIDTH, EXACTLY: one of four short words in a pill,
+                // which a content-sized column's cap — a fifth of a 385px peek
+                // — cut to "In u…".
+                width: "max-content",
+                sortValue: (c) => (c.revoked ? 1 : 0),
+                cell: (c) =>
+                  c.revoked ? (
+                    <Tag size="sm" variant="neutral">
+                      {endedWord(c, now)}
                     </Tag>
                   ) : (
-                    // WHY, SAID: it rode in a tooltip, so a session a password
-                    // change ended read as one that merely had. ONE LINE, cut
-                    // with an ellipsis and whole on its title where the column
-                    // is narrower than the sentence.
-                    <span className="row gap-1" style={{ minWidth: 0 }}>
-                      <Tag size="sm" variant="neutral">
-                        Ended
-                      </Tag>
-                      {s.ended_reason && (
-                        <span className="t-caption muted truncate" title={s.ended_reason}>
-                          {s.ended_reason}
-                        </span>
-                      )}
-                    </span>
+                    <Tag size="sm" variant="success">
+                      In use
+                    </Tag>
                   ),
               },
               {
-                key: "ends",
-                header: "Ends",
+                key: "created",
+                header: "Created",
+                shrink: true,
+                drop: 3,
+                sortValue: (c) => c.created_at ?? "",
+                cell: (c) => <DateCell at={c.created_at} now={now} />,
+              },
+              {
+                key: "expires",
+                header: "Expires",
                 shrink: true,
                 drop: 1,
-                sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
-                cell: (s) =>
-                  // A DEADLINE IS NOT AN END: a session a counter ended — a
-                  // password change, signing out everywhere — has no ended_at,
-                  // and its expiry read "in 6d" beside "Ended".
-                  !s.live && !s.ended_at && s.expires_at && tsKey(s.expires_at) > now ? (
-                    <EmptyValue label="Not recorded" />
+                sortValue: (c) => c.expires_at ?? "",
+                cell: (c) => <ExpiresCell c={c} now={now} />,
+              },
+              {
+                key: "grants",
+                header: "Carries",
+                floor: "8rem",
+                drop: 2,
+                // A RESET LINK CARRIES NO GRANT: it sets a password once and
+                // signs nobody in, and "Its holder's grants" beside it read as a
+                // link that opened the account.
+                cell: (c) =>
+                  c.method === "token" ? (
+                    <GrantTags grants={c.grants} />
                   ) : (
-                    <DateCell at={s.ended_at ?? s.expires_at} now={now} />
+                    <EmptyValue
+                      label={c.method === "reset" ? "Sets a password once" : "Its holder's grants"}
+                    />
                   ),
               },
+              ...(manages
+                ? [
+                    {
+                      key: "revoke",
+                      header: "",
+                      action: true,
+                      shrink: true,
+                      cell: (c: CredentialRow) =>
+                        c.revoked ? null : (
+                          <Button
+                            size="small"
+                            variant="ghost"
+                            aria-label={`Revoke ${METHOD_WORDS[c.method] ?? c.method}${c.label ? ` ${c.label}` : ""}`}
+                            onClick={() => setGesture({ revoke: c })}
+                          >
+                            Revoke
+                          </Button>
+                        ),
+                    },
+                  ]
+                : []),
             ]}
           />
         </QueryState>
+      </section>
+      {!machine && (
+        <section className="col gap-2">
+          <div className="t-label">Sessions</div>
+          <QueryState
+            error={sessions.code}
+            refusal={sessions.refusal}
+            detail={sessions.error?.detail || undefined}
+            loading={sessions.loading && !sessions.data}
+          >
+            <DataGrid<SessionRow>
+              rows={sessions.data ?? []}
+              rowKey={(s) => s.lineage}
+              defaultSort="started"
+              empty={{ title: "Signed in nowhere" }}
+              columns={[
+                {
+                  // A TIMESTAMP, so it is not the flexible column: it took the
+                  // grid's flexible width and drew it nearly empty while the
+                  // State beside it, capped as a shrink column, cut a session's
+                  // reason off at its edge with no ellipsis and no way to read
+                  // the rest. ITS OWN WIDTH, EXACTLY, rather than capped: a
+                  // relative time is short, and the cap — a fifth of the
+                  // peek's column — cut its own header to "SESS…".
+                  key: "started",
+                  header: "Session",
+                  width: "max-content",
+                  sortValue: (s) => s.created_at ?? "",
+                  cell: (s) => <DateCell at={s.created_at} now={now} />,
+                },
+                {
+                  key: "state",
+                  header: "State",
+                  // THE POINT OF THE LIST — signed in, or ended and why — so it
+                  // keeps a floor, and Ends goes before it narrows to nothing.
+                  floor: "8rem",
+                  sortValue: (s) => (s.live ? 0 : 1),
+                  cell: (s) =>
+                    s.live ? (
+                      <Tag
+                        size="sm"
+                        variant="success"
+                        title={s.enrolment_only ? "May only enrol a second factor" : undefined}
+                      >
+                        {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                      </Tag>
+                    ) : (
+                      // WHY, SAID: it rode in a tooltip, so a session a password
+                      // change ended read as one that merely had. ONE LINE, cut
+                      // with an ellipsis and whole on its title where the column
+                      // is narrower than the sentence.
+                      <span className="row gap-1" style={{ minWidth: 0 }}>
+                        <Tag size="sm" variant="neutral">
+                          Ended
+                        </Tag>
+                        {s.ended_reason && (
+                          <span className="t-caption muted truncate" title={s.ended_reason}>
+                            {s.ended_reason}
+                          </span>
+                        )}
+                      </span>
+                    ),
+                },
+                {
+                  key: "ends",
+                  header: "Ends",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
+                  cell: (s) =>
+                    // A DEADLINE IS NOT AN END: a session a counter ended — a
+                    // password change, signing out everywhere — has no ended_at,
+                    // and its expiry read "in 6d" beside "Ended".
+                    !s.live && !s.ended_at && s.expires_at && tsKey(s.expires_at) > now ? (
+                      <EmptyValue label="Not recorded" />
+                    ) : (
+                      <DateCell at={s.ended_at ?? s.expires_at} now={now} />
+                    ),
+                },
+              ]}
+            />
+          </QueryState>
+        </section>
       )}
-    </Card>
+    </>
   );
 }
 

@@ -580,6 +580,22 @@ export function leadsInLine(index: OrgIndex, lead: string, handle: string): bool
 }
 
 /**
+ * Whether the reader is the person this seat is held by — the seat the
+ * identity directory binds them to — and so whether what draws it speaks to
+ * them.
+ *
+ * ONE ANSWER FOR EVERY SURFACE THAT DRAWS A SEAT: the overview said "Your day
+ * … waiting on you" while the callout above it said "Held by jane.doe" and the
+ * work card beside it "Nothing open is assigned to them", because each asked
+ * for itself, or did not ask. Here rather than beside the profile because a
+ * shared control asks it too — Message holds itself on the reader's own seat
+ * (`components/writes.tsx`), and the peek draws that control as the page does.
+ */
+export function isOwnSeat(viewer: { readonly handle: string }, handle: string): boolean {
+  return viewer.handle !== "" && viewer.handle === handle;
+}
+
+/**
  * The round a live call is on, ONE-BASED: `round_num` is the engine's
  * zero-based round and `rounds_used` the same count one-based — the rounds
  * that came back, and the one in flight from the frame the loop publishes as
@@ -648,14 +664,15 @@ export type SeatSettings =
 /**
  * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
- * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document takes
+ * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document takes
  * `config:read`, so "this seat is not in the active revision", "you may not
- * read it", "the read has not come back yet" and "here it is" are four
- * different facts — and a `ConfigRole | null` collapses the first three into
- * one. Every screen that did that printed the same sentence for all of them,
- * and the sentence it picked was the reader's: the seat header's MODEL fact
- * read "needs a credential" on five of eight tabs, because those tabs simply
- * did not ask.
+ * read it", "nobody asked, because you may not", "the read has not come back
+ * yet" and "here it is" are five different facts — and a `ConfigRole | null`
+ * collapses the first four into one. Every screen that did that printed the
+ * same sentence for all of them, and the sentence it picked was the reader's:
+ * the seat header's MODEL fact read "needs a credential" on five of eight
+ * tabs, because those tabs simply did not ask; and the Settings tab told a
+ * reader nobody had asked for that "No company configuration is active".
  *
  * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
  * keeps its last good answer through a failed ask — which suits a poll and is
@@ -670,13 +687,27 @@ export type SeatReading =
   | { state: "absent" }
   /** The engine refused the read: this reader does not hold `config:read`. */
   | { state: "refused" }
-  /** Nothing has been asked, or nothing has come back. Never a claim. */
+  /**
+   * NEVER ASKED, because the answer was known before the question: the viewer
+   * has answered, holds no `config:read` and leads no unit over the seat, so
+   * the engine would refuse it ([useSeatSetup]). A claim about the READER —
+   * which grant reads the seat's half — and never one about the company.
+   */
+  | { state: "withheld" }
+  /**
+   * Nothing has come back yet — or nothing could be asked yet, because the
+   * viewer has not said who this is. Never a claim.
+   */
   | { state: "unread" };
 
 export function seatReading(
   settings: SeatSettings | null | undefined,
   error?: unknown,
+  withheld = false,
 ): SeatReading {
+  // NOT ASKED HAS NO ANSWER TO WEIGH: a disabled read holds neither a
+  // document nor an error (`useQuery`, `useRest`), so this is decided first.
+  if (withheld) return { state: "withheld" };
   if (error) return { state: "refused" };
   if (!settings) return { state: "unread" };
   if (settings.state === "found") {
@@ -742,7 +773,8 @@ export interface SeatSetup {
   settings: SeatSettings | null;
   reading: SeatReading;
   /** The raw answer, for a panel that states its own read: the document
-   *  (never beside a refusal), whether it is in flight, and the refusal. */
+   *  (never beside a refusal), whether it is in flight — or waiting on the
+   *  viewer before it can be asked — and the refusal. */
   config: {
     doc: CompanyDocument | null;
     loading: boolean;
@@ -753,7 +785,7 @@ export interface SeatSetup {
 
 /**
  * The guarded half of one seat, for any screen that draws it: the company
- * document's entry for the seat and the four-state reading of it.
+ * document's entry for the seat and the five-state reading of it.
  *
  * ONE READ, ONE ORDER. The document takes `config:read`, and every screen
  * that read it on its own either forgot the refusal-first order
@@ -778,11 +810,14 @@ export function useSeatSetup(handle: string): SeatSetup {
   // NOT ASKED WITHOUT THE GRANT. The document takes `config:read`, so a reader
   // without it is refused on every ask — the answer is known before the
   // question, and asking only puts a refusal on the wire and a `refused`
-  // banner over a page that never had a chance. Such a reader stays `unread`,
-  // which claims nothing; the screen names the grant instead.
+  // banner over a page that never had a chance. Such a reader is `withheld`
+  // once the viewer has answered — a claim about the reader, which the screen
+  // says by naming the grant — and `unread`, claiming nothing, until it has.
   const granted = viewer.grants.includes(RUNTIME_GRANT);
   const config = useQuery("config", undefined, { enabled: !!seat && granted });
   const led = !granted && !!seat?.handle && scope.seats.has(seat.handle) ? seat : null;
+  const asked = !!seat && (granted || led !== null);
+  const withheld = !!seat && !asked && !viewer.loading;
   const lead = useRest(
     led ? `/config/roles/${led.handle}+${led.unit?.id ?? ""}` : null,
     (signal) => (led ? leadDocument(led, signal) : Promise.resolve(null)),
@@ -802,14 +837,20 @@ export function useSeatSetup(handle: string): SeatSetup {
     () => (seat && read.data && !read.error ? seatSettings(read.data, seat) : null),
     [seat, read.data, read.error],
   );
-  const reading = useMemo(() => seatReading(settings, read.error), [settings, read.error]);
+  const reading = useMemo(
+    () => seatReading(settings, read.error, withheld),
+    [settings, read.error, withheld],
+  );
   return {
     seat,
     settings,
     reading,
     config: {
       doc: read.error ? null : (read.data ?? null),
-      loading: read.loading,
+      // WAITING ON THE VIEWER IS WAITING TOO: until it answers nothing can be
+      // asked, and a panel reading "not loading, no document" as an answer
+      // told every reader "No company configuration is active" while it did.
+      loading: read.loading || (!!seat && !asked && !withheld),
       error: read.error,
       refusal: read.refusal,
     },

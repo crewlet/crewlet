@@ -85,6 +85,7 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
+import { useKeyHints } from "~/lib/media.ts";
 import { themeEntry, useApplyTheme } from "../appearance.tsx";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -195,6 +196,9 @@ export function CommandPalette({
       ? { anonymous: true }
       : { anonymous: false, grants: viewer.grants };
   const prefs = useViewerPrefs();
+  // THE KEYCAPS ARE FOR A READER WITH KEYS (`useKeyHints`): on a phone the
+  // rows' chords and the footer's legend named keys nobody there has.
+  const keyHints = useKeyHints();
   const recents = useRecents();
   const agents = useAgents();
   const org = useOrg();
@@ -509,7 +513,9 @@ export function CommandPalette({
           : suggested
             ? `suggested: ${suggested.seat.name} — ${suggested.why}`
             : "choose who",
-        meta: <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />,
+        meta: keyHints ? (
+          <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />
+        ) : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -539,7 +545,7 @@ export function CommandPalette({
           ? `Ask ${suggested.seat.name} about “${term}”`
           : `Ask an agent about “${term}”…`,
         hint: why || "opens an ask, answer lands in your inbox",
-        meta: <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} />,
+        meta: keyHints ? <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -559,7 +565,9 @@ export function CommandPalette({
         icon: <PlusGlyph size="sm" />,
         label: `Create task “${term}”`,
         hint: why || (project ? whereHint(project, projectWhy) : choose),
-        meta: <Kbd subtle keys={capsOf(keyRow("search.create").presses[0]!)} />,
+        meta: keyHints ? (
+          <Kbd subtle keys={capsOf(keyRow("search.create").presses[0]!)} />
+        ) : undefined,
         onSelect: why
           ? blockedRow(why)
           : () => {
@@ -1185,30 +1193,32 @@ export function CommandPalette({
       {...scoped}
       footer={
         <>
-          <span className="palette-keys">
-            <span>
-              <Kbd subtle>↑</Kbd>
-              <Kbd subtle>↓</Kbd> {themeStep ? "preview" : "move"}
-            </span>
-            <span>
-              <Kbd subtle keys={["Enter"]} /> {themeStep ? "apply" : picking ? "choose" : "open"}
-            </span>
-            {themeStep ? (
+          {keyHints && (
+            <span className="palette-keys">
               <span>
-                <Kbd subtle keys={["Escape"]} /> back to Actions
+                <Kbd subtle>↑</Kbd>
+                <Kbd subtle>↓</Kbd> {themeStep ? "preview" : "move"}
               </span>
-            ) : picking ? (
               <span>
-                <Kbd subtle keys={capsOf(keyRow("search.back").presses[0]!)} /> back
+                <Kbd subtle keys={["Enter"]} /> {themeStep ? "apply" : picking ? "choose" : "open"}
               </span>
-            ) : (
-              // A PHONE DROPS THIS ONE (frame.css): it has no chord keys, and
-              // three keys with their words wrapped its band onto two lines.
-              <span className="palette-keys-chord">
-                <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> ask an agent
-              </span>
-            )}
-          </span>
+              {themeStep ? (
+                <span>
+                  <Kbd subtle keys={["Escape"]} /> back to Actions
+                </span>
+              ) : picking ? (
+                <span>
+                  <Kbd subtle keys={capsOf(keyRow("search.back").presses[0]!)} /> back
+                </span>
+              ) : (
+                // A PHONE DROPS THIS ONE (frame.css): it has no chord keys, and
+                // three keys with their words wrapped its band onto two lines.
+                <span className="palette-keys-chord">
+                  <Kbd subtle keys={capsOf(keyRow("search.ask").presses[0]!)} /> ask an agent
+                </span>
+              )}
+            </span>
+          )}
           {/* THE MODE, where a ranked search is what the scope runs — drawn
               at the END OF THE SCOPE ROW, as the approved palette places it
               (frame.css), since the kit's scope row takes no trailing slot. */}

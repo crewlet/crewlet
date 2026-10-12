@@ -54,6 +54,7 @@ import {
 import {
   awaitingPerson,
   heldBy,
+  isOwnSeat,
   reportsCaption,
   resolvedAbsence,
   resolvedWithheld,
@@ -90,7 +91,6 @@ import {
   failedIn,
   feedRows,
   fortnight,
-  isOwnSeat,
   mayReadRecord,
   placementWords,
   roundWords,
@@ -102,7 +102,7 @@ import {
   workersWords,
   type SeatTab,
 } from "./profile.ts";
-import { ModelChain } from "./shared.tsx";
+import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
 
 /** The window the tiles count: a week of company days, and the week before. */
@@ -847,10 +847,11 @@ function Setup({
       </dl>
       {reading.state !== "read" && (
         <p className="prof-note">
-          {reading.state === "refused" || (reading.state === "unread" && absent === "withheld")
+          {reading.state === "refused" || reading.state === "withheld"
             ? // A READER WITHOUT THE GRANT IS NEVER ASKED (`useSeatSetup`):
-              // they stay `unread`, and what they are missing is the grant,
-              // not a read in flight.
+              // the reading says so, and what they are missing is the grant,
+              // not a read in flight — while a lead's read of the seat, which
+              // the engine answers without it, is one.
               "Its sandbox, placement and workers are in the company document, which config:read reads."
             : reading.state === "absent"
               ? "The active revision names no seat by this handle, so its sandbox, placement and workers cannot be read."
@@ -1108,38 +1109,9 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
         <Reports seat={seat} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
-        {self && <YourAccount />}
+        <YourAccount handle={seat.handle} />
         <About seat={seat} />
       </aside>
     </div>
-  );
-}
-
-/**
- * The way from the reader's own seat to their own Account.
- *
- * THE SEAT IS NOT THE ACCOUNT, and from here it looked like one: a person
- * opening their own page met their name, "Person" and a Settings tab, with no
- * password, no second factor and no sessions on it — and concluded the
- * dashboard had no two-step verification to set up. The seat is the company's
- * page about a place in the chart; how the person in it signs in is theirs,
- * and lives at `#/account`. Drawn only on the reader's OWN seat, because
- * nobody manages another person's second factor from here.
- */
-function YourAccount() {
-  return (
-    <Card padding="none" className="prof-card">
-      <Card.Header divided={false}>
-        <Card.Title as="h3">Your account</Card.Title>
-      </Card.Header>
-      <p className="prof-note">
-        This seat is yours. Your password, two-step verification, where you are signed in and your
-        personal access tokens are on your{" "}
-        <a className="t-link prose-link" href={href(["account"])}>
-          Account
-        </a>{" "}
-        page.
-      </p>
-    </Card>
   );
 }

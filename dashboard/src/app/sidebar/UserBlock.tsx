@@ -13,11 +13,29 @@
  * it is not bound rather than reporting a fault.
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
  * a blank avatar, because "who does the engine think I am" is the question
- * every write this dashboard makes turns on — and the GRANTS ride beside it,
- * since they are what decides which of those writes and screens the reader
- * reaches.
+ * every write this dashboard makes turns on. The GRANTS are said in the
+ * popover, under the login, since they are what decides which of those writes
+ * and screens the reader reaches.
  *
- * # The name IS the way to the reader's own Account
+ * THE READER IS CALLED BY THEIR OWN NAME, never their seat's (`readerName` in
+ * `lib/viewer.ts`): their directory row's name, else their login, with the
+ * seat said beside it AS the seat — its name off the chart, or `@handle`
+ * where the chart is unread. The block used the seat's name, which is the
+ * chart's name for a place and often a role, so a person with no name of
+ * their own was "Founder" here while their Account said they had no name. One
+ * rule for every state, including a session the viewer has not answered for
+ * (it never does without `state:read`): that arm said "Signed in" while the
+ * session it read named the reader's seat.
+ *
+ * AND A READ THAT FAILED IS NOT NOBODY. Where the frame's `GET /auth/session`
+ * failed — a 503, the network — rather than being refused, the browser may
+ * well hold a session, so the block says it could not tell who this is and
+ * still offers the Account (whose page states its own read's failure, with a
+ * retry) and the sign-out, which ends this browser's cookie whatever the node
+ * can read. It said "Checking who you are" with no link until the tab came
+ * back.
+ *
+ * # The name IS the way to the reader's own Account, and says so
  *
  * Somebody resolved — bound or not — is a link to `#/account`, the one
  * workspace with no sidebar row (`place: "menu"` in `nav.ts`), because this
@@ -30,6 +48,17 @@
  * no two-step verification at all. The seat is one click on from there,
  * Account's Profile naming it. Nobody is not a link: there is no account to
  * open, and the popover offers the sign-in.
+ *
+ * THE LINK SAYS WHERE IT GOES, three ways, because nothing about a name says
+ * "press me for your password": its accessible name ends ", your account";
+ * its title is the Account row's own hint, the one description the palette
+ * and the popover show; and at rest it draws the rail's pressable mark, a
+ * chevron in quiet ink, where it drew nothing until hovered. Its title was the
+ * grants line, which answered a question the reader had not asked.
+ *
+ * AND IT IS THE ACCOUNT'S ROW, so it is marked current on `#/account` exactly
+ * as a sidebar row is on its own page — raised, with the hairline — since the
+ * Account has no row of its own to mark (`place: "menu"`).
  *
  * # The popover holds the session's own gestures
  *
@@ -80,9 +109,9 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import { isThemeId } from "@crewlethq/tokens";
-import { Settings2Glyph } from "@crewlethq/icons/glyphs";
+import { ChevronRightGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
-import { href } from "~/app/router.tsx";
+import { href, useRoute } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
@@ -90,9 +119,9 @@ import { useFrameSession } from "~/lib/frameSession.ts";
 import { goSignIn, signOut } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
-import type { ViewerState } from "~/lib/viewer.ts";
+import { readerName, type ViewerState } from "~/lib/viewer.ts";
 import type { SessionAnswer } from "~/protocol/index.ts";
-import { WORKSPACES, workspaceRow } from "../nav.ts";
+import { WORKSPACES, workspaceOf, workspaceRow } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
 
 /** The grants a principal carries, as one line. */
@@ -102,49 +131,71 @@ export function grantsLine(grants: readonly string[]): string {
 
 /**
  * What the block says about who this browser is. `session` is what `GET
- * /auth/session` answered: the person's own name, for one no seat names —
- * and, while the viewer has not answered, who this browser is at all.
+ * /auth/session` answered — the reader's own name and, while the viewer has
+ * not answered, who this browser is at all — and `failed` whether that read
+ * failed rather than being refused.
+ *
+ * ONE RULE FOR THE NAME in every state ([readerName]): the reader's own name,
+ * else their login, never the seat's. The SEAT is said beside it as the seat —
+ * `seatName`, off the chart, or `@handle` where the chart is unread — and the
+ * login beside a name that is not it. Nothing is said twice.
  *
  * THE SESSION STANDS IN FOR A VIEWER THAT NEVER ANSWERS. The viewer is a
  * socket question, and the socket stops dialling for a person the engine will
  * not serve (no `state:read`, a seat taken out of the chart), so the foot said
- * "Checking who you are" for good while the menu beside it named them.
+ * "Checking who you are" for good while the menu beside it named them — and
+ * then "Signed in" while the session it read named their seat.
  */
 export function whoLine(
   viewer: ViewerState,
   seatName: string,
-  session: Pick<SessionAnswer, "login" | "name" | "grants"> | null = null,
+  session: Pick<SessionAnswer, "login" | "name" | "grants" | "seat"> | null = null,
+  failed = false,
 ): { name: string; detail: string; grants: string } {
   if (viewer.loading) {
     if (session) {
-      return session.name
-        ? { name: session.name, detail: session.login, grants: grantsLine(session.grants ?? []) }
-        : { name: session.login, detail: "Signed in", grants: grantsLine(session.grants ?? []) };
+      return {
+        ...said(readerName(session), session.login, session.seat ? `@${session.seat}` : null),
+        grants: grantsLine(session.grants ?? []),
+      };
+    }
+    if (failed) {
+      return {
+        name: "Could not tell who you are",
+        detail: "The engine did not answer",
+        grants: "",
+      };
     }
     return { name: "Checking who you are", detail: "Asking the engine", grants: "" };
   }
-  const ownName = session?.name ?? "";
   if (viewer.anonymous) {
     return { name: "Not signed in", detail: "Sign in to read and act", grants: "" };
   }
   const grants = grantsLine(viewer.grants);
+  const name = readerName(session, viewer.login);
   // UNBOUND IS ORDINARY, so it is said as a fact: the login is who the engine
-  // records them as, and their record is kept under it — beside their own
-  // name, where their row holds one, since no seat names them.
-  if (viewer.unbound) {
-    return ownName
-      ? { name: ownName, detail: `${viewer.login} · Not bound to a seat`, grants }
-      : { name: viewer.login, detail: "Not bound to a seat", grants };
-  }
-  const name = viewer.name || viewer.handle;
-  // THE LOGIN AND THE SEAT'S ROLE, never the handle with a bare `@`: the
-  // login is who signed in, the role is the seat they act as, and the two
-  // differ. The seat's KIND is never captioned: every binding the directory
-  // writes is to a human seat and the guard refuses one that is not
-  // (`seat_unavailable`), so "human seat" would say what the block already
-  // shows and "agent seat" would describe a viewer no node answers.
-  const role = seatName && seatName !== name ? seatName : "";
-  return { name, detail: role ? `${viewer.login} · ${role}` : viewer.login, grants };
+  // records them as, and their record is kept under it.
+  if (viewer.unbound) return { ...said(name, viewer.login, null), grants };
+  // THE SEAT AS THE SEAT: its name off the chart, or the engine's own word for
+  // it, or its handle where neither has arrived. Its KIND is never captioned:
+  // every binding the directory writes is to a human seat and the guard
+  // refuses one that is not (`seat_unavailable`), so "human seat" would say
+  // what the block already shows.
+  const seat = seatName || viewer.name || (viewer.handle ? `@${viewer.handle}` : "");
+  return { ...said(name, viewer.login, seat), grants };
+}
+
+/**
+ * The name and the line under it: the login where it is not the name, then
+ * the seat — or, where `seat` is null, that the reader holds none — leaving
+ * out whatever would repeat what is already said.
+ */
+function said(name: string, login: string, seat: string | null): { name: string; detail: string } {
+  const parts: string[] = [];
+  if (login && login !== name) parts.push(login);
+  if (seat === null) parts.push("Not bound to a seat");
+  else if (seat && seat !== name) parts.push(seat);
+  return { name, detail: parts.join(" · ") };
 }
 
 export function UserBlock({
@@ -156,17 +207,25 @@ export function UserBlock({
   seatName: string;
 }) {
   const prefs = useViewerPrefs();
+  const route = useRoute();
   const [everywhere, setEverywhere] = useState(false);
   // THE FRAME'S ONE READ, asked again when the tab comes back: for the people
   // the socket refuses it is the ONLY way to the sign-outs, so a request lost
   // on the way must not leave them none until a reload.
-  const session = useFrameSession().answer;
-  const who = whoLine(viewer, seatName, session);
+  const frame = useFrameSession();
+  const session = frame.answer;
+  // FAILED, NOT REFUSED: a `401` is nobody, and `rest.ts` sends the tab to the
+  // sign-in; anything else says nothing about whether this browser holds a
+  // session (see the module's note).
+  const failed = session === null && frame.error !== null && frame.error.status !== 401;
+  const who = whoLine(viewer, seatName, session, failed);
   const answered = !viewer.loading && !viewer.anonymous;
   // WHO THIS IS IS SETTLED by the viewer, or by the session while the viewer
   // has not answered (see [whoLine]).
   const resolved = answered || (!viewer.anonymous && session !== null);
-  const account = accountOf(viewer, session);
+  const account = accountOf(viewer, session, failed);
+  // THE ACCOUNT'S ROW IS THIS BLOCK, so it is current where the Account is.
+  const here = workspaceOf(route.path) === ACCOUNT.key;
 
   const identity = (
     <>
@@ -191,16 +250,22 @@ export function UserBlock({
 
   return (
     <div className="user-block">
-      {resolved ? (
-        // THE READER'S OWN ACCOUNT, for anybody resolved — see the file's
-        // doc: it was the seat's page, and nobody found their second factor.
-        <a className="user-block-who" href={href(ACCOUNT.path)} title={who.grants}>
+      {resolved || account?.kind === "unknown" ? (
+        // THE READER'S OWN ACCOUNT, for anybody resolved — and for a browser
+        // whose session read failed, which may hold one — see the file's doc:
+        // it was the seat's page, and nobody found their second factor.
+        <a
+          className="user-block-who"
+          href={href(ACCOUNT.path)}
+          title={ACCOUNT.hint}
+          aria-current={here ? "page" : undefined}
+        >
           {identity}
+          <span className="sr-only">, your account</span>
+          <ChevronRightGlyph size="xs" className="user-block-go" aria-hidden="true" />
         </a>
       ) : (
-        <span className="user-block-who" title={who.grants || undefined}>
-          {identity}
-        </span>
+        <span className="user-block-who">{identity}</span>
       )}
       <ThemeToggle size="sm" value={prefs.theme} onChange={prefs.setTheme} />
       {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits at
@@ -250,20 +315,33 @@ export function UserBlock({
   );
 }
 
-/** What the popover may offer about the session behind this browser. */
-export type Account = { kind: "nobody" } | { kind: "session"; login: string };
+/**
+ * What the popover may offer about the session behind this browser: nobody's
+ * sign-in, a session under its login, or a browser whose session read FAILED
+ * and which may hold one.
+ */
+export type Account = { kind: "nobody" } | { kind: "session"; login: string } | { kind: "unknown" };
 
 /**
  * What the popover may offer, from the viewer and the session's own answer —
- * or null for nothing at all.
+ * or null for nothing at all, while the first read is out.
  *
  * A SESSION THE VIEWER HAS NOT ANSWERED FOR (it may never, for a person the
  * socket refuses) is offered its two sign-outs and its Account under its own
- * login.
+ * login. A session read that FAILED (`failed`) is no answer either way, so it
+ * is offered the Account, whose page says what its own read finds, and the
+ * sign-out of this browser — never "everywhere", which needs to know whose.
  */
-export function accountOf(viewer: ViewerState, session: SessionAnswer | null): Account | null {
+export function accountOf(
+  viewer: ViewerState,
+  session: SessionAnswer | null,
+  failed = false,
+): Account | null {
   if (viewer.anonymous) return { kind: "nobody" };
-  if (viewer.loading) return session ? { kind: "session", login: session.login } : null;
+  if (viewer.loading) {
+    if (session) return { kind: "session", login: session.login };
+    return failed ? { kind: "unknown" } : null;
+  }
   return { kind: "session", login: viewer.login };
 }
 
@@ -308,9 +386,15 @@ export function AccountActions({
   };
   return (
     <div className="preferences-account">
-      <span className="t-label">Signed in as</span>
-      <span className="mono truncate">{account.login}</span>
-      {grants && <span className="t-caption">{grants}</span>}
+      {account.kind === "session" ? (
+        <>
+          <span className="t-label">Signed in as</span>
+          <span className="mono truncate">{account.login}</span>
+          {grants && <span className="t-caption">{grants}</span>}
+        </>
+      ) : (
+        <span className="t-caption">The engine did not say who this browser is signed in as.</span>
+      )}
       {/* A LINK, not a button: it is a page, so ⌘-click opens it in a tab. */}
       {MENU_ROWS.map((ws) => (
         <a
@@ -328,17 +412,19 @@ export function AccountActions({
       <Button size="small" variant="secondary" onClick={run(() => signOut(socket), "Signing out")}>
         Sign out
       </Button>
-      <Button
-        size="small"
-        variant="ghost"
-        title="Ends every session you hold, on every device, and every personal access token"
-        onClick={() => {
-          onLeave?.();
-          onSignOutEverywhere();
-        }}
-      >
-        Sign out everywhere
-      </Button>
+      {account.kind === "session" && (
+        <Button
+          size="small"
+          variant="ghost"
+          title="Ends every session you hold, on every device, and every personal access token"
+          onClick={() => {
+            onLeave?.();
+            onSignOutEverywhere();
+          }}
+        >
+          Sign out everywhere
+        </Button>
+      )}
     </div>
   );
 }

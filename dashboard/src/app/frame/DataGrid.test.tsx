@@ -277,6 +277,50 @@ test("a cell carries its column's name, and only when that name is a word", () =
   expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
 });
 
+// A BUTTON IS ITS OWN NAME.
+//
+// A column of row actions has an empty head, and declared with a `label` its
+// cells drew that word beside the button on the phone's card: the Account's
+// sessions read `SIGN OUT  Sign out` on every row, and `SIGN OUT  This
+// browser` on the one that is not signed out by name at all. `action` says the
+// cell names itself, so the card draws no name before it — even where the
+// column carries a `label` for a chooser to name it by, which is what this
+// one does so the flag is what decides. The CONTROL is the labelled column
+// beside it, which still says its word. Mutation: read `label` for an action
+// column too and the first expectation goes red.
+test("an action column's cell names itself, so the card draws no name beside it", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "state", header: "", label: "State", cell: () => <span>live</span> },
+          {
+            key: "end",
+            header: "",
+            label: "Sign out",
+            action: true,
+            cell: (r) => <button type="button">Sign out {r.id}</button>,
+          },
+        ]}
+      />
+    </Router>,
+  );
+  const cells = [...container.querySelectorAll<HTMLElement>(".grid-row > .grid-cell")];
+  const end = cells.filter((_, at) => at % 2 === 1);
+  expect(end).toHaveLength(ROWS.length);
+  for (const cell of end) {
+    expect(cell.hasAttribute("data-label")).toBe(false);
+    // AND THE BUTTON IS STILL THERE: the cell is not empty, so the card keeps
+    // its line.
+    expect(cell.matches(":empty")).toBe(false);
+  }
+  expect(cells.filter((_, at) => at % 2 === 0).map((c) => c.getAttribute("data-label"))).toEqual(
+    ROWS.map(() => "State"),
+  );
+});
+
 // A CELL WITH NO VALUE HAS NO CHILD NODES, WHICH IS WHAT THE CARD DROPS IT ON.
 //
 // A column draws no value on a row that has none — `PriorityMark` renders null

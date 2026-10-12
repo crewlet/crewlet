@@ -12,7 +12,9 @@ import {
   configWriteAccess,
   linkOf,
   mayChangeConfig,
+  messageSeatAccess,
   orgWriteAccess,
+  OWN_SEAT_MESSAGE,
   writeAccess,
 } from "./useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
@@ -120,6 +122,24 @@ test("a person bound to no seat acts under their own login", () => {
 // still acts for nobody.
 test("a handle with an empty acts list acts for nobody", () => {
   expect(writeAccess("set_pins", { ...BOUND, acts: [] }, "open").can).toBe(false);
+});
+
+// MESSAGING YOUR OWN SEAT IS HELD, by the control's own rule and in one
+// sentence wherever it is drawn — but LAST, like every hold: a reader who is
+// offline is told that first, and a colleague's seat is free. An unbound
+// reader has no seat of their own, so no seat is theirs. Mutation: compare
+// against anything but the reader's bound seat and a row goes red.
+test("messaging your own seat is held after everything a person can clear", () => {
+  const can = writeAccess("create_work_item", { ...BOUND, acts: ["create_work_item"] }, "open");
+  expect(messageSeatAccess(can, BOUND, "jane")).toEqual({
+    can: false,
+    block: "held",
+    reason: OWN_SEAT_MESSAGE,
+  });
+  expect(messageSeatAccess(can, BOUND, "swe")).toBe(can);
+  expect(messageSeatAccess(can, UNBOUND, "")).toBe(can);
+  const offline = writeAccess("create_work_item", BOUND, "offline");
+  expect(messageSeatAccess(offline, BOUND, "jane")).toBe(offline);
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its

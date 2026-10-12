@@ -41,14 +41,26 @@
  * "This browser" mark read before it would leave this browser's new session
  * offered a named sign-out, which ends this browser.
  *
+ * # What a person comes to check is on the first screen
+ *
+ * Security leads with two-step verification — its state in a line and its
+ * button — and the password is a line of its own whose "Change password…"
+ * opens the form in a dialog, as the authenticator's setup does. The form
+ * drawn in place stood four fields tall above the second factor and pushed it
+ * below the fold at 1280×720 and on a phone, so a person looking for two-step
+ * verification found a password form and concluded there was none.
+ *
  * # A credential that is not a person's sees what it is
  *
  * A Tier A token exchanged for a session is the deployment's credential, with
  * no password, second factor or token of its own — so the page names it and
  * draws none of the personal sections, each of which the engine would refuse.
+ * Its note says so too: the page's one sentence is chosen by what the session
+ * is, because the person's — "your password, your second factor…" — stood
+ * directly above a card saying this credential has none of them.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -56,6 +68,8 @@ import {
   EmptyValue,
   FormField,
   Input,
+  Modal,
+  Skeleton,
   Tag,
   Text,
   useToast,
@@ -70,7 +84,7 @@ import {
   MintTokenDialog,
 } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
@@ -80,9 +94,10 @@ import { useIamGesture } from "~/lib/iamWrite.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
-import { indexOrg } from "~/lib/seats.ts";
+import { handleLabel, indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useFrameSession } from "~/lib/frameSession.ts";
+import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { auth, rest, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import type { CredentialRow, DirectoryRow, SessionRow } from "~/routes/settings/Access.tsx";
@@ -110,31 +125,53 @@ export function Account() {
   const session = useFrameSession();
   const sessionMoved = session.reload;
   const answer = session.answer;
+  // NOTHING TO SAY UNTIL THE ENGINE HAS ANSWERED, and the page says that much
+  // rather than nothing: the note is chosen by what the session is, so it
+  // waits too, and `QueryState` draws nothing for a read still out — which
+  // left the reader's own page blank for as long as the read took.
+  if (!answer && session.code === null) {
+    return <Skeleton variant="text" rows={4} label="Reading who you are signed in as" />;
+  }
+  if (!answer) {
+    return (
+      <QueryState
+        error={session.code}
+        refusal={session.refusal}
+        detail={session.error?.detail || undefined}
+        loading={session.loading}
+      />
+    );
+  }
   return (
     <>
-      <PageNote>
-        Who you are signed in as, and what you can change about it yourself: your password, your
-        second factor, where you are signed in and the tokens that act as you.
-      </PageNote>
-      {answer ? (
-        answer.kind === "person" ? (
-          <PersonAccount session={answer} onSessionMoved={sessionMoved} />
-        ) : (
-          <NotAPerson session={answer} />
-        )
+      <PageNote>{noteFor(answer)}</PageNote>
+      {answer.kind === "person" ? (
+        <PersonAccount session={answer} onSessionMoved={sessionMoved} />
       ) : (
-        <QueryState
-          error={session.code}
-          refusal={session.refusal}
-          detail={session.error?.detail || undefined}
-          loading={session.loading}
-        />
+        <NotAPerson session={answer} />
       )}
     </>
   );
 }
 
-/** A session that is not a person's: what it is, and nothing to manage. */
+/**
+ * The page's one sentence, for the session it shows.
+ *
+ * CHOSEN BY WHAT THE SESSION IS, and so drawn only once `/auth/session` has
+ * said: the person's sentence promises a password, a second factor, sessions
+ * and tokens, and drawn for every session it stood directly above the card
+ * telling a Tier A token's session that it holds none of them.
+ */
+function noteFor(session: SessionAnswer): string {
+  if (session.kind === "person") {
+    return "Who you are signed in as, and what you can change about it yourself: your password, your second factor, where you are signed in and the tokens that act as you.";
+  }
+  return tierATokenOf(session.login)
+    ? "Who this browser is signed in as. A deployment’s API token is its own credential rather than a person: it has no password, second factor or personal tokens to change here, and its session ends within the hour."
+    : "Who this browser is signed in as. A credential that is not a person has no password, second factor or personal tokens to change here.";
+}
+
+/** A session that is not a person's: what it is and what it holds, and nothing to manage. */
 function NotAPerson({ session }: { session: SessionAnswer }) {
   const token = tierATokenOf(session.login);
   return (
@@ -143,18 +180,18 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
         <Card.Title>Not a person&rsquo;s account</Card.Title>
       </Card.Header>
       <div className="col gap-3">
+        {/* WHICH CREDENTIAL, and nothing about what it lacks: the note above
+            says that once, for the page. */}
         <Text as="p" variant="body">
           {token ? (
             <>
               You are signed in with this deployment&rsquo;s API token{" "}
-              <code className="inline">{token}</code>. It is the deployment&rsquo;s own credential
-              rather than a person, so it has no password, second factor, sessions list or personal
-              tokens to manage here; its session ends within the hour.
+              <code className="inline">{token}</code>.
             </>
           ) : (
             <>
               You are signed in as <code className="inline">{session.login}</code>, which is not a
-              person, so there is no password, second factor or personal token to manage here.
+              person.
             </>
           )}
         </Text>
@@ -222,7 +259,13 @@ function PersonAccount({
   );
 }
 
-/** What the directory holds about the reader, read-only. */
+/**
+ * What the directory holds about the reader, read-only.
+ *
+ * AT THE CARD'S OWN INSET: `padding="none"` is for a card whose body is a
+ * flush grid, and around a list of facts it left the first of them, Login,
+ * touching the header's rule.
+ */
 function Profile({
   session,
   profile,
@@ -230,13 +273,11 @@ function Profile({
   session: SessionAnswer;
   profile: RestResult<DirectoryRow>;
 }) {
-  const org = useOrg();
   const row = profile.data;
   const seat = row?.seat ?? session.seat ?? "";
-  const seatName = seat ? (indexOrg(org).byHandle.get(seat)?.name ?? seat) : "";
   const sealed = <EmptyValue label="Sealed: this node cannot open it" />;
   return (
-    <Card padding="none">
+    <Card>
       <Card.Header icon={<UserGlyph size="sm" />}>
         <Card.Title>Profile</Card.Title>
       </Card.Header>
@@ -258,9 +299,7 @@ function Profile({
           <dt>Seat</dt>
           <dd>
             {seat ? (
-              <a className="t-link" href={href(["agents", "seats", seat])}>
-                {seatName} <span className="mono muted">{seat}</span>
-              </a>
+              <SeatFact handle={seat} linked={(session.grants ?? []).includes(LIVE_VIEW_GRANT)} />
             ) : (
               // A PERSON ALWAYS HOLDS ONE (ADR-0032), so this is a session
               // that acts as its own credential rather than as a seat.
@@ -273,17 +312,61 @@ function Profile({
           </dd>
         </dl>
       </QueryState>
-      <p
-        className="t-caption muted"
-        style={{ margin: 0, padding: "0 var(--spacing-4) var(--spacing-4)" }}
-      >
+      <p className="t-caption muted" style={{ margin: 0 }}>
         An administrator changes these, from Settings › People &amp; access.
       </p>
     </Card>
   );
 }
 
-/** The password, the second factor and the recovery codes. */
+/**
+ * The reader's seat, written as the product writes a seat everywhere: its
+ * badge and name (the grid's seat cell), then its `@handle`.
+ *
+ * IT WAS THE NAME AND THE BARE HANDLE, and where the chart could not be read
+ * the name fell back to the handle — so it read "Bob bob", and for a reader
+ * holding no company grant "cara cara". A seat the chart does not name here is
+ * its handle ALONE, since there is no name to put beside it.
+ *
+ * A LINK ONLY WHERE THE SEAT'S PAGE IS SERVED: every screen but this one reads
+ * the live socket, which needs [LIVE_VIEW_GRANT], so for a reader without it
+ * the seat linked to the panel refusing them the company.
+ */
+function SeatFact({ handle, linked }: { handle: string; linked: boolean }) {
+  const org = useOrg();
+  const held = indexOrg(org).byHandle.get(handle);
+  const at = handleLabel(handle);
+  if (!held) {
+    return linked ? (
+      <a className="t-link mono" href={href(["agents", "seats", handle])}>
+        {at}
+      </a>
+    ) : (
+      <span className="mono">{at}</span>
+    );
+  }
+  return (
+    <span className="row gap-2" style={{ flexWrap: "wrap" }}>
+      {linked ? (
+        <SeatCell handle={handle} name={held.name} kind={held.kind} avatar={held.avatar} />
+      ) : (
+        <SeatLabel name={held.name} kind={held.kind} avatar={held.avatar} />
+      )}
+      <span className="mono muted">{at}</span>
+    </span>
+  );
+}
+
+/**
+ * The second factor, the recovery codes and the password: a line each, with
+ * the gesture beside it.
+ *
+ * TWO-STEP VERIFICATION FIRST, because it is what a person comes to this card
+ * to check — and the password a line rather than its form. The form drawn in
+ * place stood above the second factor and pushed it below the fold at
+ * 1280×720 and on a phone; it opens in a dialog now, as the authenticator's
+ * setup does.
+ */
 function Security({
   credentials,
   onChanged,
@@ -291,7 +374,7 @@ function Security({
   credentials: RestResult<CredentialRow[]>;
   onChanged: () => void;
 }) {
-  const [dialog, setDialog] = useState<"factor" | "codes" | null>(null);
+  const [dialog, setDialog] = useState<"factor" | "codes" | "password" | null>(null);
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const app = live.some((c) => c.method === "totp");
   const codes = live.some((c) => c.method === "recovery");
@@ -308,48 +391,68 @@ function Security({
         <Card.Title>Security</Card.Title>
       </Card.Header>
       <div className="col gap-4">
-        <ChangePassword holdsFactor={holdsFactor} onChanged={onChanged} />
-        <section className="col gap-2" aria-label="Two-step verification">
-          <span className="t-label">Two-step verification</span>
-          {credentials.data === null ? (
+        {credentials.data === null ? (
+          <section className="col gap-1" aria-label="Two-step verification">
+            <span className="t-label">Two-step verification</span>
             <QueryState
               error={credentials.code}
               refusal={credentials.refusal}
               detail={credentials.error?.detail || undefined}
               loading={credentials.loading}
             />
-          ) : (
-            <>
-              <Text as="p" variant="body" tone="secondary">
-                {app
-                  ? "An authenticator app is set up: signing in asks for its code as well as your password."
-                  : "No authenticator app is set up: signing in asks for your password alone."}
-              </Text>
-              <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+          </section>
+        ) : (
+          <>
+            <SecurityLine
+              label="Two-step verification"
+              action={
                 <Button size="small" variant="secondary" onClick={() => setDialog("factor")}>
                   {app ? "Replace authenticator…" : "Set up an authenticator…"}
                 </Button>
-              </div>
-              {/* ONLY BESIDE AN APP: held alone, recovery codes are a second
-                  factor of their own, and the engine refuses to issue them. */}
-              {app && (
-                <>
-                  <Text as="p" variant="body" tone="secondary">
-                    {codes
-                      ? "You hold recovery codes: each signs you in once when your app is not to hand. A new set retires the one you hold."
-                      : "You hold no recovery codes: issue a set for the day your app is not to hand."}
-                  </Text>
-                  <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-                    <Button size="small" variant="secondary" onClick={() => setDialog("codes")}>
-                      New recovery codes…
-                    </Button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </section>
+              }
+            >
+              {app
+                ? "An authenticator app is set up: signing in asks for its code as well as your password."
+                : "No authenticator app is set up: signing in asks for your password alone."}
+            </SecurityLine>
+            {/* ONLY BESIDE AN APP: held alone, recovery codes are a second
+                factor of their own, and the engine refuses to issue them. */}
+            {app && (
+              <SecurityLine
+                label="Recovery codes"
+                action={
+                  <Button size="small" variant="secondary" onClick={() => setDialog("codes")}>
+                    New recovery codes…
+                  </Button>
+                }
+              >
+                {codes
+                  ? "You hold recovery codes: each signs you in once when your app is not to hand. A new set retires the one you hold."
+                  : "You hold no recovery codes: issue a set for the day your app is not to hand."}
+              </SecurityLine>
+            )}
+          </>
+        )}
+        <SecurityLine
+          label="Password"
+          action={
+            <Button size="small" variant="secondary" onClick={() => setDialog("password")}>
+              Change password…
+            </Button>
+          }
+        >
+          Changing it ends every other session and every personal access token you hold.
+        </SecurityLine>
       </div>
+      {dialog === "password" && (
+        <LayerBoundary title="Change password" onClose={() => setDialog(null)}>
+          <ChangePasswordDialog
+            holdsFactor={holdsFactor}
+            onChanged={onChanged}
+            onClose={() => setDialog(null)}
+          />
+        </LayerBoundary>
+      )}
       {dialog === "factor" && (
         <LayerBoundary title="Two-step verification" onClose={close}>
           <AuthenticatorDialog codes={codes} onClose={close} />
@@ -364,13 +467,46 @@ function Security({
   );
 }
 
+/**
+ * One thing a person proves themselves with: its name, what is true of it now
+ * in a line, and the gesture that changes it — beside the line where there is
+ * room, under it on a phone.
+ */
+function SecurityLine({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  /** What is true of it now: one sentence. */
+  children: string;
+}) {
+  return (
+    <section
+      className="row gap-3"
+      aria-label={label}
+      style={{ flexWrap: "wrap", alignItems: "center" }}
+    >
+      <div className="col gap-1" style={{ flex: "1 1 20rem", minWidth: 0 }}>
+        <span className="t-label">{label}</span>
+        <Text as="p" variant="body" tone="secondary">
+          {children}
+        </Text>
+      </div>
+      {action}
+    </section>
+  );
+}
+
 /** What changing the password came to, while this browser stays signed in. */
 type Changed = { kind: "kept" } | { kind: "refused"; text: string };
 
 /**
- * Change your own password: the current one, a code where a second factor is
- * held, and the new one twice. Those ARE the proof — a step-up's, taken in the
- * one request — so no step-up is asked.
+ * Change your own password, in the dialog the Security card's "Change
+ * password…" opens: the current one, a code where a second factor is held,
+ * and the new one twice. Those ARE the proof — a step-up's, taken in the one
+ * request — so no step-up is asked.
  *
  * # The code is asked of whoever holds a second factor
  *
@@ -381,15 +517,18 @@ type Changed = { kind: "kept" } | { kind: "refused"; text: string };
  * when the credential list says one is held, and — where that list is unknown
  * or behind — once the engine has answered `second_factor_required`.
  */
-function ChangePassword({
+function ChangePasswordDialog({
   holdsFactor,
   onChanged,
+  onClose,
 }: {
   /** Whether this person holds a second factor, or null while unknown. */
   holdsFactor: boolean | null;
   onChanged: () => void;
+  onClose: () => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const config = useRest("/auth/config", (signal) => auth.config(signal));
   const floor = config.data?.min_password_length ?? null;
   const [current, setCurrent] = useState("");
@@ -458,43 +597,70 @@ function ChangePassword({
     }
   }
 
+  const kept = outcome?.kind === "kept";
   return (
-    <form
-      className="signin-form"
-      aria-label="Change password"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void submit();
-      }}
+    <Modal
+      open
+      size="md"
+      title="Change password"
+      icon={<KeyGlyph />}
+      onClose={onClose}
+      dismissable={!busy}
+      closeDisabledReason={waiting.reason}
+      stackBody
+      onSubmit={() => void submit()}
+      footer={
+        kept ? (
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={busy}>
+              {busy ? "Changing" : "Change password"}
+            </Button>
+          </>
+        )
+      }
     >
-      <span className="t-label">Password</span>
-      <CurrentPassword value={current} onChange={setCurrent} missing={tried && current === ""} />
-      {needsCode && (
-        <SecondFactorCode value={code} onChange={setCode} missing={tried && code.trim() === ""} />
-      )}
-      <NewPasswordFields
-        floor={floor}
-        password={password}
-        confirm={confirm}
-        onPassword={setPassword}
-        onConfirm={setConfirm}
-        tried={tried}
-      />
-      {outcome?.kind === "kept" && (
+      {kept ? (
         <Callout variant="success" role="status">
           Your password is changed. Every other session and every personal access token you held has
           ended; this browser stays signed in.
         </Callout>
+      ) : (
+        <>
+          <CurrentPassword
+            value={current}
+            onChange={setCurrent}
+            missing={tried && current === ""}
+          />
+          {needsCode && (
+            <SecondFactorCode
+              value={code}
+              onChange={setCode}
+              missing={tried && code.trim() === ""}
+            />
+          )}
+          <NewPasswordFields
+            floor={floor}
+            password={password}
+            confirm={confirm}
+            onPassword={setPassword}
+            onConfirm={setConfirm}
+            tried={tried}
+          />
+          {outcome?.kind === "refused" && (
+            <Callout variant="danger" role="alert">
+              {outcome.text}
+            </Callout>
+          )}
+        </>
       )}
-      {outcome?.kind === "refused" && (
-        <Callout variant="danger" role="alert">
-          {outcome.text}
-        </Callout>
-      )}
-      <Button type="submit" variant="primary" disabled={busy}>
-        {busy ? "Changing" : "Change password"}
-      </Button>
-    </form>
+    </Modal>
   );
 }
 
@@ -592,7 +758,13 @@ function CurrentPassword({
   );
 }
 
-/** Where the reader is signed in: the live sessions, this browser marked. */
+/**
+ * Where the reader is signed in: the live sessions, this browser marked.
+ *
+ * "SIGN OUT EVERYWHERE" STANDS BESIDE THE SENTENCE SAYING WHAT IT ENDS, in the
+ * card's body rather than its header: in the header it took the title's width,
+ * and on a phone the title read "Where you are sign…".
+ */
 function Sessions({
   session,
   sessions,
@@ -625,21 +797,20 @@ function Sessions({
       <Card.Header
         icon={<MonitorGlyph size="sm" />}
         count={sessions.data ? live.length : undefined}
-        actions={
-          <Button size="small" variant="secondary" onClick={() => setEverywhere(true)}>
-            Sign out everywhere
-          </Button>
-        }
       >
         <Card.Title>Where you are signed in</Card.Title>
       </Card.Header>
-      <p
-        className="t-caption muted"
-        style={{ margin: 0, padding: "0 var(--spacing-4) var(--spacing-3)" }}
-      >
-        Signing out everywhere ends every session you hold, this one included, and every personal
-        access token you minted.
-      </p>
+      <Card.Body padding="sm">
+        <div className="row gap-3" style={{ flexWrap: "wrap" }}>
+          <p className="t-caption muted" style={{ margin: 0, flex: "1 1 16rem", minWidth: 0 }}>
+            Signing out everywhere ends every session you hold, this one included, and every
+            personal access token you minted.
+          </p>
+          <Button size="small" variant="secondary" onClick={() => setEverywhere(true)}>
+            Sign out everywhere
+          </Button>
+        </div>
+      </Card.Body>
       <QueryState
         error={sessions.code}
         refusal={sessions.refusal}
@@ -668,7 +839,7 @@ function Sessions({
             {
               key: "end",
               header: "",
-              label: "Sign out",
+              action: true,
               shrink: true,
               cell: (s) =>
                 s.lineage === session.lineage ? (
@@ -727,13 +898,14 @@ function Tokens({
       >
         <Card.Title>Personal access tokens</Card.Title>
       </Card.Header>
-      <p
-        className="t-caption muted"
-        style={{ margin: 0, padding: "0 var(--spacing-4) var(--spacing-3)" }}
-      >
-        A token acts as you — for your assistant or a script — carrying what you chose of your
-        grants, never more than you hold now.
-      </p>
+      {/* IN A BODY, at the card's inset: drawn bare under a flush header it
+          sat against the header's rule. */}
+      <Card.Body padding="sm">
+        <p className="t-caption muted" style={{ margin: 0 }}>
+          A token acts as you — for your assistant or a script — carrying what you chose of your
+          grants, never more than you hold now.
+        </p>
+      </Card.Body>
       <QueryState
         error={credentials.code}
         refusal={credentials.refusal}
@@ -792,7 +964,7 @@ function Tokens({
             {
               key: "revoke",
               header: "",
-              label: "Revoke",
+              action: true,
               shrink: true,
               cell: (c) =>
                 c.revoked ? null : (

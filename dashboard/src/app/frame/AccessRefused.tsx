@@ -1,5 +1,5 @@
 /**
- * What every screen but the reader's Account says when the engine knows who
+ * What every screen but the reader's own says when the engine knows who
  * this browser is and will not serve it the dashboard — a session without
  * `state:read`, or a person whose seat was taken out of the chart.
  *
@@ -11,7 +11,9 @@
  * true: who the engine says you are (`GET /auth/session`, which `/auth/` keeps
  * serving to such a session, read once by the frame), what you hold, why, and
  * the three things that change something from here — the Account page, which
- * reads no socket; asking again once an administrator has acted; and signing
+ * reads no socket (nor does Settings › Appearance, the other screen that is
+ * the reader's own and drawn in place of this, `nav.ts`'s `personalPath`);
+ * asking again once an administrator has acted; and signing
  * out, because the person refused is the person who needs to leave.
  *
  * # Two states, and they read differently
@@ -59,18 +61,18 @@ export function AccessRefused({ reason }: { reason: string | null }) {
         noAccess ? (
           <>
             {who}
-            Every screen but your Account reads the company&rsquo;s live state, which takes{" "}
+            Every screen but your own reads the company&rsquo;s live state, which takes{" "}
             <InlineCode>{LIVE_VIEW_GRANT}</InlineCode>. Somebody holding{" "}
             <InlineCode>people:manage</InlineCode> can give it to you, and this page opens by itself
-            once they have. Your Account works meanwhile — your password, second factor, sessions
-            and tokens.
+            once they have. Your Account works meanwhile — your password, two-step verification,
+            sessions and tokens.
           </>
         ) : (
           <>
             {who}
-            The engine says: {reason}. Your Account still works — your password, second factor,
-            sessions and tokens — and somebody holding <InlineCode>people:manage</InlineCode> can
-            give you the access this needs.
+            The engine says: {reason}. Your Account still works — your password, two-step
+            verification, sessions and tokens — and somebody holding{" "}
+            <InlineCode>people:manage</InlineCode> can give you the access this needs.
           </>
         )
       }

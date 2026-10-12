@@ -845,8 +845,17 @@ describe("the page header", () => {
   // marked.
   test("Settings draws its sections as a column, locked where the reader lacks the grant", async () => {
     location.hash = "#/settings/secrets";
+    // A READER THE SOCKET ANSWERS, so holding the company's grant: what they
+    // lack is the section's own (`sectionOpen`).
     const { store, socket } = answering({
-      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
+      viewer: {
+        login: "reader",
+        grants: ["state:read"],
+        handle: "",
+        owner: "reader",
+        name: "",
+        kind: "",
+      },
     });
     mountShell(store, socket);
     await settle();
@@ -873,7 +882,14 @@ describe("the page header", () => {
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
     const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(toggle.textContent).toBe("Settings section: Secrets");
+    // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
+    // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
+    const spoken = (el: HTMLElement) => {
+      const copy = el.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+      return copy.textContent;
+    };
+    expect(spoken(toggle)).toBe("Settings Section: Secrets");
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -889,7 +905,7 @@ describe("the page header", () => {
     });
     await settle();
     const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(moved.textContent).toBe("Settings section: Nodes");
+    expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
     );

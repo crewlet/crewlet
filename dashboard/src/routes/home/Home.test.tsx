@@ -8,7 +8,7 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -587,22 +587,20 @@ describe("the decisions", () => {
     expect(tile("Waiting on your decision").textContent).toContain("1");
   });
 
-  // A PERSON NO SEAT NAMES IS GREETED BY THEIR OWN NAME, which their row holds
-  // and the frame's `GET /auth/session` answered — the viewer's name is the
-  // seat's, so they were greeted with nothing. ONE READ, the frame's: Home
-  // asked again for itself. The CONTROL is a bound reader, greeted by the
-  // seat's name. Mutation: greet by the viewer's name alone and the unbound
-  // reader is greeted bare; read the session in Home and it is asked twice.
-  test("a reader no seat names is greeted by their own name", async () => {
+  // THE READER IS GREETED BY THEIR OWN NAME, which their row holds and the
+  // frame's `GET /auth/session` answered — bound or not — and NEVER BY THE
+  // SEAT'S: a person with no name of their own was greeted "Good afternoon,
+  // Founder", a role. ONE READ, the frame's: Home asked again for itself. The
+  // CONTROL is a bound reader whose row holds no name, greeted bare beside a
+  // seat named "Jane". Mutation: greet by the viewer's (the seat's) name and
+  // the control is greeted "Jane"; read the session in Home and it is asked
+  // twice.
+  test("a reader is greeted by their own name, never their seat's", async () => {
+    let name: string | undefined = "Bob Smith";
     const sessions = vi.fn(
       async (_input: RequestInfo | URL) =>
         new Response(
-          JSON.stringify({
-            person: "p-bob",
-            name: "Bob Smith",
-            login: "bob.smith",
-            kind: "person",
-          }),
+          JSON.stringify({ person: "p-bob", name, login: "bob.smith", kind: "person" }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
     );
@@ -624,9 +622,11 @@ describe("the decisions", () => {
     expect(reads()).toHaveLength(1);
     cleanup();
     sessions.mockClear();
+    name = undefined;
     mount();
-    expect(await screen.findByRole("heading", { name: /^Good \w+, Jane$/ })).toBeTruthy();
-    expect(reads()).toHaveLength(1);
+    await waitFor(() => expect(reads()).toHaveLength(1));
+    expect(await screen.findByRole("heading", { name: /^Good \w+$/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 
   test("a seat stopped on its budget is a decision with both ways out", async () => {

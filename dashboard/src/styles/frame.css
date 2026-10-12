@@ -550,10 +550,19 @@
   font: inherit;
   text-align: left;
   text-decoration: none;
+}
+
+/* PRESSABLE ONLY WHERE IT CAN BE PRESSED: the sign-in button and the link to
+   the nodes. The statement form — no access yet, a refusal — is a `div` that
+   does nothing, and wearing the pointer and the hover border it read as a
+   control that was broken. */
+a.health-card,
+button.health-card {
   cursor: pointer;
 }
 
-.health-card:hover {
+a.health-card:hover,
+button.health-card:hover {
   border-color: var(--color-border-hover);
 }
 
@@ -642,9 +651,31 @@ a.user-block-who:hover {
   background: var(--color-surface-hover);
 }
 
+/* WHERE THE READER IS, the sidebar's own mark: the user block is the
+   Account's row (the Account has none of its own), so on `#/account` it is
+   raised with the hairline the kit's current row wears — no hue, an outline
+   rather than a shadow so forced-colours mode keeps it — and "where am I"
+   reads one way down the whole rail. After `:hover`, so a current block shows
+   the lift rather than the hover overlay. */
+a.user-block-who[aria-current="page"] {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+}
+
 a.user-block-who:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* THE RAIL'S PRESSABLE MARK, AT REST: the chevron the health card's link
+   wears, in quiet ink, at the block's end. A name says nothing about being a
+   way to the reader's password and second factor, and the block drew no mark
+   at all until it was hovered. */
+.user-block-go {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-text-tertiary);
 }
 
 .user-block-text {
@@ -2252,6 +2283,13 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* "Section ·" BEFORE THE NAME, in the quiet ink: the row read "General"
+     alone, which a reader takes for the page's title rather than for a
+     control holding the other sections. */
+  .section-picker-prefix {
+    color: var(--color-text-tertiary);
+    font-weight: var(--font-weight-regular);
   }
   .section-picker-chevron {
     flex: none;

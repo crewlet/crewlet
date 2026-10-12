@@ -60,6 +60,15 @@
  * There is no person-to-seat chat channel. Message opens the one New task
  * sheet with the seat as assignee and `ask` set, so the question is filed as
  * work the seat owes an answer on, and the answer lands in the asker's Inbox.
+ * On the reader's own seat it is held, by the button itself, exactly as on the
+ * seat's page — an ask only they could answer.
+ *
+ * # Your own seat points at your Account
+ *
+ * The chart is where a person finds themselves first, so the peek of their own
+ * seat carries the profile's **Your account** card (`seat/shared.tsx`): the
+ * seat is the company's page about a place, and how the person in it signs in
+ * is theirs, at `#/account`. No other seat draws it.
  */
 
 import { useMemo, useState } from "react";
@@ -117,6 +126,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
 import { companyCeilings, seatRun } from "./seat/profile.ts";
+import { YourAccount } from "./seat/shared.tsx";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -301,6 +311,11 @@ function SeatPeekBody({
           </span>
         )}
       </section>
+
+      {/* YOUR OWN SEAT POINTS AT YOUR OWN ACCOUNT, as its page does: the
+          chart is where a person finds themselves first, and the peek is
+          what it opens. Nothing on anybody else's seat. */}
+      <YourAccount handle={seat.handle} />
 
       {agent?.last_error && (
         <Callout variant="danger">

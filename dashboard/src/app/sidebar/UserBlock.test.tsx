@@ -42,6 +42,7 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { workspaceRow } from "~/app/nav.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 
@@ -154,29 +155,42 @@ afterEach(() => {
 });
 
 describe("who the block says this is", () => {
-  test("a bound person is their name, with their login and their seat's role and never a bare handle", () => {
-    expect(whoLine(ada, "Founder")).toEqual({
+  // THE READER IS CALLED BY THEIR OWN NAME, never their seat's: the seat's
+  // name is the chart's name for a place, and often a role, so a person with
+  // no name of their own was "Founder" here while their Account said they had
+  // no name. The seat is said beside it, as the seat. Mutation: name the
+  // reader by `viewer.name` (the seat's) and the second case goes red.
+  test("a bound person is their own name, with their login and their seat beside it", () => {
+    const own = { login: "ada.lovelace", name: "Ada Lovelace", seat: "ada" };
+    expect(whoLine(ada, "Founder", own)).toEqual({
       name: "Ada Lovelace",
       detail: "ada.lovelace · Founder",
       grants: "Holds state:read, work:write",
     });
-    // A seat whose name IS the person's adds nothing to the login, and a
-    // person is never captioned "human seat", which says what the block
-    // already shows.
-    expect(whoLine(ada, "Ada Lovelace").detail).toBe("ada.lovelace");
-    expect(whoLine(ada, "Founder").detail).not.toContain("@");
+    // NO NAME OF THEIR OWN: their login, and the seat under it — never the
+    // seat's name in their place.
+    expect(whoLine(ada, "Founder", { login: "ada.lovelace" })).toEqual({
+      name: "ada.lovelace",
+      detail: "Founder",
+      grants: "Holds state:read, work:write",
+    });
+    // A seat named as the person adds nothing to the login.
+    expect(whoLine(ada, "Ada Lovelace", own).detail).toBe("ada.lovelace");
+    // THE CHART UNREAD, the handle stands in, written as a handle.
+    expect(whoLine({ ...ada, name: "" }, "", own).detail).toBe("ada.lovelace · @ada");
     // Nor is the seat's kind captioned at all: every binding is to a human
     // seat, and a viewer on any other is refused before it answers.
-    expect(whoLine({ ...ada, kind: "agent" }, "Release Bot").detail).toBe(
+    expect(whoLine({ ...ada, kind: "agent" }, "Release Bot", own).detail).toBe(
       "ada.lovelace · Release Bot",
     );
   });
 
   // THE SECOND LINE IS THE LOGIN, and nothing beside it where the seat has no
   // role to add. Mutation: caption a person "human seat" and this goes red.
-  test("a person with no role to show draws their login alone under their name", () => {
+  test("a person with no role to show draws their login alone under their name", async () => {
+    engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
-    const who = screen.getByRole("link", { name: /Ada Lovelace/ });
+    const who = await screen.findByRole("link", { name: /Ada Lovelace/ });
     expect(who.querySelector(".user-block-detail")?.textContent).toBe("ada.lovelace");
     expect(who.textContent).not.toContain("human seat");
   });
@@ -216,19 +230,39 @@ describe("who the block says this is", () => {
   // A VIEWER THAT NEVER ANSWERS — the socket refused a person without
   // `state:read` — is no reason to keep asking: the session names them, and
   // what they hold. The CONTROL is the case above, with no session either.
+  // AND BY THE SAME RULE: the session names the reader's SEAT, which that
+  // arm dropped for "Signed in". The chart is unreadable without
+  // `state:read`, so the handle stands in, written as a handle.
   test("a session stands in for a viewer that has not answered", () => {
-    expect(whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", grants: [] })).toEqual({
-      name: "erin.ng",
-      detail: "Signed in",
-      grants: "Holds no grants",
-    });
+    expect(
+      whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", seat: "erin", grants: [] }),
+    ).toEqual({ name: "erin.ng", detail: "@erin", grants: "Holds no grants" });
     expect(
       whoLine({ ...nobody, loading: true }, "", {
         login: "erin.ng",
         name: "Erin Ng",
+        seat: "erin",
         grants: ["work:write"],
       }),
-    ).toEqual({ name: "Erin Ng", detail: "erin.ng", grants: "Holds work:write" });
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Holds work:write" });
+    // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
+    expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
+      "Not bound to a seat",
+    );
+  });
+
+  // Mutation: draw "Signed in" for the session arm and the seat is gone.
+  test("a session the viewer never answers for draws the seat it names", async () => {
+    engine({
+      "GET /auth/session": {
+        status: 200,
+        body: { ...PERSON, login: "cara.example", seat: "cara", grants: [] },
+      },
+    });
+    render(block({ ...nobody, loading: true }));
+    const who = await screen.findByRole("link", { name: /cara\.example/ });
+    expect(who.querySelector(".user-block-detail")?.textContent).toBe("@cara");
+    expect(who.textContent).not.toContain("Signed in");
   });
 
   // THE NAME IS THE WAY TO THE READER'S OWN ACCOUNT, where their password
@@ -237,11 +271,8 @@ describe("who the block says this is", () => {
   // two-step verification at all.
   test("the reader's name opens their own Account, never their seat", () => {
     render(block(ada, "Founder"));
-    const link = screen.getByRole("link", { name: /Ada Lovelace/ });
+    const link = screen.getByRole("link", { name: /ada\.lovelace/ });
     expect(link.getAttribute("href")).toBe("#/account");
-    // THE GRANTS RIDE BESIDE THE NAME, where a reader asking "why can I not
-    // open this" finds them.
-    expect(link.getAttribute("title")).toBe("Holds state:read, work:write");
     cleanup();
     // UNBOUND HAS AN ACCOUNT TOO — a token's session is told there what it
     // is — so it is a link to the same page.
@@ -262,10 +293,71 @@ describe("who the block says this is", () => {
     const link = await screen.findByRole("link", { name: /ada\.lovelace/ });
     expect(link.getAttribute("href")).toBe("#/account");
     cleanup();
-    engine({ "GET /auth/session": "offline" });
+    // THE CONTROL: a read still out is nobody yet, and no link.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
     render(block({ ...nobody, loading: true }));
     expect(screen.getByText("Checking who you are")).toBeTruthy();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  // THE LINK SAYS WHERE IT GOES. Its name was the reader and its title their
+  // grants, so `getByRole("link", { name: /account/ })` found nothing on the
+  // page whose way to the Account it was — and at rest it drew no mark that
+  // it could be pressed. Mutation: title it with the grants, drop the spoken
+  // ", your account" or the chevron, and a line here goes red.
+  test("the reader's name says it opens their Account, in words and at rest", () => {
+    render(block(ada, "Founder"));
+    const link = screen.getByRole("link", { name: /your account/ });
+    expect(link.getAttribute("href")).toBe("#/account");
+    expect(link.getAttribute("title")).toBe(workspaceRow("account")!.hint);
+    expect(link.querySelector(".user-block-go")).not.toBeNull();
+    // THE GRANTS ARE SAID IN THE POPOVER, under the login — never as the
+    // link's title, which answered a question the reader had not asked.
+    expect(link.getAttribute("title")).not.toMatch(/Holds/);
+  });
+
+  // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
+  // sidebar row is on its own page — the only mark the sidebar can give a
+  // place it draws no row for. Mutation: drop `aria-current` and the Account
+  // is marked nowhere in the sidebar.
+  test("on the Account the block is marked current, and nowhere else", () => {
+    location.hash = "#/account";
+    render(block(ada, "Founder"));
+    expect(screen.getByRole("link", { name: /your account/ }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    cleanup();
+    location.hash = "#/";
+    render(block(ada, "Founder"));
+    expect(
+      screen.getByRole("link", { name: /your account/ }).getAttribute("aria-current"),
+    ).toBeNull();
+  });
+
+  // A FAILED READ IS NOT NOBODY. The session read failing — a 503, the
+  // network — says nothing about whether this browser holds a session, and
+  // the block said "Checking who you are" with no way to the Account until
+  // the tab came back. Now it says it could not tell, and still offers the
+  // Account and the sign-out of this browser — never "everywhere", which
+  // needs to know whose. Mutation: read a failure as nothing yet and the link
+  // and the menu's entry go.
+  test.each([
+    ["a 503", { status: 503, body: { error: "unavailable" } } as Answer],
+    ["the network", "offline" as Answer],
+  ])("a session read that failed on %s still offers the Account", async (_why, answer) => {
+    engine({ "GET /auth/session": answer });
+    render(block({ ...nobody, loading: true }));
+    expect(await screen.findByText("Could not tell who you are")).toBeTruthy();
+    const link = screen.getByRole("link", { name: /your account/ });
+    expect(link.getAttribute("href")).toBe("#/account");
+    fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
+    const menu = await screen.findByRole("dialog", { name: "Account and preferences" });
+    expect(within(menu).getByRole("link", { name: "Account" })).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: "Sign out everywhere" })).toBeNull();
   });
 
   // THE ONE BADGE THAT IS THE READER carries the accent's ring — and a badge
@@ -320,8 +412,10 @@ describe("what the account offers", () => {
   test("a session the viewer never answers for is still offered its sign-outs", () => {
     const waiting = { ...nobody, loading: true };
     expect(accountOf(waiting, PERSON)).toEqual({ kind: "session", login: "ada.lovelace" });
-    // NOTHING ANSWERED AT ALL IS STILL NOTHING.
+    // NOTHING ANSWERED AT ALL IS STILL NOTHING — while the read is out.
     expect(accountOf(waiting, null)).toBeNull();
+    // A READ THAT FAILED is no answer either way, and offers what needs none.
+    expect(accountOf(waiting, null, true)).toEqual({ kind: "unknown" });
   });
 
   test("nobody at all is offered a way to sign in, back to where they are", async () => {

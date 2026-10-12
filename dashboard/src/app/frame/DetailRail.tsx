@@ -39,9 +39,8 @@
  */
 
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigator, useRoute } from "../router.tsx";
+import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
-import { href } from "../router.tsx";
 import { ButtonLink, IconButton } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -103,9 +102,17 @@ export function usePeekControls(): {
   };
 }
 
-/** The href a row carries, so a modifier-click opens the object's page. */
-export function peekHref(ref: ObjectRef): string {
-  return href(pathOf(ref));
+/**
+ * The href a row carries, so a modifier-click opens the object's page — with
+ * `query`, what that page carries from the list it was opened from.
+ *
+ * FOR A KIND WHOSE PEEK IS ITS PAGE (`KindSpec.peekIsPage`), the list it is
+ * read beside with the peek open: a person has no screen of their own, and a
+ * new tab opened on the bare list was a click that lost who it was about.
+ */
+export function peekHref(ref: ObjectRef, query?: Record<string, string>): string {
+  if (KINDS[ref.kind].peekIsPage) return href(pathOf(ref), { ...query, peek: refToken(ref) });
+  return href(pathOf(ref), query);
 }
 
 /**
@@ -181,6 +188,10 @@ export function DetailRail({
   query?: Record<string, string>;
 }) {
   const { close } = usePeekControls();
+  // NO `Open` OVER THE PAGE IT WOULD OPEN: for a kind whose peek is its page,
+  // that page is the list under the rail, and the link would only close it.
+  const route = useRoute();
+  const opens = !(KINDS[object.kind].peekIsPage && samePath(route.path, pathOf(object)));
   // THE READER'S WIDTH, where they dragged one, over the width the screen
   // under the rail rests it at.
   const resting = useContext(PeekRestingWidth);
@@ -294,14 +305,16 @@ export function DetailRail({
               was spelling by hand — and the arrow is a glyph now rather than
               the character `↗`. NOT `external`: that withholds the opener and
               opens a tab, and this goes to the object's own page in this app. */}
-          <ButtonLink
-            size="small"
-            variant="secondary"
-            href={query ? href(pathOf(object), query) : peekHref(object)}
-            trailingIcon={<ArrowUpRightGlyph size="sm" />}
-          >
-            Open
-          </ButtonLink>
+          {opens && (
+            <ButtonLink
+              size="small"
+              variant="secondary"
+              href={peekHref(object, query)}
+              trailingIcon={<ArrowUpRightGlyph size="sm" />}
+            >
+              Open
+            </ButtonLink>
+          )}
           <IconButton
             size="sm"
             variant="ghost"

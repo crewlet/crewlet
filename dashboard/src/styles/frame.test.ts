@@ -1694,3 +1694,31 @@ test("every auto-fit and auto-fill track floor is clamped to its container", () 
   expect(found.length).toBeGreaterThan(0);
   expect(bare).toEqual([]);
 });
+
+/**
+ * THE SIDEBAR'S FOOT WEARS A CONTROL'S MARKS ONLY ON A CONTROL.
+ *
+ * The health card's statement form — "No access yet", a refusal — is a `div`
+ * that does nothing, and it wore the pointer and the hover border every form
+ * did, reading as a control that was broken. So `cursor: pointer` and the
+ * hover border are declared on the link and the button alone. The user block
+ * is the other way round: it IS a control, the way to the reader's Account,
+ * and drew no mark until hovered — so it wears the rail's chevron at rest, and
+ * it is the Account's row, marked current on `#/account` with the kit's own
+ * current-row lift: the raised surface and a hairline OUTLINE (an outline,
+ * since forced-colours mode drops a shadow and a background).
+ */
+test("the health card is pressable only as a link or a button, and the user block always", () => {
+  const css = sheet("frame.css");
+  const offenders = mentioning(css, ".health-card")
+    .filter(({ sel, body }) => /cursor:\s*pointer/.test(body) || sel.includes(":hover"))
+    .filter(({ sel }) => !/^(a|button)\.health-card(:hover)?$/.test(sel))
+    .map(({ sel }) => sel);
+  expect(offenders).toEqual([]);
+  expect(block(css, "a.health-card,\nbutton.health-card")).toMatch(/cursor:\s*pointer/);
+
+  expect(block(css, ".user-block-go")).toMatch(/color:\s*var\(--color-text-tertiary\)/);
+  const current = block(css, 'a.user-block-who[aria-current="page"]');
+  expect(current).toMatch(/background:\s*var\(--color-surface-elevated\)/);
+  expect(current).toMatch(/outline:\s*1px solid var\(--color-border-default\)/);
+});

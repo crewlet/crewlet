@@ -19,7 +19,7 @@ import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
-import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type {
   AgentRow,
@@ -880,6 +880,38 @@ test("a folded action is held in the menu with the reason", async () => {
   const assign = screen.getByRole("menuitem", { name: /^Assign task/ });
   expect(assign.getAttribute("aria-disabled")).toBe("true");
   expect(assign.textContent).toContain(WRITE_REASONS.anonymous);
+});
+
+// MESSAGE'S OWN-SEAT HOLD IS THE BUTTON'S RULE, and the folded entry asks the
+// same rule rather than the bare act: on the reader's own seat both are held
+// in one sentence, and on anybody else's both are free. Mutation: fold the
+// entry on `useWriteAccess` alone and the first half goes red.
+test("Message folded on a phone is held on your own seat as the button is", async () => {
+  mount("#/agents/seats/swe", {
+    shell: true,
+    answers: { viewer: { ...OPERATOR, handle: "swe", owner: "swe", acts: EVERY_ACT } },
+    agents: [PAUSED_SWE],
+  });
+  await settle();
+  const inline = screen.getByRole("button", { name: "Message" });
+  expect(inline.getAttribute("aria-disabled")).toBe("true");
+  expect(inline.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
+  pageMore();
+  const folded = screen.getByRole("menuitem", { name: /^Message/ });
+  expect(folded.getAttribute("aria-disabled")).toBe("true");
+  expect(folded.textContent).toContain(OWN_SEAT_MESSAGE);
+  cleanup();
+
+  mount("#/agents/seats/swe", {
+    shell: true,
+    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    agents: [PAUSED_SWE],
+  });
+  await settle();
+  pageMore();
+  expect(screen.getByRole("menuitem", { name: /^Message/ }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -2255,6 +2287,48 @@ test("the settings tab asks for the company document once", async () => {
   await waitFor(() => expect(screen.getByText("API_TOKEN")).toBeTruthy());
   await settle();
   expect(askedFor("config")).toHaveLength(1);
+});
+
+// A READ NOBODY SENT IS NOT A COMPANY WITH NO CONFIGURATION. The document is
+// never asked of a reader without config:read who leads no unit over the seat,
+// and the tab read "no document, not loading" as an answer — telling a person
+// on their own seat "No company configuration is active" while a company ran.
+// It names the grant instead, and where the seat sits in a unit, that its lead
+// reads it too. The CONTROL is a read that did come back with no document,
+// which is the one place that sentence is true. Mutation: drop the withheld
+// arm and the first two go red; draw the grant wherever no document is in
+// hand and the control does.
+test("a reader the document is not asked for is told the grant, never that none is active", async () => {
+  const reader = {
+    login: "jane.doe",
+    grants: ["state:read", "work:write"],
+    handle: "jane",
+    owner: "jane",
+    acts: [],
+  };
+  mount("#/agents/seats/jane?tab=settings", { answers: { viewer: reader } });
+  const identity = (await screen.findByText(/Reading this seat's settings needs/)).closest(
+    ".crewlet-card",
+  ) as HTMLElement;
+  expect(identity.textContent).toContain("config:read");
+  expect(identity.textContent).toContain("jane.doe");
+  // ABOVE EVERY UNIT, so no lead reads it either.
+  expect(identity.textContent).not.toContain("leads");
+  expect(document.body.textContent).not.toContain("No company configuration is active");
+  expect(askedFor("config")).toEqual([]);
+  cleanup();
+
+  mount("#/agents/seats/swe?tab=settings", { answers: { viewer: { ...reader, handle: "" } } });
+  await screen.findAllByText(/Reading this seat's settings needs/);
+  expect(document.body.textContent).toContain("Whoever leads Core, or a unit above it");
+  expect(document.body.textContent).not.toContain("No company configuration is active");
+  cleanup();
+
+  mount("#/agents/seats/jane?tab=settings", {
+    answers: { viewer: OPERATOR, config: () => null },
+  });
+  expect(await screen.findByText("No company configuration is active")).toBeTruthy();
+  expect(screen.queryByText(/Reading this seat's settings needs/)).toBeNull();
 });
 
 test("a person's settings carry their contacts and no model, budget or credential card", async () => {

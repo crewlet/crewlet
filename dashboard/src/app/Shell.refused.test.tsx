@@ -58,6 +58,7 @@ let grants: string[];
 beforeAll(async () => {
   await loadChunk("work");
   await loadChunk("account");
+  await loadChunk("settings");
 });
 
 beforeEach(() => {
@@ -114,10 +115,13 @@ afterEach(() => {
  * inside the render. `refused` is the engine's refusal of the dial the frame
  * makes for a session holding `state:read`, landing once it has made it.
  */
-async function mount(refused: string | null = "your seat is no longer in the chart") {
+async function mount(
+  refused: string | null = "your seat is no longer in the chart",
+  answer: (what: string) => Promise<unknown> = () => new Promise(() => {}),
+) {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = answer;
   const dial = vi.spyOn(socket, "start");
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -205,6 +209,104 @@ test("a session without state:read dials nothing and is told what would open the
     await new Promise((resolve) => setTimeout(resolve, 50));
   });
   expect(sent.filter((s) => s.path === "/auth/session")).toHaveLength(1);
+});
+
+// A LOCK GOES WHERE THE CLOSED THING IS. Settings' first group, You — the
+// reader's Account and Appearance — reads nothing of the company, so the
+// Settings row is never locked: it carried "Needs state:read" here while the
+// one thing this person came to Settings for was open to them. Every row whose
+// whole workspace reads the company keeps its lock, and the reader's own
+// Appearance is drawn, as their Account is, rather than the panel. Mutation:
+// lock a row for any closed section, or refuse every screen but the Account,
+// and a line here goes red.
+test("a session without state:read finds Settings unlocked, and its own Appearance drawn", async () => {
+  grants = [];
+  location.hash = "#/settings/appearance";
+  await mount(null);
+  await screen.findByText("No access yet");
+  const rows = screen.getByRole("navigation", { name: "Navigation" });
+  const row = (name: RegExp) => within(rows).getByRole("link", { name });
+  await waitFor(() =>
+    expect(row(/^Home/).querySelector("[title='Needs state:read']")).not.toBeNull(),
+  );
+  expect(row(/^Work/).querySelector("[title='Needs state:read']")).not.toBeNull();
+  const foot = screen.getByRole("navigation", { name: "Settings" });
+  const settings = within(foot).getByRole("link", { name: /^Settings/ });
+  expect(settings.querySelector(".side-locked")).toBeNull();
+  expect(settings.textContent).toBe("Settings");
+  expect(await screen.findByRole("radiogroup", { name: "Mode" })).toBeDefined();
+  expect(screen.queryByText("You have no access to the company yet")).toBeNull();
+});
+
+// ONE READING OF WHAT THE READER HOLDS. Settings' column drew its locks off the
+// viewer alone, which a session without `state:read` never gets an answer
+// from — so for that person every company section from General to Audit log
+// was drawn OPEN, while the sidebar beside it, reading the session, locked
+// the rows. Every section the company's grant opens is locked naming it; the
+// reader's own two are not; and the route that reads the company is the panel.
+// Mutation: hand the column the viewer's grants and no row says it is locked.
+test("a session without state:read finds Settings' column locked where the company is", async () => {
+  grants = [];
+  location.hash = "#/settings";
+  await mount(null);
+  await panelTitled("You have no access to the company yet");
+  const column = await screen.findByRole("navigation", { name: "Settings sections" });
+  const own = new Set(["#/account", "#/settings/appearance"]);
+  const rows = within(column).getAllByRole("link");
+  expect(rows.filter((a) => own.has(a.getAttribute("href") ?? ""))).toHaveLength(own.size);
+  for (const a of rows) {
+    const at = a.getAttribute("href") ?? "";
+    if (own.has(at)) {
+      expect(a.textContent, at).not.toMatch(/needs/);
+      expect(a.querySelector(".sr-only")?.textContent ?? "", at).not.toMatch(/needs/);
+    } else {
+      expect(a.textContent, at).toMatch(/, needs state:read/);
+    }
+  }
+});
+
+// AND A GRANT WITHDRAWN IS READ OFF THE SESSION, though the viewer the socket
+// answered before still lists it: the refusal that closed the socket is that
+// very grant, so the column left every company section open beside the panel
+// saying there was no access. Mutation: prefer an answered viewer whatever the
+// session says, and General is drawn open.
+test("a grant withdrawn under an answered viewer locks the column again", async () => {
+  location.hash = "#/settings";
+  const { store, dial } = await mount(null, (what) =>
+    what === "viewer"
+      ? Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] })
+      : new Promise(() => {}),
+  );
+  await waitFor(() => expect(dial).toHaveBeenCalled());
+  const column = await screen.findByRole("navigation", { name: "Settings sections" });
+  const general = () =>
+    within(column)
+      .getAllByRole("link")
+      .find((a) => a.getAttribute("href") === "#/settings");
+  await waitFor(() => expect(general()?.textContent).toBe("General"));
+  grants = [];
+  act(() => store.setAccessRefused("the live socket needs state:read"));
+  await panelTitled("You have no access to the company yet");
+  await waitFor(() => expect(general()?.textContent).toMatch(/, needs state:read/));
+});
+
+// AND A ROUTE'S OWN REFUSAL READS IT TOO: a session whose socket never answers
+// its viewer was held on "Checking your access to Nodes" for good, while the
+// session it had already read said it holds no fleet:operate. Mutation: decide
+// the section on the viewer alone and the skeleton never goes. AND IT NAMES
+// THE READER FROM THAT SAME READING: named off the viewer, which has not
+// answered, it told a person signed in that nobody was — the moment between
+// the session's answer and the socket's on every cold load. Mutation: hand
+// the refusal the viewer's login and it says "Nobody is signed in".
+test("a section the session's grants do not open is refused though the viewer never answers", async () => {
+  location.hash = "#/settings/nodes";
+  await mount(null);
+  expect(await screen.findByText("Nodes needs fleet:operate")).toBeDefined();
+  expect(screen.queryByText("Checking your access to Nodes")).toBeNull();
+  const main = screen.getByRole("main");
+  expect(main.textContent).toMatch(/You are signed in as jane\.doe/);
+  expect(main.textContent).not.toMatch(/Nobody is signed in/);
+  expect(within(main).getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
 });
 
 // AND THE GRANT IS NOTICED: the tab kept refusing after an administrator gave

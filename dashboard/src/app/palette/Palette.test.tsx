@@ -9,15 +9,16 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
-import { ANSWER_IDLE_MS } from "./hits.ts";
+import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
+import { TOUCH_MEDIA } from "../layout.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { remember } from "~/lib/recents.ts";
@@ -194,18 +195,19 @@ function mount({
   }) as typeof socket.query;
   const closed = vi.fn();
   const keys = vi.fn();
+  // NO `LayerHost`, as the application mounts none: every overlay is
+  // portalled to the body, in the one stacking context the layer stack orders
+  // (`app/App.tsx`).
   render(
     <ToastProvider>
-      <LayerHost>
-        <ClientContext.Provider value={{ store, socket }}>
-          <Router>
-            {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
-            <ProjectSwitcherProvider>
-              <CommandPalette onClose={closed} onShowKeys={keys} />
-            </ProjectSwitcherProvider>
-          </Router>
-        </ClientContext.Provider>
-      </LayerHost>
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
+          <ProjectSwitcherProvider>
+            <CommandPalette onClose={closed} onShowKeys={keys} />
+          </ProjectSwitcherProvider>
+        </Router>
+      </ClientContext.Provider>
     </ToastProvider>,
   );
   const input = screen.getByRole("combobox");
@@ -246,6 +248,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   location.hash = "#/";
+});
+
+// THE PALETTE IS ON THE PAGE'S ONE LAYER STACK, portalled to the body rather
+// than into a host of its own: a stacking context around it would cap it
+// beneath the narrow layout's open drawer, which paints in the root context,
+// and the palette opened from the drawer's search drew under the drawer.
+test("the palette is portalled to the body, under no layer host", () => {
+  mount();
+  const dialog = screen.getByRole("dialog", { name: "Search" });
+  expect(dialog.closest(".crewlet-layer-host")).toBeNull();
+  expect(dialog.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
+});
+
+// THE PALETTE'S KEYCAPS ARE FOR A READER WITH KEYS: on a phone its footer's
+// legend and its rows' chords named keys nobody there has. Mutation: draw them
+// whatever the input and the touch case goes red; drop them everywhere and the
+// keyboard case does.
+test.each([
+  [true, 0],
+  [false, 1],
+])("on a touch device (%s) the palette's key legend is drawn %d times", async (on, legends) => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+  Object.defineProperty(globalThis, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: on && query === TOUCH_MEDIA,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+  try {
+    const p = mount();
+    await p.type("budget");
+    expect(document.querySelectorAll(".palette-keys")).toHaveLength(legends);
+    const create = p.row(/Create task/);
+    expect(create.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(legends);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "matchMedia", had);
+  }
 });
 
 describe("scopes and sigils", () => {
@@ -1266,5 +1313,51 @@ describe("projects, the switcher and the full search", () => {
     await p.type("invoice");
     fireEvent.click(p.row("Search all work for “invoice”"));
     expect(location.hash).toBe("#/work/search?q=invoice");
+  });
+});
+
+// A PERSON LOOKS FOR THEIR ACCOUNT BY WHAT IS ON IT. Only the word "account"
+// found it, so a reader typing "password" or "2fa" was offered nothing but a
+// search — while the row's own hint named both. The words are the table's
+// (`Destination.keywords`), matched after every label and word by word.
+describe("a screen found by what it holds", () => {
+  test.each([
+    "password",
+    "2fa",
+    "two-step",
+    "two step",
+    "security",
+    "profile",
+    "sessions",
+    "token",
+    "my account",
+  ])("%s finds Account, and Enter on it opens it", async (q) => {
+    const p = mount();
+    await p.type(q);
+    const go = screen.getByRole("group", { name: "Go to" });
+    const row = within(go).getByRole("option", { name: /^Account/ });
+    fireEvent.click(row);
+    expect(location.hash).toBe("#/account");
+  });
+
+  // A LABEL STILL WINS: a screen called what was typed is never pushed under
+  // one that merely holds the word. "s" starts two of Account's words
+  // ("sessions", "security"), which a flat ranking scored ahead of every label
+  // with an "s" in its middle — Tasks, Projects, Agents.
+  test("every label match ranks above a keyword match, however good", () => {
+    const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
+    const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
+    expect(hits.at(-1)).toBe("Account");
+    expect(hits).toContain("Tasks");
+    for (const label of hits.slice(0, -1)) expect(label.toLowerCase()).toContain("s");
+  });
+
+  // THE HINT IS PROSE AND IS NEVER SEARCHED: People & access's mentions "API
+  // tokens", which are not the reader's own, and it is no answer to "token".
+  test("a word only a hint's prose holds finds nothing", async () => {
+    const p = mount();
+    await p.type("token");
+    const go = screen.getByRole("group", { name: "Go to" });
+    expect(within(go).queryByRole("option", { name: /^People & access/ })).toBeNull();
   });
 });

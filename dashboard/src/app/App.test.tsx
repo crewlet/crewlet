@@ -8,19 +8,20 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store, sessionRestored } from "~/protocol/index.ts";
-import { DESTINATIONS, WORKSPACES, grantWords } from "./nav.ts";
+import { DESTINATIONS, WORKSPACES, grantWords, workspaceRow } from "./nav.ts";
 import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
 import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
+import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
@@ -116,7 +117,7 @@ describe("the shell", () => {
 
   test("every workspace is in the sidebar, Settings included", async () => {
     // A SECTION THAT VANISHES without its grant is indistinguishable from one
-    // that does not exist, so Settings is always a row and carries a lock.
+    // that does not exist, so Settings is always a row.
     mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] }));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     for (const label of [
@@ -133,10 +134,103 @@ describe("the shell", () => {
     }
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
-    // THE LOCK IS SAID, not only drawn, once the viewer has answered: this
-    // reader holds none of the grants most Settings sections need.
-    expect(await screen.findByText(/of its sections need a grant you do not hold/)).toBeDefined();
-    expect(foot.textContent).toMatch(/\d+ of its sections need a grant you do not hold/);
+  });
+
+  // A LOCK GOES WHERE THE CLOSED THING IS. This reader holds none of the
+  // grants most Settings sections need, and the row said so with a key — so a
+  // person looking for their own Account, the first row of its You group,
+  // read Settings as closed to them. Settings is open (its You group needs
+  // nothing), and its column locks each section that is not.
+  test("Settings is not locked as a whole; its column locks what is closed", async () => {
+    location.hash = "#/settings";
+    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] }));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    await waitFor(() =>
+      expect(within(column).getByRole("link", { name: /^Nodes/ }).textContent).toMatch(
+        /needs fleet:operate/,
+      ),
+    );
+    const foot = screen.getByRole("navigation", { name: "Settings" });
+    expect(foot.querySelector(".side-locked")).toBeNull();
+    expect(foot.textContent).not.toMatch(/need a grant/);
+  });
+});
+
+// ONE STACKING CONTEXT FOR THE WHOLE LAYER BAND. Every overlay is portalled to
+// `document.body`, where its z-index is its depth on the kit's one layer stack.
+// The narrow layout's drawer is on that stack too, but it is the sidebar itself
+// and is painted in place, in the root context — so an application-wide
+// `LayerHost` (a stacking context at the bottom of the band) drew every overlay
+// opened from the drawer UNDER it: on a phone the Account popover's sign-outs
+// and the palette's results could not be tapped. What paints above what is the
+// browser's to measure; what this holds is the one structural fact it needs.
+describe("the overlays the frame opens", () => {
+  const person = {
+    login: "jane.doe",
+    owner: "jane",
+    handle: "jane",
+    name: "Jane",
+    grants: ["state:read"],
+  };
+
+  test("the Account popover is portalled to the body, under no layer host", async () => {
+    mountAs(Promise.resolve(person));
+    fireEvent.click(await screen.findByRole("button", { name: "Account and preferences" }));
+    const popover = await screen.findByRole("dialog", { name: "Account and preferences" });
+    expect(popover.parentElement).toBe(document.body);
+    expect(popover.closest(".crewlet-layer-host")).toBeNull();
+    expect(document.querySelectorAll(".crewlet-layer-host")).toHaveLength(0);
+  });
+
+  test("the palette opened from the sidebar's search is portalled to the body too", async () => {
+    mountAs(Promise.resolve(person));
+    fireEvent.click(await screen.findByRole("button", { name: /Ask or jump to/ }));
+    const palette = await screen.findByRole("dialog", { name: "Search" });
+    expect(palette.closest(".crewlet-layer-host")).toBeNull();
+    expect(palette.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
+  });
+});
+
+// A KEYCAP IS A HINT FOR A KEYBOARD. On a phone the drawer's search drew
+// "Ctrl + K", a key nobody there has, and the keycap cut the trigger's own
+// label to "Ask or jump t…". Where the reader's primary input is touch
+// (`TOUCH_MEDIA`) the frame draws none; everywhere else it does. Mutation:
+// draw the keycap whatever the input and the touch case goes red.
+describe("the drawer's search", () => {
+  const touch = (on: boolean) => {
+    const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+    Object.defineProperty(globalThis, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: on && query === TOUCH_MEDIA,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+    return () => {
+      if (had) Object.defineProperty(globalThis, "matchMedia", had);
+    };
+  };
+
+  test.each([
+    [true, 0],
+    [false, 1],
+  ])("on a touch device (%s) draws %d keycap", (on, caps) => {
+    const restore = touch(on);
+    try {
+      mount();
+      const search = document.querySelector(".side-search")!;
+      expect(search.textContent).toContain("Ask or jump to…");
+      expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
+    } finally {
+      restore();
+    }
   });
 });
 
@@ -380,14 +474,17 @@ describe("a section, for a reader holding none of its grants", () => {
     );
     for (const section of everywhere) {
       location.hash = buildHash(section.path);
-      const { view } = mountAs(Promise.resolve(reader));
+      // HOLDING THE COMPANY'S GRANT, as every reader the socket answers does
+      // (its handshake needs `state:read`): what such a reader lacks is the
+      // section's own grant, which is what its refusal names (`sectionOpen`).
+      const { view } = mountAs(Promise.resolve({ ...reader, grants: ["state:read"] }));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
       const needs = grantWords(section.grants!);
       expect(await screen.findByText(`${section.label} needs ${needs}`), section.key).toBeDefined();
-      // THE WAY OUT IS A SIGN-IN AS SOMEBODY WHO HOLDS IT, never a token.
-      expect(
-        screen.getByRole("button", { name: `Sign in as somebody holding ${needs}` }),
-      ).toBeDefined();
+      // THE WAY OUT IS A SIGN-IN AS SOMEBODY ELSE, never a token — and the
+      // reader is named, from the reading the refusal was decided on.
+      expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
+      expect(content().textContent, section.key).toMatch(/You are signed in as reader/);
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
       expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
@@ -470,7 +567,7 @@ describe("a section, for a reader holding none of its grants", () => {
   // out of Settings said by name: Budgets' said the path segment, "spend".
   test("the Settings column offers a reader holding nothing their own Account, first", async () => {
     location.hash = "#/settings";
-    mountAs(Promise.resolve(reader));
+    mountAs(Promise.resolve({ ...reader, grants: ["state:read"] }));
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     const rows = within(column).getAllByRole("link");
     expect(rows[0]?.getAttribute("href")).toBe("#/account");
@@ -482,6 +579,31 @@ describe("a section, for a reader holding none of its grants", () => {
     // is open to them.
     const people = rows.find((a) => a.getAttribute("href") === "#/settings/people");
     expect(people?.textContent).toMatch(/needs people:manage or audit:read/);
+    // EACH ROW'S TITLE IS ITS HINT, and a cross-link's is the hint of the
+    // place it leads to — the reader's Account is described alike wherever it
+    // is offered, here, in the palette and in the user block.
+    const account = workspaceRow("account")!;
+    expect(rows[0]?.getAttribute("title")).toBe(account.hint);
+    expect(people?.getAttribute("title")).toBe(
+      settings.sections.find((s) => s.key === "people")!.hint,
+    );
+  });
+
+  // THE READER'S OWN SECTIONS NEED NOTHING, and every other needs the
+  // company's grant first: a reader holding no `state:read` is told that, not
+  // the section's own grant, and their Account and Appearance carry no lock.
+  test("for a reader holding no state:read, only the company's sections are locked", async () => {
+    location.hash = "#/settings";
+    mountAs(Promise.resolve(reader));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    const row = (href: string) =>
+      within(column)
+        .getAllByRole("link")
+        .find((a) => a.getAttribute("href") === href);
+    await waitFor(() => expect(row("#/settings")?.textContent).toMatch(/needs state:read/));
+    expect(row("#/settings/people")?.textContent).toMatch(/needs state:read/);
+    expect(row("#/account")?.textContent).toBe("Account, outside Settings");
+    expect(row("#/settings/appearance")?.textContent).toBe("Appearance");
   });
 
   test("an operator is given the screen", async () => {

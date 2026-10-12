@@ -144,6 +144,30 @@ export function score(text: string, query: string): number {
   return (i === 0 ? 0 : 100 + i) + t.length / 100;
 }
 
+/**
+ * How well a field matches a query WORD BY WORD, lower is better, or -1: the
+ * whole query as [score] reads it, or else every word of it the start of some
+ * word of the field — so "two step" finds "two-step verification" and "my
+ * account" finds "my account" typed with a space too many. Ranked after every
+ * whole match, which is the reader's own spelling of the field.
+ */
+export function wordScore(text: string, query: string): number {
+  const whole = score(text, query);
+  if (whole >= 0) return whole;
+  const wanted = wordsOf(query);
+  if (wanted.length < 2) return -1;
+  const own = wordsOf(text);
+  return wanted.every((w) => own.some((o) => o.startsWith(w))) ? 1000 + text.length / 100 : -1;
+}
+
+/** A field's words, lowercase, split at anything that is not a letter or a digit. */
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
 /** One row the palette offers, before it is drawn. */
 export interface Hit {
   id: string;
@@ -183,6 +207,43 @@ function ranked<T>(
 }
 
 /**
+ * The ranked matches of a list whose fields come in TIERS, best first, capped:
+ * an item matched in an earlier tier outranks every item matched only in a
+ * later one, whatever the scores, and within a tier [wordScore] orders them.
+ */
+function rankedInTiers<T>(
+  items: readonly T[],
+  query: string,
+  tiers: (item: T) => readonly (readonly string[])[],
+  cap: number,
+): T[] {
+  const scored: { item: T; tier: number; s: number }[] = [];
+  for (const item of items) {
+    if (!query) {
+      scored.push({ item, tier: 0, s: 0 });
+      continue;
+    }
+    const fields = tiers(item);
+    for (let tier = 0; tier < fields.length; tier++) {
+      const s = Math.min(
+        ...(fields[tier] ?? []).map((f) => {
+          const v = wordScore(f, query);
+          return v < 0 ? Infinity : v;
+        }),
+      );
+      if (Number.isFinite(s)) {
+        scored.push({ item, tier, s });
+        break;
+      }
+    }
+  }
+  return scored
+    .sort((a, b) => a.tier - b.tier || a.s - b.s)
+    .slice(0, cap)
+    .map((x) => x.item);
+}
+
+/**
  * Where the reader just was, most recent first — what an empty palette should
  * offer, because the likeliest place to go is the one they just left.
  */
@@ -204,7 +265,10 @@ export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
 export type Standing = { anonymous: true } | { anonymous: false; grants: readonly string[] } | null;
 
 /**
- * The screens, matched by name.
+ * The screens, matched by name — and then by the words a reader looks for one
+ * by ([Destination.keywords]), so "password" or "2fa" finds Account. A label
+ * match always ranks first, so a screen called what was typed is never pushed
+ * under one that merely holds it; the hint's prose is never searched.
  *
  * A SCREEN THE READER HOLDS NONE OF THE GRANTS FOR SAYS WHAT WOULD OPEN IT,
  * and only then: "needs a token" named a credential a person signing in has no
@@ -219,7 +283,7 @@ export function destinationHits(
   cap: number,
   standing: Standing,
 ): Hit[] {
-  return ranked(DESTINATIONS, query, (d) => [d.label], cap).map((d) => ({
+  return rankedInTiers(DESTINATIONS, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => ({
     id: `nav-${d.key}`,
     icon: d.icon,
     label: d.label,

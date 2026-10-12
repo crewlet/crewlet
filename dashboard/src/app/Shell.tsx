@@ -69,7 +69,7 @@ import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
-import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
+import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { NO_ACCESS, SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
@@ -376,6 +376,11 @@ function Frame({ children }: { children: ReactNode }) {
   const viewer = useViewer();
   const engine = useEngineHealth();
   const session = useFrameSession();
+  // WHAT THE READER HOLDS — the frame's one reading (`useHeldGrants`), which
+  // Settings' column locks its sections by, as the sidebar locks its rows.
+  // Read off the viewer alone, the column drew a session without
+  // `state:read`, whose viewer never answers, no lock at all.
+  const held = useHeldGrants();
 
   // DIAL FOR A SESSION THAT MAY READ THE COMPANY — see [Shell] — when it is
   // first read, and again when a later answer holds the grant an earlier one
@@ -543,7 +548,7 @@ function Frame({ children }: { children: ReactNode }) {
   // only of a reader whose grants reach them. See `sidebar/settingsFigures.tsx`.
   const figures = useSettingsSidebar({
     here: row?.renderer === "column",
-    grants: viewer.grants,
+    grants: held ?? [],
     health: engine,
     published: publishedFleet,
   });
@@ -607,12 +612,7 @@ function Frame({ children }: { children: ReactNode }) {
               className="section-frame"
               style={{ "--section-column": `${column}px` } as CSSProperties}
             >
-              <SectionColumn
-                row={row}
-                path={route.path}
-                grants={viewer.loading ? null : viewer.grants}
-                figures={figures}
-              />
+              <SectionColumn row={row} path={route.path} grants={held} figures={figures} />
               <div className="section-body">{screen}</div>
             </div>
           ) : (

@@ -18,10 +18,13 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { Suspense } from "react";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "@crewlethq/ui";
 import { PeopleAndAccess } from "./Access.tsx";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -181,6 +184,14 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
       const answer = queue && (queue.length > 1 ? queue.shift()! : queue[0]!);
       return Promise.resolve(answer ? answer.clone() : json(404, { error: "no_route" }));
     }
+    // ONE PERSON, as the peek reads them: the row the directory holds under
+    // that id at this read, or the engine's 404.
+    const one = /^\/iam\/people\/([^/]+)$/.exec(url.pathname);
+    if (one) {
+      const people = (directory() as { people: { id: string }[] }).people;
+      const row = people.find((p) => p.id === one[1]);
+      return Promise.resolve(row ? json(200, row) : json(404, { error: "not_found" }));
+    }
     switch (url.pathname) {
       case "/auth/config":
         return Promise.resolve(json(200, { min_password_length: 12, second_factor: secondFactor }));
@@ -246,7 +257,14 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
         <Router>
           <ToastProvider>
             <SessionReading>
-              <PeopleAndAccess />
+              {/* THE SCREEN AND THE FRAME'S ONE PEEK, as the shell mounts
+                  them: an opened person's gestures are the peek's. */}
+              <PeekNeighbours>
+                <PeopleAndAccess />
+                <Suspense fallback={null}>
+                  <PeekHost />
+                </Suspense>
+              </PeekNeighbours>
             </SessionReading>
           </ToastProvider>
         </Router>
@@ -277,9 +295,14 @@ async function invitationRow(): Promise<HTMLElement> {
 
 let uninstall: (() => void) | null = null;
 
+// THE PEEK'S BODY IS THE SETTINGS CHUNK'S, loaded once.
+beforeAll(async () => {
+  await loadChunk("settings");
+});
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/settings/access";
+  location.hash = "#/settings/people";
   secondFactor = "required";
   reader = null;
   administrators = 1;
@@ -304,13 +327,15 @@ afterEach(() => {
 // anybody, and a line here goes red.
 test("an auditor sees no write control, and an administrator sees them", async () => {
   engine();
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount(AUDITOR);
-  await screen.findByText("Bo Lang");
+  await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
   // THE VIEWER HAS ANSWERED once the contact column reads the company
-  // document, which only a reader holding config:read is asked for.
+  // document, which only a reader holding config:read is asked for — and the
+  // opened person's peek has drawn their credentials.
   await screen.findAllByText("No surface");
+  await screen.findByText("Authenticator app");
   for (const name of ["Invite person", "New service account", "Cancel", "Remove", "Revoke"]) {
     expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
   }
@@ -318,7 +343,7 @@ test("an auditor sees no write control, and an administrator sees them", async (
   cleanup();
   engine();
   mount(ADMIN);
-  await screen.findByText("Bo Lang");
+  await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
   await screen.findAllByRole("button", { name: "New service account" });
   for (const name of ["New service account", "Cancel", "Remove", "Revoke"]) {
@@ -402,7 +427,7 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
   fireEvent.click(within(cancel).getByRole("button", { name: "Done" }));
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
 
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
@@ -479,7 +504,7 @@ test.each([
 ])("a second factor's reset says what %s asks", async (setting, after) => {
   secondFactor = setting;
   engine();
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
   const reset = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
@@ -493,7 +518,7 @@ test.each([
 // it, and a line here goes red.
 test("a seated person's suspension withholds their seat, and a removal frees it, by name", async () => {
   engine();
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
@@ -516,7 +541,7 @@ test("a seated person's suspension withholds their seat, and a removal frees it,
 // as a person's.
 test("a service account bound to no seat is told nothing about one, and is created back", async () => {
   engine();
-  location.hash = "#/settings/access?person=p-ci";
+  location.hash = "#/settings/people?peek=person:p-ci";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const suspend = await screen.findByRole("dialog", { name: "Suspend ci:release?" });
@@ -537,7 +562,7 @@ test("a service account bound to no seat is told nothing about one, and is creat
 // drop the link from any one dialog and its assertion goes red.
 test("every gesture that ends a reset link says so, and the link comes after them", async () => {
   engine();
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
   const factor = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
@@ -591,7 +616,7 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   const eng = engine({
     "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })],
   });
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -624,7 +649,7 @@ test("an edit refused part way reads the directory again", async () => {
       }),
     ],
   });
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -651,7 +676,7 @@ test("an edit sends what its editor changed, whatever the directory read since",
     { "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
     () => people,
   );
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -680,7 +705,7 @@ test("an edit offers the seat its person holds by the seat's name", async () => 
     ...PEOPLE,
     people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, seat: "jane" } : p)),
   }));
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -696,7 +721,7 @@ test("a person's edit offers no 'No seat', and moving them sends the seat chosen
   const eng = engine({
     "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })],
   });
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -721,7 +746,7 @@ test("a service account's edit offers No seat, and choosing it unbinds the accou
       people: PEOPLE.people.map((p) => (p.id === "p-ci" ? { ...p, seat: "ops" } : p)),
     }),
   );
-  location.hash = "#/settings/access?person=p-ci";
+  location.hash = "#/settings/people?peek=person:p-ci";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
@@ -747,7 +772,7 @@ test("a grant change sends the ticks alone, whatever another administrator chang
     { "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
     () => people,
   );
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
@@ -789,7 +814,7 @@ test("a suspension retried after an unknown answer sends the suspension again", 
     },
     () => people,
   );
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const dialog = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
@@ -822,7 +847,7 @@ test("an edit takes away a grant the editor does not hold, and adds none", async
   const eng = engine({
     "PATCH /iam/people/p-di": [json(200, { id: "p-di", outcome: "applied", op_id: "k" })],
   });
-  location.hash = "#/settings/access?person=p-di";
+  location.hash = "#/settings/people?peek=person:p-di";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Di Moss" });
@@ -849,7 +874,7 @@ test("a machine's edit adds no grant a token never carries, and takes one away",
   const eng = engine({
     "PATCH /iam/people/p-ci": [json(200, { id: "p-ci", outcome: "applied", op_id: "k" })],
   });
-  location.hash = "#/settings/access?person=p-ci";
+  location.hash = "#/settings/people?peek=person:p-ci";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
@@ -876,7 +901,7 @@ test("a mint leaves out an account's grant its minter does not hold", async () =
       json(201, { id: "c-tok", person: "p-ci", token: "cwl_pat_c-tok_1_s", grants: [] }),
     ],
   });
-  location.hash = "#/settings/access?person=p-ci";
+  location.hash = "#/settings/people?peek=person:p-ci";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Mint token" }));
   const mint = await screen.findByRole("dialog", { name: "Mint a token for ci:release" });
@@ -905,7 +930,7 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
     "DELETE /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })],
     "DELETE /iam/credentials/c-totp": [json(200, { id: "c-totp", outcome: "applied" })],
   });
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Issue password reset link" }));
   const issue = await screen.findByRole("dialog", { name: /Issue a password reset link/ });
@@ -945,20 +970,20 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   expect(removal?.path).toBe("/iam/people/p-bo");
 });
 
-// A REMOVAL CLOSES THE PANEL IT WAS MADE FROM, and says what it did: left
-// open, the directory read again no longer held the row, so the panel turned
-// into the note for a link naming nobody — "Nobody in the directory has this
-// id", a raw id beside it — right after the reader's own action. The CONTROL
-// is that note itself, which a link to somebody since removed still draws
-// (`Access.test.tsx`). Mutation: drop the panel's removal callback and the
-// note, the id and the `person=` parameter all stay.
+// A REMOVAL CLOSES THE PEEK IT WAS MADE FROM, and says what it did: left
+// open, the row read again answered 404, so the peek turned into the note for
+// a link naming nobody — "Nobody in the directory has this id", a raw id
+// beside it — right after the reader's own action. The CONTROL is that note
+// itself, which a link to somebody since removed still draws
+// (`Access.test.tsx`). Mutation: drop the peek's removal callback and the
+// note, the id and the `peek=` parameter all stay.
 test("removing the open person closes their panel and says they were removed", async () => {
   let removed = false;
   engine(
     { "DELETE /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
     () => (removed ? { people: PEOPLE.people.filter((p) => p.id !== "p-bo"), next: "" } : PEOPLE),
   );
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
@@ -969,7 +994,7 @@ test("removing the open person closes their panel and says they were removed", a
   fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
   await settle();
   expect((await screen.findAllByText("Bo Lang was removed")).length).toBeGreaterThan(0);
-  expect(location.hash).toBe("#/settings/access");
+  expect(location.hash).toBe("#/settings/people");
   expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
   expect(screen.queryByText("p-bo")).toBeNull();
   expect(screen.queryByRole("dialog", { name: "Remove Bo Lang?" })).toBeNull();
@@ -1000,7 +1025,7 @@ test("taking your own people:manage in an edit says it is you, and when nobody e
   ] as const) {
     administrators = count;
     engine({}, directory);
-    location.hash = "#/settings/access?person=p-ana";
+    location.hash = "#/settings/people?peek=person:p-ana";
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
     const edit = await screen.findByRole("dialog", { name: "Edit Ana Admin" });
@@ -1037,7 +1062,7 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   const directory = () => ({ people: [...PEOPLE.people, ana], next: "" });
   reader = "p-ana";
   engine({}, directory);
-  location.hash = "#/settings/access?person=p-ana";
+  location.hash = "#/settings/people?peek=person:p-ana";
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const suspend = await screen.findByRole("dialog", { name: "Suspend yourself?" });
@@ -1085,7 +1110,7 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   expect(within(another).queryByText(/Nobody else active holds/)).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   engine({}, directory);
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
@@ -1190,7 +1215,7 @@ test("a login outside its kind's grammar is refused under the field and not post
   expect(within(create).getByText(/Use lowercase words joined by a colon/)).toBeTruthy();
   fireEvent.click(within(create).getByRole("button", { name: "Cancel" }));
 
-  location.hash = "#/settings/access?person=p-bo";
+  location.hash = "#/settings/people?peek=person:p-bo";
   await settle();
   fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });

@@ -70,7 +70,8 @@ import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
 import {
   grantWords,
-  grantsOpen,
+  grantsMissing,
+  isSidebarRow,
   sectionOf,
   WORKSPACES,
   type Section,
@@ -96,6 +97,8 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
+import { useMediaQuery } from "~/lib/media.ts";
+import { PHONE_BREAKPOINT } from "../layout.ts";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -461,12 +464,15 @@ export function elsewhereWords(row: WorkspaceRow, s: Section): string {
 /**
  * Settings' sections, as a column of groups beside the screen.
  *
- * A SECTION THE READER HOLDS NONE OF THE GRANTS FOR DRAWS ITS LOCK AND STAYS,
- * for the reason the sidebar's Settings row does: a section that vanished for
- * a reader without its grant is one they cannot know exists. The lock names
- * the grant, because that is what the reader would ask somebody for — and it
- * is drawn only once the viewer has answered, since a lock on every section
- * while the first read is out claims a refusal nobody has made. A CROSS-LINK
+ * A SECTION CLOSED TO THE READER DRAWS ITS LOCK AND STAYS, for the reason no
+ * sidebar row is ever hidden: a section that vanished for a reader without its
+ * grant is one they cannot know exists. Closed is `nav.ts`'s `sectionOpen`,
+ * the one rule every lock is drawn by — the reader's own sections (their
+ * Account, Appearance) never, every other without the company's grant or its
+ * own. The lock names what is missing, because that is what the reader would
+ * ask somebody for — and it is drawn only once somebody has said what the
+ * reader holds, since a lock on every section while the first read is out
+ * claims a refusal nobody has made. Each row's title is its hint. A CROSS-LINK
  * (the reader's Account, and Budgets, which lives once, under Spend) draws an
  * arrow, because pressing it leaves Settings. A figure beside a section is handed in whole, in the
  * column's own two shapes (`settingsFigures.tsx` decides them and asks for
@@ -499,15 +505,35 @@ export function SectionColumn({
   // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION. Stacked whole above
   // the section it took about 520px, so on Nodes and Secrets the section's own
   // content began below the fold on every visit. Below the phone breakpoint
-  // the list is folded behind one row saying where the reader is, and it folds
-  // again once they pick a section (the path moves); at every other width the
-  // toggle is not drawn and the list always is (frame.css).
-  const [open, setOpen] = useState(false);
-  const [openedAt, setOpenedAt] = useState(path.join("/"));
-  if (openedAt !== path.join("/")) {
-    setOpenedAt(path.join("/"));
-    setOpen(false);
+  // the list is folded behind one row saying where the reader is; at every
+  // other width the toggle is not drawn and the list always is (frame.css).
+  //
+  // FOLDED WHERE THE READER CHOSE A SECTION, OPEN WHERE THEY HAVE NOT. A deep
+  // link (`#/settings/people`) arrives folded, which is the reason the picker
+  // folds at all: the section the link named starts right under it. But the
+  // workspace's own address names no section anybody picked — it is where the
+  // sidebar's Settings row lands — so arriving there opens the list: folded,
+  // a phone reader saw one row reading "General" and never the You group with
+  // their Account in it. Every pick folds it again, the section the reader is
+  // already on included, which moves no path.
+  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const at = path.join("/");
+  const atRoot = samePath(path, row.path);
+  const [open, setOpen] = useState(phone && atRoot);
+  const [openedAt, setOpenedAt] = useState(at);
+  // THE ADDRESS A PICK IN THIS LIST IS ON ITS WAY TO, so the arrival it causes
+  // is told from one the reader did not make here — the Settings row, Back.
+  const [picked, setPicked] = useState<string | null>(null);
+  if (openedAt !== at) {
+    setOpenedAt(at);
+    setOpen(picked !== at && phone && atRoot);
+    setPicked(null);
   }
+  const pick = (s: Section) => () => {
+    setOpen(false);
+    const to = s.path.join("/");
+    if (to !== at) setPicked(to);
+  };
   const listID = useId();
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
@@ -527,7 +553,14 @@ export function SectionColumn({
         <span className="section-picker-name">
           {current ? (
             <>
-              <span className="sr-only">{row.label} section: </span>
+              {/* SAID, NOT ONLY SPOKEN: the row read "General" and nothing
+                  else, which a reader takes for the section's title rather
+                  than for a list of the others. */}
+              <span className="section-picker-prefix">
+                <span className="sr-only">{row.label} </span>Section
+                <span aria-hidden="true"> · </span>
+                <span className="sr-only">: </span>
+              </span>
               {current.label}
             </>
           ) : (
@@ -542,8 +575,10 @@ export function SectionColumn({
             <SidebarNav.Group key={g.name} label={g.name}>
               {g.sections.map((s) => {
                 const Glyph = glyphFor(s.icon);
-                const locked =
-                  grants !== null && s.grants !== undefined && !grantsOpen(s.grants, grants);
+                // BY THE ONE RULE every lock the navigation draws is decided
+                // by (`nav.ts`'s `sectionOpen`): the reader's own sections
+                // need nothing, and every other needs the company's grant too.
+                const needs = grants === null ? [] : grantsMissing(s, grants);
                 const figure = figures[s.key];
                 return (
                   <SidebarNav.Item
@@ -551,13 +586,21 @@ export function SectionColumn({
                     href={href(s.path)}
                     current={!s.elsewhere && current?.key === s.key}
                     icon={<Glyph size="sm" />}
+                    onClick={pick(s)}
+                    // THE ROW'S HINT AS ITS TITLE, the words the palette shows
+                    // under it — for a cross-link the hint of the row it leads
+                    // to (`crossLink`), so the reader's Account is described
+                    // alike wherever it is offered.
+                    renderLink={({ className, ...link }) => (
+                      <a className={className} {...link} title={s.hint} />
+                    )}
                     label={
                       <span className="section-column-label">
                         {s.label}
-                        {locked && (
+                        {needs.length > 0 && (
                           <>
                             <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs {grantWords(s.grants ?? [])}</span>
+                            <span className="sr-only">, needs {grantWords(needs)}</span>
                           </>
                         )}
                         {s.elsewhere && (
@@ -728,8 +771,9 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
   // and saying why, rather than left out: it was drawn on every section of a
   // workspace but its first, so moving between two tabs of one workspace moved
   // the header's controls, and the reader had no way to learn why the star was
-  // sometimes missing.
-  if (path.length < 2) {
+  // sometimes missing. WHETHER IT IS ONE is `isSidebarRow`'s, never the
+  // path's length: the reader's Account is one segment long and has no row.
+  if (isSidebarRow(path)) {
     return (
       <Button
         size="small"
@@ -813,12 +857,13 @@ export function PageMore({
   }));
   // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
   // whose own entries carry it, or for a tab that has not learned who reads
-  // it, and unavailable and saying why on a workspace's own page.
+  // it, and unavailable and saying why on a sidebar row's own page — by the
+  // one rule the inline star asks (`isSidebarRow`).
   const frameStar = star && reader !== null && resolves(path);
   if (items.length > 0 && frameStar) items.push({ kind: "separator", key: "frame" });
   if (frameStar) {
     items.push(
-      path.length < 2
+      isSidebarRow(path)
         ? {
             key: "star",
             label: "Keep in Starred",

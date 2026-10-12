@@ -73,6 +73,16 @@
  * just answered `401` (the `sign_in` need, `protocol/signin.ts`) holds no
  * session, which the engine has already said — asking `GET /auth/session`
  * again was one more refused request on every way a session ends.
+ *
+ * # The console carries the engine's 401s, and nothing of ours
+ *
+ * A signed-out load's `GET /auth/session` answers `401`, and so does a
+ * two-step sign-in's password step (`second_factor_required`); a browser logs
+ * every 4xx a page loads, and no page can stop it. Neither is a fault to
+ * dress up as something else: the cookie is `HttpOnly`, so only the engine
+ * can say nobody is signed in, and a `200` from `/auth/login` always opened a
+ * session. What this screen keeps is that each is ONE request, and that it
+ * writes nothing to the console itself — a refusal is drawn on the form.
  */
 
 import { useEffect, useState } from "react";

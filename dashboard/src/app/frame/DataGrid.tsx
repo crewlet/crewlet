@@ -60,6 +60,19 @@ export interface GridColumn<T> {
    * draws its own name beside it; ignored everywhere `header` is drawn.
    */
   label?: string;
+  /**
+   * A column of ROW ACTIONS: every cell is a control that names itself — a
+   * "Revoke" button, an icon button with its own label — or a mark standing in
+   * for one ("This browser"). On the phone's card layout such a cell draws
+   * NO NAME beside it: the button is its own name, and the label the column
+   * once had to carry printed the word twice, `SIGN OUT  Sign out` on every
+   * session row. So it is declared IN PLACE OF [label] — `app/source.test.ts`
+   * accepts it where it asks an empty head for one — and a `label` beside it
+   * is only ever a chooser's or the "Hidden to fit" note's word, never drawn
+   * on the card. Its head stays empty, since a word over a column of buttons
+   * says nothing the buttons do not.
+   */
+  action?: boolean;
   /** Shrink to content and never wrap. */
   shrink?: boolean;
   /**
@@ -848,6 +861,9 @@ export function DataGrid<T>({
     // rule is that a cell with no value has no child nodes — which is what
     // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
     // span would defeat it silently.
+    //
+    // AND AN ACTION COLUMN'S CELL NAMES ITSELF ([GridColumn.action]): a
+    // button's own word is the line, so the card draws no name before it.
     const inner = visibleColumns.map((column) => (
       <span
         key={column.key}
@@ -855,8 +871,10 @@ export function DataGrid<T>({
         data-lead={column.phoneLead || undefined}
         data-phone-omit={column.phoneOmit || undefined}
         data-label={
-          (typeof column.header === "string" && column.header ? column.header : column.label) ||
-          undefined
+          column.action
+            ? undefined
+            : (typeof column.header === "string" && column.header ? column.header : column.label) ||
+              undefined
         }
       >
         {column.cell(row)}

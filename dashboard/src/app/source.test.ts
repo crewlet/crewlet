@@ -576,6 +576,11 @@ test("the element scanner reads a multi-line prop", () => {
  * repeat it — so a new glyph column type-checks, renders, and is wrong only on
  * a phone, which no suite in this tree has a viewport for.
  *
+ * EXCEPT A COLUMN OF ROW ACTIONS, which says `action: true` instead: its cell
+ * is a button that names itself, so the card draws no name beside it — and a
+ * `label` this rule had demanded there printed the word twice, `SIGN OUT  Sign
+ * out` on every session of the Account page.
+ *
  * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
  * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
  * properties share a column and everything nested under one is indented past
@@ -612,12 +617,13 @@ test("a column with no word in its head declares one", () => {
         }
       }
       if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }
   }
   expect(
     offenders,
-    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`",
+    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`, or `action: true` for a column of self-naming buttons",
   ).toEqual([]);
   // THE OTHER SIDE, as above: a renamed field or a broken scan makes the rule
   // vacuous and still green. Well over a hundred columns today.

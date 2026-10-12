@@ -47,6 +47,7 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -1061,6 +1062,11 @@ function AnswerRunDialog({
  * held with the reason where the reader could not file one — a door that
  * opened onto a sheet that then refused would teach the reason one press too
  * late.
+ *
+ * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
+ * ask of your own seat is a question only you could answer. Decided here
+ * rather than by each screen that draws the button, because the page held it
+ * while the peek drew it bare.
  */
 export function MessageSeatButton({
   handle,
@@ -1070,6 +1076,7 @@ export function MessageSeatButton({
   variant?: "primary" | "secondary";
 }) {
   const write = useAct("create_work_item");
+  const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
   return (
     <WriteButton
@@ -1078,6 +1085,10 @@ export function MessageSeatButton({
       variant={variant}
       leadingIcon={<MessageSquareGlyph size="sm" />}
       showRefusal={false}
+      // THE ACT'S OWN REASON IS THE BUTTON'S where it cannot act at all, and
+      // the access above is that same reason then — so this is only ever the
+      // own-seat hold, which ranks after everything else.
+      blocked={access.can ? undefined : access.reason}
       onPress={() => openNewTask({ assignee: handle, ask: handle })}
     >
       Message

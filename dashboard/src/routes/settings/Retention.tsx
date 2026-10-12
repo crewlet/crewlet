@@ -313,7 +313,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             {
               key: "gate",
               header: "",
-              label: "Eviction",
+              action: true,
               shrink: true,
               cell: (n) => {
                 const action = gateAction(n, gestures);

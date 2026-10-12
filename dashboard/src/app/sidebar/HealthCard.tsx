@@ -181,6 +181,10 @@ export function HealthCard({
   reading: HealthReading;
   onSignIn: () => void;
 }) {
+  // THE PRESSABLE MARK ONLY ON A CARD THAT CAN BE PRESSED: a statement wearing
+  // the chevron (and the pointer and the hover border, frame.css) read as a
+  // control that did nothing and could not be focused.
+  const pressable = reading.press !== "none";
   const body: ReactNode = (
     <>
       {/* ON THE TITLE'S LINE, because it is the title's tone: centred on
@@ -205,14 +209,14 @@ export function HealthCard({
           </span>
         )}
       </span>
-      <ChevronRightGlyph size="sm" className="health-card-go" />
+      {pressable && <ChevronRightGlyph size="sm" className="health-card-go" />}
     </>
   );
   // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the card is that
   // button. A refusal of somebody the engine knows is fixed by an
   // administrator, so the card says it and leads nowhere — the nodes' page
-  // would be one more refusal. Every other state is a fact about the fleet,
-  // and its page is the nodes.
+  // would be one more refusal — and wears nothing a control wears. Every
+  // other state is a fact about the fleet, and its page is the nodes.
   if (reading.press === "sign-in") {
     return (
       <button type="button" className="health-card" data-tone={reading.tone} onClick={onSignIn}>

@@ -44,17 +44,17 @@
  */
 
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
-import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
+import { Skeleton, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { resolve, type Resolved, type Route } from "./routes.ts";
-import { framelessOf, grantsOpen, sectionOf, workspaceOf } from "./nav.ts";
+import { framelessOf, grantsMissing, personalPath, sectionOf, sectionOpen } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
@@ -296,31 +296,48 @@ function Frame() {
 
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
+  const held = useHeldReading();
   const { accessRefused } = useConnection();
   const { noAccess } = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
   // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE, or whose session holds no
-  // grant to read the company, is told so in place of every screen but its
-  // Account, which reads no socket — see `AccessRefused`.
-  if ((accessRefused !== null || noAccess) && workspaceOf(path) !== "account") {
+  // grant to read the company, is told so in place of every screen but the
+  // reader's own — their Account and Settings › Appearance, which read no
+  // socket (`personalPath`, the rule the sidebar's locks are drawn by) — see
+  // `AccessRefused`.
+  if ((accessRefused !== null || noAccess) && !personalPath(path)) {
     return <AccessRefused reason={accessRefused} />;
   }
-  // A SECTION FOR A VIEWER THE ENGINE HAS SAID HOLDS NONE OF ITS GRANTS is
-  // its refusal and nothing else — see `GrantRequired`. Only on an ANSWER,
-  // and the first one is waited for: until it is in, the section asks
-  // nothing it may be refused (a cold load of #/settings/secrets sent its
-  // guarded reads, was refused, and drew the refusal, a frame before the
-  // frame knew to). A viewer read that FAILED is no answer and does not hold
-  // the section: the screen mounts, and its own reads say what they find.
+  // A SECTION CLOSED TO THE READER is its refusal and nothing else — see
+  // `GrantRequired` — decided by the rule every lock the navigation draws is
+  // decided by (`nav.ts`'s `sectionOpen`), over the frame's one reading of
+  // who the reader is and what they hold (`useHeldReading`): the viewer's
+  // answer, or the session's where the viewer has not answered — and the
+  // refusal names the reader from that same reading. Read off the viewer alone, a
+  // session whose socket the engine refuses (so whose viewer never answers)
+  // was held at "Checking your access" for good on a section the sidebar
+  // beside it had already locked. Only on an ANSWER, and the first one is
+  // waited for: until it is in, the section asks nothing it may be refused (a
+  // cold load of #/settings/secrets sent its guarded reads, was refused, and
+  // drew the refusal, a frame before the frame knew to). A read that FAILED
+  // is no answer and does not hold the section: the screen mounts, and its
+  // own reads say what they find.
   const section = sectionOf(path);
   if (section?.grants) {
-    if (viewer.asking) {
+    if (held === null) {
+      if (viewer.asking) {
+        return (
+          <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
+        );
+      }
+    } else if (!sectionOpen(section, held.grants)) {
       return (
-        <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
+        <GrantRequired
+          what={section.label}
+          grants={grantsMissing(section, held.grants)}
+          reader={held.login}
+        />
       );
-    }
-    if (!viewer.loading && !grantsOpen(section.grants, viewer.grants)) {
-      return <GrantRequired what={section.label} grants={section.grants} />;
     }
   }
   return screenFor(where);
@@ -334,28 +351,32 @@ export function App() {
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
+    //
+    // AND NO `LayerHost` AROUND THE FRAME. Every overlay the kit draws — a
+    // Modal, a Select's listbox, a Popover, the palette, a toast — asks
+    // `useLayerContainer()` where to go, and with no host that answers
+    // `document.body`, where each one's z-index is its DEPTH on the one layer
+    // stack in the ROOT stacking context. The narrow layout's drawer is on that
+    // stack too, but it is the sidebar itself and cannot be portalled: it is
+    // painted in place at its own depth plus one. A host here made a stacking
+    // context of its own at the bottom of the band, so every overlay was capped
+    // beneath the open drawer whatever its depth — on a phone the Account
+    // popover and the palette opened from the drawer drew UNDER it, and their
+    // Account link, sign-outs and results could not be tapped. The kit names a
+    // host for a FULLSCREEN container only (the org builder keeps its own),
+    // since a fullscreen element paints nothing outside itself.
     <ToastProvider>
-      {/* THE ONE PORTAL TARGET, DECLARED RATHER THAN FALLEN BACK TO. Every
-          overlay the kit draws — a Modal, a Select's listbox, a Popover, and
-          the palette — asks `useLayerContainer()` where to go, and with no
-          host mounted that answers `document.body`. The host is one
-          absolutely-positioned box covering the shell, inert until something
-          is drawn in it, holding the whole layer band in a stacking context of
-          its own. INSIDE THE TOAST PROVIDER, so a toast reporting what a write
-          inside a dialog did is readable over the dialog that caused it. */}
-      <LayerHost>
-        {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
-            ceremony and the one live region are what a sign-in screen and a
-            framed one both need, so none may tear them down and none of
-            them waits on a chunk. */}
-        <FollowSessionNeed />
-        <StepUpHost />
-        {/* THE ONE LIVE REGION the design system's controls speak into,
-            beside the frame so a sign-in does not tear it down. See
-            `announcer.tsx`. */}
-        <AppAnnouncer />
-        <Frame />
-      </LayerHost>
+      {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
+          ceremony and the one live region are what a sign-in screen and a
+          framed one both need, so none may tear them down and none of them
+          waits on a chunk. */}
+      <FollowSessionNeed />
+      <StepUpHost />
+      {/* THE ONE LIVE REGION the design system's controls speak into,
+          beside the frame so a sign-in does not tear it down. See
+          `announcer.tsx`. */}
+      <AppAnnouncer />
+      <Frame />
     </ToastProvider>
   );
 }

@@ -5,7 +5,8 @@
  * The company document takes `config:read`, so a reader without it is refused
  * on every ask: the answer is known before the question. Asking anyway put a
  * refusal on the wire on every seat page such a reader opened, and a
- * `refused` banner over a page that never had a chance.
+ * `refused` banner over a page that never had a chance. And not asking is
+ * said as what it is — `withheld` — never as a document that came back empty.
  */
 
 import { act, cleanup, render } from "@testing-library/react";
@@ -79,7 +80,7 @@ function probe() {
       <Reader />
     </ClientContext.Provider>,
   );
-  return { asked, reading: () => seen!.reading };
+  return { asked, reading: () => seen!.reading, setup: () => seen! };
 }
 
 async function settle() {
@@ -88,11 +89,30 @@ async function settle() {
   });
 }
 
-test("a reader without config:read stays unread, and nothing is asked", async () => {
-  const { asked, reading } = probe();
+// NOT ASKED IS ITS OWN ANSWER, and never a company with no configuration: the
+// Settings tab read a read nobody sent — no document, not loading — as one
+// that came back empty, and told a person opening their own seat "No company
+// configuration is active" beside a company running. Mutation: leave such a
+// reader `unread` and the panel has nothing to tell the two apart by.
+test("a reader without config:read is withheld, and nothing is asked", async () => {
+  const { asked, reading, setup } = probe();
+  await settle();
+  expect(asked).not.toContain("config");
+  expect(reading()).toEqual({ state: "withheld" });
+  expect(setup().config).toMatchObject({ doc: null, loading: false, error: null });
+});
+
+// A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT WITHHELD — it may hold the grant
+// — and its read is WAITING rather than answered: until the viewer says who
+// this is nothing can be asked, so the panel draws a read in flight rather
+// than a document that came back with nothing.
+test("before the viewer answers the read claims nothing, and is waiting", async () => {
+  vi.mocked(useViewer).mockReturnValue({ ...READER, grants: [], loading: true, asking: true });
+  const { asked, reading, setup } = probe();
   await settle();
   expect(asked).not.toContain("config");
   expect(reading()).toEqual({ state: "unread" });
+  expect(setup().config.loading).toBe(true);
 });
 
 test("a reader holding config:read is read", async () => {

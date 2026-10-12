@@ -103,6 +103,7 @@ export function Settings({
   const company = useOrg()?.token_budget;
   const state = (children: ReactNode) => (
     <SettingsState
+      reading={reading}
       error={config.error}
       refusal={config.refusal}
       loading={config.loading}
