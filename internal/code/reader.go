@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -956,30 +957,82 @@ func cutPushCursor(s string) (int64, int64, string, bool) {
 	return at, position, parts[2], true
 }
 
-// DeletedPastRetention answers every repository deleted at or before now less
-// retention, purging ones included — what the code-retention pass purges.
-func (r *Reader) DeletedPastRetention(ctx context.Context, now time.Time, retention time.Duration) ([]RepoRef, error) {
-	var out []RepoRef
+// dueRepo is one repository the code-retention pass steps: what the pass
+// needs of it and nothing more — its id to step, its name to report and hand
+// on — and where it sits in the listing's order.
+type dueRepo struct {
+	id, name string
+
+	// purging says its purge has begun, so it is listed whatever the
+	// retention.
+	purging bool
+
+	// deletedAt is its deletion's instant as stored: the listing's order,
+	// with the id.
+	deletedAt int64
+}
+
+// dueQuery asks for one page of what the code-retention pass steps.
+type dueQuery struct {
+	// cutoff is now less the retention: a DELETED repository is listed only
+	// once its deletion is at or before it.
+	cutoff time.Time
+
+	// after is the last repository of the page before; nil for the first.
+	after *dueRepo
+
+	// limit is the most repositories the page lists.
+	limit int
+}
+
+// due lists one page of what the code-retention pass steps, in the order it
+// steps them: every PURGING repository first, whatever the retention — a
+// purge once begun is always finished, since its rows are partly gone and
+// nothing restores it — and then every DELETED repository whose deletion is
+// at or before the cutoff; each phase oldest deletion first, and the page
+// resuming after q.after.
+//
+// A STALE READ of this node's rows, in one transaction, of the three columns
+// the pass uses: every step decides again in its own snapshot, so a
+// repository that moved on since the listing is answered there. Each phase
+// is ONE statement over its own partial index (replicated 0043), so a page
+// reads the rows it lists — never the repositories deleted inside the
+// retention, nor a repository's settings and rules the pass has no use for:
+// read whole, a listing of ten thousand due repositories was two statements
+// a repository and every protection rule each holds, re-read at every pass
+// however few of them the pass could step.
+func (r *Reader) due(ctx context.Context, q dueQuery) ([]dueRepo, error) {
+	if q.limit <= 0 {
+		return nil, fmt.Errorf("%w: a page of the repositories due lists at least one", ErrInvalid)
+	}
+	var out []dueRepo
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		out = nil
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
+		out = out[:0]
+		var (
+			after   = int64(math.MinInt64)
+			afterID string
+			purging = true
+		)
+		if q.after != nil {
+			after, afterID, purging = q.after.deletedAt, q.after.id, q.after.purging
 		}
-		ids, err := keyList(ctx, tx, deletedSQL, store.EncodeTime(now.Add(-retention)))
-		if err != nil {
-			return fmt.Errorf("code: read the deleted repositories: %w", err)
+		if purging {
+			var err error
+			if out, err = dueIn(ctx, tx, out, true, duePurgingSQL, after, after, afterID,
+				q.limit); err != nil {
+				return fmt.Errorf("code: read the repositories purging: %w", err)
+			}
+			if len(out) == q.limit {
+				return nil
+			}
+			after, afterID = math.MinInt64, ""
 		}
-		for _, id := range ids {
-			v, found, err := repoViewIn(ctx, tx, id, cp.At)
-			if err != nil {
-				return err
-			}
-			if found {
-				out = append(out, v.ref)
-			}
+		var err error
+		if out, err = dueIn(ctx, tx, out, false, dueDeletedSQL, store.EncodeTime(q.cutoff),
+			after, after, afterID, q.limit-len(out)); err != nil {
+			return fmt.Errorf("code: read the repositories deleted past the retention: %w", err)
 		}
 		return nil
 	})
@@ -987,6 +1040,50 @@ func (r *Reader) DeletedPastRetention(ctx context.Context, now time.Time, retent
 		return nil, err
 	}
 	return out, nil
+}
+
+// dueIn appends to out every repository query lists, each marked purging or
+// not.
+func dueIn(ctx context.Context, tx *sql.Tx, out []dueRepo, purging bool, query string,
+	args ...any) ([]dueRepo, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		d := dueRepo{purging: purging}
+		if err := rows.Scan(&d.id, &d.name, &d.deletedAt); err != nil {
+			return out, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// purgedAt reports whether this node's rows hold repository id PURGED — its
+// row gone and its deletion marker written — read at the session floor at,
+// the position of the purge's last record: a node that has not applied it
+// waits for it, for the read's budget, and refuses `behind` past that rather
+// than answering from before it. False is a definite answer: at that
+// position this node's copy still holds the repository's row, so the record
+// there removed nothing here.
+func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) (bool, error) {
+	if at.IsZero() {
+		return false, fmt.Errorf("%w: at: a purge is confirmed at its last record's position", ErrInvalid)
+	}
+	var purged bool
+	query := statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}.Query(
+		statelog.ScopeSet{Paths: []string{RepoPath(id)}}, false)
+	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+		var rows, marked int
+		if err := tx.QueryRowContext(ctx, purgeStateSQL, id, id).Scan(&rows, &marked); err != nil {
+			return fmt.Errorf("code: read whether %s is purged: %w", id, err)
+		}
+		purged = rows == 0 && marked > 0
+		return nil
+	})
+	return purged, err
 }
 
 // The reader's statements, each registered in plan_test.go so the pinned
@@ -1034,6 +1131,17 @@ const (
 		ORDER BY repo_id, pattern`
 	headSQL = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
 		WHERE repo_id = ? AND ref = ? AND target != ''`
-	deletedSQL = `SELECT id FROM code_repos WHERE deleted_at IS NOT NULL AND deleted_at <= ?
-		ORDER BY deleted_at, id`
+	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
+	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
+	// beside the OR is what keeps the index's range seek, which a bare OR of
+	// the two terms would give up.
+	duePurgingSQL = `SELECT id, name, deleted_at FROM code_repos
+		WHERE status = 'purging' AND deleted_at >= ? AND (deleted_at > ? OR id > ?)
+		ORDER BY deleted_at, id LIMIT ?`
+	dueDeletedSQL = `SELECT id, name, deleted_at FROM code_repos
+		WHERE status = 'deleted' AND deleted_at <= ? AND deleted_at >= ? AND (deleted_at > ? OR id > ?)
+		ORDER BY deleted_at, id LIMIT ?`
+	purgeStateSQL = `SELECT
+		(SELECT COUNT(*) FROM code_repos WHERE id = ?),
+		(SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?)`
 )

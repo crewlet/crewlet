@@ -17,9 +17,10 @@ import (
 // respect to one that honoured it, so the only way to observe the difference
 // is to put the node BEHIND the bound and require the refusal — in both units,
 // because a reader that threads one field and forgets the other is the exact
-// shape the tracker shipped. A push's outcome and the retention pass's listing
-// take no caller bound — the first is always read at its record's own position,
-// the second is the pass's own stale read — so they are not rows here.
+// shape the tracker shipped. A push's outcome and the retention pass's two
+// reads take no caller bound — the outcome and the pass's confirmation of a
+// purge are always read at their record's own position, and its listing is
+// the pass's own stale read — so they are not rows here.
 func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

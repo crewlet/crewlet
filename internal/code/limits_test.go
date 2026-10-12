@@ -166,6 +166,26 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			queue.MaxPayloadBytes)
 	}
 
+	// A RETENTION PASS LEAVES THE LANE ITS SHARE AND ENDS BEFORE ITS TICK:
+	// it waits twice a step's duration after each (a third of the lane), and
+	// its budget is StallGrace — what a node six times slower than the holder
+	// ends a pass behind by is (6/3 − 1) budgets, StallGrace itself — and
+	// leaves most of the tick for that node to catch up before the next.
+	if code.RetentionIdlePerStep != 2 {
+		t.Errorf("a pass waits %v times a step's duration after it, want 2: a third of the "+
+			"lane (RetentionLaneShare %v)", code.RetentionIdlePerStep, code.RetentionLaneShare)
+	}
+	if code.RetentionPassBudget != statelog.StallGrace ||
+		(6*code.RetentionLaneShare-1)*float64(code.RetentionPassBudget) > float64(statelog.StallGrace) {
+		t.Errorf("RetentionPassBudget is %v: a node six times slower than the holder must end a "+
+			"pass no more than StallGrace (%v) behind", code.RetentionPassBudget, statelog.StallGrace)
+	}
+	if 2*code.RetentionPassBudget > code.RetentionInterval {
+		t.Errorf("RetentionPassBudget (%v) is past half of RetentionInterval (%v): a node behind "+
+			"the pass has less of the tick to catch up in than the pass ran",
+			code.RetentionPassBudget, code.RetentionInterval)
+	}
+
 	// THE LIMITS A COMPANY DOES NOT SET ARE CONFIG'S, one value.
 	if got := code.DefaultLimits(); got != (code.Limits{
 		MaxPushBytes: config.DefaultCodeMaxPushBytes, MaxBlobBytes: config.DefaultCodeMaxBlobBytes,
