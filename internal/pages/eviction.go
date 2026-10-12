@@ -60,6 +60,13 @@ func (s *Store) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID strin
 // decision runs ([statelog.Snap.Held]); what this write adds is whether the
 // record its operation landed is still in force, judged from the node's own
 // row in the same snapshot ([statelog.GateStanding]).
+//
+// THE FRAMEWORK'S REFUSALS COME BACK IN ITS OWN WORDS, so this goes to the
+// publisher directly rather than through [Store.publish]. That translation is
+// for a person editing a page — a lost race is "the page kept changing" — and
+// on a node's eviction subject it named a page after a node id, telling an
+// operator contending with another over one node's gate about an edit nobody
+// was making.
 func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
@@ -77,7 +84,7 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	subject := EvictionSubject(nodeID)
 	scope := ScopeSet{Subject: true}
 	at := s.now()
-	return s.publish(ctx, statelog.Request{
+	return s.publisher.Publish(ctx, statelog.Request{
 		Subject:  statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
