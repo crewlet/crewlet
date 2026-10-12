@@ -634,7 +634,7 @@ var table = []rule{
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
 		remedy: "A node did not cover its bucket range, so part of the corpus " +
-			"went unscanned — it was unreachable, or its own lexical index has " +
+			"went unscanned: it was unreachable, or its own lexical index has " +
 			"not finished its first lap, which is what a node that joined a " +
 			"few minutes ago looks like and clears itself. The answers were " +
 			"complete for what was searched and silent about what was not; the " +
@@ -653,7 +653,7 @@ var table = []rule{
 				r.HistoryPartialFraction > 0
 		},
 		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows — every answer names " +
+			"a partial answer is missing that node's rows, and every answer names " +
 			"the node in its `coverage`. A node that has left the fleet is gone " +
 			"with its detail, and the aggregates survive it in the usage domain; " +
 			"a live node that keeps missing the budget is slow on its own store " +
@@ -697,7 +697,7 @@ var table = []rule{
 		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
 			"`crewlet search eval` against a backup's copy of the estate " +
 			"measures the full scan beside the index in every query shape and " +
-			"will say the same. The remedy is the evaluation's — raise " +
+			"will say the same. The remedy is the evaluation's: raise " +
 			"BinaryOversample, then an int8 first stage, both code changes (see " +
 			"docs/guides/search.md). No index is installed meanwhile, so " +
 			"searches answer from the full scan at the recall the evaluation " +
@@ -717,8 +717,8 @@ var table = []rule{
 		// named here to the line the applier writes.
 		remedy: "A gated record is recoverable by nothing. Each drop's " +
 			"`statelog_record_gated` log line names the `gate` that dropped it, " +
-			"the record's `position` and `kind`, and the `writer` — the node " +
-			"that wrote it; this is worth reading today.",
+			"the record's `position` and `kind`, and the `writer` (the node " +
+			"that wrote it); this is worth reading today.",
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
@@ -736,8 +736,8 @@ var table = []rule{
 				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
 		},
 		remedy: "A record no build on this node can read. It redelivers for ever " +
-			"rather than being dropped, so the wakes behind it are waiting too — " +
-			"upgrade the node past it, or the feed stops moving.",
+			"rather than being dropped, so the wakes behind it are waiting too. " +
+			"Upgrade the node past it, or the feed stops moving.",
 	},
 	{
 		kind: KindMaintenanceOpen,
@@ -763,7 +763,7 @@ var table = []rule{
 					bytesHuman(r.StoreBytes)),
 				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
 		},
-		remedy: "Add space to the volume the alarm names — or, where it could not be " +
+		remedy: "Add space to the volume the alarm names. Where it could not be " +
 			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
 			"join all need the room, and each fails partway through without it.",
 	},
@@ -811,7 +811,7 @@ var table = []rule{
 		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
 			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
 			"the S3 bucket) and restore those files from a backup, or upload them " +
-			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
+			"again (see docs/guides/backup.md). `crewlet objects status` names them.",
 	},
 }
 

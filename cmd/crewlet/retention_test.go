@@ -341,12 +341,12 @@ func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
 		t.Fatalf("retention status: %v", err)
 	}
 	first := strings.SplitN(strings.TrimSpace(stdout), "\n", 2)[0]
-	if first != "NOT READY tracker: wrong_stream (recreated) — tracker's rows are "+
+	if first != "NOT READY tracker: wrong_stream (recreated): tracker's rows are "+
 		"keyed to the stream created at 2031-04-01" {
 		t.Errorf("the first line is %q, want the refusal naming its finding", first)
 	}
 	for _, want := range []string{
-		"WRITES REFUSED tracker: log_truncated — peer node-4",
+		"WRITES REFUSED tracker: log_truncated: peer node-4",
 		"could not read tracker's evictions",
 		"left gen 0",
 		"LOG DIVERGED",
@@ -729,7 +729,7 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 		t.Fatalf("an unvouched gesture exited zero:\n%s", stdout)
 	}
 	for _, want := range []string{
-		"pages: unknown — this node cannot tell",
+		"pages: unknown (this node cannot tell",
 		"run it through another node the fleet still counts: -url <that node> -op-id " + gesture,
 	} {
 		if !strings.Contains(stdout, want) {

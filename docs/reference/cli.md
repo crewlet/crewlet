@@ -908,8 +908,8 @@ refusal's own sentence — and for a `wrong_stream`, which finding is behind it
 (`recreated`, `ahead_of_log`, `log_diverged`, `generation_passed`):
 
 ```
-NOT READY pages: wrong_stream (recreated) — pages's rows are keyed to the stream created at … and the broker's CREWLET_PAGES_LOG was created at …
-WRITES REFUSED tracker: log_truncated — peer node-4 stands at sequence … of CREWLET_TRACKER_LOG, which ends at …
+NOT READY pages: wrong_stream (recreated): pages's rows are keyed to the stream created at … and the broker's CREWLET_PAGES_LOG was created at …
+WRITES REFUSED tracker: log_truncated: peer node-4 stands at sequence … of CREWLET_TRACKER_LOG, which ends at …
 ```
 
 Then the blocking term, **in prose**, because it is the answer to the only
@@ -1028,7 +1028,7 @@ finish that log — an `unknown` outcome, a node still catching up — it names 
 with `-force` carried over from a forced run:
 
 ```
-  pages: unknown — the record may or may not be on the log
+  pages: unknown (the record may or may not be on the log)
     its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not
   The gesture has not reached every log. Run it again with -op-id 01a0cd85-… to finish it: a log that already holds the record answers from its own rows and is not written twice.
 ```
@@ -1047,7 +1047,7 @@ ordinary writes still takes them — needs
 [`crewlet retention set-capacity`](#crewlet-retention-set-capacity):
 
 ```
-  pages: not written (log_full) — pages: statelog: unavailable (log_full): …
+  pages: not written (log_full): pages: statelog: unavailable (log_full): …
     CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
     crewlet retention set-capacity CREWLET_PAGES_LOG <bytes> -confirm <bytes>, then run this again with -op-id 01a0cd85-…
 ```

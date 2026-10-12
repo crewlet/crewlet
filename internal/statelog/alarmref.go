@@ -38,8 +38,8 @@ var alarmMeaning = map[Kind]string{
 		"moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
-	KindBarrierSlow: "The read barrier — the append every linearizable read " +
-		"waits on — is spending a quarter of the whole read budget.",
+	KindBarrierSlow: "The read barrier (the append every linearizable read " +
+		"waits on) is spending a quarter of the whole read budget.",
 	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
@@ -63,17 +63,17 @@ var alarmMeaning = map[Kind]string{
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +
-		"half — the embeddings provider or the vector domain is failing.",
+		"half: the embeddings provider or the vector domain is failing.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
 		"because a node did not answer its bucket range.",
-	KindHistoryPartial: "Fleet history reads — turns, traces, the event log — " +
+	KindHistoryPartial: "Fleet history reads (turns, traces, the event log) " +
 		"are being answered without every node, because one did not answer " +
 		"inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindIVFRecallBelowFloor: "The latest measurement of the " +
 		"semantic index found recall against the exact scan below the floor, " +
-		"in a query shape a search is issued in, even probing every list — " +
+		"in a query shape a search is issued in, even probing every list, " +
 		"which is the full scan's own candidate pool, so the first stage is " +
 		"below the floor on this corpus with or without the index.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
@@ -83,15 +83,15 @@ var alarmMeaning = map[Kind]string{
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
-		"than the next restore, vacuum or snapshot needs for a second copy — or " +
+		"than the next restore, vacuum or snapshot needs for a second copy, or " +
 		"could not be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
 		"a checkpoint is not happening.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
-		"its census allows — 125 a day per agent seat (at least one seat), " +
-		"plus what the object store's collector reads on its own schedule — " +
+		"its census allows (125 a day per agent seat, at least one seat, " +
+		"plus what the object store's collector reads on its own schedule), " +
 		"so every sizing decision under it is stale.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
@@ -111,7 +111,7 @@ collector scrapes, a named ` + "`WARN`" + ` line when it starts and another when
 clears, carrying how long it was up, and a count on the node's health envelope
 (` + "`GET /health`" + ` and the dashboard's health push carry ` + "`alarms: {count, worst}`" + `,
 where ` + "`worst`" + ` is the alarm that has been firing longest). Nothing has to be
-polled for any of them — alarms are evaluated on the node's own position
+polled for any of them: alarms are evaluated on the node's own position
 heartbeat, so a condition with a one-minute grace is named within that minute.
 
 The log line is the one to read first. It carries the measurement that raised
@@ -127,14 +127,14 @@ count, the gauge and the log line agree about how many problems there are.
 const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
-decides something — the grace that takes a copy out of service, the grace
+decides something: the grace that takes a copy out of service, the grace
 that stops a node serving a copy it cannot decode, the budget a caller was
 promised.
 
 A seat whose token window is spent is NOT an alarm, because nothing is wrong
 with the node: the ceiling is doing what it was set to do. Its mail is parked
-on its inbox until the window turns over or a revision raises the ceiling —
-the ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
+on its inbox until the window turns over or a revision raises the ceiling.
+The ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
 the budgets surfaces show the refusing window. See the budget park in
 docs/concepts/agent-runtime.md.
 `
