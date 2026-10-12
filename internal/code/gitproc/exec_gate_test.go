@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
 // TestOnlyGitprocExecsGit fails the build when any Go file of the module
@@ -743,7 +744,7 @@ func importNames(file *ast.File) map[string]string {
 		if !starter && path != gittestPackage {
 			continue
 		}
-		name := path[strings.LastIndex(path, "/")+1:]
+		name := decltype.ImportName(path)
 		if imp.Name != nil {
 			name = imp.Name.Name
 		}

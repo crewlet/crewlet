@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
 // TestNoPackageOrdersByAHashOfItsOwn fails the build when any package but
@@ -473,7 +474,7 @@ func (tr *hashTree) read(t *testing.T, path string) {
 		if err != nil {
 			continue
 		}
-		name := importName(p)
+		name := decltype.ImportName(p)
 		if imp.Name != nil {
 			name = imp.Name.Name
 		}
@@ -485,21 +486,6 @@ func (tr *hashTree) read(t *testing.T, path string) {
 		}
 	}
 	tr.files = append(tr.files, f)
-}
-
-// importName is the name an import path is used by when nothing renames it:
-// its last element, or the one before a major-version suffix
-// (math/rand/v2, xxhash/v2). Every package in this module is named for its
-// directory, so the rule holds for the module's own imports too.
-func importName(path string) string {
-	elems := strings.Split(path, "/")
-	last := elems[len(elems)-1]
-	if len(elems) > 1 && len(last) > 1 && last[0] == 'v' {
-		if _, err := strconv.Atoi(last[1:]); err == nil {
-			return elems[len(elems)-2]
-		}
-	}
-	return last
 }
 
 func (f *hashFile) importsAHash() bool {
