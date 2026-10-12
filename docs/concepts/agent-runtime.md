@@ -524,14 +524,16 @@ flowchart TD
 
 Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes).
 
-**Force stop (second signal).** The first signal starts the drain and
-*hands the signals back to the operating system*, so a second SIGINT or
-SIGTERM does what it always does: the process dies immediately, with no
-cleanup. That handover is what makes the unbounded drain above safe to
-offer — without it the engine would still be the installed handler, every
-further press would be swallowed, and an operator watching a drain from
-the terminal they started it in would have no way to abort it short of
-SIGKILL from somewhere else.
+**Force stop (second signal).** The first signal *hands the signals back to
+the operating system* the moment it arrives, so a second SIGINT or SIGTERM
+does what it always does: the process dies immediately, with no cleanup.
+That holds from the first moment of `crewlet run`, while the node is still
+booting as much as while it drains, because a boot can wait unboundedly too:
+a boot that fails once the engine is up runs the same drain. The handover is
+what makes those unbounded waits safe to offer. Without it the engine would
+still be the installed handler, every further press would be swallowed, and
+an operator watching a drain or a slow boot from the terminal they started it
+in would have no way to abort it short of SIGKILL from somewhere else.
 
 A turn killed that way leaves its trigger **unacknowledged** rather than
 NAK'd, because nothing gets to run. The broker redelivers it once its ack
